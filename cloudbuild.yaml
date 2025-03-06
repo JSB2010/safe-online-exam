@@ -1,32 +1,29 @@
 steps:
-  # Build the container image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/canvas-seb:$COMMIT_SHA', '.']
+  # Build the application
+  - name: 'maven:3.8.6-openjdk-23'
+    entrypoint: 'mvn'
+    args: ['clean', 'package', '-DskipTests']
 
-  # Push the container image to Container Registry
+  # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/canvas-seb:$COMMIT_SHA']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/canvas-seb-integration:$COMMIT_SHA', '.']
 
-  # Deploy container image to Cloud Run
+  # Push the Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/canvas-seb-integration:$COMMIT_SHA']
+
+  # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'gcloud'
     args:
       - 'run'
       - 'deploy'
-      - 'canvas-seb'
-      - '--image'
-      - 'gcr.io/$PROJECT_ID/canvas-seb:$COMMIT_SHA'
-      - '--region'
-      - 'us-central1'
-      - '--platform'
-      - 'managed'
+      - 'canvas-seb-integration'
+      - '--image=gcr.io/$PROJECT_ID/canvas-seb-integration:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--set-env-vars'
-      - 'SPRING_PROFILES_ACTIVE=prod'
-      - '--set-secrets'
-      - 'DB_USER=db-user:latest,DB_PASS=db-pass:latest,DB_NAME=db-name:latest,CLOUD_SQL_CONNECTION_NAME=cloud-sql-conn:latest,LTI_CLIENT_ID=lti-client-id:latest'
-      - '--add-cloudsql-instances'
-      - '$PROJECT_ID:us-central1:canvas-seb-db'
+      - '--set-env-vars=SPRING_PROFILES_ACTIVE=prod,DB_USER=${_DB_USER},DB_PASS=${_DB_PASS},DB_NAME=${_DB_NAME},CLOUD_SQL_CONNECTION_NAME=${_CLOUD_SQL_CONNECTION_NAME},LTI_CLIENT_ID=${_LTI_CLIENT_ID},TOOL_URL=${_TOOL_URL}'
 
 images:
-  - 'gcr.io/$PROJECT_ID/canvas-seb:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/canvas-seb-integration:$COMMIT_SHA'

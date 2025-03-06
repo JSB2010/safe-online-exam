@@ -1,89 +1,175 @@
 package org.kentdenver.sebcanvas.controller;
 
-import org.kentdenver.sebcanvas.model.Quiz;
-import org.kentdenver.sebcanvas.model.QuizSebSetting;
-import org.kentdenver.sebcanvas.repository.SebSettingRepository;
-import org.kentdenver.sebcanvas.service.CanvasService;
-import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.model.Quiz;
+import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
+import org.kentdenver.sebcanvas.service.QuizService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpSession;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
+import java.util.stream.Collectors;
 
+/**
+ * Controller for quiz-related operations.
+ * Handles API calls for quiz SEB settings and viewing quizzes.
+ */
 @Controller
-@RequestMapping("/teacher")
-@RequiredArgsConstructor
+@RequestMapping("/api/quizzes")
 @Slf4j
+@RequiredArgsConstructor
 public class QuizController {
 
-    private final CanvasService canvasService;
-    private final SebSettingRepository sebSettingRepository;
+    private final QuizService quizService;
 
     /**
-     * Teacher dashboard
+     * API endpoint to update SEB requirement for a quiz.
+     *
+     * @param quizId The quiz ID
+     * @param requestBody The request body containing the required flag
+     * @param session The HTTP session with user information
+     * @return ResponseEntity with the updated setting
      */
-    @GetMapping("/dashboard")
-    public String dashboard(
-            @RequestParam("courseId") String courseId,
-            HttpSession session,
-            Model model) {
+    @PutMapping("/{quizId}/seb")
+    @ResponseBody
+    public ResponseEntity<QuizSebSetting> updateSebRequirement(
+            @PathVariable String quizId,
+            @RequestBody Map<String, Boolean> requestBody,
+            HttpSession session) {
 
-        // Check LTI authentication
-        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("ltiLaunchData");
+        // Verify that the user is authorized (should be instructor)
+        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
         if (launchData == null || !launchData.isInstructor()) {
-            return "redirect:/error?message=Unauthorized";
+            log.warn("Unauthorized attempt to update SEB requirement for quiz: {}", quizId);
+            return ResponseEntity.status(403).build();
         }
 
-        // Get quizzes for the course
-        // (In production, obtain access token from OAuth or session)
-        String accessToken = "sample_access_token";
-        List<Quiz> quizzes = canvasService.getQuizzesForCourse(courseId, accessToken);
+        boolean required = requestBody.getOrDefault("required", false);
+        log.debug("Updating SEB requirement for quiz {} to {}", quizId, required);
 
-        // Load SEB settings for each quiz
-        for (Quiz quiz : quizzes) {
-            Optional<QuizSebSetting> setting = sebSettingRepository.findByQuizId(quiz.getId());
-            if (setting.isPresent()) {
-                model.addAttribute("sebSetting_" + quiz.getId(), setting.get());
-            }
-        }
-
-        model.addAttribute("quizzes", quizzes);
-        model.addAttribute("courseId", courseId);
-
-        return "teacherView";
+        QuizSebSetting setting = quizService.updateSebRequirement(quizId, required);
+        return ResponseEntity.ok(setting);
     }
 
     /**
-     * Update SEB settings for a quiz
+     * Gets all quizzes for the current course.
+     *
+     * @param session The HTTP session with user information
+     * @return ResponseEntity with the list of quizzes
      */
-    @PostMapping("/updateSebSettings")
+    @GetMapping
     @ResponseBody
-    public String updateSebSettings(
-            @RequestParam("quizId") String quizId,
-            @RequestParam("sebRequired") boolean sebRequired,
-            HttpSession session) {
-
-        // Check LTI authentication
-        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("ltiLaunchData");
-        if (launchData == null || !launchData.isInstructor()) {
-            return "Unauthorized";
+    public ResponseEntity<List<Quiz>> getQuizzes(HttpSession session) {
+        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+        if (launchData == null) {
+            log.warn("Attempted to get quizzes without valid launch data");
+            return ResponseEntity.status(403).build();
         }
 
-        // Find or create SEB settings for the quiz
-        QuizSebSetting setting = sebSettingRepository.findByQuizId(quizId)
-                .orElse(new QuizSebSetting());
+        String courseId = launchData.getCourseId();
+        log.debug("Getting quizzes for course: {}", courseId);
 
-        setting.setQuizId(quizId);
-        setting.setSebRequired(sebRequired);
+        List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId);
+        return ResponseEntity.ok(quizzes);
+    }
 
-        // Save the settings
-        sebSettingRepository.save(setting);
+    /**
+     * Gets all SEB settings for quizzes in the current course.
+     *
+     * @param session The HTTP session with user information
+     * @return ResponseEntity with a map of quiz IDs to SEB settings
+     */
+    @GetMapping("/seb-settings")
+    @ResponseBody
+    public ResponseEntity<Map<String, QuizSebSetting>> getQuizSebSettings(HttpSession session) {
+        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+        if (launchData == null) {
+            log.warn("Attempted to get SEB settings without valid launch data");
+            return ResponseEntity.status(403).build();
+        }
 
-        return "Success";
+        String courseId = launchData.getCourseId();
+        log.debug("Getting SEB settings for course: {}", courseId);
+
+        // Get all quizzes in the course
+        List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId);
+
+        // Get SEB settings for each quiz
+        Map<String, QuizSebSetting> settings = new HashMap<>();
+        for (Quiz quiz : quizzes) {
+            QuizSebSetting setting = quizService.getSebSettingForQuiz(quiz.getId());
+            if (setting != null) {
+                settings.put(quiz.getId(), setting);
+            }
+        }
+
+        return ResponseEntity.ok(settings);
+    }
+
+    /**
+     * View endpoint to display all quizzes and their SEB settings.
+     *
+     * @param model The Spring model
+     * @param session The HTTP session with user information
+     * @return The view name
+     */
+    @GetMapping("/view")
+    public String viewQuizzes(Model model, HttpSession session) {
+        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+        if (launchData == null) {
+            log.warn("Attempted to view quizzes without valid launch data");
+            return "redirect:/login";
+        }
+
+        String courseId = launchData.getCourseId();
+        log.debug("Viewing quizzes for course: {}", courseId);
+
+        // Get all quizzes in the course
+        List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId);
+        model.addAttribute("quizzes", quizzes);
+
+        // Get SEB settings for each quiz
+        Map<String, QuizSebSetting> quizSebSettings = quizzes.stream()
+                .map(quiz -> quizService.getSebSettingForQuiz(quiz.getId()))
+                .filter(setting -> setting != null)
+                .collect(Collectors.toMap(QuizSebSetting::getQuizId, setting -> setting));
+
+        model.addAttribute("quizSebSettings", quizSebSettings);
+        model.addAttribute("launchData", launchData);
+
+        return "quizzes";
+    }
+
+    /**
+     * Gets details for a specific quiz.
+     *
+     * @param quizId The quiz ID
+     * @param session The HTTP session with user information
+     * @return ResponseEntity with the quiz details
+     */
+    @GetMapping("/{quizId}")
+    @ResponseBody
+    public ResponseEntity<Quiz> getQuiz(@PathVariable String quizId, HttpSession session) {
+        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+        if (launchData == null) {
+            log.warn("Attempted to get quiz without valid launch data");
+            return ResponseEntity.status(403).build();
+        }
+
+        log.debug("Getting details for quiz: {}", quizId);
+
+        Quiz quiz = quizService.getQuiz(quizId);
+        if (quiz == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return ResponseEntity.ok(quiz);
     }
 }
