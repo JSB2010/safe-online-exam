@@ -1,11 +1,12 @@
 package org.kentdenver.sebcanvas.service;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.model.SebConfig;
 import org.kentdenver.sebcanvas.repository.SebSettingRepository;
 import org.kentdenver.sebcanvas.util.SebConfigGenerator;
+import org.kentdenver.sebcanvas.util.SebDetector;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpServletRequest;
@@ -15,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Arrays;
 
 /**
  * Service for SEB-related operations including detection, validation, and configuration generation.
@@ -25,21 +27,35 @@ import java.util.UUID;
  * 2. Validation of Browser Exam Keys sent by SEB
  * 3. Generation of SEB configuration files (.seb) for Canvas quizzes
  * 4. Management of Browser Exam Keys for quiz security
+ *
+ * The service implements the SEB integration protocols as specified in:
+ * https://safeexambrowser.org/developer/seb-integration.html
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class SebService {
 
-    // Service dependencies injected through constructor
+    // Service dependencies
     private final SebSettingRepository sebSettingRepository;
     private final SebConfigGenerator sebConfigGenerator;
+    private final SebDetector sebDetector;
 
-    // Constants for SEB-specific headers
-    private static final String USER_AGENT_HEADER = "User-Agent";
-    private static final String CONFIG_KEY_HASH_HEADER = "X-SafeExamBrowser-ConfigKeyHash";
-    private static final String BROWSER_EXAM_KEY_HEADER = "X-SafeExamBrowser-BrowserExamKey";
-    private static final String SEB_UA_PATTERN = "SEB";
+    /**
+     * Constructor with dependency injection for all required services.
+     *
+     * @param sebSettingRepository Repository for SEB settings storage
+     * @param sebConfigGenerator Utility for generating SEB config files
+     * @param sebDetector Utility for detecting and validating SEB
+     */
+    @Autowired
+    public SebService(
+            SebSettingRepository sebSettingRepository,
+            SebConfigGenerator sebConfigGenerator,
+            SebDetector sebDetector) {
+        this.sebSettingRepository = sebSettingRepository;
+        this.sebConfigGenerator = sebConfigGenerator;
+        this.sebDetector = sebDetector;
+    }
 
     /**
      * Check if the user is using SEB based on request headers.
@@ -49,33 +65,7 @@ public class SebService {
      * @return true if the request appears to come from SEB, false otherwise
      */
     public boolean isUsingSeb(HttpServletRequest request) {
-        if (request == null) {
-            log.debug("Request is null, cannot detect SEB");
-            return false;
-        }
-
-        // Check for SEB in User-Agent header
-        String userAgent = request.getHeader(USER_AGENT_HEADER);
-        if (userAgent != null && userAgent.contains(SEB_UA_PATTERN)) {
-            log.debug("SEB detected through User-Agent: {}", userAgent);
-            return true;
-        }
-
-        // Check for SEB-specific headers
-        String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
-        if (configKeyHash != null && !configKeyHash.isEmpty()) {
-            log.debug("SEB detected through Config Key Hash header: {}", configKeyHash);
-            return true;
-        }
-
-        String browserExamKey = request.getHeader(BROWSER_EXAM_KEY_HEADER);
-        if (browserExamKey != null && !browserExamKey.isEmpty()) {
-            log.debug("SEB detected through Browser Exam Key header: {}", browserExamKey);
-            return true;
-        }
-
-        log.debug("SEB not detected in request headers");
-        return false;
+        return sebDetector.isSebBrowser(request);
     }
 
     /**
@@ -124,7 +114,11 @@ public class SebService {
         // Create a SEB configuration with settings appropriate for Canvas quizzes
         SebConfig config = createSebConfigForCanvasQuiz(quizId, quizUrl);
 
-        // Generate the .seb file with the Browser Exam Key
+        // Add the Browser Exam Key to the configuration
+        config.setBrowserExamKey(browserExamKey);
+        config.setSendBrowserExamKey(true); // Enable sending BEK in HTTP headers
+
+        // Generate the .seb file using our config generator
         byte[] sebFileContent = sebConfigGenerator.generateSebFile(config, browserExamKey);
         log.debug("Generated SEB config file for quiz: {} ({} bytes)", quizId, sebFileContent.length);
 
@@ -132,36 +126,33 @@ public class SebService {
     }
 
     /**
-     * Creates a SEB configuration with settings appropriate for Canvas quizzes.
+     * Generate a password-protected SEB .seb file for a quiz.
+     * This adds an additional layer of security by encrypting the configuration file.
      *
      * @param quizId The ID of the quiz
      * @param quizUrl The URL of the quiz in Canvas
-     * @return A SebConfig object with appropriate settings
+     * @param password The password to encrypt the configuration
+     * @return The generated SEB configuration file as a byte array
+     * @throws IOException If there's an error generating the file
+     * @throws NoSuchAlgorithmException If there's an error with cryptographic operations
      */
-    private SebConfig createSebConfigForCanvasQuiz(String quizId, String quizUrl) {
-        SebConfig config = new SebConfig();
+    public byte[] generatePasswordProtectedSebConfig(String quizId, String quizUrl, String password)
+            throws IOException, NoSuchAlgorithmException {
+        log.debug("Generating password-protected SEB config for quiz ID: {}, URL: {}", quizId, quizUrl);
 
-        // Basic identification
-        config.setName("Canvas Quiz " + quizId);
-        config.setDescription("Safe Exam Browser Configuration for Canvas Quiz");
+        // Get or generate a Browser Exam Key
+        String browserExamKey = getBrowserExamKey(quizId);
 
-        // URL settings
-        config.setStartURL(quizUrl);
-        config.setQuitURL(quizUrl + "/submitted"); // Use submission page as quit URL
+        // Create the configuration
+        SebConfig config = createSebConfigForCanvasQuiz(quizId, quizUrl);
+        config.setBrowserExamKey(browserExamKey);
+        config.setSendBrowserExamKey(true);
 
-        // Security settings - these can be adjusted based on requirements
-        config.setAllowQuit(true);        // Allow students to exit SEB
-        config.setBlockExplorer(true);    // Block accessing file system
-        config.setDisableScreenCapture(true); // Prevent screenshots
-        config.setDisablePrinting(true);  // Disable printing
+        // Generate the password-protected .seb file
+        byte[] sebFileContent = sebConfigGenerator.generatePasswordProtectedSebFile(config, browserExamKey, password);
+        log.debug("Generated password-protected SEB config file for quiz: {} ({} bytes)", quizId, sebFileContent.length);
 
-        // Additional settings could be added here
-        // For example:
-        // config.setEnableAudio(true);
-        // config.setEnablePlugIns(false);
-        // config.setAllowSpellCheck(false);
-
-        return config;
+        return sebFileContent;
     }
 
     /**
@@ -199,6 +190,30 @@ public class SebService {
     }
 
     /**
+     * Validate the Browser Exam Key from a request against the expected key for a quiz.
+     * This is a convenient method that extracts the key from the request and validates it.
+     *
+     * @param request The HTTP request containing the SEB headers
+     * @param quizId The ID of the quiz
+     * @return true if the key is valid, false otherwise
+     */
+    public boolean validateBrowserExamKey(HttpServletRequest request, String quizId) {
+        if (request == null) {
+            log.debug("No request provided for Browser Exam Key validation");
+            return false;
+        }
+
+        Optional<QuizSebSetting> settingOpt = sebSettingRepository.findByQuizId(quizId);
+        if (!settingOpt.isPresent() || settingOpt.get().getBrowserExamKey() == null) {
+            log.debug("No Browser Exam Key found in SEB settings for quiz: {}", quizId);
+            return false;
+        }
+
+        String expectedKey = settingOpt.get().getBrowserExamKey();
+        return sebDetector.validateBrowserExamKey(request, expectedKey);
+    }
+
+    /**
      * Validate the Config Key Hash from a request.
      * This is a more complex validation involving the URL of the request.
      *
@@ -214,12 +229,6 @@ public class SebService {
             return false;
         }
 
-        String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
-        if (configKeyHash == null || configKeyHash.isEmpty()) {
-            log.debug("No Config Key Hash header found in request");
-            return false;
-        }
-
         Optional<QuizSebSetting> settingOpt = sebSettingRepository.findByQuizId(quizId);
         if (!settingOpt.isPresent() || settingOpt.get().getConfigKey() == null) {
             log.debug("No Config Key found in SEB settings for quiz: {}", quizId);
@@ -227,51 +236,102 @@ public class SebService {
         }
 
         String configKey = settingOpt.get().getConfigKey();
-
-        try {
-            // Get the request URL
-            String requestUrl = getFullRequestUrl(request);
-
-            // Calculate the expected hash: SHA-256(URL + ConfigKey)
-            String urlWithKey = requestUrl + configKey;
-            String expectedHash = calculateSha256Hash(urlWithKey);
-
-            // Compare with the provided hash
-            boolean isValid = expectedHash.equalsIgnoreCase(configKeyHash);
-            log.debug("Config Key Hash validation result for quiz {}: {}", quizId, isValid);
-
-            return isValid;
-        } catch (Exception e) {
-            log.error("Error validating Config Key Hash", e);
-            return false;
-        }
+        return sebDetector.validateConfigKeyHash(request, configKey);
     }
 
     /**
-     * Get the full URL of a request, including query parameters.
+     * Creates a SEB configuration with settings appropriate for Canvas quizzes.
      *
-     * @param request The HTTP request
-     * @return The full URL as a string
+     * @param quizId The ID of the quiz
+     * @param quizUrl The URL of the quiz in Canvas
+     * @return A SebConfig object with appropriate settings
      */
-    private String getFullRequestUrl(HttpServletRequest request) {
-        StringBuilder url = new StringBuilder();
+    private SebConfig createSebConfigForCanvasQuiz(String quizId, String quizUrl) {
+        SebConfig config = new SebConfig();
 
-        url.append(request.getScheme()).append("://")
-                .append(request.getServerName());
+        // Basic identification
+        config.setName("Canvas Quiz " + quizId);
+        config.setDescription("Safe Exam Browser Configuration for Canvas Quiz");
 
-        // Add port if it's not the default
-        if (request.getServerPort() != 80 && request.getServerPort() != 443) {
-            url.append(":").append(request.getServerPort());
+        // URL settings
+        config.setStartURL(quizUrl);
+        config.setQuitURL(quizUrl + "/submitted"); // Use submission page as quit URL
+
+        // Security settings - these can be adjusted based on requirements
+        config.setAllowQuit(true);        // Allow students to exit SEB
+        config.setAllowReload(true);      // Allow page reloads (important for Canvas)
+        config.setBlockExplorer(true);    // Block accessing file system
+        config.setDisableScreenCapture(true); // Prevent screenshots
+        config.setDisablePrinting(true);  // Disable printing
+        config.setEnableRightClick(false); // Disable right-click menu
+        config.setShowReloadButton(true); // Show reload button (helpful for Canvas)
+        config.setEnablePlugIns(true);    // Enable plugins (may be required for some Canvas features)
+
+        // URL filtering - enable filtering and add Canvas domain
+        config.setUrlFilterEnable(true);
+
+        // Extract Canvas domain from the quiz URL
+        String canvasDomain = extractDomain(quizUrl);
+        if (canvasDomain != null) {
+            config.setCanvasDomain(canvasDomain);
+            config.getAllowedURLs().add("*." + canvasDomain + "/*"); // Allow all subdomains
+
+            // Allow Canvas assets and APIs
+            config.getAllowedURLs().add("*.instructure.com/*");
+            config.getAllowedURLs().add("*.canvaslms.com/*");
+            config.getAllowedURLs().add("*.insops.net/*");
+            config.getAllowedURLs().add("*.inscloudgate.net/*");
+
+            // Common CDNs that Canvas might use
+            config.getAllowedURLs().add("*.cloudfront.net/*");
+            config.getAllowedURLs().add("*.googleapis.com/*");
         }
 
-        url.append(request.getRequestURI());
-
-        // Add query string if present
-        if (request.getQueryString() != null) {
-            url.append("?").append(request.getQueryString());
+        // Store Canvas-specific info
+        if (quizUrl.contains("/courses/")) {
+            // Extract course ID from URL if possible (used for better config management)
+            String courseId = extractCourseIdFromUrl(quizUrl);
+            if (courseId != null) {
+                config.setCanvasCourseId(courseId);
+            }
         }
+        config.setCanvasQuizId(quizId);
 
-        return url.toString();
+        return config;
+    }
+
+    /**
+     * Get or generate a Browser Exam Key for a quiz.
+     * This is a helper method to ensure we always have a valid Browser Exam Key.
+     *
+     * @param quizId The ID of the quiz
+     * @return The Browser Exam Key
+     * @throws NoSuchAlgorithmException If there's an error generating a new key
+     */
+    private String getBrowserExamKey(String quizId) throws NoSuchAlgorithmException {
+        Optional<QuizSebSetting> settingOpt = sebSettingRepository.findByQuizId(quizId);
+
+        if (settingOpt.isPresent() && settingOpt.get().getBrowserExamKey() != null) {
+            return settingOpt.get().getBrowserExamKey();
+        } else {
+            // Generate a new Browser Exam Key
+            String browserExamKey = generateBrowserExamKey();
+
+            // Save it
+            if (settingOpt.isPresent()) {
+                QuizSebSetting setting = settingOpt.get();
+                setting.setBrowserExamKey(browserExamKey);
+                sebSettingRepository.save(setting);
+            } else {
+                QuizSebSetting newSetting = new QuizSebSetting();
+                newSetting.setQuizId(quizId);
+                newSetting.setSebRequired(true);
+                newSetting.setBrowserExamKey(browserExamKey);
+                sebSettingRepository.save(newSetting);
+            }
+
+            return browserExamKey;
+        }
     }
 
     /**
@@ -286,7 +346,9 @@ public class SebService {
         String randomStr = "SEB" + UUID.randomUUID().toString() + System.currentTimeMillis();
 
         // Hash it with SHA-256 to create the Browser Exam Key
-        return calculateSha256Hash(randomStr);
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] encodedHash = digest.digest(randomStr.getBytes(StandardCharsets.UTF_8));
+        return bytesToHex(encodedHash);
     }
 
     /**
@@ -318,5 +380,72 @@ public class SebService {
             hexString.append(hex);
         }
         return hexString.toString();
+    }
+
+    /**
+     * Extract the domain from a URL.
+     *
+     * @param url The URL to extract the domain from
+     * @return The domain, or null if it couldn't be extracted
+     */
+    private String extractDomain(String url) {
+        if (url == null || url.isEmpty()) {
+            return null;
+        }
+
+        try {
+            // Remove protocol if present
+            String domain = url.replaceAll("^(https?://)?", "");
+
+            // Extract domain name (stop at first slash or port)
+            int endIndex = domain.indexOf('/');
+            if (endIndex == -1) {
+                endIndex = domain.length();
+            }
+
+            int portIndex = domain.indexOf(':');
+            if (portIndex != -1 && portIndex < endIndex) {
+                endIndex = portIndex;
+            }
+
+            return domain.substring(0, endIndex);
+        } catch (Exception e) {
+            log.warn("Error extracting domain from URL: {}", url, e);
+            return null;
+        }
+    }
+
+    /**
+     * Extract the course ID from a Canvas URL.
+     *
+     * @param url The Canvas URL
+     * @return The course ID, or null if it couldn't be extracted
+     */
+    private String extractCourseIdFromUrl(String url) {
+        if (url == null || url.isEmpty() || !url.contains("/courses/")) {
+            return null;
+        }
+
+        try {
+            // Find the courses part
+            int coursesIndex = url.indexOf("/courses/");
+            if (coursesIndex == -1) {
+                return null;
+            }
+
+            // Extract the course ID (everything between /courses/ and the next /)
+            String afterCourses = url.substring(coursesIndex + 9); // 9 is length of "/courses/"
+            int nextSlash = afterCourses.indexOf('/');
+
+            if (nextSlash == -1) {
+                // No trailing slash
+                return afterCourses;
+            } else {
+                return afterCourses.substring(0, nextSlash);
+            }
+        } catch (Exception e) {
+            log.warn("Error extracting course ID from URL: {}", url, e);
+            return null;
+        }
     }
 }
