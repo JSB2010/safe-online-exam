@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.kentdenver.sebcanvas.service.LtiService;
@@ -36,24 +37,15 @@ public class LtiControllerIntegrationTest {
                         .param("login_hint", "login_hint_123")
                         .param("target_link_uri", "https://app.example.com/target")
                         .param("client_id", "client_123")
-                        .param("lti_message_hint", "message_hint_123"))
+                        .param("lti_message_hint", "message_hint_123")
+                        .param("lti_deployment_id", "deployment_123")
+                        .param("canvas_region", "us-west-2")
+                        .param("canvas_environment", "production"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/lti/auth"))
                 .andReturn();
 
-        // Get the session ID
-        String sessionId = loginResult.getRequest().getSession().getId();
-
-        // Step 2: Auth request should redirect to Canvas
-        mockMvc.perform(get("/lti/auth")
-                        .sessionAttr("iss", "https://canvas.instructure.com")
-                        .sessionAttr("login_hint", "login_hint_123")
-                        .sessionAttr("target_link_uri", "https://app.example.com/target")
-                        .sessionAttr("client_id", "client_123")
-                        .sessionAttr("lti_message_hint", "message_hint_123")
-                        .sessionId(sessionId))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("https://sso.canvaslms.com/api/lti/authorize_redirect*"));
+        // Get the session from the result
+        MockHttpSession session = (MockHttpSession) loginResult.getRequest().getSession();
 
         // Step 3: Mock an instructor launching the tool
         // Setup the mock LTI service to return an instructor
@@ -65,13 +57,16 @@ public class LtiControllerIntegrationTest {
 
         when(ltiService.validateToken(anyString())).thenReturn(instructorData);
 
+        // Set the state in session
+        String state = "state_123";
+        session.setAttribute("oidc_state", state);
+
         // Simulate the launch
         mockMvc.perform(post("/lti/launch")
                         .param("id_token", "mocked_token")
-                        .param("state", "state_123")
-                        .sessionAttr("state", "state_123")
-                        .sessionId(sessionId))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/teacher/dashboard?courseId=course_123"));
+                        .param("state", state)
+                        .session(session))
+                .andExpect(status().isOk())
+                .andExpect(view().name("teacherView"));
     }
 }

@@ -1,32 +1,27 @@
 package org.kentdenver.sebcanvas.model;
 
+import com.google.cloud.firestore.annotation.DocumentId;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import javax.persistence.*;
 import java.util.List;
 import java.util.ArrayList;
 
 /**
  * Entity class representing a Safe Exam Browser configuration.
- * Stores settings used to generate SEB configuration files (.seb) based on the SEB specification.
+ * This class has been migrated from JPA to Firestore.
  *
- * SEB configurations consist of various settings that control:
- * - Browser behavior (quit access, navigation, reloading)
- * - Security features (screen capture, printing, keyboard shortcuts)
- * - Launch URLs (where SEB should navigate on startup)
- * - Quit URLs (URLs that trigger SEB to close)
- * - URL filtering (allowed/blocked domains)
- * - Authentication settings (passwords for quitting, admin access)
- *
- * Reference: https://safeexambrowser.org/developer/seb-config-key.html
+ * Stores settings used to generate SEB configuration files (.seb)
+ * based on the SEB specification.
  */
-@Entity
 @Data
 @NoArgsConstructor
 public class SebConfig {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    /**
+     * Unique identifier for this configuration.
+     * In Firestore, this will be the document ID.
+     */
+    @DocumentId
+    private String id;
 
     /**
      * Name of the configuration for identification
@@ -39,10 +34,11 @@ public class SebConfig {
     private String description;
 
     /**
-     * The raw SEB configuration file content, if storing pre-generated files
+     * The raw SEB configuration file content, if storing pre-generated files.
+     * In Firestore, large binary data should typically be stored in Cloud Storage
+     * with just a reference stored in Firestore.
      */
-    @Lob
-    private byte[] configFileContent;
+    private String configFileStorageUri;
 
     // SEB Browser Settings
     /**
@@ -130,14 +126,14 @@ public class SebConfig {
 
     /**
      * List of allowed URL patterns (whitelist)
+     * Stored as a simple array in Firestore
      */
-    @ElementCollection
     private List<String> allowedURLs = new ArrayList<>();
 
     /**
      * List of blocked URL patterns (blacklist)
+     * Stored as a simple array in Firestore
      */
-    @ElementCollection
     private List<String> blockedURLs = new ArrayList<>();
 
     // Canvas-specific fields

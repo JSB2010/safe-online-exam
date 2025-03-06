@@ -5,32 +5,27 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
-import org.kentdenver.sebcanvas.repository.SebSettingRepository;
-import org.kentdenver.sebcanvas.service.CanvasService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
+import org.kentdenver.sebcanvas.service.QuizService;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.ui.Model;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 public class QuizControllerTest {
 
     @Mock
-    private CanvasService canvasService;
-
-    @Mock
-    private SebSettingRepository sebSettingRepository;
+    private QuizService quizService;
 
     @Mock
     private Model model;
@@ -42,7 +37,6 @@ public class QuizControllerTest {
     private LtiLaunchData ltiLaunchData;
     private List<Quiz> mockQuizzes;
     private static final String COURSE_ID = "12345";
-    private static final String ACCESS_TOKEN = "test_token";
 
     @BeforeEach
     void setUp() {
@@ -54,7 +48,7 @@ public class QuizControllerTest {
         ltiLaunchData.setCourseId(COURSE_ID);
         ltiLaunchData.setRoles(Arrays.asList("http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"));
 
-        session.setAttribute("ltiLaunchData", ltiLaunchData);
+        session.setAttribute("launchData", ltiLaunchData);
 
         // Setup mock quizzes
         Quiz quiz1 = new Quiz();
@@ -73,76 +67,110 @@ public class QuizControllerTest {
     }
 
     @Test
-    void testDashboard() {
-        // Mock Canvas service
-        when(canvasService.getQuizzesForCourse(COURSE_ID, ACCESS_TOKEN)).thenReturn(mockQuizzes);
+    void testUpdateSebRequirement() {
+        // Mock data
+        String quizId = "1";
+        Map<String, Boolean> requestBody = new HashMap<>();
+        requestBody.put("required", true);
 
-        // Mock SEB setting for quiz 1
+        QuizSebSetting setting = new QuizSebSetting();
+        setting.setQuizId(quizId);
+        setting.setSebRequired(true);
+
+        // Mock service
+        when(quizService.updateSebRequirement(quizId, true)).thenReturn(setting);
+
+        // Call the method
+        ResponseEntity<QuizSebSetting> response = quizController.updateSebRequirement(quizId, requestBody, session);
+
+        // Verify
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(setting, response.getBody());
+        verify(quizService).updateSebRequirement(quizId, true);
+    }
+
+    @Test
+    void testGetQuizzes() {
+        // Mock service
+        when(quizService.getQuizzesForCourse(COURSE_ID)).thenReturn(mockQuizzes);
+
+        // Call the method
+        ResponseEntity<List<Quiz>> response = quizController.getQuizzes(session);
+
+        // Verify
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(mockQuizzes, response.getBody());
+        verify(quizService).getQuizzesForCourse(COURSE_ID);
+    }
+
+    @Test
+    void testViewQuizzes() {
+        // Mock service
+        when(quizService.getQuizzesForCourse(COURSE_ID)).thenReturn(mockQuizzes);
+
+        // Create mock data for quiz settings
+        Map<String, QuizSebSetting> quizSebSettings = new HashMap<>();
         QuizSebSetting setting1 = new QuizSebSetting();
         setting1.setQuizId("1");
         setting1.setSebRequired(true);
-        when(sebSettingRepository.findByQuizId("1")).thenReturn(Optional.of(setting1));
+        quizSebSettings.put("1", setting1);
 
-        // Mock no SEB setting for quiz 2
-        when(sebSettingRepository.findByQuizId("2")).thenReturn(Optional.empty());
-
-        // Call the dashboard method
-        String result = quizController.dashboard(COURSE_ID, session, model);
-
-        // Verify
-        assertEquals("teacherView", result);
-        verify(model).addAttribute("quizzes", mockQuizzes);
-        verify(model).addAttribute("courseId", COURSE_ID);
-        verify(model).addAttribute("sebSetting_1", setting1);
-    }
-
-    @Test
-    void testUpdateSebSettings() {
-        // Mock existing setting
-        QuizSebSetting existingSetting = new QuizSebSetting();
-        existingSetting.setQuizId("1");
-        existingSetting.setSebRequired(false);
-
-        when(sebSettingRepository.findByQuizId("1")).thenReturn(Optional.of(existingSetting));
-        when(sebSettingRepository.save(any(QuizSebSetting.class))).thenAnswer(i -> i.getArguments()[0]);
+        when(quizService.getSebSettingForQuiz(anyString())).thenReturn(setting1);
 
         // Call the method
-        String result = quizController.updateSebSettings("1", true, session);
+        String viewName = quizController.viewQuizzes(model, session);
 
         // Verify
-        assertEquals("Success", result);
-        verify(sebSettingRepository).save(any(QuizSebSetting.class));
+        assertEquals("quizzes", viewName);
+        verify(model).addAttribute(eq("quizzes"), eq(mockQuizzes));
+        verify(model).addAttribute(eq("launchData"), eq(ltiLaunchData));
     }
 
     @Test
-    void testUpdateSebSettings_newSetting() {
-        // Mock no existing setting
-        when(sebSettingRepository.findByQuizId("1")).thenReturn(Optional.empty());
-        when(sebSettingRepository.save(any(QuizSebSetting.class))).thenAnswer(i -> {
-            QuizSebSetting saved = (QuizSebSetting) i.getArguments()[0];
-            assertEquals("1", saved.getQuizId());
-            assertEquals(true, saved.isSebRequired());
-            return saved;
-        });
+    void testGetQuiz() {
+        // Mock data
+        String quizId = "1";
+        Quiz quiz = mockQuizzes.get(0);
+
+        // Mock service
+        when(quizService.getQuiz(quizId)).thenReturn(quiz);
 
         // Call the method
-        String result = quizController.updateSebSettings("1", true, session);
+        ResponseEntity<Quiz> response = quizController.getQuiz(quizId, session);
 
         // Verify
-        assertEquals("Success", result);
-        verify(sebSettingRepository).save(any(QuizSebSetting.class));
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(quiz, response.getBody());
+        verify(quizService).getQuiz(quizId);
     }
 
     @Test
-    void testDashboard_unauthorized() {
+    void testGetQuiz_notFound() {
+        // Mock data
+        String quizId = "999";
+
+        // Mock service to return null
+        when(quizService.getQuiz(quizId)).thenReturn(null);
+
+        // Call the method
+        ResponseEntity<Quiz> response = quizController.getQuiz(quizId, session);
+
+        // Verify
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertNull(response.getBody());
+    }
+
+    @Test
+    void testGetQuizzes_unauthorized() {
         // Set no LTI launch data in session
         session = new MockHttpSession();
 
-        // Call the dashboard method
-        String result = quizController.dashboard(COURSE_ID, session, model);
+        // Call the method
+        ResponseEntity<List<Quiz>> response = quizController.getQuizzes(session);
 
         // Verify
-        assertEquals("redirect:/error?message=Unauthorized", result);
-        verify(canvasService, never()).getQuizzesForCourse(anyString(), anyString());
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertNull(response.getBody());
+        verify(quizService, never()).getQuizzesForCourse(anyString());
     }
 }

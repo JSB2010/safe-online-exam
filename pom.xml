@@ -66,11 +66,25 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Google Cloud SQL for production deployment -->
+        <!-- Google Cloud Firestore -->
         <dependency>
-            <groupId>com.google.cloud.sql</groupId>
-            <artifactId>postgres-socket-factory</artifactId>
-            <version>1.12.0</version> <!-- Updated for latest version -->
+            <groupId>com.google.cloud</groupId>
+            <artifactId>google-cloud-firestore</artifactId>
+            <version>3.15.4</version>
+        </dependency>
+
+        <!-- Google Cloud Core -->
+        <dependency>
+            <groupId>com.google.cloud</groupId>
+            <artifactId>google-cloud-core</artifactId>
+            <version>2.24.0</version>
+        </dependency>
+
+        <!-- Google Auth Library -->
+        <dependency>
+            <groupId>com.google.auth</groupId>
+            <artifactId>google-auth-library-oauth2-http</artifactId>
+            <version>1.20.0</version>
         </dependency>
 
         <!-- Utilities -->

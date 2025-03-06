@@ -3,12 +3,11 @@ package org.kentdenver.sebcanvas.service;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
-import org.kentdenver.sebcanvas.repository.QuizRepository;
-import org.kentdenver.sebcanvas.repository.SebSettingRepository;
+import org.kentdenver.sebcanvas.repository.FirestoreQuizRepository;
+import org.kentdenver.sebcanvas.repository.FirestoreSebSettingRepository;
 import org.kentdenver.sebcanvas.util.SebConfigGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.security.MessageDigest;
@@ -23,14 +22,14 @@ import java.util.stream.Collectors;
 
 /**
  * Service class for managing quizzes and their SEB settings.
- * Handles quiz retrieval, SEB configuration generation, and enforcing SEB requirements.
+ * This class has been updated to use Firestore repositories instead of JPA.
  */
 @Service
 @Slf4j
 public class QuizService {
 
-    private final QuizRepository quizRepository;
-    private final SebSettingRepository sebSettingRepository;
+    private final FirestoreQuizRepository quizRepository;
+    private final FirestoreSebSettingRepository sebSettingRepository;
     private final CanvasService canvasService;
     private final SebConfigGenerator sebConfigGenerator;
 
@@ -44,8 +43,8 @@ public class QuizService {
      */
     @Autowired
     public QuizService(
-            QuizRepository quizRepository,
-            SebSettingRepository sebSettingRepository,
+            FirestoreQuizRepository quizRepository,
+            FirestoreSebSettingRepository sebSettingRepository,
             CanvasService canvasService,
             SebConfigGenerator sebConfigGenerator) {
         this.quizRepository = quizRepository;
@@ -56,7 +55,7 @@ public class QuizService {
 
     /**
      * Retrieves all quizzes for a specific course.
-     * If not found in the local database, fetches them from Canvas.
+     * If not found in the local database, fetches them from Canvas and saves them to Firestore.
      *
      * @param courseId The Canvas course ID
      * @return List of quizzes
@@ -74,7 +73,7 @@ public class QuizService {
 
             // Save fetched quizzes to database
             if (!quizzes.isEmpty()) {
-                quizRepository.saveAll(quizzes);
+                quizzes = quizRepository.saveAll(quizzes);
                 log.debug("Saved {} quizzes from Canvas to database", quizzes.size());
             }
         }
@@ -124,12 +123,8 @@ public class QuizService {
                 .map(Quiz::getId)
                 .collect(Collectors.toList());
 
-        // Find all SEB settings for these quizzes
-        // Note: Since findAllByQuizIdIn might not be implemented, we'll use a workaround
-        // In a production environment, you would implement this method in the repository
-        List<QuizSebSetting> settings = sebSettingRepository.findAll().stream()
-                .filter(setting -> quizIds.contains(setting.getQuizId()))
-                .collect(Collectors.toList());
+        // Find all SEB settings for these quizzes using the Firestore repository
+        List<QuizSebSetting> settings = sebSettingRepository.findAllByQuizIdIn(quizIds);
 
         // Create a map of quiz ID to SEB required flag
         Map<String, Boolean> settingsMap = settings.stream()
@@ -148,15 +143,16 @@ public class QuizService {
 
     /**
      * Updates the SEB requirement for a quiz.
+     * In Firestore, this uses a find-then-update pattern since there are no JPA-style transactions.
      *
      * @param quizId The quiz ID
      * @param required Whether SEB is required
      * @return The updated setting
      */
-    @Transactional
     public QuizSebSetting updateSebRequirement(String quizId, boolean required) {
         log.debug("Updating SEB requirement for quiz: {} to {}", quizId, required);
 
+        // Find existing setting or create a new one
         QuizSebSetting setting = sebSettingRepository.findByQuizId(quizId)
                 .orElseGet(() -> {
                     QuizSebSetting newSetting = new QuizSebSetting();
@@ -166,7 +162,7 @@ public class QuizService {
 
         setting.setSebRequired(required);
 
-        // If enabling SEB, generate a new Browser Exam Key
+        // If enabling SEB, generate a new Browser Exam Key if needed
         if (required && (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isEmpty())) {
             try {
                 String browserExamKey = generateBrowserExamKey();
@@ -177,6 +173,7 @@ public class QuizService {
             }
         }
 
+        // Save to Firestore
         QuizSebSetting savedSetting = sebSettingRepository.save(setting);
         log.debug("Saved SEB setting for quiz: {}", quizId);
 
@@ -226,7 +223,7 @@ public class QuizService {
             // Generate a new Browser Exam Key
             browserExamKey = generateBrowserExamKey();
 
-            // Save the new key if we have a setting
+            // Save the new key
             if (setting.isPresent()) {
                 QuizSebSetting sebSetting = setting.get();
                 sebSetting.setBrowserExamKey(browserExamKey);
