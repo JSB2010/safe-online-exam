@@ -21,6 +21,12 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'SPRING_PROFILES_ACTIVE=prod'
+      - '--set-secrets'
+      - 'DB_USER=db-user:latest,DB_PASS=db-pass:latest,DB_NAME=db-name:latest,CLOUD_SQL_CONNECTION_NAME=cloud-sql-conn:latest,LTI_CLIENT_ID=lti-client-id:latest'
+      - '--add-cloudsql-instances'
+      - '$PROJECT_ID:us-central1:canvas-seb-db'
 
 images:
   - 'gcr.io/$PROJECT_ID/canvas-seb:$COMMIT_SHA'

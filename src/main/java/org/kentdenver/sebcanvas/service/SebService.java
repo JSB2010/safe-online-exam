@@ -9,15 +9,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpServletRequest;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
-import java.util.HexFormat;
 import java.util.Optional;
-import java.util.zip.GZIPOutputStream;
 
 @Service
 @Slf4j
@@ -37,15 +33,13 @@ public class SebService {
         // SEB User-Agent contains 'SEB' string
         if (userAgent != null && userAgent.contains("SEB")) {
             // Further validation can be implemented based on the SEB Config Key or Browser Exam Key
-            // which would be passed in custom HTTP headers by SEB
             return true;
         }
 
-        // Check for SEB config key hash if required
+        // Check for SEB config key hash
         String configKeyHash = request.getHeader("X-SafeExamBrowser-ConfigKeyHash");
         if (configKeyHash != null && !configKeyHash.isEmpty()) {
             // Validate the config key hash against expected value
-            // (implementation details would depend on how you're generating and storing keys)
             return true;
         }
 
@@ -61,8 +55,8 @@ public class SebService {
 
         if (settingOpt.isPresent() && settingOpt.get().getSebConfigFileId() != null) {
             // Use custom SEB config if available
-            // (This would involve retrieving the stored SEB config file)
-            return null; // Not implemented in this example
+            // Not implemented in this example
+            return null;
         } else {
             // Generate a basic SEB config
             SebConfig config = new SebConfig();
@@ -116,7 +110,7 @@ public class SebService {
     }
 
     /**
-     * Convert bytes to hex string
+     * Convert bytes to hex string - Java 11 compatible method
      */
     private static String bytesToHex(byte[] hash) {
         StringBuilder hexString = new StringBuilder();

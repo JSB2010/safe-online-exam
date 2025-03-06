@@ -38,6 +38,7 @@ public class LtiService {
     /**
      * Validate an LTI 1.3 launch JWT token
      */
+    @SuppressWarnings("unchecked")
     public LtiLaunchData validateToken(String token) throws ParseException, JOSEException, IOException {
         // Parse the JWS
         JWSObject jwsObject = JWSObject.parse(token);
