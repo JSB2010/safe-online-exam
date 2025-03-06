@@ -165,8 +165,8 @@ public class LtiControllerTest {
         ResponseStatusException exception = assertThrows(ResponseStatusException.class,
                 () -> ltiController.handleLaunch(ID_TOKEN, STATE, session, model, request));
 
-        // Verify - FIXED: Use getStatus() instead of getStatusCode()
-        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        // Verify - use getStatusCode() instead of getStatus()
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
         verify(ltiService, never()).validateToken(anyString());
     }
 
@@ -218,8 +218,8 @@ public class LtiControllerTest {
         ResponseStatusException exception = assertThrows(ResponseStatusException.class,
                 () -> ltiController.getSebConfig(quizId, session));
 
-        // Verify - FIXED: Use getStatus() instead of getStatusCode()
-        assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatus());
+        // Verify - use getStatusCode() instead of getStatus()
+        assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatusCode());
     }
 
     @Test

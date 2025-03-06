@@ -18,8 +18,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.view.RedirectView;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import java.text.ParseException;
 import java.util.List;
 import java.util.Map;
@@ -261,8 +261,6 @@ public class LtiController {
                 log.debug("User with undefined role, displaying generic view");
                 return "genericView";
             }
-
-            // Note: IOException is not thrown in the above logic, so we're removing it from the catch clause
         } catch (ParseException | JOSEException e) {
             log.error("Error validating LTI token", e);
             model.addAttribute("error", "Failed to validate LTI launch. Please contact your instructor.");
@@ -314,7 +312,7 @@ public class LtiController {
     @ExceptionHandler(ResponseStatusException.class)
     public String handleError(ResponseStatusException ex, Model model) {
         model.addAttribute("error", ex.getReason());
-        model.addAttribute("status", ex.getStatus().value());
+        model.addAttribute("status", ex.getStatusCode().value());  // Changed getStatus() to getStatusCode()
         return "error";
     }
 }

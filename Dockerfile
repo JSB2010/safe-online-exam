@@ -1,5 +1,5 @@
-# Use the official OpenJDK 23 image
-FROM openjdk:23-slim
+# Use Java 21 instead of 23
+FROM eclipse-temurin:21-jre-jammy
 
 # Set working directory
 WORKDIR /app

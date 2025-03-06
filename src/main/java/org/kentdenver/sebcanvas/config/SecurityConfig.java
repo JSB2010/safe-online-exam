@@ -30,18 +30,18 @@ public class SecurityConfig {
         http
                 // Disable CSRF for LTI endpoints (required for LTI 1.3 launches)
                 .csrf(csrf -> csrf
-                        .ignoringAntMatchers("/lti/**", "/seb/**", "/h2-console/**")
+                        .ignoringRequestMatchers("/lti/**", "/seb/**", "/h2-console/**")
                 )
                 // Configure authorization for endpoints
-                .authorizeRequests(auth -> auth
+                .authorizeHttpRequests(auth -> auth
                         // LTI endpoints must be accessible without authentication
-                        .antMatchers("/lti/**").permitAll()
+                        .requestMatchers("/lti/**").permitAll()
                         // SEB config endpoints must be accessible without authentication
-                        .antMatchers("/seb/**").permitAll()
+                        .requestMatchers("/seb/**").permitAll()
                         // H2 console access (for development only)
-                        .antMatchers("/h2-console/**").permitAll()
+                        .requestMatchers("/h2-console/**").permitAll()
                         // Static resources
-                        .antMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+                        .requestMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
                         // Require authentication for all other endpoints
                         .anyRequest().authenticated()
                 )
@@ -58,7 +58,7 @@ public class SecurityConfig {
                 )
                 // Allow iframe embedding for LTI
                 .headers(headers -> headers
-                        .frameOptions().sameOrigin()
+                        .frameOptions(frameOptions -> frameOptions.sameOrigin())
                 );
 
         return http.build();

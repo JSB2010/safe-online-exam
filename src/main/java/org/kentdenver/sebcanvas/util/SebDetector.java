@@ -3,7 +3,7 @@ package org.kentdenver.sebcanvas.util;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -11,15 +11,6 @@ import java.util.Enumeration;
 
 /**
  * Utility class for detecting and validating Safe Exam Browser (SEB) requests.
- *
- * This component provides functionality to:
- * 1. Detect if a request comes from Safe Exam Browser by examining headers
- * 2. Validate Browser Exam Keys sent from SEB
- * 3. Validate Config Key Hash values for more secure SEB validation
- *
- * The implementation follows the SEB detection and validation protocols as
- * documented in SEB integration guide:
- * https://safeexambrowser.org/developer/seb-integration.html
  */
 @Component
 @Slf4j
@@ -36,10 +27,6 @@ public class SebDetector {
 
     /**
      * Checks if the request is coming from Safe Exam Browser.
-     * This method detects SEB based on specific headers that SEB adds to requests.
-     *
-     * @param request The HTTP request to check
-     * @return true if the request is from SEB, false otherwise
      */
     public boolean isSebBrowser(HttpServletRequest request) {
         if (request == null) {
@@ -82,13 +69,6 @@ public class SebDetector {
 
     /**
      * Validates a Browser Exam Key from SEB against the expected key.
-     *
-     * From the SEB documentation, the BEK is added as a header to HTTP requests
-     * when "Use Browser & Config Keys" is enabled in SEB settings.
-     *
-     * @param request The HTTP request containing the SEB headers
-     * @param expectedKey The expected Browser Exam Key
-     * @return true if the key is valid, false otherwise
      */
     public boolean validateBrowserExamKey(HttpServletRequest request, String expectedKey) {
         if (request == null || expectedKey == null || expectedKey.isEmpty()) {
@@ -109,17 +89,6 @@ public class SebDetector {
 
     /**
      * Validates a Config Key Hash from SEB.
-     *
-     * According to the SEB specification, the Config Key Hash is created by:
-     * 1. Taking the Config Key from SEB settings
-     * 2. Concatenating it with the requested URL
-     * 3. Generating a SHA-256 hash of this string
-     *
-     * This provides a stronger validation mechanism than the Browser Exam Key.
-     *
-     * @param request The HTTP request containing the SEB headers
-     * @param configKey The expected Config Key
-     * @return true if the hash is valid, false otherwise
      */
     public boolean validateConfigKeyHash(HttpServletRequest request, String configKey) {
         if (request == null || configKey == null || configKey.isEmpty()) {
@@ -156,11 +125,6 @@ public class SebDetector {
 
     /**
      * Gets the full request URL without the fragment part.
-     * According to the SEB specification, the fragment part (everything after #)
-     * must be removed from the URL before hash calculation.
-     *
-     * @param request The HTTP request
-     * @return The full URL without fragment
      */
     private String getRequestUrlWithoutFragment(HttpServletRequest request) {
         StringBuilder url = new StringBuilder();
@@ -188,11 +152,6 @@ public class SebDetector {
 
     /**
      * Calculates a SHA-256 hash of a string.
-     * This is used for Config Key Hash validation according to the SEB specification.
-     *
-     * @param input The input string
-     * @return The SHA-256 hash as a hexadecimal string
-     * @throws NoSuchAlgorithmException If SHA-256 is not available
      */
     private String calculateSha256Hash(String input) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -202,10 +161,6 @@ public class SebDetector {
 
     /**
      * Converts a byte array to a hexadecimal string.
-     * Used for formatting hash values for comparison with SEB headers.
-     *
-     * @param bytes The byte array
-     * @return The hexadecimal string
      */
     private String bytesToHex(byte[] bytes) {
         StringBuilder hexString = new StringBuilder();
@@ -221,9 +176,6 @@ public class SebDetector {
 
     /**
      * Logs all headers in the request for debugging purposes.
-     * This is helpful for debugging SEB integration issues.
-     *
-     * @param request The HTTP request
      */
     private void logAllHeaders(HttpServletRequest request) {
         if (log.isTraceEnabled()) {
@@ -238,11 +190,7 @@ public class SebDetector {
     }
 
     /**
-     * For completeness, let's also include a method to check if a specific Browser Exam Key is present
-     * without comparing to an expected value. This can be useful in some scenarios.
-     *
-     * @param request The HTTP request containing the SEB headers
-     * @return The Browser Exam Key if present, null otherwise
+     * Extract Browser Exam Key from request.
      */
     public String extractBrowserExamKey(HttpServletRequest request) {
         if (request == null) {
@@ -252,11 +200,7 @@ public class SebDetector {
     }
 
     /**
-     * For completeness, let's also include a method to check if a specific Config Key Hash is present
-     * without comparing to an expected value.
-     *
-     * @param request The HTTP request containing the SEB headers
-     * @return The Config Key Hash if present, null otherwise
+     * Extract Config Key Hash from request.
      */
     public String extractConfigKeyHash(HttpServletRequest request) {
         if (request == null) {

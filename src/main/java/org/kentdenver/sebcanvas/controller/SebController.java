@@ -16,8 +16,8 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.security.NoSuchAlgorithmException;
 
@@ -37,9 +37,6 @@ public class SebController {
 
     /**
      * Checks if the current request is coming from SEB.
-     *
-     * @param request The HTTP request
-     * @return ResponseEntity with the SEB detection result
      */
     @GetMapping("/check")
     @ResponseBody
@@ -51,10 +48,6 @@ public class SebController {
 
     /**
      * Validates a Browser Exam Key.
-     *
-     * @param quizId The quiz ID
-     * @param request The HTTP request containing the SEB headers
-     * @return ResponseEntity with the validation result
      */
     @GetMapping("/validate/{quizId}")
     @ResponseBody
@@ -77,10 +70,6 @@ public class SebController {
 
     /**
      * Generates and returns a SEB configuration file for a quiz.
-     *
-     * @param quizId The quiz ID
-     * @param session The HTTP session with user information
-     * @return ResponseEntity with the SEB configuration file
      */
     @GetMapping("/config/{quizId}")
     public ResponseEntity<byte[]> getSebConfig(
@@ -122,11 +111,6 @@ public class SebController {
 
     /**
      * Displays the SEB required page for a quiz.
-     *
-     * @param quizId The quiz ID
-     * @param model The Spring model
-     * @param request The HTTP request for SEB detection
-     * @return The view name
      */
     @GetMapping("/required/{quizId}")
     public String sebRequiredPage(

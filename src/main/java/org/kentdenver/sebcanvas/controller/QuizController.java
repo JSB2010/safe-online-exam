@@ -11,7 +11,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
-import javax.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpSession;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,11 +31,6 @@ public class QuizController {
 
     /**
      * API endpoint to update SEB requirement for a quiz.
-     *
-     * @param quizId The quiz ID
-     * @param requestBody The request body containing the required flag
-     * @param session The HTTP session with user information
-     * @return ResponseEntity with the updated setting
      */
     @PutMapping("/{quizId}/seb")
     @ResponseBody
@@ -60,9 +55,6 @@ public class QuizController {
 
     /**
      * Gets all quizzes for the current course.
-     *
-     * @param session The HTTP session with user information
-     * @return ResponseEntity with the list of quizzes
      */
     @GetMapping
     @ResponseBody
@@ -82,9 +74,6 @@ public class QuizController {
 
     /**
      * Gets all SEB settings for quizzes in the current course.
-     *
-     * @param session The HTTP session with user information
-     * @return ResponseEntity with a map of quiz IDs to SEB settings
      */
     @GetMapping("/seb-settings")
     @ResponseBody
@@ -115,10 +104,6 @@ public class QuizController {
 
     /**
      * View endpoint to display all quizzes and their SEB settings.
-     *
-     * @param model The Spring model
-     * @param session The HTTP session with user information
-     * @return The view name
      */
     @GetMapping("/view")
     public String viewQuizzes(Model model, HttpSession session) {
@@ -149,10 +134,6 @@ public class QuizController {
 
     /**
      * Gets details for a specific quiz.
-     *
-     * @param quizId The quiz ID
-     * @param session The HTTP session with user information
-     * @return ResponseEntity with the quiz details
      */
     @GetMapping("/{quizId}")
     @ResponseBody

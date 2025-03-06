@@ -6,6 +6,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.repository.SebSettingRepository;
 import org.kentdenver.sebcanvas.util.SebConfigGenerator;
+import org.kentdenver.sebcanvas.util.SebDetector;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -29,6 +30,9 @@ public class SebServiceTest {
     @Mock
     private SebConfigGenerator sebConfigGenerator;
 
+    @Mock
+    private SebDetector sebDetector;
+
     @InjectMocks
     private SebService sebService;
 
@@ -47,6 +51,9 @@ public class SebServiceTest {
         // Set SEB User-Agent
         request.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) SEB/3.0.0 Chrome/71.0.3578.98 Safari/537.36");
 
+        // Mock the detector
+        when(sebDetector.isSebBrowser(any())).thenReturn(true);
+
         // Test detection
         boolean result = sebService.isUsingSeb(request);
 
@@ -59,6 +66,9 @@ public class SebServiceTest {
         // Set SEB Config Key Hash header
         request.addHeader("X-SafeExamBrowser-ConfigKeyHash", "some-hash-value");
 
+        // Mock the detector
+        when(sebDetector.isSebBrowser(any())).thenReturn(true);
+
         // Test detection
         boolean result = sebService.isUsingSeb(request);
 
@@ -70,6 +80,9 @@ public class SebServiceTest {
     void testIsUsingSeb_notUsingSeb() {
         // Set regular User-Agent
         request.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+
+        // Mock the detector
+        when(sebDetector.isSebBrowser(any())).thenReturn(false);
 
         // Test detection
         boolean result = sebService.isUsingSeb(request);
@@ -106,8 +119,9 @@ public class SebServiceTest {
         mockSetting.setBrowserExamKey(BROWSER_EXAM_KEY);
         when(sebSettingRepository.findByQuizId(QUIZ_ID)).thenReturn(Optional.of(mockSetting));
 
-        // Call the method
-        boolean result = sebService.validateBrowserExamKey(QUIZ_ID, BROWSER_EXAM_KEY);
+        // Call the method with HTTP request
+        when(sebDetector.validateBrowserExamKey(any(), eq(BROWSER_EXAM_KEY))).thenReturn(true);
+        boolean result = sebService.validateBrowserExamKey(request, QUIZ_ID);
 
         // Verify
         assertTrue(result);
@@ -121,8 +135,9 @@ public class SebServiceTest {
         mockSetting.setBrowserExamKey(BROWSER_EXAM_KEY);
         when(sebSettingRepository.findByQuizId(QUIZ_ID)).thenReturn(Optional.of(mockSetting));
 
-        // Call the method with wrong key
-        boolean result = sebService.validateBrowserExamKey(QUIZ_ID, "wrong_key");
+        // Call the method with HTTP request
+        when(sebDetector.validateBrowserExamKey(any(), eq(BROWSER_EXAM_KEY))).thenReturn(false);
+        boolean result = sebService.validateBrowserExamKey(request, QUIZ_ID);
 
         // Verify
         assertFalse(result);
@@ -133,8 +148,8 @@ public class SebServiceTest {
         // Setup mock repository to return empty
         when(sebSettingRepository.findByQuizId(QUIZ_ID)).thenReturn(Optional.empty());
 
-        // Call the method
-        boolean result = sebService.validateBrowserExamKey(QUIZ_ID, BROWSER_EXAM_KEY);
+        // Call the method with HTTP request
+        boolean result = sebService.validateBrowserExamKey(request, QUIZ_ID);
 
         // Verify
         assertFalse(result);

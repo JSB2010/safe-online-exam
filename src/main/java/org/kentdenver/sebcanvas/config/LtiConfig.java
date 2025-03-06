@@ -23,8 +23,9 @@ public class LtiConfig {
 
     /**
      * The client ID from the Canvas Developer Key.
+     * Provides a default value for development/testing.
      */
-    @Value("${lti.clientId}")
+    @Value("${lti.clientId:lti-client-id-placeholder}")
     private String clientId;
 
     /**
@@ -51,8 +52,9 @@ public class LtiConfig {
     /**
      * The base URL of this tool.
      * Used for constructing redirect URIs during the LTI flow.
+     * Provides a default for development/testing.
      */
-    @Value("${lti.toolUrl}")
+    @Value("${lti.toolUrl:http://localhost:8080}")
     private String toolUrl;
 
     /**
@@ -69,7 +71,13 @@ public class LtiConfig {
     public void init() {
         log.info("LTI configuration initialized:");
         log.info("Issuer: {}", issuer);
-        log.info("Client ID: {}", clientId);
+
+        if ("lti-client-id-placeholder".equals(clientId)) {
+            log.warn("Using placeholder client ID - this is not suitable for production!");
+        } else {
+            log.info("Client ID: {}", clientId);
+        }
+
         log.info("Key Set URL: {}", keySetUrl);
         log.info("Token URL: {}", tokenUrl);
         log.info("Auth URL: {}", authUrl);

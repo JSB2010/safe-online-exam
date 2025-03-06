@@ -1,7 +1,6 @@
 package org.kentdenver.sebcanvas.repository;
 
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
-import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -10,9 +9,13 @@ import java.util.Optional;
 /**
  * Repository for accessing QuizSebSetting entities in the database.
  * Provides methods to find and manage SEB settings for quizzes.
+ *
+ * @deprecated This JPA repository is no longer used. Use {@link FirestoreSebSettingRepository} instead
+ * as the application has been migrated to use Firestore.
  */
+@Deprecated
 @Repository
-public interface SebSettingRepository extends JpaRepository<QuizSebSetting, Long> {
+public interface SebSettingRepository {
 
     /**
      * Finds a SEB setting for a specific quiz.
@@ -30,4 +33,12 @@ public interface SebSettingRepository extends JpaRepository<QuizSebSetting, Long
      * @return The list of SEB settings found
      */
     List<QuizSebSetting> findAllByQuizIdIn(List<String> quizIds);
+
+    /**
+     * Saves a SEB setting entity.
+     *
+     * @param setting The setting to save
+     * @return The saved setting
+     */
+    QuizSebSetting save(QuizSebSetting setting);
 }
