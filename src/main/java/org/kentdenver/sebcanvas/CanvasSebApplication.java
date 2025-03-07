@@ -1,6 +1,7 @@
 package org.kentdenver.sebcanvas;
 
 import org.kentdenver.sebcanvas.config.LtiConfig;
+import org.kentdenver.sebcanvas.service.JwkService;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -21,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 public class CanvasSebApplication {
 
     private final LtiConfig ltiConfig;
+    private final JwkService jwkService;
 
     /**
      * Main method to start the application.
@@ -41,5 +43,8 @@ public class CanvasSebApplication {
 
         // Initialize and log LTI configuration
         ltiConfig.init();
+
+        // Initialize JWK service
+        jwkService.initialize();
     }
 }

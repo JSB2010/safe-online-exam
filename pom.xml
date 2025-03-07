@@ -27,7 +27,7 @@
             <dependency>
                 <groupId>com.google.cloud</groupId>
                 <artifactId>libraries-bom</artifactId>
-                <version>25.1.0</version>
+                <version>26.56.0</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -84,21 +84,22 @@
         <dependency>
             <groupId>com.google.cloud</groupId>
             <artifactId>google-cloud-firestore</artifactId>
-            <version>3.30.0</version>
         </dependency>
 
-        <!-- Google Cloud Core -->
+        <dependency>
+            <groupId>com.google.cloud</groupId>
+            <artifactId>google-cloud-secretmanager</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>com.google.cloud</groupId>
             <artifactId>google-cloud-core</artifactId>
-            <version>2.52.0</version>
         </dependency>
 
         <!-- Google Auth Library -->
         <dependency>
             <groupId>com.google.auth</groupId>
             <artifactId>google-auth-library-oauth2-http</artifactId>
-            <version>1.22.0</version>
         </dependency>
 
         <!-- Utilities -->
@@ -128,10 +129,6 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.google.cloud</groupId>
-            <artifactId>google-cloud-secretmanager</artifactId>
         </dependency>
     </dependencies>
 

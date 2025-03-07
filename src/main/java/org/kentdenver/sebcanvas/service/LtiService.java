@@ -10,8 +10,18 @@ import com.nimbusds.jose.jwk.RSAKey;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.LtiConfig;
+import org.kentdenver.sebcanvas.service.JwkService;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSSigner;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import java.util.Date;
+import java.util.UUID;
 
 import java.io.IOException;
 import java.net.URI;
@@ -32,6 +42,7 @@ public class LtiService {
     private final LtiConfig ltiConfig;
     private final RestTemplate restTemplate;
     private JWKSet jwkSet;
+    private final JwkService jwkService;
 
     /**
      * Constructor that initializes the JWKSet from the Canvas JWKS URL.
@@ -41,9 +52,10 @@ public class LtiService {
      * @param restTemplate RestTemplate for HTTP requests
      * @throws RuntimeException If there's an error loading the JWK Set
      */
-    public LtiService(LtiConfig ltiConfig, RestTemplate restTemplate) {
+    public LtiService(LtiConfig ltiConfig, RestTemplate restTemplate, JwkService jwkService) {
         this.ltiConfig = ltiConfig;
         this.restTemplate = restTemplate;
+        this.jwkService = jwkService;
 
         // Load the JWK Set from Canvas
         try {
@@ -303,5 +315,33 @@ public class LtiService {
             }
             return false;
         }
+    }
+
+    /**
+     * Creates a signed JWT for LTI authentication.
+     * This is used when your app needs to make requests to Canvas APIs.
+     */
+    public String createSignedJwt(String targetAudience) throws JOSEException {
+        // Prepare JWT with claims
+        JWTClaimsSet claimsSet = new JWTClaimsSet.Builder()
+                .subject(ltiConfig.getClientId())
+                .issuer(ltiConfig.getToolUrl())
+                .audience(targetAudience)
+                .jwtID(UUID.randomUUID().toString())
+                .issueTime(new Date())
+                .expirationTime(new Date(System.currentTimeMillis() + 300 * 1000)) // 5 min expiry
+                .build();
+
+        // Create JWS header with key ID
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)
+                .keyID(jwkService.getKeyId())
+                .build();
+
+        // Sign the JWT
+        SignedJWT signedJWT = new SignedJWT(header, claimsSet);
+        signedJWT.sign(jwkService.getSigner());
+
+        // Return the serialized JWT
+        return signedJWT.serialize();
     }
 }
