@@ -14,9 +14,6 @@ import java.io.IOException;
 /**
  * Service for interacting with Google Cloud Secret Manager.
  * Provides methods to retrieve and update secrets with fallback to environment variables.
- *
- * The @Slf4j annotation adds a 'log' field to the class for logging.
- * This addresses the compilation error related to missing 'log' variables.
  */
 @Service
 @Slf4j
@@ -24,6 +21,9 @@ public class SecretManagerService {
 
     @Value("${spring.cloud.gcp.project-id:}")
     private String projectId;
+
+    @Value("${spring.profiles.active:dev}")
+    private String activeProfile;
 
     // For environments where we don't have a CredentialsProvider bean
     // we'll handle the null case gracefully
@@ -38,6 +38,7 @@ public class SecretManagerService {
     @Autowired(required = false)
     public SecretManagerService(CredentialsProvider credentialsProvider) {
         this.credentialsProvider = credentialsProvider;
+        log.info("SecretManagerService initialized with credentialsProvider: {}", (credentialsProvider != null ? "provided" : "null"));
     }
 
     /**
@@ -52,16 +53,27 @@ public class SecretManagerService {
      */
     public String getSecret(String secretId, String version) throws IOException {
         if (projectId == null || projectId.isEmpty()) {
-            log.warn("Project ID not configured, cannot access Secret Manager");
-            return getEnvironmentVariable(secretId);
+            log.warn("Project ID not configured, cannot access Secret Manager. secretId={}", secretId);
+            String envValue = getEnvironmentVariable(secretId);
+            log.info("Using environment variable fallback for secret: {}, found: {}",
+                    secretId, (envValue != null ? "yes" : "no"));
+            return envValue;
         }
 
         // Create the client
         try (SecretManagerServiceClient client = createClient()) {
+            if (client == null) {
+                log.warn("Failed to create Secret Manager client, using environment fallback for: {}", secretId);
+                return getEnvironmentVariable(secretId);
+            }
+
             SecretVersionName secretVersionName = SecretVersionName.of(projectId, secretId, version);
             try {
                 // Access the secret version
+                log.debug("Attempting to access secret: {}, version: {}, in project: {}",
+                        secretId, version, projectId);
                 AccessSecretVersionResponse response = client.accessSecretVersion(secretVersionName);
+                log.info("Successfully retrieved secret: {}", secretId);
                 return response.getPayload().getData().toStringUtf8();
             } catch (NotFoundException e) {
                 log.warn("Secret not found: {}:{} in project {}", secretId, version, projectId);
@@ -89,16 +101,22 @@ public class SecretManagerService {
      */
     public boolean updateSecret(String secretId, String secretValue) throws IOException {
         if (projectId == null || projectId.isEmpty()) {
-            log.warn("Project ID not configured, cannot update Secret Manager");
+            log.warn("Project ID not configured, cannot update Secret Manager. secretId={}", secretId);
             return false;
         }
 
         try (SecretManagerServiceClient client = createClient()) {
+            if (client == null) {
+                log.warn("Failed to create Secret Manager client, cannot update secret: {}", secretId);
+                return false;
+            }
+
             SecretName secretName = SecretName.of(projectId, secretId);
 
             // Check if the secret exists
             try {
                 client.getSecret(secretName);
+                log.debug("Secret {} exists in project {}", secretId, projectId);
             } catch (NotFoundException e) {
                 // Secret doesn't exist, create it
                 log.info("Secret {} does not exist in project {}, creating it", secretId, projectId);
@@ -172,6 +190,7 @@ public class SecretManagerService {
         try {
             // If we have a credentials provider, use it
             if (credentialsProvider != null) {
+                log.info("Creating Secret Manager client with explicit credentials provider");
                 return SecretManagerServiceClient.create(
                         SecretManagerServiceSettings.newBuilder()
                                 .setCredentialsProvider(credentialsProvider)
@@ -179,10 +198,27 @@ public class SecretManagerService {
             } else {
                 // Otherwise use default credentials
                 log.info("No credentials provider available, using application default credentials");
+                log.info("Current environment: K_SERVICE={}, GOOGLE_APPLICATION_CREDENTIALS={}",
+                        System.getenv("K_SERVICE"), System.getenv("GOOGLE_APPLICATION_CREDENTIALS"));
                 return SecretManagerServiceClient.create();
             }
         } catch (IOException e) {
-            log.error("Failed to create Secret Manager client", e);
+            log.error("Failed to create Secret Manager client: {}", e.getMessage(), e);
+            // Log additional details that might help troubleshoot
+            if (projectId == null || projectId.isEmpty()) {
+                log.error("Project ID is null or empty, which may cause Secret Manager issues");
+            }
+            log.error("Running with profile: {}", activeProfile);
+            log.error("Credentials provider null? {}", (credentialsProvider == null));
+
+            // Log relevant environment variables for troubleshooting
+            String k8sService = System.getenv("K_SERVICE");
+            String credentialsPath = System.getenv("GOOGLE_APPLICATION_CREDENTIALS");
+            String gcpProjectId = System.getenv("GCP_PROJECT_ID");
+
+            log.error("Environment information: K_SERVICE={}, GCP_PROJECT_ID={}, GOOGLE_APPLICATION_CREDENTIALS={}",
+                    k8sService, gcpProjectId, credentialsPath);
+
             throw e;
         }
     }
@@ -209,6 +245,24 @@ public class SecretManagerService {
         if (value != null && !value.isEmpty()) {
             log.info("Retrieved value for {} from environment variable {}", secretId, envVarFormat);
             return value;
+        }
+
+        // Try additional formats that might be used in Cloud Run
+        if (secretId.contains("_")) {
+            // Try different case variations
+            String[] formats = {
+                    secretId,
+                    secretId.toUpperCase(),
+                    secretId.toLowerCase()
+            };
+
+            for (String format : formats) {
+                value = System.getenv(format);
+                if (value != null && !value.isEmpty()) {
+                    log.info("Retrieved value for {} from environment variable {}", secretId, format);
+                    return value;
+                }
+            }
         }
 
         log.warn("Value for {} not found in environment variables", secretId);

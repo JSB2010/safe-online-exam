@@ -82,41 +82,41 @@ public class DeploymentService {
      * @return The service URL
      */
     private String determineServiceUrl(String serviceName) {
-        // Strategy 1: Check for manually set URL in environment
+        // Check for explicit SERVICE_URL environment variable
         String manualServiceUrl = System.getenv("SERVICE_URL");
         if (manualServiceUrl != null && !manualServiceUrl.isEmpty()) {
-            log.info("Using SERVICE_URL environment variable: {}", manualServiceUrl);
+            log.info("Using explicit SERVICE_URL from environment: {}", manualServiceUrl);
+            // Ensure HTTPS protocol
+            if (!manualServiceUrl.startsWith("https://")) {
+                manualServiceUrl = "https://" + manualServiceUrl.replaceFirst("^http://", "");
+                log.info("Converted service URL to HTTPS: {}", manualServiceUrl);
+            }
             return manualServiceUrl;
         }
 
-        // Strategy 2: Construct URL based on Cloud Run service name and region
-        // Get the GCP region
-        String region = System.getenv("GOOGLE_CLOUD_REGION");
-        if (region == null || region.isEmpty()) {
-            region = "us-central1"; // Default region
-        }
+        // Use K_SERVICE environment variable directly to ensure we get the full hostname
+        // K_SERVICE is always set in Cloud Run environment
+        String k8sService = System.getenv("K_SERVICE");
 
-        // Check if we have a project ID
-        if (projectId != null && !projectId.isEmpty()) {
-            // Standard format for Cloud Run URLs
-            String cloudRunUrl = "https://" + serviceName + "-" + region + ".run.app";
-            log.info("Constructed Cloud Run URL: {}", cloudRunUrl);
-            return cloudRunUrl;
-        }
-
-        // Strategy 3: Try to get the hostname from the system
-        try {
-            String hostName = InetAddress.getLocalHost().getHostName();
-            if (hostName != null && !hostName.isEmpty()) {
-                String url = "https://" + hostName;
-                log.info("Using system hostname for URL: {}", url);
-                return url;
+        // Retrieve the actual URL from the environment
+        // This environment variable is set by Cloud Run and includes the project ID in the URL
+        String rawUrl = System.getenv("CLOUD_RUN_CONTAINER_URL");
+        if (rawUrl != null && !rawUrl.isEmpty()) {
+            // Ensure HTTPS protocol
+            if (!rawUrl.startsWith("https://")) {
+                rawUrl = "https://" + rawUrl.replaceFirst("^http://", "");
             }
-        } catch (UnknownHostException e) {
-            log.warn("Could not determine hostname", e);
+            log.info("Using CLOUD_RUN_CONTAINER_URL: {}", rawUrl);
+            return rawUrl;
         }
 
-        log.error("All strategies failed to determine service URL");
-        return null;
+        // Fallback: Construct URL using service name, project ID and region
+        String region = System.getenv("K_REGION") != null ? System.getenv("K_REGION") : "us-central1";
+        String projectId = this.projectId != null ? this.projectId : "securityapis";
+
+        // Include the project ID in the URL to match the actual deployment URL
+        String cloudRunUrl = "https://" + serviceName + "-" + projectId + "." + region + ".run.app";
+        log.info("Constructed Cloud Run URL with project ID: {}", cloudRunUrl);
+        return cloudRunUrl;
     }
 }

@@ -14,9 +14,6 @@ import java.io.IOException;
 /**
  * Configuration for LTI 1.3 integration with Canvas.
  * Contains all necessary endpoints and identifiers for the LTI flow.
- *
- * The @Getter annotation ensures all private fields have getter methods automatically generated.
- * This addresses the compilation errors related to missing getters.
  */
 @Configuration
 @Slf4j
@@ -90,6 +87,7 @@ public class LtiConfig {
         // Set default values
         this.clientId = "lti-client-id-placeholder";
         this.toolUrl = "http://localhost:8080";
+        log.info("LtiConfig initialized with default values");
     }
 
     /**
@@ -98,8 +96,29 @@ public class LtiConfig {
      */
     @EventListener(ApplicationReadyEvent.class)
     public void init() {
-        // Try to load secrets from Secret Manager
-        loadSecrets();
+        log.info("Starting LTI configuration initialization");
+
+        try {
+            // Try to load secrets from Secret Manager
+            loadSecrets();
+        } catch (Exception e) {
+            log.error("Error initializing secrets from Secret Manager. Falling back to environment variables.", e);
+            // Fall back to environment variables
+            loadFromEnvironment();
+        }
+
+        // Ensure toolUrl uses HTTPS
+        if (toolUrl != null && !toolUrl.isEmpty()) {
+            // Force HTTPS protocol
+            if (!toolUrl.startsWith("https://")) {
+                String oldUrl = toolUrl;
+                toolUrl = "https://" + toolUrl.replaceFirst("^http://", "");
+                log.info("Changed toolUrl from '{}' to '{}'", oldUrl, toolUrl);
+            }
+        } else {
+            // If toolUrl is still null or empty, construct it directly from environment variables
+            constructToolUrlFromEnvironment();
+        }
 
         log.info("LTI configuration initialized:");
         log.info("Issuer: {}", issuer);
@@ -122,6 +141,29 @@ public class LtiConfig {
     }
 
     /**
+     * Constructs a tool URL from environment variables when no URL is specified.
+     */
+    private void constructToolUrlFromEnvironment() {
+        String k8sService = System.getenv("K_SERVICE");
+        String region = System.getenv("K_REGION") != null ? System.getenv("K_REGION") : "us-central1";
+        String envProjectId = System.getenv("GCP_PROJECT_ID");
+
+        // Use either environment variable or injected project ID
+        String effectiveProjectId = (envProjectId != null && !envProjectId.isEmpty()) ?
+                envProjectId :
+                (projectId != null ? projectId : "securityapis");
+
+        if (k8sService != null) {
+            toolUrl = "https://" + k8sService + "-" + effectiveProjectId + "." + region + ".run.app";
+            log.info("Set toolUrl directly from environment: {}", toolUrl);
+        } else {
+            // Fallback - likely local development
+            toolUrl = "https://localhost:8080";
+            log.warn("Could not determine Cloud Run URL, using fallback: {}", toolUrl);
+        }
+    }
+
+    /**
      * Loads secrets from Secret Manager or environment variables.
      * Follows a consistent naming convention for secrets based on the active profile.
      */
@@ -131,6 +173,8 @@ public class LtiConfig {
         String toolUrlSecret = activeProfile.equals("prod") ? "prod_tool_url" : "dev_tool_url";
 
         try {
+            log.info("Attempting to load LTI secrets from Secret Manager");
+
             // Load LTI Client ID from Secret Manager or fallback to environment variable
             String loadedClientId = secretManagerService.getSecret(ltiClientIdSecret, "latest");
             if (loadedClientId != null && !loadedClientId.isEmpty()) {
@@ -170,19 +214,24 @@ public class LtiConfig {
      * Checks both standard and uppercase variable names.
      */
     private void loadClientIdFromEnvironment() {
-        String envClientId = System.getenv("LTI_CLIENT_ID");
-        if (envClientId == null || envClientId.isEmpty()) {
-            // Try alternate environment variable format
-            envClientId = System.getenv("PROD_LTI_CLIENT_ID");
-            if (activeProfile.equals("dev")) {
-                envClientId = System.getenv("DEV_LTI_CLIENT_ID");
+        // Try various patterns for environment variable names
+        String[] patterns = {
+                "LTI_CLIENT_ID",
+                activeProfile.equals("prod") ? "PROD_LTI_CLIENT_ID" : "DEV_LTI_CLIENT_ID",
+                "lti_client_id",
+                activeProfile.equals("prod") ? "prod_lti_client_id" : "dev_lti_client_id"
+        };
+
+        for (String pattern : patterns) {
+            String envClientId = System.getenv(pattern);
+            if (envClientId != null && !envClientId.isEmpty()) {
+                this.clientId = envClientId;
+                log.info("Loaded LTI Client ID from environment variable: {}", pattern);
+                return;
             }
         }
 
-        if (envClientId != null && !envClientId.isEmpty()) {
-            this.clientId = envClientId;
-            log.info("Loaded LTI Client ID from environment");
-        }
+        log.warn("Could not find LTI Client ID in environment variables");
     }
 
     /**
@@ -190,18 +239,29 @@ public class LtiConfig {
      * Checks both standard and profile-specific variable names.
      */
     private void loadToolUrlFromEnvironment() {
-        String envToolUrl = System.getenv("TOOL_URL");
-        if (envToolUrl == null || envToolUrl.isEmpty()) {
-            // Try alternate environment variable format
-            envToolUrl = System.getenv("PROD_TOOL_URL");
-            if (activeProfile.equals("dev")) {
-                envToolUrl = System.getenv("DEV_TOOL_URL");
+        // Try various patterns for environment variable names
+        String[] patterns = {
+                "TOOL_URL",
+                activeProfile.equals("prod") ? "PROD_TOOL_URL" : "DEV_TOOL_URL",
+                "tool_url",
+                activeProfile.equals("prod") ? "prod_tool_url" : "dev_tool_url",
+                "SERVICE_URL"
+        };
+
+        for (String pattern : patterns) {
+            String envToolUrl = System.getenv(pattern);
+            if (envToolUrl != null && !envToolUrl.isEmpty()) {
+                this.toolUrl = envToolUrl;
+                log.info("Loaded Tool URL from environment variable {}: {}", pattern, toolUrl);
+                return;
             }
         }
 
-        if (envToolUrl != null && !envToolUrl.isEmpty()) {
-            this.toolUrl = envToolUrl;
-            log.info("Loaded Tool URL from environment: {}", toolUrl);
+        // If no environment variable found, try to construct from Cloud Run metadata
+        String k8sService = System.getenv("K_SERVICE");
+        if (k8sService != null && !k8sService.isEmpty()) {
+            log.info("Attempting to construct Tool URL from Cloud Run metadata");
+            constructToolUrlFromEnvironment();
         } else {
             log.info("Using default Tool URL: {}", toolUrl);
         }

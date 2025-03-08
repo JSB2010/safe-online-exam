@@ -30,7 +30,7 @@ public class SecurityConfig {
         http
                 // Disable CSRF for LTI endpoints (required for LTI 1.3 launches)
                 .csrf(csrf -> csrf
-                        .ignoringRequestMatchers("/lti/**", "/seb/**", "/h2-console/**")
+                        .ignoringRequestMatchers("/lti/**", "/seb/**", "/h2-console/**", "/login/**", "/health/**")
                 )
                 // Configure authorization for endpoints
                 .authorizeHttpRequests(auth -> auth
@@ -38,6 +38,12 @@ public class SecurityConfig {
                         .requestMatchers("/lti/**").permitAll()
                         // SEB config endpoints must be accessible without authentication
                         .requestMatchers("/seb/**").permitAll()
+                        // Health check endpoint (for Cloud Run)
+                        .requestMatchers("/health", "/health/**").permitAll()
+                        // Login endpoint
+                        .requestMatchers("/login", "/login/**").permitAll()
+                        // Root path for direct access
+                        .requestMatchers("/").permitAll()
                         // H2 console access (for development only)
                         .requestMatchers("/h2-console/**").permitAll()
                         // Static resources
