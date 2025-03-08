@@ -80,7 +80,7 @@
             <version>6.2.1</version>
         </dependency>
 
-        <!-- Google Cloud Firestore -->
+        <!-- Google Cloud Dependencies -->
         <dependency>
             <groupId>com.google.cloud</groupId>
             <artifactId>google-cloud-firestore</artifactId>
@@ -96,10 +96,18 @@
             <artifactId>google-cloud-core</artifactId>
         </dependency>
 
-        <!-- Google Auth Library -->
+        <!-- Google Auth Library with explicit version -->
         <dependency>
             <groupId>com.google.auth</groupId>
             <artifactId>google-auth-library-oauth2-http</artifactId>
+            <version>1.23.0</version>
+        </dependency>
+
+        <!-- Add GCP Spring integration -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-gcp-starter</artifactId>
+            <version>1.2.8.RELEASE</version>
         </dependency>
 
         <!-- Utilities -->

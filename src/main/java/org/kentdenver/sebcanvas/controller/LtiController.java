@@ -12,6 +12,8 @@ import org.kentdenver.sebcanvas.service.SebService;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -19,8 +21,10 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.view.RedirectView;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.text.ParseException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,9 +37,6 @@ import java.util.UUID;
  * 1. Login initiation - Canvas redirects to /lti/login with initialization parameters
  * 2. Authentication request - App redirects to Canvas auth endpoint with OIDC parameters
  * 3. Launch - Canvas redirects back with ID token containing LTI data
- *
- * The controller then routes users to appropriate views based on their roles (instructor or student)
- * and handles SEB configuration and enforcement for quizzes.
  */
 @Controller
 @RequestMapping("/lti")
@@ -48,7 +49,11 @@ public class LtiController {
     private static final String SESSION_LOGIN_HINT = "login_hint";
     private static final String SESSION_CLIENT_ID = "client_id";
     private static final String SESSION_LTI_MESSAGE_HINT = "lti_message_hint";
-    private static final String SESSION_CANVAS_USER_ACCESS_TOKEN = "canvas_user_access_token";
+    private static final String SESSION_LTI_DEPLOYMENT_ID = "lti_deployment_id";
+    private static final String SESSION_LAUNCH_DATA = "launchData";
+    private static final String SESSION_CANVAS_REGION = "canvas_region";
+    private static final String SESSION_CANVAS_ENVIRONMENT = "canvas_environment";
+    private static final String SESSION_LTI_STORAGE_TARGET = "lti_storage_target";
 
     // Service dependencies
     private final LtiService ltiService;
@@ -60,13 +65,6 @@ public class LtiController {
 
     /**
      * Constructor with dependency injection for all required services.
-     *
-     * @param ltiService Service for LTI token validation and processing
-     * @param ltiConfig Configuration for LTI integration
-     * @param sebDetector Utility for detecting SEB usage
-     * @param canvasService Service for Canvas API interactions
-     * @param quizService Service for quiz management
-     * @param sebService Service for SEB configuration generation
      */
     @Autowired
     public LtiController(
@@ -88,9 +86,7 @@ public class LtiController {
      * Handles the OIDC Login Initiation request from Canvas.
      * This is the first step in the LTI 1.3 launch flow based on Canvas LTI documentation.
      *
-     * Canvas redirects users to this endpoint when they click on an LTI tool. The method
-     * validates the issuer, generates CSRF protection state and nonce parameters, and
-     * redirects to Canvas's authorization endpoint.
+     * Canvas redirects users to this endpoint when they click on an LTI tool.
      *
      * @param iss The issuer (Canvas)
      * @param loginHint The login hint for the user
@@ -100,6 +96,7 @@ public class LtiController {
      * @param deploymentId The deployment ID identifying the specific tool installation
      * @param canvasRegion The AWS region of the Canvas instance
      * @param canvasEnvironment The Canvas environment (production, beta, test)
+     * @param ltiStorageTarget The name of the frame for LTI storage postMessages
      * @param session The HTTP session to store state for the authentication flow
      * @return A redirect to Canvas for authentication
      */
@@ -113,39 +110,52 @@ public class LtiController {
             @RequestParam(value = "lti_deployment_id", required = false) String deploymentId,
             @RequestParam(value = "canvas_region", required = false) String canvasRegion,
             @RequestParam(value = "canvas_environment", required = false) String canvasEnvironment,
+            @RequestParam(value = "lti_storage_target", required = false) String ltiStorageTarget,
             HttpSession session) {
 
-        log.debug("LTI login initiation received: iss={}, loginHint={}, targetLinkUri={}, clientId={}, deploymentId={}, region={}, env={}",
-                iss, loginHint, targetLinkUri, clientId, deploymentId, canvasRegion, canvasEnvironment);
+        log.debug("LTI login initiation received: iss={}, clientId={}, region={}, env={}",
+                iss, clientId, canvasRegion, canvasEnvironment);
 
         // Validate the issuer - This must match the configured issuer from Canvas
-        // For Canvas, this is always https://canvas.instructure.com regardless of the specific domain
         if (!ltiConfig.getIssuer().equals(iss)) {
             log.error("Invalid issuer: {}", iss);
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid issuer");
         }
 
         // Generate a state parameter for CSRF protection
-        // This will be checked on return to verify the authentication response is for this request
         String state = UUID.randomUUID().toString();
         session.setAttribute(SESSION_OIDC_STATE, state);
 
         // Generate a nonce for replay protection
-        // This helps prevent replay attacks by ensuring the token can only be used once
         String nonce = UUID.randomUUID().toString();
         session.setAttribute(SESSION_NONCE, nonce);
 
-        // Store other parameters for the next step in the session
+        // Store parameters in session for the next step
         session.setAttribute(SESSION_TARGET_LINK_URI, targetLinkUri);
         session.setAttribute(SESSION_LOGIN_HINT, loginHint);
         session.setAttribute(SESSION_CLIENT_ID, clientId);
+
         if (ltiMessageHint != null) {
             session.setAttribute(SESSION_LTI_MESSAGE_HINT, ltiMessageHint);
         }
 
-        // Construct the authentication request URL
-        // This follows the OpenID Connect third-party initiated login flow used by Canvas
-        // See: https://canvas.instructure.com/doc/api/file.lti_dev_key_config.html
+        if (deploymentId != null) {
+            session.setAttribute(SESSION_LTI_DEPLOYMENT_ID, deploymentId);
+        }
+
+        if (canvasRegion != null) {
+            session.setAttribute(SESSION_CANVAS_REGION, canvasRegion);
+        }
+
+        if (canvasEnvironment != null) {
+            session.setAttribute(SESSION_CANVAS_ENVIRONMENT, canvasEnvironment);
+        }
+
+        if (ltiStorageTarget != null) {
+            session.setAttribute(SESSION_LTI_STORAGE_TARGET, ltiStorageTarget);
+        }
+
+        // Construct the authentication request URL to Canvas
         StringBuilder authUrlBuilder = new StringBuilder(ltiConfig.getAuthUrl())
                 .append("?client_id=").append(clientId)
                 .append("&login_hint=").append(loginHint)
@@ -157,12 +167,12 @@ public class LtiController {
                 .append("&nonce=").append(nonce)
                 .append("&prompt=none");
 
-        // Include lti_message_hint if available - this contains context about the launch
+        // Include lti_message_hint if available
         if (ltiMessageHint != null) {
             authUrlBuilder.append("&lti_message_hint=").append(ltiMessageHint);
         }
 
-        // Include the deployment_id if available - helps identify the specific tool installation
+        // Include deployment_id if available
         if (deploymentId != null) {
             authUrlBuilder.append("&lti_deployment_id=").append(deploymentId);
         }
@@ -180,7 +190,6 @@ public class LtiController {
      *
      * Canvas redirects back to this endpoint after successful authentication.
      * The ID token contains all the LTI launch data which is validated and processed.
-     * Based on the user's role and context, they are directed to appropriate views.
      *
      * @param idToken The ID token from Canvas containing the LTI message
      * @param state The state parameter for CSRF protection validation
@@ -200,7 +209,6 @@ public class LtiController {
         log.debug("LTI launch received with ID token");
 
         // Verify state parameter to prevent CSRF
-        // This ensures the response is for the original authentication request
         String expectedState = (String) session.getAttribute(SESSION_OIDC_STATE);
         if (expectedState == null || !expectedState.equals(state)) {
             log.error("Invalid state parameter: expected={}, received={}", expectedState, state);
@@ -209,13 +217,12 @@ public class LtiController {
 
         try {
             // Validate the token and extract LTI data
-            // This verifies the signature and checks all required claims
-            LtiLaunchData launchData = ltiService.validateToken(idToken);
+            String nonce = (String) session.getAttribute(SESSION_NONCE);
+            LtiLaunchData launchData = ltiService.validateToken(idToken, nonce);
 
             // Add launch data to session and model
-            // This makes it available for the view and subsequent requests
             model.addAttribute("launchData", launchData);
-            session.setAttribute("launchData", launchData);
+            session.setAttribute(SESSION_LAUNCH_DATA, launchData);
 
             // Check if using SEB by examining request headers
             boolean isUsingSeb = sebDetector.isSebBrowser(request);
@@ -224,43 +231,13 @@ public class LtiController {
             log.info("LTI launch successful for user: {}, course: {}, resource: {}, using SEB: {}",
                     launchData.getUserId(), launchData.getCourseId(), launchData.getResourceLinkId(), isUsingSeb);
 
-            // Determine the appropriate view based on user role and context
-            if (launchData.isInstructor()) {
-                log.debug("Instructor launch detected, displaying teacher view");
-
-                // For instructors, get all quizzes in the course
-                List<Quiz> quizzes = quizService.getQuizzesForCourse(launchData.getCourseId());
-                model.addAttribute("quizzes", quizzes);
-
-                // Add SEB settings for each quiz to the model
-                Map<String, Boolean> quizSebRequirements = quizService.getQuizSebRequirements(quizzes);
-                model.addAttribute("quizSebRequirements", quizSebRequirements);
-
-                return "teacherView";
-            } else if (launchData.isStudent()) {
-                log.debug("Student launch detected, checking SEB requirements");
-
-                // For students, check if the current quiz requires SEB
-                String quizId = launchData.getResourceLinkId();
-                boolean sebRequired = quizService.isSebRequired(quizId);
-                model.addAttribute("sebRequired", sebRequired);
-                model.addAttribute("quizId", quizId);
-
-                // If SEB is required but the student isn't using it, show the requirement page
-                if (sebRequired && !isUsingSeb) {
-                    log.debug("SEB required but not using SEB, redirecting to SEB download page");
-                    return "sebRequired";
-                }
-
-                // If using SEB or SEB not required, show the quiz content
-                String quizUrl = quizService.getQuizUrl(quizId);
-                model.addAttribute("quizUrl", quizUrl);
-
-                return "studentView";
-            } else {
-                log.debug("User with undefined role, displaying generic view");
-                return "genericView";
+            // Handle different message types (LtiResourceLinkRequest vs LtiDeepLinkingRequest)
+            if ("LtiDeepLinkingRequest".equals(launchData.getMessageType())) {
+                return handleDeepLinkingRequest(launchData, model);
             }
+
+            // Standard resource link request - determine view based on user role
+            return handleResourceLinkRequest(launchData, isUsingSeb, model, request);
         } catch (ParseException | JOSEException e) {
             log.error("Error validating LTI token", e);
             model.addAttribute("error", "Failed to validate LTI launch. Please contact your instructor.");
@@ -269,21 +246,99 @@ public class LtiController {
     }
 
     /**
+     * Handles an LTI deep linking request message type.
+     * Used when Canvas is requesting content selection from the tool.
+     *
+     * @param launchData The LTI launch data
+     * @param model The Spring model for the view
+     * @return The view name
+     */
+    private String handleDeepLinkingRequest(LtiLaunchData launchData, Model model) {
+        log.debug("Deep linking request received");
+
+        // Only instructors should be able to select content
+        if (!launchData.isInstructor()) {
+            log.warn("Non-instructor attempted to access deep linking");
+            model.addAttribute("error", "Only instructors can select content");
+            return "error";
+        }
+
+        // Add necessary data for the content selection view
+        model.addAttribute("returnUrl", launchData.getDeepLinkReturnUrl());
+        model.addAttribute("deploymentId", launchData.getDeploymentId());
+
+        return "contentSelection";
+    }
+
+    /**
+     * Handles a standard LTI resource link request.
+     * Determines the appropriate view based on user role and context.
+     *
+     * @param launchData The LTI launch data
+     * @param isUsingSeb Whether the user is using SEB
+     * @param model The Spring model for the view
+     * @param request The HTTP request
+     * @return The view name
+     */
+    private String handleResourceLinkRequest(
+            LtiLaunchData launchData,
+            boolean isUsingSeb,
+            Model model,
+            HttpServletRequest request) {
+
+        // For instructors, show the teacher view with quiz management
+        if (launchData.isInstructor()) {
+            log.debug("Instructor launch detected, displaying teacher view");
+
+            // Get all quizzes in the course
+            List<Quiz> quizzes = quizService.getQuizzesForCourse(launchData.getCourseId());
+            model.addAttribute("quizzes", quizzes);
+
+            // Add SEB settings for each quiz
+            Map<String, Boolean> quizSebRequirements = quizService.getQuizSebRequirements(quizzes);
+            model.addAttribute("quizSebRequirements", quizSebRequirements);
+
+            return "teacherView";
+        }
+        // For students, check if SEB is required for the current resource
+        else if (launchData.isStudent()) {
+            log.debug("Student launch detected, checking SEB requirements");
+
+            String quizId = launchData.getResourceLinkId();
+            boolean sebRequired = quizService.isSebRequired(quizId);
+            model.addAttribute("sebRequired", sebRequired);
+            model.addAttribute("quizId", quizId);
+
+            // If SEB is required but not being used, show the requirement page
+            if (sebRequired && !isUsingSeb) {
+                log.debug("SEB required but not using SEB, redirecting to SEB download page");
+                return "sebRequired";
+            }
+
+            // Student is using SEB or SEB not required, show the quiz content
+            String quizUrl = quizService.getQuizUrl(quizId);
+            model.addAttribute("quizUrl", quizUrl);
+
+            return "studentView";
+        }
+        // For other roles, show a generic view
+        else {
+            log.debug("User with undefined role, displaying generic view");
+            return "genericView";
+        }
+    }
+
+    /**
      * Provides the SEB configuration file for a specific quiz.
      * This generates a .seb file that students can download and use to launch SEB.
-     *
-     * The method retrieves the quiz URL, generates a SEB configuration for that quiz,
-     * and returns it as a downloadable file. This configuration includes the browser exam key
-     * and appropriate settings for the Canvas quiz.
      *
      * @param quizId The ID of the quiz
      * @param session The HTTP session with user information
      * @return The SEB configuration file as a download
      */
     @GetMapping("/seb/config/{quizId}")
-    @ResponseBody
-    public byte[] getSebConfig(@PathVariable String quizId, HttpSession session) {
-        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+    public ResponseEntity<byte[]> getSebConfig(@PathVariable String quizId, HttpSession session) {
+        LtiLaunchData launchData = (LtiLaunchData) session.getAttribute(SESSION_LAUNCH_DATA);
         if (launchData == null) {
             log.error("No launch data in session when requesting SEB config");
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not authenticated");
@@ -294,11 +349,35 @@ public class LtiController {
             String quizUrl = quizService.getQuizUrl(quizId);
 
             // Generate SEB config
-            return sebService.generateSebConfig(quizId, quizUrl);
+            byte[] configData = sebService.generateSebConfig(quizId, quizUrl);
+
+            // Set up response headers for file download
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .header("Content-Disposition", "attachment; filename=quiz_" + quizId + ".seb")
+                    .body(configData);
         } catch (Exception e) {
             log.error("Error generating SEB config", e);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error generating SEB config");
         }
+    }
+
+    /**
+     * Endpoint that returns capabilities supported by the tool.
+     * Used by Canvas for LTI Platform Storage communication.
+     */
+    @PostMapping(value = "/capabilities", produces = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseBody
+    public Map<String, Object> capabilities() {
+        Map<String, Object> capabilities = new HashMap<>();
+        capabilities.put("supports_dynamic_registration", false);
+        capabilities.put("supported_messages", new String[] {
+                "lti.get_data",
+                "lti.put_data",
+                "lti.capabilities",
+                "lti.frameResize"
+        });
+        return capabilities;
     }
 
     /**
@@ -312,7 +391,7 @@ public class LtiController {
     @ExceptionHandler(ResponseStatusException.class)
     public String handleError(ResponseStatusException ex, Model model) {
         model.addAttribute("error", ex.getReason());
-        model.addAttribute("status", ex.getStatusCode().value());  // Changed getStatus() to getStatusCode()
+        model.addAttribute("status", ex.getStatusCode().value());
         return "error";
     }
 }

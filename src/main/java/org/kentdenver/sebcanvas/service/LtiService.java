@@ -10,18 +10,16 @@ import com.nimbusds.jose.jwk.RSAKey;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.LtiConfig;
-import org.kentdenver.sebcanvas.service.JwkService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSSigner;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
-import java.util.Date;
-import java.util.UUID;
 
 import java.io.IOException;
 import java.net.URI;
@@ -30,6 +28,8 @@ import java.text.ParseException;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Service for handling LTI 1.3 authentication and token validation.
@@ -39,10 +39,14 @@ import java.util.Map;
 @Slf4j
 public class LtiService {
 
+    // Constant for JWK refresh interval (24 hours)
+    private static final long JWK_REFRESH_INTERVAL = TimeUnit.HOURS.toMillis(24);
+
     private final LtiConfig ltiConfig;
     private final RestTemplate restTemplate;
     private JWKSet jwkSet;
     private final JwkService jwkService;
+    private long jwkSetLastRefreshed = 0;
 
     /**
      * Constructor that initializes the JWKSet from the Canvas JWKS URL.
@@ -50,18 +54,29 @@ public class LtiService {
      *
      * @param ltiConfig Configuration for LTI connections
      * @param restTemplate RestTemplate for HTTP requests
+     * @param jwkService Service for managing JWKs
      * @throws RuntimeException If there's an error loading the JWK Set
      */
+    @Autowired
     public LtiService(LtiConfig ltiConfig, RestTemplate restTemplate, JwkService jwkService) {
         this.ltiConfig = ltiConfig;
         this.restTemplate = restTemplate;
         this.jwkService = jwkService;
 
         // Load the JWK Set from Canvas
+        refreshJwkSet();
+    }
+
+    /**
+     * Refreshes the JWKSet from Canvas.
+     * This is important to handle key rotations.
+     */
+    @Scheduled(fixedRate = 86400000) // 24 hours in milliseconds
+    public void refreshJwkSet() {
         try {
-            // Use URI instead of URL(String) constructor which is deprecated
             URI jwksUri = new URI(ltiConfig.getKeySetUrl());
             this.jwkSet = JWKSet.load(jwksUri.toURL());
+            this.jwkSetLastRefreshed = System.currentTimeMillis();
             log.info("Successfully loaded JWK Set from {}", ltiConfig.getKeySetUrl());
         } catch (IOException | ParseException | URISyntaxException e) {
             log.error("Failed to load JWK Set from {}", ltiConfig.getKeySetUrl(), e);
@@ -73,12 +88,19 @@ public class LtiService {
      * Validates an LTI 1.3 JWT token according to the Canvas LTI documentation.
      *
      * @param token The JWT token from Canvas
+     * @param expectedNonce The nonce that should be in the token (for security)
      * @return The LTI launch data extracted from the token
      * @throws ParseException If there's an error parsing the token
      * @throws JOSEException If there's an error validating the token signature
      */
     @SuppressWarnings("unchecked")
-    public LtiLaunchData validateToken(String token) throws ParseException, JOSEException {
+    public LtiLaunchData validateToken(String token, String expectedNonce) throws ParseException, JOSEException {
+        // Check if JWK Set needs refreshing (older than 24 hours)
+        if (System.currentTimeMillis() - jwkSetLastRefreshed > JWK_REFRESH_INTERVAL) {
+            log.debug("JWK Set is stale, refreshing from Canvas");
+            refreshJwkSet();
+        }
+
         // Parse the JWT
         JWSObject jwsObject = JWSObject.parse(token);
 
@@ -103,7 +125,7 @@ public class LtiService {
         Map<String, Object> claims = jwsObject.getPayload().toJSONObject();
 
         // Verify required properties according to Canvas LTI documentation
-        validateClaims(claims);
+        validateClaims(claims, expectedNonce);
 
         // Extract the LTI claim data
         LtiLaunchData launchData = new LtiLaunchData();
@@ -153,6 +175,16 @@ public class LtiService {
             launchData.setCustomParameters(custom);
         }
 
+        // Extract deep linking settings if available (for content item selection)
+        Map<String, Object> deepLinkingSettings = (Map<String, Object>) claims.get("https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings");
+        if (deepLinkingSettings != null) {
+            launchData.setDeepLinkReturnUrl((String) deepLinkingSettings.get("deep_link_return_url"));
+            launchData.setDeepLinkAcceptTypes((List<String>) deepLinkingSettings.get("accept_types"));
+            launchData.setDeepLinkAcceptMedia((List<String>) deepLinkingSettings.get("accept_media_types"));
+            launchData.setDeepLinkDocumentTargets((List<String>) deepLinkingSettings.get("accept_presentation_document_targets"));
+            launchData.setDeepLinkData((String) deepLinkingSettings.get("data"));
+        }
+
         // Extract platform instance information
         Map<String, Object> platform = (Map<String, Object>) claims.get("https://purl.imsglobal.org/spec/lti/claim/tool_platform");
         if (platform != null) {
@@ -169,13 +201,22 @@ public class LtiService {
     }
 
     /**
+     * Legacy method without nonce validation - for backward compatibility
+     */
+    public LtiLaunchData validateToken(String token) throws ParseException, JOSEException {
+        log.warn("Using deprecated validateToken method without nonce validation");
+        return validateToken(token, null);
+    }
+
+    /**
      * Validates the claims in the token according to the Canvas LTI documentation.
      *
      * @param claims The claims from the token
+     * @param expectedNonce The nonce expected in the token
      * @throws JOSEException If the claims are invalid
      */
     @SuppressWarnings("unchecked")
-    private void validateClaims(Map<String, Object> claims) throws JOSEException {
+    private void validateClaims(Map<String, Object> claims, String expectedNonce) throws JOSEException {
         // Verify issuer
         if (!claims.get("iss").equals(ltiConfig.getIssuer())) {
             throw new JOSEException("Invalid issuer: " + claims.get("iss"));
@@ -197,6 +238,14 @@ public class LtiService {
 
         if (!validAudience) {
             throw new JOSEException("Invalid audience: " + audObj);
+        }
+
+        // Verify nonce if provided
+        if (expectedNonce != null) {
+            String tokenNonce = (String) claims.get("nonce");
+            if (tokenNonce == null || !tokenNonce.equals(expectedNonce)) {
+                throw new JOSEException("Invalid nonce");
+            }
         }
 
         // Verify not expired
@@ -243,7 +292,41 @@ public class LtiService {
     }
 
     /**
+     * Creates a signed JWT for LTI client credentials.
+     * This is used when your app needs to make requests to Canvas APIs.
+     *
+     * @param targetAudience The audience claim for the JWT (typically Canvas token URL)
+     * @return A signed JWT string
+     * @throws JOSEException If there's an error signing the JWT
+     */
+    public String createSignedJwt(String targetAudience) throws JOSEException {
+        // Prepare JWT with claims
+        JWTClaimsSet claimsSet = new JWTClaimsSet.Builder()
+                .subject(ltiConfig.getClientId())
+                .issuer(ltiConfig.getToolUrl())
+                .audience(targetAudience)
+                .jwtID(UUID.randomUUID().toString())
+                .issueTime(new Date())
+                .expirationTime(new Date(System.currentTimeMillis() + 300 * 1000)) // 5 min expiry
+                .build();
+
+        // Create JWS header with key ID
+        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)
+                .keyID(jwkService.getKeyId())
+                .build();
+
+        // Sign the JWT
+        SignedJWT signedJWT = new SignedJWT(header, claimsSet);
+        signedJWT.sign(jwkService.getSigner());
+
+        // Return the serialized JWT
+        return signedJWT.serialize();
+    }
+
+    /**
      * Data class for LTI launch information extracted from the token.
+     * This class uses Lombok's @Data annotation to automatically generate
+     * getters, setters, equals, hashCode, and toString methods.
      */
     @Data
     public static class LtiLaunchData {
@@ -277,6 +360,13 @@ public class LtiService {
         private String platformGuid;
         private String platformVersion;
         private String platformProductFamilyCode;
+
+        // Deep linking information (for content selection)
+        private String deepLinkReturnUrl;
+        private List<String> deepLinkAcceptTypes;
+        private List<String> deepLinkAcceptMedia;
+        private List<String> deepLinkDocumentTargets;
+        private String deepLinkData;
 
         /**
          * Checks if the user is an instructor based on their roles.
@@ -315,33 +405,5 @@ public class LtiService {
             }
             return false;
         }
-    }
-
-    /**
-     * Creates a signed JWT for LTI authentication.
-     * This is used when your app needs to make requests to Canvas APIs.
-     */
-    public String createSignedJwt(String targetAudience) throws JOSEException {
-        // Prepare JWT with claims
-        JWTClaimsSet claimsSet = new JWTClaimsSet.Builder()
-                .subject(ltiConfig.getClientId())
-                .issuer(ltiConfig.getToolUrl())
-                .audience(targetAudience)
-                .jwtID(UUID.randomUUID().toString())
-                .issueTime(new Date())
-                .expirationTime(new Date(System.currentTimeMillis() + 300 * 1000)) // 5 min expiry
-                .build();
-
-        // Create JWS header with key ID
-        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)
-                .keyID(jwkService.getKeyId())
-                .build();
-
-        // Sign the JWT
-        SignedJWT signedJWT = new SignedJWT(header, claimsSet);
-        signedJWT.sign(jwkService.getSigner());
-
-        // Return the serialized JWT
-        return signedJWT.serialize();
     }
 }

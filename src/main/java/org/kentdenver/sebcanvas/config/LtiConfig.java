@@ -6,12 +6,17 @@ import org.kentdenver.sebcanvas.service.SecretManagerService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 
 import java.io.IOException;
 
 /**
  * Configuration for LTI 1.3 integration with Canvas.
  * Contains all necessary endpoints and identifiers for the LTI flow.
+ *
+ * The @Getter annotation ensures all private fields have getter methods automatically generated.
+ * This addresses the compilation errors related to missing getters.
  */
 @Configuration
 @Slf4j
@@ -22,41 +27,41 @@ public class LtiConfig {
      * The issuer identifier for Canvas.
      * This is always https://canvas.instructure.com regardless of the institution's Canvas domain.
      */
-    @Value("${lti.issuer}")
+    @Value("${lti.issuer:https://canvas.instructure.com}")
     private String issuer;
 
     /**
      * The client ID from the Canvas Developer Key.
-     * Now loaded from Secret Manager.
+     * Loaded from Secret Manager or environment variable.
      */
-    private String clientId = "lti-client-id-placeholder";
+    private String clientId;
 
     /**
      * The URL to the Canvas JSON Web Key Set (JWKS).
      * Used to verify JWT tokens from Canvas.
      */
-    @Value("${lti.keySetUrl}")
+    @Value("${lti.keySetUrl:https://sso.canvaslms.com/api/lti/security/jwks}")
     private String keySetUrl;
 
     /**
      * The URL to the Canvas OAuth2 token endpoint.
      * Used for obtaining access tokens for Canvas API services.
      */
-    @Value("${lti.tokenUrl}")
+    @Value("${lti.tokenUrl:https://sso.canvaslms.com/login/oauth2/token}")
     private String tokenUrl;
 
     /**
      * The URL to the Canvas OpenID Connect authorization endpoint.
      * Used during the LTI launch flow for authentication.
      */
-    @Value("${lti.authUrl}")
+    @Value("${lti.authUrl:https://sso.canvaslms.com/api/lti/authorize_redirect}")
     private String authUrl;
 
     /**
      * The base URL of this tool.
-     * Now loaded from Secret Manager.
+     * Loaded from Secret Manager or environment variable.
      */
-    private String toolUrl = "http://localhost:8080";
+    private String toolUrl;
 
     /**
      * The deployment ID for this tool.
@@ -73,32 +78,41 @@ public class LtiConfig {
 
     private final SecretManagerService secretManagerService;
 
+    /**
+     * Constructor with dependency injection for SecretManagerService.
+     * Sets default values for clientId and toolUrl.
+     *
+     * @param secretManagerService Service to access secrets from Secret Manager
+     */
     @Autowired
     public LtiConfig(SecretManagerService secretManagerService) {
         this.secretManagerService = secretManagerService;
+        // Set default values
+        this.clientId = "lti-client-id-placeholder";
+        this.toolUrl = "http://localhost:8080";
     }
 
     /**
-     * Initializes the LTI configuration and logs the values.
-     * Now loads secrets from Secret Manager when available.
+     * Initializes the LTI configuration by loading secrets from Secret Manager.
+     * This method is automatically called after application startup.
      */
+    @EventListener(ApplicationReadyEvent.class)
     public void init() {
         // Try to load secrets from Secret Manager
         loadSecrets();
 
         log.info("LTI configuration initialized:");
         log.info("Issuer: {}", issuer);
+        log.info("Key Set URL: {}", keySetUrl);
+        log.info("Token URL: {}", tokenUrl);
+        log.info("Auth URL: {}", authUrl);
+        log.info("Tool URL: {}", toolUrl);
 
         if ("lti-client-id-placeholder".equals(clientId)) {
             log.warn("Using placeholder client ID - this is not suitable for production!");
         } else {
             log.info("Client ID: {}", clientId);
         }
-
-        log.info("Key Set URL: {}", keySetUrl);
-        log.info("Token URL: {}", tokenUrl);
-        log.info("Auth URL: {}", authUrl);
-        log.info("Tool URL: {}", toolUrl);
 
         if (deploymentId != null && !deploymentId.isEmpty()) {
             log.info("Deployment ID: {}", deploymentId);
@@ -108,22 +122,16 @@ public class LtiConfig {
     }
 
     /**
-     * Loads secrets from Secret Manager.
-     * Falls back to environment variables if secrets are not available.
+     * Loads secrets from Secret Manager or environment variables.
+     * Follows a consistent naming convention for secrets based on the active profile.
      */
     private void loadSecrets() {
-        if (projectId == null || projectId.isEmpty()) {
-            log.warn("GCP project ID not set. Falling back to environment variables.");
-            loadFromEnvironment();
-            return;
-        }
+        // Determine secret names based on active profile
+        String ltiClientIdSecret = activeProfile.equals("prod") ? "prod_lti_client_id" : "dev_lti_client_id";
+        String toolUrlSecret = activeProfile.equals("prod") ? "prod_tool_url" : "dev_tool_url";
 
         try {
-            // Determine secret names based on active profile
-            String ltiClientIdSecret = activeProfile.equals("prod") ? "prod_lti_client_id" : "dev_lti_client_id";
-            String toolUrlSecret = activeProfile.equals("prod") ? "prod_tool_url" : "dev_tool_url";
-
-            // Load LTI Client ID
+            // Load LTI Client ID from Secret Manager or fallback to environment variable
             String loadedClientId = secretManagerService.getSecret(ltiClientIdSecret, "latest");
             if (loadedClientId != null && !loadedClientId.isEmpty()) {
                 this.clientId = loadedClientId;
@@ -133,7 +141,7 @@ public class LtiConfig {
                 loadClientIdFromEnvironment();
             }
 
-            // Load Tool URL
+            // Load Tool URL from Secret Manager or fallback to environment variable
             String loadedToolUrl = secretManagerService.getSecret(toolUrlSecret, "latest");
             if (loadedToolUrl != null && !loadedToolUrl.isEmpty()) {
                 this.toolUrl = loadedToolUrl;
@@ -144,6 +152,7 @@ public class LtiConfig {
             }
         } catch (IOException e) {
             log.error("Error accessing Secret Manager", e);
+            log.info("Falling back to environment variables");
             loadFromEnvironment();
         }
     }
@@ -158,9 +167,18 @@ public class LtiConfig {
 
     /**
      * Loads the LTI Client ID from environment variables.
+     * Checks both standard and uppercase variable names.
      */
     private void loadClientIdFromEnvironment() {
         String envClientId = System.getenv("LTI_CLIENT_ID");
+        if (envClientId == null || envClientId.isEmpty()) {
+            // Try alternate environment variable format
+            envClientId = System.getenv("PROD_LTI_CLIENT_ID");
+            if (activeProfile.equals("dev")) {
+                envClientId = System.getenv("DEV_LTI_CLIENT_ID");
+            }
+        }
+
         if (envClientId != null && !envClientId.isEmpty()) {
             this.clientId = envClientId;
             log.info("Loaded LTI Client ID from environment");
@@ -169,9 +187,18 @@ public class LtiConfig {
 
     /**
      * Loads the Tool URL from environment variables.
+     * Checks both standard and profile-specific variable names.
      */
     private void loadToolUrlFromEnvironment() {
         String envToolUrl = System.getenv("TOOL_URL");
+        if (envToolUrl == null || envToolUrl.isEmpty()) {
+            // Try alternate environment variable format
+            envToolUrl = System.getenv("PROD_TOOL_URL");
+            if (activeProfile.equals("dev")) {
+                envToolUrl = System.getenv("DEV_TOOL_URL");
+            }
+        }
+
         if (envToolUrl != null && !envToolUrl.isEmpty()) {
             this.toolUrl = envToolUrl;
             log.info("Loaded Tool URL from environment: {}", toolUrl);

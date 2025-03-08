@@ -14,6 +14,9 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Main application class for the Canvas SEB Integration.
  * Configures and starts the Spring Boot application.
+ *
+ * The @Slf4j annotation adds a 'log' field to the class for logging.
+ * This addresses the compilation error related to missing 'log' variables.
  */
 @SpringBootApplication
 @EnableAsync
@@ -36,13 +39,13 @@ public class CanvasSebApplication {
     /**
      * Event listener that runs after the application has started.
      * Initializes configurations and logs startup information.
+     *
+     * Note: LtiConfig's init() method is annotated with @EventListener and will be called automatically,
+     * so we don't need to call it here. We only need to initialize the JWK service.
      */
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         log.info("Canvas SEB Integration started successfully");
-
-        // Initialize and log LTI configuration
-        ltiConfig.init();
 
         // Initialize JWK service
         jwkService.initialize();
