@@ -14,6 +14,8 @@ import java.io.IOException;
 /**
  * Configuration for LTI 1.3 integration with Canvas.
  * Contains all necessary endpoints and identifiers for the LTI flow.
+ *
+ * The @Getter annotation ensures all private fields have getter methods automatically generated.
  */
 @Configuration
 @Slf4j
@@ -96,16 +98,8 @@ public class LtiConfig {
      */
     @EventListener(ApplicationReadyEvent.class)
     public void init() {
-        log.info("Starting LTI configuration initialization");
-
-        try {
-            // Try to load secrets from Secret Manager
-            loadSecrets();
-        } catch (Exception e) {
-            log.error("Error initializing secrets from Secret Manager. Falling back to environment variables.", e);
-            // Fall back to environment variables
-            loadFromEnvironment();
-        }
+        // Try to load secrets from Secret Manager
+        loadSecrets();
 
         // Ensure toolUrl uses HTTPS
         if (toolUrl != null && !toolUrl.isEmpty()) {
@@ -116,8 +110,9 @@ public class LtiConfig {
                 log.info("Changed toolUrl from '{}' to '{}'", oldUrl, toolUrl);
             }
         } else {
-            // If toolUrl is still null or empty, construct it directly from environment variables
-            constructToolUrlFromEnvironment();
+            // If toolUrl is still null or empty, log a warning
+            log.warn("No tool URL configured in secrets - LTI functionality may not work correctly");
+            log.warn("Please set the toolUrl in Secret Manager");
         }
 
         log.info("LTI configuration initialized:");
@@ -137,29 +132,6 @@ public class LtiConfig {
             log.info("Deployment ID: {}", deploymentId);
         } else {
             log.info("No deployment ID configured - will use deployment ID from launch");
-        }
-    }
-
-    /**
-     * Constructs a tool URL from environment variables when no URL is specified.
-     */
-    private void constructToolUrlFromEnvironment() {
-        String k8sService = System.getenv("K_SERVICE");
-        String region = System.getenv("K_REGION") != null ? System.getenv("K_REGION") : "us-central1";
-        String envProjectId = System.getenv("GCP_PROJECT_ID");
-
-        // Use either environment variable or injected project ID
-        String effectiveProjectId = (envProjectId != null && !envProjectId.isEmpty()) ?
-                envProjectId :
-                (projectId != null ? projectId : "securityapis");
-
-        if (k8sService != null) {
-            toolUrl = "https://" + k8sService + "-" + effectiveProjectId + "." + region + ".run.app";
-            log.info("Set toolUrl directly from environment: {}", toolUrl);
-        } else {
-            // Fallback - likely local development
-            toolUrl = "https://localhost:8080";
-            log.warn("Could not determine Cloud Run URL, using fallback: {}", toolUrl);
         }
     }
 
@@ -194,7 +166,7 @@ public class LtiConfig {
                 log.warn("Tool URL not found in Secret Manager, checking environment");
                 loadToolUrlFromEnvironment();
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.error("Error accessing Secret Manager", e);
             log.info("Falling back to environment variables");
             loadFromEnvironment();
@@ -257,13 +229,6 @@ public class LtiConfig {
             }
         }
 
-        // If no environment variable found, try to construct from Cloud Run metadata
-        String k8sService = System.getenv("K_SERVICE");
-        if (k8sService != null && !k8sService.isEmpty()) {
-            log.info("Attempting to construct Tool URL from Cloud Run metadata");
-            constructToolUrlFromEnvironment();
-        } else {
-            log.info("Using default Tool URL: {}", toolUrl);
-        }
+        log.warn("Could not find Tool URL in environment variables");
     }
 }

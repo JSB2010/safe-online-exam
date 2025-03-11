@@ -47,7 +47,25 @@ public class CanvasSebApplication {
     public void onApplicationReady() {
         log.info("Canvas SEB Integration started successfully");
 
-        // Initialize JWK service
-        jwkService.initialize();
+        // Initialize JWK service with improved error handling
+        try {
+            // Run JWK initialization in a background thread to avoid blocking startup
+            new Thread(() -> {
+                try {
+                    log.info("Starting JWK service initialization in background thread");
+                    Thread.sleep(5000); // Wait 5 seconds to give other services time to initialize
+                    jwkService.initialize();
+                    log.info("JWK service initialized successfully");
+                } catch (Exception e) {
+                    // Log the error but allow the application to continue running
+                    log.error("Error initializing JWK service: {}", e.getMessage());
+                    log.warn("Some signing operations may not work correctly, but the application will continue to run");
+                }
+            }, "JWK-Init-Thread").start();
+        } catch (Exception e) {
+            // If we can't even start the background thread, log and continue
+            log.error("Failed to start JWK initialization thread: {}", e.getMessage());
+            log.warn("Application started with limited functionality");
+        }
     }
 }
