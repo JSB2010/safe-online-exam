@@ -86,7 +86,8 @@ public class CanvasService {
 
         try {
             // Get a valid token (either from cache or through OAuth)
-            String accessToken = getAccessToken(userId);
+            // Pass the courseId to the getAccessToken method
+            String accessToken = getAccessToken(userId, courseId);
 
             // Prepare the request URL - use Canvas API standard endpoint for quizzes
             String url = UriComponentsBuilder
@@ -132,24 +133,31 @@ public class CanvasService {
      * First checks the cache, and if not found or expired, gets a new token via client credentials flow.
      *
      * @param userId The user ID for token caching
+     * @param courseId The course ID for which we need access
      * @return A valid access token
      * @throws Exception If token acquisition fails
      */
-    private String getAccessToken(String userId) throws Exception {
-        // Check cache first
-        TokenInfo cachedToken = tokenCache.get(userId);
+    private String getAccessToken(String userId, String courseId) throws Exception {
+        // Check cache first - use a composite key of userId_courseId for the cache
+        String cacheKey = userId + "_" + courseId;
+        TokenInfo cachedToken = tokenCache.get(cacheKey);
         if (cachedToken != null && cachedToken.isValid()) {
-            log.debug("Using cached token for user: {}", userId);
+            log.debug("Using cached token for user: {} and course: {}", userId, courseId);
             return cachedToken.token;
         }
 
-        log.debug("No valid cached token found for user: {}, obtaining new token", userId);
+        log.debug("No valid cached token found for user: {} and course: {}, obtaining new token", userId, courseId);
 
         try {
             // Create a signed JWT for client credentials request
             String signedJwt = jwkService.createSignedJwt(ltiConfig.getClientId(),
                     ltiConfig.getToolUrl(),
                     ltiConfig.getTokenUrl());
+
+            log.debug("JWT token length: {}", signedJwt.length());
+            log.debug("Using client_id: {}", ltiConfig.getClientId());
+            log.debug("Using issuer (tool URL): {}", ltiConfig.getToolUrl());
+            log.debug("Using audience (token URL): {}", ltiConfig.getTokenUrl());
 
             // Prepare token request
             HttpHeaders headers = new HttpHeaders();
@@ -159,9 +167,14 @@ public class CanvasService {
             formData.add("grant_type", "client_credentials");
             formData.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
             formData.add("client_assertion", signedJwt);
-            formData.add("scope", "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly");
+
+            // Use the specific granular scope with the actual course ID
+            formData.add("scope", "url:GET|/api/v1/courses/" + courseId + "/quizzes");
 
             HttpEntity<MultiValueMap<String, String>> requestEntity = new HttpEntity<>(formData, headers);
+
+            log.debug("Making token request to: {}", ltiConfig.getTokenUrl());
+            log.debug("Requesting scope for course ID: {}", courseId);
 
             // Make the token request
             ResponseEntity<String> response = restTemplate.exchange(
@@ -180,16 +193,23 @@ public class CanvasService {
             String accessToken = (String) tokenResponse.get("access_token");
             long expiresIn = ((Number) tokenResponse.getOrDefault("expires_in", 3600)).longValue();
 
-            // Store in cache
-            tokenCache.put(userId, new TokenInfo(accessToken, expiresIn));
+            log.debug("Successfully obtained access token, expires in {} seconds", expiresIn);
+            log.debug("Access token first 20 chars: {}", accessToken.substring(0, Math.min(accessToken.length(), 20)) + "...");
 
-            log.debug("Successfully obtained new access token for user: {}", userId);
+            // Store in cache using the composite key
+            tokenCache.put(cacheKey, new TokenInfo(accessToken, expiresIn));
+
             return accessToken;
         } catch (Exception e) {
             log.error("Failed to obtain access token: {}", e.getMessage());
 
+            // Log more details about the error
+            if (e instanceof HttpClientErrorException) {
+                HttpClientErrorException httpEx = (HttpClientErrorException) e;
+                log.error("HTTP Status: {}, Response body: {}", httpEx.getStatusCode(), httpEx.getResponseBodyAsString());
+            }
+
             // As a fallback during development, return a manually configured token if available
-            // This can be useful for testing when OAuth flow is not fully configured
             String fallbackToken = System.getenv("CANVAS_API_TOKEN");
             if (fallbackToken != null && !fallbackToken.isEmpty()) {
                 log.warn("Using fallback Canvas API token from environment variables");
