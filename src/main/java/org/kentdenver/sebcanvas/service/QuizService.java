@@ -66,15 +66,22 @@ public class QuizService {
 
         if (quizzes.isEmpty()) {
             log.debug("No quizzes found in database for course: {}, fetching from Canvas", courseId);
-            // In a real implementation, you would pass an access token
-            // This would typically be retrieved during the LTI launch
-            String accessToken = "dummy_token";
-            quizzes = canvasService.getQuizzesForCourse(courseId, accessToken);
 
-            // Save fetched quizzes to database
+            // Use the courseId as the userId for caching purposes
+            // In a production implementation, you would use the actual user ID from the LTI context
+            quizzes = canvasService.getQuizzesForCourse(courseId, courseId);
+
+            // Save fetched quizzes to database if any were returned
             if (!quizzes.isEmpty()) {
-                quizzes = quizRepository.saveAll(quizzes);
-                log.debug("Saved {} quizzes from Canvas to database", quizzes.size());
+                try {
+                    quizzes = quizRepository.saveAll(quizzes);
+                    log.debug("Saved {} quizzes from Canvas to database", quizzes.size());
+                } catch (Exception e) {
+                    log.error("Error saving quizzes to database: {}", e.getMessage());
+                    // Continue with the fetched quizzes even if saving fails
+                }
+            } else {
+                log.info("No quizzes found in Canvas for course: {}", courseId);
             }
         }
 

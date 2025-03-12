@@ -30,7 +30,7 @@ steps:
       - '--region=us-central1'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--set-env-vars=SPRING_PROFILES_ACTIVE=dev,GCP_PROJECT_ID=$PROJECT_ID'
+      - '--set-env-vars=SPRING_PROFILES_ACTIVE=dev,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev'
       - '--set-secrets=LTI_CLIENT_ID=dev_lti_client_id:latest,TOOL_URL=dev_tool_url:latest,ADMIN_PASSWORD=dev_admin_password:latest'
       - '--memory=1Gi'
       - '--cpu=1'

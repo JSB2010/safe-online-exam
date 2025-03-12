@@ -14,58 +14,88 @@ import java.io.IOException;
 
 /**
  * Configuration class for Google Cloud Firestore.
- * This class provides the Firestore instance that will be injected into repositories.
- * It includes fallback mechanisms for development environments and graceful error handling.
+ * Provides specific database connections for development and production environments.
+ *
+ * This configuration ensures the application uses Firestore Native mode databases
+ * instead of the default Datastore mode in the project.
  */
 @Configuration
 @Slf4j
 public class FirestoreConfig {
 
-    @Value("${spring.cloud.gcp.project-id:canvas-seb-integration}")
+    @Value("${spring.cloud.gcp.project-id:securityapis}")
     private String projectId;
 
     /**
      * Creates and configures a Firestore instance for production use.
      * Uses Application Default Credentials (ADC) for authentication.
+     * Explicitly connects to the seb-canvaslti-prod database.
      *
-     * @return A configured Firestore instance or null if initialization fails
+     * @return A configured Firestore instance
      */
     @Bean
     @Primary
-    public Firestore firestore() {
+    @Profile("prod")
+    public Firestore firestoreProd() {
         try {
-            log.info("Initializing Firestore with project ID: {}", projectId);
+            log.info("Initializing Firestore for PRODUCTION with project ID: {}", projectId);
 
-            // Build Firestore options with minimal configuration
+            // Build Firestore options with production database
             FirestoreOptions firestoreOptions = FirestoreOptions.getDefaultInstance().toBuilder()
                     .setProjectId(projectId)
+                    .setDatabaseId("seb-canvaslti-prod") // Explicitly set the production database
                     .build();
 
-            log.info("Successfully created Firestore configuration");
+            log.info("Successfully created Firestore configuration for production database");
             return firestoreOptions.getService();
         } catch (Throwable e) {
-            // Log the error but allow application to start without Firestore
-            log.error("Failed to initialize Firestore: {}", e.getMessage());
-            log.error("Application will start but Firestore-dependent features will not work");
+            log.error("Failed to initialize Firestore for production: {}", e.getMessage(), e);
+            log.error("This application requires Firestore Native mode database 'seb-canvaslti-prod'");
 
-            if (e instanceof NoClassDefFoundError) {
-                log.error("Class not found error suggests a dependency conflict. Check Google Cloud library versions.");
-            }
+            // Re-throw to prevent application from starting with broken database connection
+            throw new RuntimeException("Failed to initialize Firestore. See logs for details.", e);
+        }
+    }
 
-            // Return null to allow application to start
-            // Note: Will cause NullPointerExceptions if Firestore is used, but better than preventing startup
-            return null;
+    /**
+     * Creates and configures a Firestore instance for development use.
+     * Uses Application Default Credentials (ADC) for authentication.
+     * Explicitly connects to the seb-canvaslti-dev database.
+     *
+     * @return A configured Firestore instance
+     */
+    @Bean
+    @Primary
+    @Profile("dev")
+    public Firestore firestoreDev() {
+        try {
+            log.info("Initializing Firestore for DEVELOPMENT with project ID: {}", projectId);
+
+            // Build Firestore options with development database
+            FirestoreOptions firestoreOptions = FirestoreOptions.getDefaultInstance().toBuilder()
+                    .setProjectId(projectId)
+                    .setDatabaseId("seb-canvaslti-dev") // Explicitly set the development database
+                    .build();
+
+            log.info("Successfully created Firestore configuration for development database");
+            return firestoreOptions.getService();
+        } catch (Throwable e) {
+            log.error("Failed to initialize Firestore for development: {}", e.getMessage(), e);
+            log.error("This application requires Firestore Native mode database 'seb-canvaslti-dev'");
+
+            // Re-throw to prevent application from starting with broken database connection
+            throw new RuntimeException("Failed to initialize Firestore. See logs for details.", e);
         }
     }
 
     /**
      * Creates a Firestore instance configured for the emulator in development environments.
-     * Only active when the "dev" profile is active and FIRESTORE_EMULATOR_HOST is set.
+     * Only active when the "test" profile is active and FIRESTORE_EMULATOR_HOST is set.
      *
-     * @return A Firestore instance for the emulator or a production instance as fallback
+     * @return A Firestore instance for the emulator
      */
-    @Bean(name = "firestoreEmulator")
-    @Profile("dev")
+    @Bean
+    @Profile("test")
     public Firestore firestoreEmulator() {
         String emulatorHost = System.getenv("FIRESTORE_EMULATOR_HOST");
 
@@ -82,18 +112,24 @@ public class FirestoreConfig {
                 log.info("Successfully connected to Firestore emulator");
                 return firestoreOptions.getService();
             } catch (Exception e) {
-                log.warn("Failed to connect to Firestore emulator: {}", e.getMessage());
-                log.warn("Falling back to regular Firestore authentication");
+                log.warn("Failed to connect to Firestore emulator: {}", e.getMessage(), e);
             }
         }
 
-        // If emulator connection fails or isn't configured, try regular authentication
-        log.info("No Firestore emulator configured, using regular authentication");
-        try {
-            return firestore(); // Reuse the regular method as fallback
-        } catch (Exception e) {
-            log.error("Failed to initialize any Firestore instance: {}", e.getMessage());
-            return null;
-        }
+        log.error("No Firestore emulator configured and test profile is active");
+        throw new RuntimeException("Test profile requires Firestore emulator");
+    }
+
+    /**
+     * Fallback Firestore instance for when no specific profile is active.
+     * This is a safety measure and will throw an error in production.
+     *
+     * @return A Firestore instance
+     */
+    @Bean
+    @Profile("default")
+    public Firestore firestoreDefault() {
+        log.warn("No specific profile active (dev/prod/test), using development database");
+        return firestoreDev(); // Default to development database
     }
 }

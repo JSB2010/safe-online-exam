@@ -74,7 +74,7 @@
         </div>
     </div>
 
-    <div class="row" th:if="${quizzes != null && !quizzes.empty}">
+    <div class="row" th:if="${quizzes != null && !quizzes.isEmpty()}">
         <div class="col">
             <div class="alert alert-info">
                 <strong>Found <span th:text="${quizzes.size()}">0</span> quizzes in this course.</strong>
@@ -100,11 +100,18 @@
         </div>
     </div>
 
-    <div class="row" th:if="${quizzes == null || quizzes.empty}">
-        <div class="col">
-            <div class="alert alert-warning">
-                No quizzes found in this course. Create quizzes in Canvas first, then return to this tool to configure SEB requirements.
-            </div>
+    <div th:if="${quizzes == null || quizzes.isEmpty()}" class="mt-4">
+        <div class="alert alert-warning">
+            No quizzes found in this course. This could be because:
+            <ul>
+                <li>You haven't created any quizzes in Canvas yet</li>
+                <li>There was an error communicating with Canvas API</li>
+                <li>The app doesn't have permission to access your Canvas quizzes</li>
+            </ul>
+            <p>
+                Try creating quizzes in Canvas first, then return to this tool to configure SEB requirements.
+                If you already have quizzes, please contact your administrator to check API permissions.
+            </p>
         </div>
     </div>
 </div>
