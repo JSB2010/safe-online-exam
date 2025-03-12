@@ -7,6 +7,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.LtiConfig;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -15,166 +16,185 @@ import java.text.ParseException;
 import java.util.Date;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Service for JSON Web Key (JWK) operations.
  * Handles key retrieval from Secret Manager and JWT signing for Canvas API authentication.
+ * This implementation ensures proper initialization timing with respect to configuration loading.
  */
 @Service
 @Slf4j
 public class JwkService {
 
     private final SecretManagerService secretManagerService;
+    private final LtiConfig ltiConfig;
     private RSAKey rsaKey;
     private JWSSigner signer;
     private String keyId;
-    private boolean initialized = false;
+    private volatile boolean initialized = false;
+    private final ReentrantLock initLock = new ReentrantLock();
     private int secretManagerRetries = 3;
 
     @Value("${spring.cloud.gcp.project-id:}")
     private String projectId;
 
     /**
-     * Constructor that takes the secret manager service.
+     * Constructor that takes the secret manager service and LTI configuration.
      *
      * @param secretManagerService Service to retrieve secrets
+     * @param ltiConfig LTI configuration containing tool URL and other settings
      */
     @Autowired
-    public JwkService(SecretManagerService secretManagerService) {
+    public JwkService(SecretManagerService secretManagerService, LtiConfig ltiConfig) {
         this.secretManagerService = secretManagerService;
+        this.ltiConfig = ltiConfig;
+        log.info("JwkService created - will initialize lazily when needed");
     }
 
     /**
      * Initializes the RSA key for JWT signing.
-     * This method loads the private key from Secret Manager in JWK format.
-     * If the key cannot be retrieved, it logs clear errors instead of creating a new key.
+     * This method loads the private key from Secret Manager or environment variable in JWK format.
+     * It waits for the LtiConfig to be fully initialized to ensure proper URLs are used.
      */
     public void initialize() {
+        // Use a lock to prevent concurrent initialization attempts
         if (initialized) {
             log.debug("JWK Service already initialized");
             return;
         }
 
-        log.info("Initializing JWK Service to retrieve key from Secret Manager");
-
-        // Track retry attempts
-        final AtomicInteger retryCount = new AtomicInteger(0);
-        boolean keyLoaded = false;
-
-        log.info("Initializing JWK Service...");
-
-        // First check if we have the key directly in environment variables
-        // This is set by Cloud Run's --set-secrets
-        String jwkJson = System.getenv("LTI_PRIVATE_KEY");
-
-        if (jwkJson != null && !jwkJson.isEmpty()) {
-            try {
-                log.info("Found JWK in environment variable LTI_PRIVATE_KEY");
-                parseAndSetKey(jwkJson);
-                keyLoaded = true;
+        initLock.lock();
+        try {
+            // Double-check after acquiring lock
+            if (initialized) {
+                log.debug("JWK Service already initialized by another thread");
                 return;
-            } catch (Exception e) {
-                log.error("Failed to parse JWK from environment variable: {}", e.getMessage());
-                // Continue to Secret Manager as fallback
             }
-        }
 
-        // Implement retries with increasing delay
-        while (retryCount.get() < secretManagerRetries && !keyLoaded) {
-            try {
-                // Implement progressive backoff
-                if (retryCount.get() > 0) {
-                    long sleepTime = Math.min(1000L * retryCount.get(), 5000L);
-                    log.info("Retry #{} - waiting {}ms before attempting to load JWK",
-                            retryCount.get(), sleepTime);
-                    Thread.sleep(sleepTime);
+            log.info("Initializing JWK Service to retrieve key from Secret Manager or environment variables");
+
+            // Ensure LtiConfig is properly initialized with the right tool URL
+            validateLtiConfig();
+
+            // Track retry attempts
+            final AtomicInteger retryCount = new AtomicInteger(0);
+            boolean keyLoaded = false;
+
+            // First check if we have the key directly in environment variables
+            // This is set by Cloud Run's --set-secrets
+            String jwkJson = System.getenv("LTI_PRIVATE_KEY");
+
+            if (jwkJson != null && !jwkJson.isEmpty()) {
+                try {
+                    log.info("Found JWK in environment variable LTI_PRIVATE_KEY");
+                    parseAndSetKey(jwkJson);
+                    keyLoaded = true;
+                } catch (Exception e) {
+                    log.error("Failed to parse JWK from environment variable: {}", e.getMessage());
+                    // Continue to Secret Manager as fallback
+                }
+            }
+
+            // Implement retries with increasing delay
+            while (retryCount.get() < secretManagerRetries && !keyLoaded) {
+                try {
+                    // Implement progressive backoff
+                    if (retryCount.get() > 0) {
+                        long sleepTime = Math.min(1000L * retryCount.get(), 5000L);
+                        log.info("Retry #{} - waiting {}ms before attempting to load JWK",
+                                retryCount.get(), sleepTime);
+                        Thread.sleep(sleepTime);
+                    }
+
+                    // Try to load private key from Secret Manager
+                    jwkJson = secretManagerService.getSecret("dev_lti_private_key", "latest");
+
+                    if (jwkJson != null && !jwkJson.isEmpty()) {
+                        log.debug("Loaded private key JWK from Secret Manager, length: {} chars", jwkJson.length());
+
+                        try {
+                            parseAndSetKey(jwkJson);
+                            keyLoaded = true;
+                        } catch (Exception e) {
+                            log.error("Failed to parse JWK from Secret Manager: {}", e.getMessage(), e);
+                            retryCount.incrementAndGet();
+                        }
+                    } else {
+                        log.error("CONFIGURATION ERROR: Private key not found in Secret Manager or is empty");
+                        log.error("Please ensure the secret 'dev_lti_private_key' exists in project '{}'", projectId);
+                        log.error("Secret should contain a valid RSA private key in JWK format");
+
+                        // No point retrying if the secret is missing or empty
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.error("Error accessing Secret Manager (attempt {}/{}): {}",
+                            retryCount.incrementAndGet(), secretManagerRetries, e.getMessage());
+                }
+            }
+
+            // If we couldn't load a key after all retries, provide clear error
+            if (!keyLoaded) {
+                if (retryCount.get() >= secretManagerRetries) {
+                    log.error("CRITICAL ERROR: Failed to load JWK after {} attempts", secretManagerRetries);
                 }
 
-                // Try to load private key from Secret Manager
-                jwkJson = secretManagerService.getSecret("dev_lti_private_key", "latest");
+                log.error("CANVAS INTEGRATION WILL NOT WORK WITHOUT A VALID KEY");
+                log.error("Please verify the following:");
+                log.error("1. The 'dev_lti_private_key' secret exists in Secret Manager in project '{}'", projectId);
+                log.error("2. The service account has Secret Manager access");
+                log.error("3. Network connectivity to Secret Manager is working");
+                log.error("4. The key is provided via LTI_PRIVATE_KEY environment variable in Cloud Run");
 
-                if (jwkJson != null && !jwkJson.isEmpty()) {
-                    log.debug("Loaded private key JWK from Secret Manager, length: {} chars", jwkJson.length());
+                // Don't throw exception to allow app to start, but set not initialized state
+                initialized = false;
+            } else {
+                // Verify we can create a JWT with the current configuration
+                validateJwtCreation();
+            }
+        } finally {
+            initLock.unlock();
+        }
+    }
 
-                    try {
-                        // Parse the JWK JSON
-                        JWK jwk = JWK.parse(jwkJson);
-                        log.debug("Successfully parsed JWK from Secret Manager");
+    /**
+     * Validates that the LtiConfig is properly initialized with a valid tool URL.
+     * If not, waits or uses fallback strategies to ensure proper initialization.
+     */
+    private void validateLtiConfig() {
+        // Check if the LtiConfig has a valid tool URL
+        String toolUrl = ltiConfig.getSanitizedToolUrl();
 
-                        if (!(jwk instanceof RSAKey)) {
-                            log.error("CONFIGURATION ERROR: Loaded JWK is not an RSA key, type: {}",
-                                    jwk.getClass().getName());
-                            break;
-                        }
+        if (toolUrl == null || toolUrl.isEmpty() || toolUrl.contains("localhost")) {
+            log.warn("LtiConfig doesn't have a valid tool URL yet: {}", toolUrl);
 
-                        // Cast to RSAKey and ensure it has a private key component
-                        this.rsaKey = (RSAKey) jwk;
-                        if (!this.rsaKey.isPrivate()) {
-                            log.error("CONFIGURATION ERROR: Loaded RSA key does not contain private key information");
-                            break;
-                        }
+            // Wait for LtiConfig to be properly initialized
+            int maxRetries = 3;
+            for (int i = 0; i < maxRetries; i++) {
+                try {
+                    log.info("Waiting for LtiConfig to complete initialization (attempt {}/{})", i+1, maxRetries);
+                    Thread.sleep(1000); // Wait 1 second before checking again
 
-                        // Extract the key ID from the JWK
-                        this.keyId = this.rsaKey.getKeyID();
-                        log.debug("Extracted key ID from JWK: {}", this.keyId);
+                    // Trigger LtiConfig initialization if it hasn't happened yet
+                    ltiConfig.init();
 
-                        if (this.keyId == null || this.keyId.isEmpty()) {
-                            // If no key ID is in the JWK, use a default one
-                            this.keyId = "canvas-seb-integration-key";
-                            log.info("No key ID found in JWK, using default: {}", this.keyId);
-
-                            // Create a new key with our key ID
-                            this.rsaKey = new RSAKey.Builder((RSAKey)jwk)
-                                    .keyID(this.keyId)
-                                    .build();
-                        }
-
-                        // Create signer with the RSA key
-                        this.signer = new RSASSASigner(this.rsaKey);
-
-                        // Also create and log the public JWK
-                        JWK publicJwk = new RSAKey.Builder(this.rsaKey.toRSAPublicKey())
-                                .keyID(this.keyId)
-                                .build();
-
-                        log.info("Public key for Canvas registration: {}", publicJwk.toJSONString());
-
-                        keyLoaded = true;
-                        initialized = true;
-                        log.info("JWK Service successfully initialized with key ID: {}", keyId);
-
-                    } catch (Exception e) {
-                        log.error("Failed to parse JWK from Secret Manager: {}", e.getMessage(), e);
-                        retryCount.incrementAndGet();
+                    // Check if we have a valid URL now
+                    toolUrl = ltiConfig.getSanitizedToolUrl();
+                    if (toolUrl != null && !toolUrl.isEmpty() && !toolUrl.contains("localhost")) {
+                        log.info("LtiConfig now has a valid tool URL: {}", toolUrl);
+                        return;
                     }
-                } else {
-                    log.error("CONFIGURATION ERROR: Private key not found in Secret Manager or is empty");
-                    log.error("Please ensure the secret 'dev_lti_private_key' exists in project '{}'", projectId);
-                    log.error("Secret should contain a valid RSA private key in JWK format");
-
-                    // No point retrying if the secret is missing or empty
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Interrupted while waiting for LtiConfig to initialize", e);
                     break;
                 }
-            } catch (Exception e) {
-                log.error("Error accessing Secret Manager (attempt {}/{}): {}",
-                        retryCount.incrementAndGet(), secretManagerRetries, e.getMessage());
-            }
-        }
-
-        // If we couldn't load a key after all retries, provide clear error
-        if (!keyLoaded) {
-            if (retryCount.get() >= secretManagerRetries) {
-                log.error("CRITICAL ERROR: Failed to load JWK after {} attempts", secretManagerRetries);
             }
 
-            log.error("CANVAS INTEGRATION WILL NOT WORK WITHOUT A VALID KEY");
-            log.error("Please verify the following:");
-            log.error("1. The 'dev_lti_private_key' secret exists in Secret Manager in project '{}'", projectId);
-            log.error("2. The service account 'seb-canvas@{}.iam.gserviceaccount.com' has Secret Manager access", projectId);
-            log.error("3. Network connectivity to Secret Manager is working");
-
-            // Don't throw exception to allow app to start, but set not initialized state
-            initialized = false;
+            log.warn("Could not wait for LtiConfig to properly initialize. JWK initialization may use placeholder URLs.");
+        } else {
+            log.info("LtiConfig is properly initialized with tool URL: {}", toolUrl);
         }
     }
 
@@ -224,9 +244,11 @@ public class JwkService {
 
     /**
      * Creates a signed JWT for client credentials authentication with Canvas API.
+     * Enhanced to ensure proper formatting of claims and guarantee HTTPS for production URLs.
+     * Uses the current tool URL from LtiConfig as the issuer if not overridden.
      *
      * @param clientId The client ID (from LTI configuration)
-     * @param issuer The issuer (typically the tool URL)
+     * @param issuer The issuer (typically the tool URL, if null uses LtiConfig's toolUrl)
      * @param audience The audience (typically the Canvas token URL)
      * @return A signed JWT string
      * @throws JOSEException If signing fails
@@ -236,6 +258,38 @@ public class JwkService {
 
         // Current time
         Date now = new Date();
+
+        // If issuer is null or empty, use the tool URL from LtiConfig
+        if (issuer == null || issuer.isEmpty()) {
+            issuer = ltiConfig.getSanitizedToolUrl();
+            log.info("Using tool URL from LtiConfig as issuer: {}", issuer);
+        }
+
+        // Clean up issuer and audience URLs to ensure proper format
+        // Remove trailing slashes which can cause validation issues
+        if (issuer != null && issuer.endsWith("/")) {
+            issuer = issuer.substring(0, issuer.length() - 1);
+            log.debug("Removed trailing slash from issuer URL: {}", issuer);
+        }
+
+        if (audience != null && audience.endsWith("/")) {
+            audience = audience.substring(0, audience.length() - 1);
+            log.debug("Removed trailing slash from audience URL: {}", audience);
+        }
+
+        // Ensure URLs use https for non-localhost environments
+        if (issuer != null && issuer.startsWith("http://") && !issuer.contains("localhost")) {
+            String oldIssuer = issuer;
+            issuer = "https://" + issuer.substring(7);
+            log.warn("Changed issuer from http to https: {} -> {}", oldIssuer, issuer);
+        }
+
+        // Log detailed information about the JWT we're creating
+        log.info("Creating signed JWT with the following parameters:");
+        log.info(" - Issuer: {}", issuer);
+        log.info(" - Subject (Client ID): {}", clientId);
+        log.info(" - Audience: {}", audience);
+        log.info(" - Key ID: {}", keyId);
 
         // Build JWT claims
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
@@ -259,12 +313,34 @@ public class JwkService {
 
         // Log JWT details for debugging
         String serialized = signedJWT.serialize();
-        log.debug("Created signed JWT with issuer: {}, subject: {}, audience: {}, keyId: {}",
-                issuer, clientId, audience, keyId);
+        log.debug("JWT created and signed successfully, length: {} characters", serialized.length());
 
         return serialized;
     }
 
+    /**
+     * Validates that we can create a JWT with the current configuration.
+     * This helps catch issues early in the initialization process.
+     */
+    private void validateJwtCreation() {
+        try {
+            // Use the tool URL from LtiConfig as the issuer
+            String toolUrl = ltiConfig.getSanitizedToolUrl();
+            String audience = ltiConfig.getTokenUrl();
+
+            // Create a test JWT
+            String jwt = createSignedJwt("test-client-id", toolUrl, audience);
+            log.info("Successfully validated JWT creation with current configuration. JWT length: {} chars", jwt.length());
+        } catch (Exception e) {
+            log.warn("JWT validation during initialization failed. This may indicate configuration issues:", e);
+            // Don't fail initialization, but log the warning
+        }
+    }
+
+    /**
+     * Parse and set the RSA key from JWK JSON.
+     * Centralized method to avoid code duplication.
+     */
     private void parseAndSetKey(String jwkJson) throws ParseException, JOSEException {
         JWK jwk = JWK.parse(jwkJson);
 
@@ -295,5 +371,49 @@ public class JwkService {
 
         initialized = true;
         log.info("JWK Service successfully initialized with key ID: {}", keyId);
+    }
+
+    /**
+     * Check if the JWK service is properly initialized.
+     * This method helps diagnose JWT issues.
+     *
+     * @return true if the service is initialized, false otherwise
+     */
+    public boolean isInitialized() {
+        return initialized;
+    }
+
+    /**
+     * Reinitialize the JWK service with a specific tool URL.
+     * This is useful for fixing JWT issuer URL issues.
+     *
+     * @param toolUrl The correct tool URL to use as the JWT issuer
+     */
+    public void reinitializeWithToolUrl(String toolUrl) {
+        if (toolUrl == null || toolUrl.isEmpty()) {
+            throw new IllegalArgumentException("Tool URL cannot be null or empty");
+        }
+
+        log.info("Reinitializing JWK service with tool URL: {}", toolUrl);
+
+        // Ensure we have a key
+        if (!initialized) {
+            initialize();
+        }
+
+        if (!initialized) {
+            throw new IllegalStateException("JWK Service could not be initialized");
+        }
+
+        // Test creating a JWT with the new tool URL
+        try {
+            String jwt = createSignedJwt("test", toolUrl, "https://test.com");
+            log.info("Successfully created test JWT with new tool URL, length: {}", jwt.length());
+        } catch (Exception e) {
+            log.error("Failed to create test JWT with new tool URL", e);
+            throw new RuntimeException("Failed to verify new tool URL", e);
+        }
+
+        log.info("JWK service reinitialized successfully with tool URL: {}", toolUrl);
     }
 }

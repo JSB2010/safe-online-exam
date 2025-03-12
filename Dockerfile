@@ -4,6 +4,10 @@ FROM eclipse-temurin:21-jre-jammy
 # Set working directory
 WORKDIR /app
 
+# Add a timestamp argument to break cache when needed
+ARG BUILD_DATE=unknown
+RUN echo "Build timestamp: $BUILD_DATE" > build_timestamp.txt
+
 # Add the application JAR
 ADD target/sebcanvas-0.0.1-SNAPSHOT.jar app.jar
 
@@ -12,7 +16,6 @@ ENV SPRING_PROFILES_ACTIVE=dev
 ENV JAVA_OPTS="-Xmx512m -Xms256m"
 
 # Set GCP debugging options to help troubleshoot classpath issues
-# The '-verbose:class' flag will print all classes as they are loaded
 ENV JAVA_TOOL_OPTIONS="-Dspring.profiles.active=dev"
 
 # Make the port more explicit - should match the port in the application
