@@ -21,39 +21,30 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.view.RedirectView;
 
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.text.ParseException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Base64;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Controller that handles the LTI 1.3 launch flow according to the Canvas LTI specification.
  * Implements the OpenID Connect third-party initiated login flow for authentication.
- *
- * This controller manages three key steps in the LTI flow:
- * 1. Login initiation - Canvas redirects to /lti/login with initialization parameters
- * 2. Authentication request - App redirects to Canvas auth endpoint with OIDC parameters
- * 3. Launch - Canvas redirects back with ID token containing LTI data
  */
 @Controller
 @RequestMapping("/lti")
 @Slf4j
 public class LtiController {
+    // Static encryption key for state parameter - this should ideally be in a secure configuration
+    private static final String STATE_ENCRYPTION_KEY = "SEB-Canvas-Integration-State-Key-2025";
+    private static final String ALGORITHM = "AES";
+
     // Session attribute keys for storing LTI launch state
-    private static final String SESSION_OIDC_STATE = "oidc_state";
     private static final String SESSION_NONCE = "oidc_nonce";
-    private static final String SESSION_TARGET_LINK_URI = "target_link_uri";
-    private static final String SESSION_LOGIN_HINT = "login_hint";
-    private static final String SESSION_CLIENT_ID = "client_id";
-    private static final String SESSION_LTI_MESSAGE_HINT = "lti_message_hint";
-    private static final String SESSION_LTI_DEPLOYMENT_ID = "lti_deployment_id";
     private static final String SESSION_LAUNCH_DATA = "launchData";
-    private static final String SESSION_CANVAS_REGION = "canvas_region";
-    private static final String SESSION_CANVAS_ENVIRONMENT = "canvas_environment";
-    private static final String SESSION_LTI_STORAGE_TARGET = "lti_storage_target";
 
     // Service dependencies
     private final LtiService ltiService;
@@ -83,25 +74,10 @@ public class LtiController {
     }
 
     /**
-     * Handles the OIDC Login Initiation request from Canvas.
-     * This is the first step in the LTI 1.3 launch flow based on Canvas LTI documentation.
-     *
-     * Canvas redirects users to this endpoint when they click on an LTI tool.
-     *
-     * @param iss The issuer (Canvas)
-     * @param loginHint The login hint for the user
-     * @param targetLinkUri The target link URI to redirect to after successful authentication
-     * @param clientId The client ID from Canvas for this LTI tool
-     * @param ltiMessageHint Additional LTI specific context information
-     * @param deploymentId The deployment ID identifying the specific tool installation
-     * @param canvasRegion The AWS region of the Canvas instance
-     * @param canvasEnvironment The Canvas environment (production, beta, test)
-     * @param ltiStorageTarget The name of the frame for LTI storage postMessages
-     * @param session The HTTP session to store state for the authentication flow
-     * @return A redirect to Canvas for authentication
+     * Handles the OIDC Login Initiation request from Canvas via GET.
      */
     @GetMapping("/login")
-    public RedirectView handleLogin(
+    public RedirectView handleLoginGet(
             @RequestParam("iss") String iss,
             @RequestParam("login_hint") String loginHint,
             @RequestParam("target_link_uri") String targetLinkUri,
@@ -113,8 +89,44 @@ public class LtiController {
             @RequestParam(value = "lti_storage_target", required = false) String ltiStorageTarget,
             HttpSession session) {
 
-        log.debug("LTI login initiation received: iss={}, clientId={}, region={}, env={}",
+        log.debug("LTI GET login initiation received: iss={}, clientId={}, region={}, env={}",
                 iss, clientId, canvasRegion, canvasEnvironment);
+
+        return handleLoginCommon(iss, loginHint, targetLinkUri, clientId, ltiMessageHint,
+                deploymentId, canvasRegion, canvasEnvironment, ltiStorageTarget, session);
+    }
+
+    /**
+     * Handles the OIDC Login Initiation request from Canvas via POST.
+     */
+    @PostMapping("/login")
+    public RedirectView handleLoginPost(
+            @RequestParam("iss") String iss,
+            @RequestParam("login_hint") String loginHint,
+            @RequestParam("target_link_uri") String targetLinkUri,
+            @RequestParam("client_id") String clientId,
+            @RequestParam(value = "lti_message_hint", required = false) String ltiMessageHint,
+            @RequestParam(value = "lti_deployment_id", required = false) String deploymentId,
+            @RequestParam(value = "canvas_region", required = false) String canvasRegion,
+            @RequestParam(value = "canvas_environment", required = false) String canvasEnvironment,
+            @RequestParam(value = "lti_storage_target", required = false) String ltiStorageTarget,
+            HttpSession session) {
+
+        log.debug("LTI POST login initiation received: iss={}, clientId={}, region={}, env={}",
+                iss, clientId, canvasRegion, canvasEnvironment);
+
+        return handleLoginCommon(iss, loginHint, targetLinkUri, clientId, ltiMessageHint,
+                deploymentId, canvasRegion, canvasEnvironment, ltiStorageTarget, session);
+    }
+
+    /**
+     * Common logic for handling login requests, shared between GET and POST handlers.
+     * Uses encrypted state parameter that includes all session data to be more resilient.
+     */
+    private RedirectView handleLoginCommon(
+            String iss, String loginHint, String targetLinkUri, String clientId,
+            String ltiMessageHint, String deploymentId, String canvasRegion,
+            String canvasEnvironment, String ltiStorageTarget, HttpSession session) {
 
         // Validate the issuer - This must match the configured issuer from Canvas
         if (!ltiConfig.getIssuer().equals(iss)) {
@@ -124,35 +136,45 @@ public class LtiController {
 
         // Generate a state parameter for CSRF protection
         String state = UUID.randomUUID().toString();
-        session.setAttribute(SESSION_OIDC_STATE, state);
+        log.debug("Generated state: {}", state);
 
         // Generate a nonce for replay protection
         String nonce = UUID.randomUUID().toString();
         session.setAttribute(SESSION_NONCE, nonce);
+        log.debug("Generated nonce: {} and stored in session", nonce);
 
-        // Store parameters in session for the next step
-        session.setAttribute(SESSION_TARGET_LINK_URI, targetLinkUri);
-        session.setAttribute(SESSION_LOGIN_HINT, loginHint);
-        session.setAttribute(SESSION_CLIENT_ID, clientId);
+        // Create a state object with all the data we need to preserve
+        Map<String, String> stateData = new HashMap<>();
+        stateData.put("state", state);
+        stateData.put("target_link_uri", targetLinkUri);
+        stateData.put("login_hint", loginHint);
+        stateData.put("client_id", clientId);
+        stateData.put("nonce", nonce); // Include nonce in state data as backup
 
         if (ltiMessageHint != null) {
-            session.setAttribute(SESSION_LTI_MESSAGE_HINT, ltiMessageHint);
+            stateData.put("lti_message_hint", ltiMessageHint);
         }
-
         if (deploymentId != null) {
-            session.setAttribute(SESSION_LTI_DEPLOYMENT_ID, deploymentId);
+            stateData.put("lti_deployment_id", deploymentId);
         }
-
         if (canvasRegion != null) {
-            session.setAttribute(SESSION_CANVAS_REGION, canvasRegion);
+            stateData.put("canvas_region", canvasRegion);
         }
-
         if (canvasEnvironment != null) {
-            session.setAttribute(SESSION_CANVAS_ENVIRONMENT, canvasEnvironment);
+            stateData.put("canvas_environment", canvasEnvironment);
+        }
+        if (ltiStorageTarget != null) {
+            stateData.put("lti_storage_target", ltiStorageTarget);
         }
 
-        if (ltiStorageTarget != null) {
-            session.setAttribute(SESSION_LTI_STORAGE_TARGET, ltiStorageTarget);
+        // Encrypt the state data
+        String encryptedState;
+        try {
+            encryptedState = encryptState(stateData);
+            log.debug("Encrypted state parameter (length: {})", encryptedState.length());
+        } catch (Exception e) {
+            log.error("Error encrypting state data", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error creating state parameter");
         }
 
         // Construct the authentication request URL to Canvas
@@ -162,7 +184,7 @@ public class LtiController {
                 .append("&redirect_uri=").append(ltiConfig.getToolUrl()).append("/lti/launch")
                 .append("&response_type=id_token")
                 .append("&scope=openid")
-                .append("&state=").append(state)
+                .append("&state=").append(encryptedState)
                 .append("&response_mode=form_post")
                 .append("&nonce=").append(nonce)
                 .append("&prompt=none");
@@ -185,44 +207,93 @@ public class LtiController {
     }
 
     /**
-     * Handles the LTI launch request with the ID token.
-     * This is the third step in the LTI 1.3 launch flow.
-     *
-     * Canvas redirects back to this endpoint after successful authentication.
-     * The ID token contains all the LTI launch data which is validated and processed.
-     *
-     * @param idToken The ID token from Canvas containing the LTI message
-     * @param state The state parameter for CSRF protection validation
-     * @param session The HTTP session with stored state
-     * @param model The Spring model for the view
-     * @param request The HTTP request for SEB detection
-     * @return The appropriate view based on user role and context
+     * Handles the LTI launch request with ID token via POST.
      */
     @PostMapping("/launch")
-    public String handleLaunch(
+    public String handleLaunchPost(
             @RequestParam("id_token") String idToken,
-            @RequestParam("state") String state,
+            @RequestParam("state") String encryptedState,
             HttpSession session,
             Model model,
             HttpServletRequest request) {
 
-        log.debug("LTI launch received with ID token");
+        log.debug("LTI launch received with ID token via POST, state length: {}", encryptedState.length());
 
-        // Verify state parameter to prevent CSRF
-        String expectedState = (String) session.getAttribute(SESSION_OIDC_STATE);
-        if (expectedState == null || !expectedState.equals(state)) {
-            log.error("Invalid state parameter: expected={}, received={}", expectedState, state);
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid state parameter");
+        return handleLaunchCommon(idToken, encryptedState, session, model, request);
+    }
+
+    /**
+     * Handles the LTI launch request with ID token via GET.
+     */
+    @GetMapping("/launch")
+    public String handleLaunchGet(
+            @RequestParam("id_token") String idToken,
+            @RequestParam("state") String encryptedState,
+            HttpSession session,
+            Model model,
+            HttpServletRequest request) {
+
+        log.debug("LTI launch received with ID token via GET, state length: {}", encryptedState.length());
+
+        return handleLaunchCommon(idToken, encryptedState, session, model, request);
+    }
+
+    /**
+     * Common logic for handling launch requests, shared between GET and POST handlers.
+     * Decrypts the state parameter to retrieve session data instead of relying on session persistence.
+     */
+    private String handleLaunchCommon(
+            String idToken, String encryptedState, HttpSession session, Model model, HttpServletRequest request) {
+
+        // First try to decrypt the state parameter to get state data
+        Map<String, String> stateData;
+        try {
+            stateData = decryptState(encryptedState);
+            if (stateData == null || stateData.isEmpty()) {
+                log.error("Failed to decrypt state parameter or empty result: {}", encryptedState);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid state parameter (decrypt failed)");
+            }
+
+            log.debug("Successfully decrypted state data with {} entries", stateData.size());
+        } catch (Exception e) {
+            log.error("Error decrypting state parameter: {}", e.getMessage(), e);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid state parameter: " + e.getMessage());
         }
 
+        // Get values from state data
+        String originalState = stateData.get("state");
+        String nonce = stateData.get("nonce");
+
+        if (originalState == null) {
+            log.error("State value missing from decrypted state data");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid state parameter (missing state)");
+        }
+
+        log.debug("Retrieved original state: {} and nonce: {} from state data", originalState, nonce);
+
         try {
-            // Validate the token and extract LTI data
-            String nonce = (String) session.getAttribute(SESSION_NONCE);
+            // Try session nonce first, fallback to state data nonce
+            String sessionNonce = (String) session.getAttribute(SESSION_NONCE);
+            if (sessionNonce == null) {
+                log.warn("Nonce not found in session, using nonce from state data: {}", nonce);
+                if (nonce == null) {
+                    log.error("Nonce not available in session or state data");
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Missing nonce for token validation");
+                }
+            } else {
+                nonce = sessionNonce;
+                log.debug("Using nonce from session: {}", nonce);
+            }
+
             LtiLaunchData launchData = ltiService.validateToken(idToken, nonce);
+            log.info("Successfully validated LTI token for user: {}", launchData.getUserId());
 
             // Add launch data to session and model
             model.addAttribute("launchData", launchData);
             session.setAttribute(SESSION_LAUNCH_DATA, launchData);
+
+            // Restore other session attributes from state data
+            restoreSessionAttributes(stateData, session);
 
             // Check if using SEB by examining request headers
             boolean isUsingSeb = sebDetector.isSebBrowser(request);
@@ -239,19 +310,99 @@ public class LtiController {
             // Standard resource link request - determine view based on user role
             return handleResourceLinkRequest(launchData, isUsingSeb, model, request);
         } catch (ParseException | JOSEException e) {
-            log.error("Error validating LTI token", e);
+            log.error("Error validating LTI token: {}", e.getMessage(), e);
             model.addAttribute("error", "Failed to validate LTI launch. Please contact your instructor.");
+            model.addAttribute("exception", e.toString());
             return "error";
         }
     }
 
     /**
+     * Encrypt state data map to a secure string for URL parameter
+     */
+    private String encryptState(Map<String, String> stateData) throws Exception {
+        // Convert map to a simple string representation
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> entry : stateData.entrySet()) {
+            sb.append(entry.getKey())
+                    .append("=")
+                    .append(entry.getValue())
+                    .append("&");
+        }
+        // Remove the trailing &
+        if (sb.length() > 0) {
+            sb.setLength(sb.length() - 1);
+        }
+
+        String stateStr = sb.toString();
+
+        // Generate a key from our encryption key
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        byte[] key = sha.digest(STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8));
+        key = Arrays.copyOf(key, 16); // use only first 128 bit for AES
+
+        SecretKeySpec secretKey = new SecretKeySpec(key, ALGORITHM);
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+
+        byte[] encrypted = cipher.doFinal(stateStr.getBytes(StandardCharsets.UTF_8));
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(encrypted);
+    }
+
+    /**
+     * Decrypt state parameter string to a map of values
+     */
+    private Map<String, String> decryptState(String encryptedState) throws Exception {
+        try {
+            // Generate key from our encryption key
+            MessageDigest sha = MessageDigest.getInstance("SHA-256");
+            byte[] key = sha.digest(STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8));
+            key = Arrays.copyOf(key, 16); // use only first 128 bit for AES
+
+            SecretKeySpec secretKey = new SecretKeySpec(key, ALGORITHM);
+            Cipher cipher = Cipher.getInstance(ALGORITHM);
+            cipher.init(Cipher.DECRYPT_MODE, secretKey);
+
+            byte[] decrypted = cipher.doFinal(Base64.getUrlDecoder().decode(encryptedState));
+            String stateStr = new String(decrypted, StandardCharsets.UTF_8);
+
+            // Parse the string back to a map
+            Map<String, String> stateData = new HashMap<>();
+            for (String pair : stateStr.split("&")) {
+                String[] keyValue = pair.split("=", 2);
+                if (keyValue.length == 2) {
+                    stateData.put(keyValue[0], keyValue[1]);
+                }
+            }
+
+            return stateData;
+        } catch (Exception e) {
+            log.error("Error decrypting state: {}", e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Restore session attributes from state data
+     */
+    private void restoreSessionAttributes(Map<String, String> stateData, HttpSession session) {
+        // These are the keys we stored in the state data that should be restored to session
+        String[] keys = {
+                "target_link_uri", "login_hint", "client_id", "lti_message_hint",
+                "lti_deployment_id", "canvas_region", "canvas_environment", "lti_storage_target"
+        };
+
+        for (String key : keys) {
+            String value = stateData.get(key);
+            if (value != null) {
+                session.setAttribute(key, value);
+                log.debug("Restored session attribute: {} = {}", key, value);
+            }
+        }
+    }
+
+    /**
      * Handles an LTI deep linking request message type.
-     * Used when Canvas is requesting content selection from the tool.
-     *
-     * @param launchData The LTI launch data
-     * @param model The Spring model for the view
-     * @return The view name
      */
     private String handleDeepLinkingRequest(LtiLaunchData launchData, Model model) {
         log.debug("Deep linking request received");
@@ -272,13 +423,6 @@ public class LtiController {
 
     /**
      * Handles a standard LTI resource link request.
-     * Determines the appropriate view based on user role and context.
-     *
-     * @param launchData The LTI launch data
-     * @param isUsingSeb Whether the user is using SEB
-     * @param model The Spring model for the view
-     * @param request The HTTP request
-     * @return The view name
      */
     private String handleResourceLinkRequest(
             LtiLaunchData launchData,
@@ -330,11 +474,6 @@ public class LtiController {
 
     /**
      * Provides the SEB configuration file for a specific quiz.
-     * This generates a .seb file that students can download and use to launch SEB.
-     *
-     * @param quizId The ID of the quiz
-     * @param session The HTTP session with user information
-     * @return The SEB configuration file as a download
      */
     @GetMapping("/seb/config/{quizId}")
     public ResponseEntity<byte[]> getSebConfig(@PathVariable String quizId, HttpSession session) {
@@ -364,7 +503,6 @@ public class LtiController {
 
     /**
      * Endpoint that returns capabilities supported by the tool.
-     * Used by Canvas for LTI Platform Storage communication.
      */
     @PostMapping(value = "/capabilities", produces = MediaType.APPLICATION_JSON_VALUE)
     @ResponseBody
@@ -382,11 +520,6 @@ public class LtiController {
 
     /**
      * Handles errors that occur during the LTI launch process.
-     * Provides a user-friendly error page with details about what went wrong.
-     *
-     * @param ex The exception that occurred
-     * @param model The Spring model for the view
-     * @return The error view
      */
     @ExceptionHandler(ResponseStatusException.class)
     public String handleError(ResponseStatusException ex, Model model) {
