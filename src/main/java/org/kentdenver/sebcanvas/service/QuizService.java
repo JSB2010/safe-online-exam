@@ -7,6 +7,7 @@ import org.kentdenver.sebcanvas.repository.FirestoreQuizRepository;
 import org.kentdenver.sebcanvas.repository.FirestoreSebSettingRepository;
 import org.kentdenver.sebcanvas.util.SebConfigGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -22,7 +23,7 @@ import java.util.stream.Collectors;
 
 /**
  * Service class for managing quizzes and their SEB settings.
- * This class has been updated to use Firestore repositories instead of JPA.
+ * Updated to use the CanvasService interface for Canvas API interactions.
  */
 @Service
 @Slf4j
@@ -38,19 +39,21 @@ public class QuizService {
      *
      * @param quizRepository Repository for quiz data
      * @param sebSettingRepository Repository for SEB settings
-     * @param canvasService Service for Canvas API integration
+     * @param canvasService Service for Canvas API integration (uses primary implementation)
      * @param sebConfigGenerator Utility for generating SEB config files
      */
     @Autowired
     public QuizService(
             FirestoreQuizRepository quizRepository,
             FirestoreSebSettingRepository sebSettingRepository,
-            CanvasService canvasService,
+            @Qualifier("oauthCanvasService") CanvasService canvasService,
             SebConfigGenerator sebConfigGenerator) {
         this.quizRepository = quizRepository;
         this.sebSettingRepository = sebSettingRepository;
         this.canvasService = canvasService;
         this.sebConfigGenerator = sebConfigGenerator;
+        log.info("Initialized QuizService with canvasService implementation: {}",
+                canvasService.getClass().getSimpleName());
     }
 
     /**
@@ -67,7 +70,7 @@ public class QuizService {
         if (quizzes.isEmpty()) {
             log.debug("No quizzes found in database for course: {}, fetching from Canvas", courseId);
 
-            // Use the courseId as the userId for caching purposes
+            // Use the courseId as the userId for caching purposes (temporary solution)
             // In a production implementation, you would use the actual user ID from the LTI context
             quizzes = canvasService.getQuizzesForCourse(courseId, courseId);
 
@@ -87,6 +90,9 @@ public class QuizService {
 
         return quizzes;
     }
+
+    // The rest of the QuizService methods can remain unchanged
+    // They operate on local data and don't interact with Canvas API
 
     /**
      * Checks if a quiz requires SEB.

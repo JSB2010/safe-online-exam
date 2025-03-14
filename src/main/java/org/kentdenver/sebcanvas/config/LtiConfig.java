@@ -9,13 +9,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 
-import java.io.IOException;
-
 /**
  * Configuration for LTI 1.3 integration with Canvas.
  * Contains all necessary endpoints and identifiers for the LTI flow.
- *
- * The @Getter annotation ensures all private fields have getter methods automatically generated.
  */
 @Configuration
 @Slf4j
@@ -101,10 +97,21 @@ public class LtiConfig {
         // Try to load secrets from Secret Manager
         loadSecrets();
 
-        // Ensure toolUrl uses HTTPS
+        // Log non-sensitive configuration values for debugging
+        log.info("Active profile: {}", activeProfile);
+        log.info("Project ID: {}", projectId);
+
+        // Ensure toolUrl uses HTTPS for non-localhost environments
         if (toolUrl != null && !toolUrl.isEmpty()) {
-            // Force HTTPS protocol
-            if (!toolUrl.startsWith("https://")) {
+            // Always remove trailing slash for consistent URL handling
+            if (toolUrl.endsWith("/")) {
+                String oldUrl = toolUrl;
+                toolUrl = toolUrl.substring(0, toolUrl.length() - 1);
+                log.info("Removed trailing slash from toolUrl: {} -> {}", oldUrl, toolUrl);
+            }
+
+            // Force HTTPS protocol for non-localhost environments
+            if (!toolUrl.startsWith("https://") && !toolUrl.contains("localhost")) {
                 String oldUrl = toolUrl;
                 toolUrl = "https://" + toolUrl.replaceFirst("^http://", "");
                 log.info("Changed toolUrl from '{}' to '{}'", oldUrl, toolUrl);
@@ -230,5 +237,32 @@ public class LtiConfig {
         }
 
         log.warn("Could not find Tool URL in environment variables");
+    }
+
+    /**
+     * Gets the sanitized tool URL, ensuring it has proper format.
+     * This method ensures we always work with clean URLs.
+     *
+     * @return Properly formatted tool URL
+     */
+    public String getSanitizedToolUrl() {
+        if (toolUrl == null || toolUrl.isEmpty()) {
+            log.warn("Tool URL is not set - using default localhost URL");
+            return "http://localhost:8080";
+        }
+
+        String url = toolUrl;
+
+        // Remove trailing slash if present
+        if (url.endsWith("/")) {
+            url = url.substring(0, url.length() - 1);
+        }
+
+        // Ensure HTTPS for non-localhost URLs
+        if (!url.startsWith("https://") && !url.contains("localhost")) {
+            url = "https://" + url.replaceFirst("^http://", "");
+        }
+
+        return url;
     }
 }

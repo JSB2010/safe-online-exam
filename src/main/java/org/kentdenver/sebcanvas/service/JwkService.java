@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.text.ParseException;
 import java.util.Date;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -108,7 +109,9 @@ public class JwkService {
                     }
 
                     // Try to load private key from Secret Manager
-                    jwkJson = secretManagerService.getSecret("dev_lti_private_key", "latest");
+                    String secretName = ltiConfig.getActiveProfile().equals("prod") ?
+                            "prod_lti_private_key" : "dev_lti_private_key";
+                    jwkJson = secretManagerService.getSecret(secretName, "latest");
 
                     if (jwkJson != null && !jwkJson.isEmpty()) {
                         log.debug("Loaded private key JWK from Secret Manager, length: {} chars", jwkJson.length());
@@ -122,7 +125,8 @@ public class JwkService {
                         }
                     } else {
                         log.error("CONFIGURATION ERROR: Private key not found in Secret Manager or is empty");
-                        log.error("Please ensure the secret 'dev_lti_private_key' exists in project '{}'", projectId);
+                        log.error("Please ensure the secret '{}' exists in project '{}'",
+                                secretName, projectId);
                         log.error("Secret should contain a valid RSA private key in JWK format");
 
                         // No point retrying if the secret is missing or empty
@@ -142,7 +146,7 @@ public class JwkService {
 
                 log.error("CANVAS INTEGRATION WILL NOT WORK WITHOUT A VALID KEY");
                 log.error("Please verify the following:");
-                log.error("1. The 'dev_lti_private_key' secret exists in Secret Manager in project '{}'", projectId);
+                log.error("1. The appropriate secret exists in Secret Manager in project '{}'", projectId);
                 log.error("2. The service account has Secret Manager access");
                 log.error("3. Network connectivity to Secret Manager is working");
                 log.error("4. The key is provided via LTI_PRIVATE_KEY environment variable in Cloud Run");
@@ -331,9 +335,10 @@ public class JwkService {
             // Create a test JWT
             String jwt = createSignedJwt("test-client-id", toolUrl, audience);
             log.info("Successfully validated JWT creation with current configuration. JWT length: {} chars", jwt.length());
+            initialized = true;
         } catch (Exception e) {
             log.warn("JWT validation during initialization failed. This may indicate configuration issues:", e);
-            // Don't fail initialization, but log the warning
+            initialized = false;
         }
     }
 
@@ -415,5 +420,86 @@ public class JwkService {
         }
 
         log.info("JWK service reinitialized successfully with tool URL: {}", toolUrl);
+    }
+
+    /**
+     * Signs a Deep Linking JWT using the configured private key.
+     * This creates a signed JWT containing the deep linking response data.
+     *
+     * @param claims The JWT claims to include (Deep Linking response)
+     * @return A signed JWT string
+     * @throws JOSEException If signing fails
+     */
+    public String signDeepLinkingJwt(Map<String, Object> claims) throws JOSEException {
+        try {
+            // Convert claims map to JWTClaimsSet
+            JWTClaimsSet.Builder claimsBuilder = new JWTClaimsSet.Builder();
+
+            for (Map.Entry<String, Object> entry : claims.entrySet()) {
+                claimsBuilder.claim(entry.getKey(), entry.getValue());
+            }
+
+            JWTClaimsSet claimsSet = claimsBuilder.build();
+
+            // Create JWS header with key ID
+            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.RS256)
+                    .keyID(getKeyId())
+                    .type(new JOSEObjectType("JWT"))
+                    .build();
+
+            // Create and sign the JWT
+            SignedJWT signedJWT = new SignedJWT(header, claimsSet);
+            signedJWT.sign(getSigner());
+
+            // Return the serialized JWT
+            return signedJWT.serialize();
+
+        } catch (Exception e) {
+            log.error("Failed to sign Deep Linking JWT", e);
+            throw e;
+        }
+    }
+
+    /**
+     * Forces initialization with the current tool URL from the LtiConfig.
+     * Call this method in the application startup to ensure proper JWT issuer URL.
+     */
+    public void forceInitializeWithCorrectToolUrl() {
+        // Check if we're already initialized
+        if (initialized) {
+            // Get the current tool URL
+            String currentToolUrl = ltiConfig.getSanitizedToolUrl();
+
+            // If the tool URL is localhost or not properly configured, wait a bit
+            if (currentToolUrl.contains("localhost") || currentToolUrl.equals("http://localhost:8080")) {
+                log.warn("Tool URL still shows as localhost - waiting for proper initialization");
+                try {
+                    // Wait up to 3 seconds for proper configuration
+                    for (int i = 0; i < 3; i++) {
+                        Thread.sleep(1000);
+                        currentToolUrl = ltiConfig.getSanitizedToolUrl();
+                        if (!currentToolUrl.contains("localhost") && !currentToolUrl.equals("http://localhost:8080")) {
+                            log.info("Tool URL properly initialized to: {}", currentToolUrl);
+                            break;
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Interrupted while waiting for tool URL initialization");
+                }
+            }
+
+            // Re-initialize with the correct URL
+            log.info("Re-initializing JWK service with current tool URL: {}", currentToolUrl);
+            try {
+                reinitializeWithToolUrl(currentToolUrl);
+            } catch (Exception e) {
+                log.error("Failed to re-initialize JWK service with correct tool URL", e);
+            }
+        } else {
+            // Not initialized yet, so do a full initialization
+            log.info("JWK service not initialized yet - performing full initialization");
+            initialize();
+        }
     }
 }

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Canvas API Authorization Status</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+<div class="container mt-5">
+    <h1>Canvas API Authorization Status</h1>
+
+    <div class="card mt-4">
+        <div class="card-header">
+            User ID: <span th:text="${userId}">user_id</span>
+        </div>
+        <div class="card-body">
+            <div th:if="${hasToken}" class="alert alert-success">
+                <strong>Authorized!</strong> This user has authorized the Canvas API access.
+            </div>
+            <div th:unless="${hasToken}" class="alert alert-warning">
+                <strong>Not Authorized!</strong> This user has not authorized Canvas API access.
+                <div class="mt-3">
+                    <a th:href="@{/api/oauth2authorize(user_id=${userId},course_id='self')}" class="btn btn-primary">
+                        Authorize Canvas API Access
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

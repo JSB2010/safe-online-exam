@@ -1,65 +1,151 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
-    <title>SEB Required</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
+    <title>Safe Exam Browser Required</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/css/bootstrap.min.css">
     <style>
-        .seb-icon {
-            max-width: 100px;
+        body {
+            padding-top: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 800px;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        .seb-logo {
+            max-width: 150px;
             margin-bottom: 20px;
         }
-        .instructions {
+        .step {
+            margin-bottom: 25px;
+            padding: 15px;
+            border-left: 4px solid #007bff;
             background-color: #f8f9fa;
-            border-radius: 0.5rem;
-            padding: 1.5rem;
-            margin-top: 1.5rem;
         }
-        .instructions ol {
-            padding-left: 1.5rem;
+        .step-number {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            line-height: 30px;
+            text-align: center;
+            background-color: #007bff;
+            color: white;
+            border-radius: 50%;
+            margin-right: 10px;
+            font-weight: bold;
         }
-        .instructions li {
-            margin-bottom: 0.5rem;
+        .alert-warning {
+            border-left: 4px solid #ffc107;
+        }
+        .download-button {
+            margin: 20px 0;
+            padding: 12px 25px;
+            font-size: 18px;
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+        .system-requirements {
+            font-size: 0.9rem;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
         }
     </style>
 </head>
 <body>
-<div class="container mt-5">
-    <div class="row justify-content-center">
-        <div class="col-md-8 text-center">
-            <img src="https://safeexambrowser.org/images/seb-logo.png" alt="Safe Exam Browser Logo" class="seb-icon">
-            <h1>Safe Exam Browser Required</h1>
-            <div class="alert alert-warning">
-                <strong>This quiz requires Safe Exam Browser (SEB).</strong>
-                You must download and use the SEB configuration file below to access this quiz.
+<div class="container">
+    <div class="row">
+        <div class="col-md-12 text-center mb-4">
+            <img src="https://safeexambrowser.org/images/seb-logo.png" alt="Safe Exam Browser Logo" class="seb-logo">
+            <h1 class="display-4">Safe Exam Browser Required</h1>
+            <p class="lead">This quiz requires the use of Safe Exam Browser (SEB)</p>
+        </div>
+    </div>
+
+    <div class="alert alert-warning" role="alert">
+        <h4 class="alert-heading">Attention!</h4>
+        <p>You are attempting to access a quiz that requires the use of Safe Exam Browser (SEB). SEB is a secure browser environment that prevents unauthorized resources during exams.</p>
+        <hr>
+        <p class="mb-0">Please follow the steps below to access your quiz using Safe Exam Browser.</p>
+    </div>
+
+    <div class="step">
+        <h3><span class="step-number">1</span> Download Safe Exam Browser</h3>
+        <p>If you haven't already installed Safe Exam Browser, download the application for your operating system:</p>
+        <div class="row">
+            <div class="col-md-4 mb-2">
+                <a href="https://safeexambrowser.org/download_en.html#Windows" target="_blank" class="btn btn-outline-primary btn-block">Windows</a>
             </div>
-
-            <a th:href="@{/lti/seb/config/{quizId}(quizId=${quizId})}" class="btn btn-primary btn-lg mt-3">
-                Download SEB Configuration
-            </a>
-
-            <div class="instructions text-start">
-                <h3>Instructions:</h3>
-                <ol>
-                    <li>Click the button above to download the SEB configuration file.</li>
-                    <li>If you don't have Safe Exam Browser installed:
-                        <ul>
-                            <li><a href="https://safeexambrowser.org/download_en.html" target="_blank">Download and install Safe Exam Browser</a> first.</li>
-                        </ul>
-                    </li>
-                    <li>Once downloaded, double-click the configuration file (it has a .seb extension).</li>
-                    <li>Safe Exam Browser will launch automatically and take you to this quiz.</li>
-                    <li>When you complete the quiz, you can exit SEB by clicking the "Quit" button or pressing Ctrl+Q (Windows) or Cmd+Q (Mac).</li>
-                </ol>
-                <div class="alert alert-info">
-                    <strong>Note:</strong> You can only access this quiz through Safe Exam Browser. Attempting to access it through another browser will redirect you back to this page.
-                </div>
+            <div class="col-md-4 mb-2">
+                <a href="https://safeexambrowser.org/download_en.html#MacOSX" target="_blank" class="btn btn-outline-primary btn-block">macOS</a>
+            </div>
+            <div class="col-md-4 mb-2">
+                <a href="https://safeexambrowser.org/download_en.html#iOS" target="_blank" class="btn btn-outline-primary btn-block">iOS</a>
             </div>
         </div>
     </div>
+
+    <div class="step">
+        <h3><span class="step-number">2</span> Download the SEB Configuration File</h3>
+        <p>This quiz has a specific configuration file that will automatically launch Safe Exam Browser and navigate to your quiz.</p>
+        <div class="text-center">
+            <a th:href="${configUrl}" class="btn btn-primary btn-lg download-button">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-download mr-2" viewBox="0 0 16 16">
+                    <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                    <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+                </svg>
+                Download SEB Config
+            </a>
+        </div>
+    </div>
+
+    <div class="step">
+        <h3><span class="step-number">3</span> Open the Configuration File</h3>
+        <p>Once downloaded, locate the .seb configuration file and open it:</p>
+        <ul>
+            <li>On <strong>Windows</strong>: Double-click the .seb file to open it with Safe Exam Browser</li>
+            <li>On <strong>Mac</strong>: Right-click the .seb file and select "Open with" → "Safe Exam Browser"</li>
+            <li>On <strong>iOS</strong>: Open the file from the "Downloads" location or email the file to yourself and open it on your device</li>
+        </ul>
+        <p>Opening the configuration file will automatically launch Safe Exam Browser and navigate to your quiz.</p>
+    </div>
+
+    <div class="step">
+        <h3><span class="step-number">4</span> Complete Your Quiz</h3>
+        <p>Once Safe Exam Browser opens, you will be automatically directed to your quiz. You may need to log in to Canvas if prompted.</p>
+        <p>When you finish your quiz, you can exit Safe Exam Browser by clicking the "Submit Quiz" button, or using the quit button in the browser.</p>
+    </div>
+
+    <div class="system-requirements">
+        <h5>System Requirements</h5>
+        <ul>
+            <li><strong>Windows:</strong> Windows 10 or later</li>
+            <li><strong>macOS:</strong> macOS 10.13 or later</li>
+            <li><strong>iOS:</strong> iOS 11.0 or later (iPad only)</li>
+        </ul>
+        <p><small>For technical assistance, please contact your instructor or IT support.</small></p>
+    </div>
+
+    <div class="footer text-center">
+        <p>Quiz ID: <span th:text="${quiz != null ? quiz.id : 'Unknown'}">12345</span></p>
+        <p>If you encounter any issues, please contact your instructor for assistance.</p>
+    </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Bootstrap JS and dependencies -->
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.min.js"></script>
 </body>
 </html>

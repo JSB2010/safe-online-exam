@@ -1,255 +1,93 @@
 package org.kentdenver.sebcanvas.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
-import org.kentdenver.sebcanvas.config.LtiConfig;
 import org.kentdenver.sebcanvas.model.Quiz;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
-import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
-
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Service for interacting with the Canvas API.
- * Handles communication with Canvas to fetch quizzes and other course resources.
- * Implements token management and caching for efficiency.
+ * Interface for Canvas API interactions.
+ * This defines the contract for different Canvas API service implementations.
  */
-@Service
-@Slf4j
-public class CanvasService {
-
-    private final RestTemplate restTemplate;
-    private final LtiConfig ltiConfig;
-    private final ObjectMapper objectMapper;
-    private final JwkService jwkService;
-    private final String apiBaseUrl;
-
-    // Cache for tokens to avoid repeated OAuth exchanges
-    private final Map<String, TokenInfo> tokenCache = new ConcurrentHashMap<>();
-
-    /**
-     * Inner class to store token information with expiration
-     */
-    private static class TokenInfo {
-        String token;
-        long expiresAt; // milliseconds since epoch
-
-        public TokenInfo(String token, long expiresInSeconds) {
-            this.token = token;
-            this.expiresAt = System.currentTimeMillis() + (expiresInSeconds * 1000);
-        }
-
-        public boolean isValid() {
-            // Consider token expired 5 minutes before actual expiration
-            return System.currentTimeMillis() < (expiresAt - (5 * 60 * 1000));
-        }
-    }
-
-    /**
-     * Constructor for the Canvas service with all required dependencies.
-     */
-    @Autowired
-    public CanvasService(RestTemplate restTemplate,
-                         LtiConfig ltiConfig,
-                         ObjectMapper objectMapper,
-                         JwkService jwkService,
-                         @Value("${canvas.api.baseUrl}") String apiBaseUrl) {
-        this.restTemplate = restTemplate;
-        this.ltiConfig = ltiConfig;
-        this.objectMapper = objectMapper;
-        this.jwkService = jwkService;
-        this.apiBaseUrl = apiBaseUrl;
-
-        log.debug("Initialized CanvasService with API Base URL: {}", apiBaseUrl);
-    }
+public interface CanvasService {
 
     /**
      * Gets a list of quizzes for a specific course from Canvas.
-     * Uses the LTI user context to authorize the request.
      *
      * @param courseId The Canvas course ID
-     * @param userId The Canvas user ID (used for token caching)
+     * @param userId The Canvas user ID for authentication context
      * @return List of quizzes in the course
      */
-    public List<Quiz> getQuizzesForCourse(String courseId, String userId) {
-        log.debug("Fetching quizzes for course: {} for user: {}", courseId, userId);
+    List<Quiz> getQuizzesForCourse(String courseId, String userId);
 
-        try {
-            // Get a valid token (either from cache or through OAuth)
-            // Pass the courseId to the getAccessToken method
-            String accessToken = getAccessToken(userId, courseId);
+    /**
+     * Gets a temporary session token for direct access to Canvas.
+     * This can be used to generate secure, time-limited URLs for quiz access.
+     *
+     * @param userId The Canvas user ID for authentication context
+     * @param targetUrl The URL to access with the session token
+     * @return A session token URL that redirects to the target URL, or null if not available
+     */
+    String getSessionToken(String userId, String targetUrl);
 
-            // Prepare the request URL - use Canvas API standard endpoint for quizzes
-            String url = UriComponentsBuilder
-                    .fromHttpUrl(apiBaseUrl)
-                    .path("/courses/" + courseId + "/quizzes")
-                    .queryParam("per_page", 100) // Request up to 100 quizzes at once
-                    .toUriString();
+    /**
+     * Checks if this service has valid credentials for the user.
+     *
+     * @param userId The Canvas user ID to check
+     * @return true if the service can make API calls for this user
+     */
+    boolean hasValidCredentials(String userId);
 
-            // Set up headers with authorization
-            HttpHeaders headers = new HttpHeaders();
-            headers.setBearerAuth(accessToken);
-            headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+    /**
+     * Clear any cached credentials for a user.
+     *
+     * @param userId The Canvas user ID, or null to clear all credentials
+     */
+    void clearCredentials(String userId);
 
-            // Create the HTTP request
-            HttpEntity<String> entity = new HttpEntity<>(headers);
-            log.debug("Sending request to Canvas API: {}", url);
-
-            // Execute the request
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.GET,
-                    entity,
-                    String.class
-            );
-
-            // Parse the response to a list of Quiz objects
-            List<Quiz> quizzes = parseQuizList(response.getBody(), courseId);
-            log.info("Successfully fetched {} quizzes from Canvas for course: {}", quizzes.size(), courseId);
-
-            return quizzes;
-        } catch (HttpClientErrorException e) {
-            log.error("Error fetching quizzes from Canvas: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
-            // Return empty list on error to avoid breaking the UI flow
-            return new ArrayList<>();
-        } catch (Exception e) {
-            log.error("Error fetching quizzes from Canvas", e);
-            return new ArrayList<>();
-        }
+    /**
+     * Makes a direct API request to the Canvas API.
+     * This is a utility method for debugging API access.
+     *
+     * @param path The API path to request
+     * @param accessToken The access token to use
+     * @return The response as a map
+     */
+    default Map<String, Object> makeApiRequest(String path, String accessToken) {
+        throw new UnsupportedOperationException("makeApiRequest is not implemented in this service");
     }
 
     /**
-     * Gets a valid access token for Canvas API calls.
-     * First checks the cache, and if not found or expired, gets a new token via client credentials flow.
+     * Makes a token request to the specified URL with the given parameters.
+     * This is a utility method for debugging token acquisition.
+     *
+     * @param tokenUrl The token URL to request from
+     * @param params The parameters to include in the request
+     * @return The response as a map
+     */
+    default Map<String, Object> makeTokenRequest(String tokenUrl, Map<String, String> params) {
+        throw new UnsupportedOperationException("makeTokenRequest is not implemented in this service");
+    }
+
+    /**
+     * Gets an access token using a specific scope.
+     * This method is exposed for debugging purposes.
      *
      * @param userId The user ID for token caching
-     * @param courseId The course ID for which we need access
-     * @return A valid access token
-     * @throws Exception If token acquisition fails
+     * @param scope The scope to request
+     * @return The access token, or null if not obtained
      */
-    private String getAccessToken(String userId, String courseId) throws Exception {
-        // Check cache first - use a composite key of userId_courseId for the cache
-        String cacheKey = userId + "_" + courseId;
-        TokenInfo cachedToken = tokenCache.get(cacheKey);
-        if (cachedToken != null && cachedToken.isValid()) {
-            log.debug("Using cached token for user: {} and course: {}", userId, courseId);
-            return cachedToken.token;
-        }
-
-        log.debug("No valid cached token found for user: {} and course: {}, obtaining new token", userId, courseId);
-
-        try {
-            // Create a signed JWT for client credentials request
-            String signedJwt = jwkService.createSignedJwt(ltiConfig.getClientId(),
-                    ltiConfig.getToolUrl(),
-                    ltiConfig.getTokenUrl());
-
-            log.debug("JWT token length: {}", signedJwt.length());
-            log.debug("Using client_id: {}", ltiConfig.getClientId());
-            log.debug("Using issuer (tool URL): {}", ltiConfig.getToolUrl());
-            log.debug("Using audience (token URL): {}", ltiConfig.getTokenUrl());
-
-            // Prepare token request
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
-            formData.add("grant_type", "client_credentials");
-            formData.add("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
-            formData.add("client_assertion", signedJwt);
-
-            // Use the specific granular scope with the actual course ID
-            formData.add("scope", "url:GET|/api/v1/courses/" + courseId + "/quizzes");
-
-            HttpEntity<MultiValueMap<String, String>> requestEntity = new HttpEntity<>(formData, headers);
-
-            log.debug("Making token request to: {}", ltiConfig.getTokenUrl());
-            log.debug("Requesting scope for course ID: {}", courseId);
-
-            // Make the token request
-            ResponseEntity<String> response = restTemplate.exchange(
-                    ltiConfig.getTokenUrl(),
-                    HttpMethod.POST,
-                    requestEntity,
-                    String.class
-            );
-
-            // Parse the response
-            Map<String, Object> tokenResponse = objectMapper.readValue(
-                    response.getBody(),
-                    new TypeReference<Map<String, Object>>() {}
-            );
-
-            String accessToken = (String) tokenResponse.get("access_token");
-            long expiresIn = ((Number) tokenResponse.getOrDefault("expires_in", 3600)).longValue();
-
-            log.debug("Successfully obtained access token, expires in {} seconds", expiresIn);
-            log.debug("Access token first 20 chars: {}", accessToken.substring(0, Math.min(accessToken.length(), 20)) + "...");
-
-            // Store in cache using the composite key
-            tokenCache.put(cacheKey, new TokenInfo(accessToken, expiresIn));
-
-            return accessToken;
-        } catch (Exception e) {
-            log.error("Failed to obtain access token: {}", e.getMessage());
-
-            // Log more details about the error
-            if (e instanceof HttpClientErrorException) {
-                HttpClientErrorException httpEx = (HttpClientErrorException) e;
-                log.error("HTTP Status: {}, Response body: {}", httpEx.getStatusCode(), httpEx.getResponseBodyAsString());
-            }
-
-            // As a fallback during development, return a manually configured token if available
-            String fallbackToken = System.getenv("CANVAS_API_TOKEN");
-            if (fallbackToken != null && !fallbackToken.isEmpty()) {
-                log.warn("Using fallback Canvas API token from environment variables");
-                return fallbackToken;
-            }
-
-            // If all else fails, throw the exception
-            throw e;
-        }
+    default String getAccessTokenWithScope(String userId, String scope) {
+        throw new UnsupportedOperationException("getAccessTokenWithScope is not implemented in this service");
     }
 
     /**
-     * Parses the JSON response from Canvas into Quiz objects.
+     * Builds a properly formatted API path.
+     * This is a public utility method for debug controllers.
      *
-     * @param jsonResponse The JSON response from Canvas API
-     * @param courseId The course ID to associate with the quizzes
-     * @return List of Quiz objects
-     * @throws JsonProcessingException If parsing fails
+     * @param path The API path to format
+     * @return The formatted API path
      */
-    private List<Quiz> parseQuizList(String jsonResponse, String courseId) throws JsonProcessingException {
-        // Parse the response into a list of maps
-        List<Map<String, Object>> rawQuizzes = objectMapper.readValue(
-                jsonResponse,
-                new TypeReference<List<Map<String, Object>>>() {}
-        );
-
-        List<Quiz> quizzes = new ArrayList<>();
-
-        // Convert each raw quiz to our Quiz model
-        for (Map<String, Object> rawQuiz : rawQuizzes) {
-            Quiz quiz = new Quiz();
-            quiz.setId(rawQuiz.get("id").toString());
-            quiz.setTitle((String) rawQuiz.get("title"));
-            quiz.setDescription((String) rawQuiz.getOrDefault("description", ""));
-            quiz.setHtmlUrl((String) rawQuiz.get("html_url"));
-            quiz.setCourseId(courseId);
-
-            quizzes.add(quiz);
-        }
-
-        return quizzes;
+    default String buildApiPathPublic(String path) {
+        throw new UnsupportedOperationException("buildApiPathPublic is not implemented in this service");
     }
 }

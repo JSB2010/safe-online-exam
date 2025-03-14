@@ -1,6 +1,7 @@
 package org.kentdenver.sebcanvas.util;
 
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.springframework.stereotype.Component;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,6 +12,7 @@ import java.util.Enumeration;
 
 /**
  * Utility class for detecting and validating Safe Exam Browser (SEB) requests.
+ * Enhanced with additional methods to support SEB redirection workflow.
  */
 @Component
 @Slf4j
@@ -85,6 +87,61 @@ public class SebDetector {
         boolean isValid = browserExamKey.equals(expectedKey);
         log.debug("Browser Exam Key validation result: {}", isValid);
         return isValid;
+    }
+
+    /**
+     * Validates a Browser Exam Key directly.
+     * This is useful for API validation endpoints.
+     *
+     * @param providedKey The key provided in the request
+     * @param expectedKey The expected key from settings
+     * @return true if keys match, false otherwise
+     */
+    public boolean validateBrowserExamKey(String providedKey, String expectedKey) {
+        if (providedKey == null || expectedKey == null) {
+            log.debug("Provided key or expected key is null, validation failed");
+            return false;
+        }
+
+        boolean isValid = providedKey.equals(expectedKey);
+        log.debug("Browser Exam Key validation result: {}", isValid);
+        return isValid;
+    }
+
+    /**
+     * Checks if a request is coming from Safe Exam Browser and validates any Browser Exam Key
+     * if a SEB setting is provided.
+     *
+     * @param request The HTTP request to check
+     * @param sebSetting The SEB setting for the quiz being accessed (can be null)
+     * @return true if the request is from SEB and passes any validation, false otherwise
+     */
+    public boolean isRequestFromSEB(HttpServletRequest request, QuizSebSetting sebSetting) {
+        // First check if this is a SEB browser at all
+        boolean isSebBrowser = isSebBrowser(request);
+
+        if (!isSebBrowser) {
+            log.debug("Request is not from SEB browser");
+            return false;
+        }
+
+        // If no SEB setting is provided, just return true based on browser detection
+        if (sebSetting == null) {
+            log.debug("No SEB setting provided, accepting SEB browser based on detection alone");
+            return true;
+        }
+
+        // If SEB setting exists and has a Browser Exam Key, validate it
+        String browserExamKey = sebSetting.getBrowserExamKey();
+        if (browserExamKey != null && !browserExamKey.isEmpty()) {
+            boolean isValid = validateBrowserExamKey(request, browserExamKey);
+            log.debug("Browser Exam Key validation result: {}", isValid);
+            return isValid;
+        }
+
+        // If there's a SEB setting but no Browser Exam Key, just return true based on browser detection
+        log.debug("SEB setting has no Browser Exam Key, accepting SEB browser based on detection alone");
+        return true;
     }
 
     /**
