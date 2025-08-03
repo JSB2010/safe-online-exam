@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +40,7 @@ public class QuizService {
      *
      * @param quizRepository Repository for quiz data
      * @param sebSettingRepository Repository for SEB settings
-     * @param canvasService Service for Canvas API integration (uses primary implementation)
+     * @param canvasService Service for Canvas API integration (uses OAuth2-based implementation)
      * @param sebConfigGenerator Utility for generating SEB config files
      */
     @Autowired
@@ -57,22 +58,34 @@ public class QuizService {
     }
 
     /**
-     * Retrieves all quizzes for a specific course.
+     * Gets all quizzes for a specific course (backward compatibility).
      * If not found in the local database, fetches them from Canvas and saves them to Firestore.
+     * Note: This method uses courseId as userId which may not work with OAuth.
      *
      * @param courseId The Canvas course ID
      * @return List of quizzes
      */
     public List<Quiz> getQuizzesForCourse(String courseId) {
-        log.debug("Getting quizzes for course: {}", courseId);
+        return getQuizzesForCourse(courseId, courseId);
+    }
+
+    /**
+     * Retrieves all quizzes for a specific course.
+     * If not found in the local database, fetches them from Canvas and saves them to Firestore.
+     *
+     * @param courseId The Canvas course ID
+     * @param userId The user ID for OAuth authentication
+     * @return List of quizzes
+     */
+    public List<Quiz> getQuizzesForCourse(String courseId, String userId) {
+        log.debug("Getting quizzes for course: {} with user: {}", courseId, userId);
         List<Quiz> quizzes = quizRepository.findByCourseId(courseId);
 
         if (quizzes.isEmpty()) {
-            log.debug("No quizzes found in database for course: {}, fetching from Canvas", courseId);
+            log.debug("No quizzes found in database for course: {}, fetching from Canvas with user: {}", courseId, userId);
 
-            // Use the courseId as the userId for caching purposes (temporary solution)
-            // In a production implementation, you would use the actual user ID from the LTI context
-            quizzes = canvasService.getQuizzesForCourse(courseId, courseId);
+            // Use the actual user ID for OAuth authentication
+            quizzes = canvasService.getQuizzesForCourse(courseId, userId);
 
             // Save fetched quizzes to database if any were returned
             if (!quizzes.isEmpty()) {
@@ -90,6 +103,8 @@ public class QuizService {
 
         return quizzes;
     }
+
+
 
     // The rest of the QuizService methods can remain unchanged
     // They operate on local data and don't interact with Canvas API

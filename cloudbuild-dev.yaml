@@ -1,23 +1,23 @@
 steps:
   # Build the application with explicit dependency verification
-  - name: 'maven:3.8.6-openjdk-21'
+  - name: 'maven:3.9.6-eclipse-temurin-21'
     entrypoint: 'mvn'
     args: ['clean', 'dependency:tree', 'package', '-DskipTests']
 
   # Print the resolved dependencies to help diagnose issues
-  - name: 'maven:3.8.6-openjdk-21'
+  - name: 'maven:3.9.6-eclipse-temurin-21'
     entrypoint: 'mvn'
     args: ['dependency:resolve', '-DincludeGroupIds=com.google.auth,com.google.cloud']
 
   # Build the Docker image with additional memory for Maven
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:$COMMIT_SHA', '.']
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest', '.']
     env:
       - 'MAVEN_OPTS=-Xmx1g'
 
   # Push the Docker image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:$COMMIT_SHA']
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest']
 
   # Deploy to Cloud Run with longer startup timeout
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -26,7 +26,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'canvas-seb-dev'
-      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:$COMMIT_SHA'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest'
       - '--region=us-central1'
       - '--execution-environment=gen2'
       - '--platform=managed'
@@ -41,4 +41,4 @@ steps:
       - '--service-account=seb-canvas@$PROJECT_ID.iam.gserviceaccount.com'
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest'

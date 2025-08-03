@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.LtiConfig;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.kentdenver.sebcanvas.service.CanvasService;
 import org.kentdenver.sebcanvas.service.LtiService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
@@ -21,6 +22,10 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.view.RedirectView;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import java.util.stream.Collectors;
+import java.util.Collections;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
@@ -43,7 +48,8 @@ import javax.crypto.spec.SecretKeySpec;
 @Slf4j
 public class LtiController {
     // Static encryption key for state parameter - this should ideally be in a secure configuration
-    private static final String STATE_ENCRYPTION_KEY = "SEB-Canvas-Integration-State-Key32";
+    // Key must be exactly 32 bytes for AES-256
+    private static final String STATE_ENCRYPTION_KEY = "SEB-Canvas-Integration-State-32B";
     private static final String ALGORITHM = "AES";
 
     // Session attribute keys for storing LTI launch state
@@ -56,6 +62,7 @@ public class LtiController {
     private final CanvasService canvasService;
     private final QuizService quizService;
     private final SebService sebService;
+    private final CanvasApiService canvasApiService;
 
     /**
      * Constructor with dependency injection for all required services.
@@ -67,13 +74,15 @@ public class LtiController {
             SebDetector sebDetector,
             @Qualifier("oauthCanvasService") CanvasService canvasService,
             QuizService quizService,
-            SebService sebService) {
+            SebService sebService,
+            CanvasApiService canvasApiService) {
         this.ltiService = ltiService;
         this.ltiConfig = ltiConfig;
         this.sebDetector = sebDetector;
         this.canvasService = canvasService;
         this.quizService = quizService;
         this.sebService = sebService;
+        this.canvasApiService = canvasApiService;
     }
 
     /**
@@ -92,9 +101,9 @@ public class LtiController {
 
         log.debug("LTI login initiated: iss={}, loginHint={}, targetLinkUri={}", issuer, loginHint, targetLinkUri);
 
-        // Generate and store a nonce in the session for additional security
+        // Generate a nonce for additional security (stored in state, not session)
         String nonce = UUID.randomUUID().toString();
-        session.setAttribute("lti_nonce", nonce);
+        log.info("Generated nonce: {}, Session ID: {}", nonce, session.getId());
 
         // If client ID is not provided, use the one from the config
         if (clientId == null || clientId.isEmpty()) {
@@ -159,7 +168,14 @@ public class LtiController {
             HttpSession session,
             Model model) {
 
-        log.debug("LTI launch received - token length: {}", idToken != null ? idToken.length() : 0);
+        log.info("LTI launch received from: {}", request.getRemoteAddr());
+        log.info("Token length: {}, State present: {}, Error: {}",
+                idToken != null ? idToken.length() : 0,
+                state != null,
+                error);
+        log.debug("Full request headers: {}",
+                Collections.list(request.getHeaderNames()).stream()
+                    .collect(Collectors.toMap(h -> h, request::getHeader)));
 
         // Check for authentication errors
         if (error != null) {
@@ -180,10 +196,11 @@ public class LtiController {
             Map<String, String> stateData = decryptState(state);
             String nonce = stateData.get("nonce");
 
-            // Validate the expected nonce from session
-            String sessionNonce = (String) session.getAttribute("lti_nonce");
-            if (nonce == null || !nonce.equals(sessionNonce)) {
-                log.error("Nonce mismatch in LTI launch");
+            // Validate the nonce from the JWT token against the one in the state
+            log.info("Validating nonce from state: {}, Session ID: {}", nonce, session.getId());
+
+            if (nonce == null || nonce.trim().isEmpty()) {
+                log.error("Missing nonce in state parameter");
                 model.addAttribute("error", "Security validation failed");
                 return "error";
             }
@@ -286,7 +303,7 @@ public class LtiController {
         // User has API access, proceed with normal flow
         if (isInstructor) {
             // Instructor view - they can manage SEB settings for quizzes
-            List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId);
+            List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
             model.addAttribute("quizzes", quizzes);
             return "teacherView";
         } else {
@@ -352,5 +369,97 @@ public class LtiController {
         // Parse back to Map
         return new ObjectMapper().readValue(decryptedJson,
                 new TypeReference<Map<String, String>>() {});
+    }
+
+    /**
+     * Handles GET requests to /lti/launch after OAuth authorization.
+     * This endpoint is used when users are redirected back after Canvas OAuth authorization.
+     */
+    @GetMapping("/launch")
+    public String handleOAuthRedirect(
+            @RequestParam(value = "course_id", required = false) String courseId,
+            @RequestParam(value = "user_id", required = false) String userId,
+            Model model,
+            HttpSession session) {
+
+        log.info("Handling OAuth redirect for course: {}, user: {}", courseId, userId);
+
+        // Check if we have OAuth access
+        if (userId != null && canvasApiService.hasAccessToken(userId)) {
+            log.info("User {} has OAuth access, showing quiz management interface", userId);
+
+            // Create minimal launch data for the interface
+            if (courseId != null) {
+                try {
+                    // Get quizzes for the course using OAuth
+                    List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
+                    model.addAttribute("quizzes", quizzes);
+                    model.addAttribute("courseId", courseId);
+                    model.addAttribute("userId", userId);
+                    model.addAttribute("hasOAuthAccess", true);
+
+                    log.info("Successfully loaded {} quizzes for course {}", quizzes.size(), courseId);
+                    return "teacherView";
+                } catch (Exception e) {
+                    log.error("Error loading quizzes for course {}", courseId, e);
+                    model.addAttribute("error", "Failed to load quizzes: " + e.getMessage());
+                    return "error";
+                }
+            }
+        }
+
+        // If we get here, something went wrong
+        log.warn("OAuth redirect failed - no course_id or no OAuth access");
+        model.addAttribute("error", "OAuth authorization incomplete or missing parameters");
+        return "error";
+    }
+
+    /**
+     * Serves the LTI 1.3 tool configuration JSON for Canvas.
+     * This endpoint provides the configuration that Canvas needs to set up the LTI tool.
+     */
+    @GetMapping(value = "/config", produces = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> getLtiConfig() {
+        try {
+            log.info("Serving LTI configuration");
+
+            String toolUrl = ltiConfig.getSanitizedToolUrl();
+
+            Map<String, Object> config = new HashMap<>();
+            config.put("title", "Canvas SEB Integration");
+            config.put("description", "Safe Exam Browser integration for Canvas quizzes");
+            config.put("oidc_initiation_url", toolUrl + "/lti/login");
+            config.put("target_link_uri", toolUrl + "/lti/launch");
+            config.put("scopes", Arrays.asList(
+                "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
+                "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
+                "https://purl.imsglobal.org/spec/lti-ags/scope/score",
+                "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
+            ));
+
+            // Extensions for Canvas-specific features
+            Map<String, Object> extensions = new HashMap<>();
+            Map<String, Object> canvasExtension = new HashMap<>();
+            canvasExtension.put("privacy_level", "public");
+            canvasExtension.put("course_navigation", Map.of(
+                "enabled", true,
+                "text", "SEB Settings",
+                "visibility", "admins"
+            ));
+            extensions.put("https://www.instructure.com/placement", canvasExtension);
+            config.put("extensions", extensions);
+
+            config.put("public_jwk_url", toolUrl + "/.well-known/jwks.json");
+            config.put("custom_fields", Map.of(
+                "canvas_course_id", "$Canvas.course.id",
+                "canvas_user_id", "$Canvas.user.id"
+            ));
+
+            return ResponseEntity.ok(config);
+        } catch (Exception e) {
+            log.error("Error serving LTI configuration", e);
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to generate configuration"));
+        }
     }
 }

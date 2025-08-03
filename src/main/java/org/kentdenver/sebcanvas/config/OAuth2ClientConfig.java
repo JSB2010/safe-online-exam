@@ -39,14 +39,13 @@ public class OAuth2ClientConfig {
         String clientSecret = canvasApiConfig.getClientSecret();
         String redirectUri = canvasApiConfig.getRedirectUri();
 
-        // Create robust scopes for Canvas API - add all necessary scopes
+        // Create Canvas API scopes - request scopes needed for quiz access
         Set<String> scopes = new HashSet<>();
+        // Add scopes for quiz access - these are the specific scopes needed
+        scopes.add("url:GET|/api/v1/courses");
         scopes.add("url:GET|/api/v1/courses/:course_id/quizzes");
         scopes.add("url:GET|/api/v1/courses/:course_id");
-        scopes.add("url:GET|/api/v1/login/session_token");
-        // Add LTI-specific scopes which seem to work better based on logs
-        scopes.add("https://purl.imsglobal.org/spec/lti-ags/scope/lineitem");
-        scopes.add("https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly");
+        // Note: LTI scopes are NOT requested via OAuth2, they come from LTI launch
 
         // Only create a real registration if we have client ID and secret
         if (clientId != null && !clientId.isEmpty() && clientSecret != null && !clientSecret.isEmpty()) {
@@ -61,9 +60,9 @@ public class OAuth2ClientConfig {
                     .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                     .redirectUri(redirectUri)
                     .scope(scopes)
-                    .authorizationUri(canvasApiConfig.getCanvasDomain() + "/login/oauth2/auth")
-                    .tokenUri(canvasApiConfig.getCanvasDomain() + "/login/oauth2/token")
-                    .userInfoUri(canvasApiConfig.getCanvasDomain() + "/api/v1/users/self")
+                    .authorizationUri("https://kentdenver.instructure.com/login/oauth2/auth")
+                    .tokenUri("https://kentdenver.instructure.com/login/oauth2/token")
+                    .userInfoUri("https://kentdenver.instructure.com/api/v1/users/self")
                     .userNameAttributeName("id")
                     .build();
 

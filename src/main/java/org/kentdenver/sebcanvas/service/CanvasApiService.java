@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.model.Quiz;
+import org.kentdenver.sebcanvas.model.OAuthToken;
+import org.kentdenver.sebcanvas.repository.FirestoreOAuthTokenRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.*;
@@ -38,8 +40,9 @@ public class CanvasApiService implements CanvasService {
     private final ObjectMapper objectMapper;
     private final CanvasApiConfig canvasApiConfig;
     private final OAuth2AuthorizedClientService clientService;
+    private final FirestoreOAuthTokenRepository tokenRepository;
 
-    // Cache for tokens keyed by userId
+    // Cache for tokens keyed by userId (for performance, backed by Firestore)
     private final Map<String, String> tokenCache = new ConcurrentHashMap<>();
 
     /**
@@ -55,11 +58,13 @@ public class CanvasApiService implements CanvasService {
             RestTemplate restTemplate,
             ObjectMapper objectMapper,
             CanvasApiConfig canvasApiConfig,
-            OAuth2AuthorizedClientService clientService) {
+            OAuth2AuthorizedClientService clientService,
+            FirestoreOAuthTokenRepository tokenRepository) {
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
         this.canvasApiConfig = canvasApiConfig;
         this.clientService = clientService;
+        this.tokenRepository = tokenRepository;
 
         log.info("Initialized CanvasApiService with API Base URL: {}", canvasApiConfig.getApiBaseUrl());
     }
@@ -85,7 +90,7 @@ public class CanvasApiService implements CanvasService {
             }
 
             // Build the API URL
-            String apiPath = "/api/v1/courses/" + courseId + "/quizzes";
+            String apiPath = "/courses/" + courseId + "/quizzes";
             String url = UriComponentsBuilder
                     .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
                     .path(apiPath)
@@ -154,7 +159,7 @@ public class CanvasApiService implements CanvasService {
             }
 
             // Build the API URL for session token
-            String apiPath = "/api/v1/login/session_token";
+            String apiPath = "/login/session_token";
             String url = UriComponentsBuilder
                     .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
                     .path(apiPath)
@@ -210,7 +215,21 @@ public class CanvasApiService implements CanvasService {
      */
     @Override
     public boolean hasValidCredentials(String userId) {
-        return tokenCache.containsKey(userId);
+        // Check cache first for performance
+        if (tokenCache.containsKey(userId)) {
+            return true;
+        }
+
+        // Check Firestore for persistent storage
+        boolean hasToken = tokenRepository.existsByUserId(userId);
+        if (hasToken) {
+            // Load token into cache for future requests
+            tokenRepository.findByUserId(userId).ifPresent(token ->
+                tokenCache.put(userId, token.getAccessToken())
+            );
+        }
+
+        return hasToken;
     }
 
     /**
@@ -233,13 +252,23 @@ public class CanvasApiService implements CanvasService {
     @Override
     public void clearCredentials(String userId) {
         if (userId == null) {
-            // Clear all credentials
+            // Clear all credentials - only clear cache (Firestore cleanup would be too expensive)
             log.info("Clearing all credentials from token cache");
             tokenCache.clear();
         } else {
-            // Clear specific user credentials
+            // Clear specific user credentials from both cache and Firestore
             tokenCache.remove(userId);
-            log.info("Cleared credentials for user: {}", userId);
+            try {
+                boolean deleted = tokenRepository.deleteByUserId(userId);
+                if (deleted) {
+                    log.info("Cleared credentials for user: {} from cache and Firestore", userId);
+                } else {
+                    log.info("Cleared credentials for user: {} from cache (no Firestore token found)", userId);
+                }
+            } catch (Exception e) {
+                log.error("Failed to clear credentials from Firestore for user: {}", userId, e);
+                log.info("Cleared credentials for user: {} from cache only", userId);
+            }
         }
     }
 
@@ -253,6 +282,17 @@ public class CanvasApiService implements CanvasService {
     }
 
     /**
+     * Clears the access token for a specific user.
+     * This is useful when the existing token has insufficient scopes.
+     *
+     * @param userId The user ID whose token should be cleared
+     */
+    public void clearAccessToken(String userId) {
+        log.info("Clearing access token for user: {}", userId);
+        clearCredentials(userId);
+    }
+
+    /**
      * Gets the access token for a user.
      * This method checks the cache first and returns the cached token if available.
      *
@@ -260,10 +300,20 @@ public class CanvasApiService implements CanvasService {
      * @return The access token or null if not found
      */
     private String getAccessToken(String userId) {
-        // Check cache first
+        // Check cache first for performance
         if (tokenCache.containsKey(userId)) {
             log.debug("Using cached access token for user: {}", userId);
             return tokenCache.get(userId);
+        }
+
+        // Check Firestore for persistent storage
+        Optional<OAuthToken> tokenOpt = tokenRepository.findByUserId(userId);
+        if (tokenOpt.isPresent()) {
+            String accessToken = tokenOpt.get().getAccessToken();
+            // Cache the token for future requests
+            tokenCache.put(userId, accessToken);
+            log.debug("Loaded access token from Firestore for user: {}", userId);
+            return accessToken;
         }
 
         log.debug("No access token found for user: {}. OAuth flow required.", userId);
@@ -321,8 +371,18 @@ public class CanvasApiService implements CanvasService {
      * @param accessToken The access token
      */
     public void storeAccessToken(String userId, String accessToken) {
+        // Store in cache for immediate use
         tokenCache.put(userId, accessToken);
-        log.info("Stored access token for user: {}", userId);
+
+        // Store in Firestore for persistence
+        try {
+            OAuthToken token = new OAuthToken(userId, accessToken, "url:GET|/api/v1/courses");
+            tokenRepository.save(token);
+            log.info("Stored access token for user: {} in cache and Firestore", userId);
+        } catch (Exception e) {
+            log.error("Failed to store access token in Firestore for user: {}", userId, e);
+            // Token is still in cache, so the current session will work
+        }
     }
 
     /**

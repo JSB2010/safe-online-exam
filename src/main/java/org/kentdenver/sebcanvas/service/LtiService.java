@@ -243,9 +243,12 @@ public class LtiService {
         // Verify nonce if provided
         if (expectedNonce != null) {
             String tokenNonce = (String) claims.get("nonce");
+            log.info("Nonce validation - Expected: {}, Token: {}", expectedNonce, tokenNonce);
             if (tokenNonce == null || !tokenNonce.equals(expectedNonce)) {
-                throw new JOSEException("Invalid nonce");
+                log.error("Nonce mismatch - Expected: {}, Token: {}", expectedNonce, tokenNonce);
+                throw new JOSEException("Invalid nonce - expected: " + expectedNonce + ", got: " + tokenNonce);
             }
+            log.info("Nonce validation successful");
         }
 
         // Verify not expired

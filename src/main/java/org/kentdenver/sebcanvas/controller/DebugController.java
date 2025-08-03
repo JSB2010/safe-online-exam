@@ -596,4 +596,38 @@ public class DebugController {
         return ResponseEntity.ok(beanInfo);
     }
 
+    /**
+     * Clears OAuth token for a specific user to force re-authorization.
+     * Useful when OAuth configuration changes or tokens become invalid.
+     */
+    @GetMapping("/clear-oauth-token")
+    public ResponseEntity<Map<String, Object>> clearOAuthToken(
+            @RequestParam(value = "user_id", required = false) String userId) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            if (userId == null || userId.isEmpty()) {
+                userId = "f2bbc1e1-ad05-4ae8-a8b6-d49fa4fb9760"; // Default to your user ID
+            }
+
+            // Clear OAuth token from both services
+            canvasService.clearCredentials(userId);
+
+            response.put("status", "success");
+            response.put("message", "OAuth token cleared for user: " + userId);
+            response.put("userId", userId);
+            response.put("timestamp", System.currentTimeMillis());
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("status", "error");
+            response.put("message", "Error clearing OAuth token: " + e.getMessage());
+            response.put("timestamp", System.currentTimeMillis());
+
+            return ResponseEntity.status(500).body(response);
+        }
+    }
+
+
+
 }

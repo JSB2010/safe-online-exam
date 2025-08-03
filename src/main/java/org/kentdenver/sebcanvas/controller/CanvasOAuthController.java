@@ -19,6 +19,15 @@ import org.springframework.web.servlet.view.RedirectView;
 
 import jakarta.servlet.http.HttpSession;
 import org.springframework.web.util.UriComponentsBuilder;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.UUID;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Controller for handling Canvas API OAuth2 flow.
@@ -29,6 +38,10 @@ import org.springframework.web.util.UriComponentsBuilder;
 @RequestMapping("/api")
 @Slf4j
 public class CanvasOAuthController {
+
+    // Static encryption key for state parameter - same as LTI controller
+    private static final String STATE_ENCRYPTION_KEY = "SEB-Canvas-Integration-State-32B";
+    private static final String ALGORITHM = "AES";
 
     private final CanvasApiConfig canvasApiConfig;
     private final ClientRegistrationRepository clientRegistrationRepository;
@@ -56,6 +69,32 @@ public class CanvasOAuthController {
     }
 
     /**
+     * Clears existing OAuth token and initiates new authorization.
+     * This is useful when the existing token has insufficient scopes.
+     *
+     * @param courseId The course ID to return to after authorization
+     * @param userId The user ID for token association
+     * @param redirectUrl The URL to redirect to after authorization
+     * @param session The HTTP session for storing state
+     * @return A redirect to Canvas OAuth2 authorization endpoint
+     */
+    @GetMapping("/oauth2reauthorize")
+    public RedirectView reauthorize(
+            @RequestParam("course_id") String courseId,
+            @RequestParam("user_id") String userId,
+            @RequestParam(value = "redirect_url", required = false) String redirectUrl,
+            HttpSession session) {
+
+        log.info("Clearing existing OAuth token and reauthorizing for user: {}, course: {}", userId, courseId);
+
+        // Clear existing token to force new authorization
+        canvasApiService.clearAccessToken(userId);
+
+        // Proceed with normal authorization flow
+        return initiateAuthorization(courseId, userId, redirectUrl, session);
+    }
+
+    /**
      * Initiates OAuth2 authorization with Canvas.
      * Redirects the user to Canvas for authorization.
      *
@@ -74,21 +113,39 @@ public class CanvasOAuthController {
 
         log.info("Initiating Canvas API OAuth2 authorization for user: {}, course: {}", userId, courseId);
 
-        // Store information in session
-        session.setAttribute(SESSION_USER_ID, userId);
-        session.setAttribute(SESSION_COURSE_ID, courseId);
+        // Create a state parameter that includes the necessary data (encrypted)
+        Map<String, String> stateData = new HashMap<>();
+        stateData.put("user_id", userId);
+        stateData.put("course_id", courseId);
+        stateData.put("timestamp", String.valueOf(System.currentTimeMillis()));
+        stateData.put("nonce", UUID.randomUUID().toString());
 
         // If no redirect URL provided, use a default
         if (redirectUrl == null || redirectUrl.isEmpty()) {
-            redirectUrl = "/lti/launch?course_id=" + courseId;
+            redirectUrl = "/lti/launch?course_id=" + courseId + "&user_id=" + userId;
         }
-        session.setAttribute(SESSION_REDIRECT_URL, redirectUrl);
+
+        // Ensure redirect URL is absolute HTTPS URL
+        if (redirectUrl.startsWith("/")) {
+            redirectUrl = "https://canvas-seb-dev-184075650720.us-central1.run.app" + redirectUrl;
+        }
+
+        stateData.put("redirect_url", redirectUrl);
 
         // Get the client registration
         ClientRegistration registration = clientRegistrationRepository.findByRegistrationId("canvas-api");
         if (registration == null) {
             log.error("Canvas API OAuth2 client registration not found");
             return new RedirectView("/error?message=OAuth2+client+registration+not+found");
+        }
+
+        // Encrypt the state data
+        String encryptedState;
+        try {
+            encryptedState = encryptState(stateData);
+        } catch (Exception e) {
+            log.error("Error encrypting OAuth state", e);
+            return new RedirectView("/error?message=OAuth2+state+encryption+failed");
         }
 
         // Build the authorization URL
@@ -98,7 +155,7 @@ public class CanvasOAuthController {
                 .queryParam("response_type", "code")
                 .queryParam("redirect_uri", registration.getRedirectUri())
                 .queryParam("scope", String.join(" ", registration.getScopes()))
-                .queryParam("state", session.getId()) // Use session ID as state
+                .queryParam("state", encryptedState)
                 .build()
                 .toUriString();
 
@@ -135,12 +192,20 @@ public class CanvasOAuthController {
             return "oauthError";
         }
 
-        // Verify state
-        if (state == null || !state.equals(session.getId())) {
-            log.error("OAuth2 state mismatch. Expected: {}, Received: {}", session.getId(), state);
+        // Decrypt and verify state
+        Map<String, String> stateData;
+        try {
+            stateData = decryptState(state);
+        } catch (Exception e) {
+            log.error("Error decrypting OAuth state: {}", e.getMessage());
             model.addAttribute("error", "Invalid state parameter in OAuth2 callback");
             return "oauthError";
         }
+
+        // Extract data from state
+        String userId = stateData.get("user_id");
+        String courseId = stateData.get("course_id");
+        String redirectUrl = stateData.get("redirect_url");
 
         // Verify code
         if (code == null) {
@@ -175,18 +240,32 @@ public class CanvasOAuthController {
             // This is a simplified example - you would parse the JSON properly
             String accessToken = extractAccessToken(tokenResponse);
 
-            // Get user ID from session
-            String userId = (String) session.getAttribute(SESSION_USER_ID);
-
-            // Store the token
+            // Store the token using data from state
             if (userId != null && accessToken != null) {
                 canvasApiService.storeAccessToken(userId, accessToken);
                 log.info("Successfully obtained and stored access token for user: {}", userId);
 
-                // Get the redirect URL from session
-                String redirectUrl = (String) session.getAttribute(SESSION_REDIRECT_URL);
-                if (redirectUrl != null) {
-                    return "redirect:" + redirectUrl;
+                // Construct redirect URL with proper parameters
+                if (redirectUrl != null && courseId != null) {
+                    // Ensure the redirect URL has the required parameters (but don't duplicate them)
+                    String finalRedirectUrl = redirectUrl;
+
+                    // Only add course_id if it's not already present
+                    if (!redirectUrl.contains("course_id=")) {
+                        if (redirectUrl.contains("?")) {
+                            finalRedirectUrl += "&course_id=" + courseId;
+                        } else {
+                            finalRedirectUrl += "?course_id=" + courseId;
+                        }
+                    }
+
+                    // Only add user_id if it's not already present
+                    if (!finalRedirectUrl.contains("user_id=")) {
+                        finalRedirectUrl += "&user_id=" + userId;
+                    }
+
+                    log.info("Redirecting to: {}", finalRedirectUrl);
+                    return "redirect:" + finalRedirectUrl;
                 }
             }
 
@@ -239,5 +318,44 @@ public class CanvasOAuthController {
         model.addAttribute("hasToken", hasToken);
 
         return "oauth2Status";
+    }
+
+    /**
+     * Encrypts state data into a string for use as the OAuth2 state parameter.
+     */
+    private String encryptState(Map<String, String> stateData) throws Exception {
+        // Convert state data to JSON
+        String stateJson = new ObjectMapper().writeValueAsString(stateData);
+
+        // Encrypt the JSON
+        SecretKeySpec secretKey = new SecretKeySpec(
+                STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8), ALGORITHM);
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+
+        // Encrypt and encode
+        byte[] encryptedBytes = cipher.doFinal(stateJson.getBytes(StandardCharsets.UTF_8));
+        return Base64.getUrlEncoder().encodeToString(encryptedBytes);
+    }
+
+    /**
+     * Decrypts the state parameter back into the original data.
+     */
+    private Map<String, String> decryptState(String encryptedState) throws Exception {
+        // Decode the encrypted state
+        byte[] encryptedBytes = Base64.getUrlDecoder().decode(encryptedState);
+
+        // Decrypt
+        SecretKeySpec secretKey = new SecretKeySpec(
+                STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8), ALGORITHM);
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.DECRYPT_MODE, secretKey);
+
+        byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
+        String decryptedJson = new String(decryptedBytes, StandardCharsets.UTF_8);
+
+        // Parse back to Map
+        return new ObjectMapper().readValue(decryptedJson,
+                new TypeReference<Map<String, String>>() {});
     }
 }
