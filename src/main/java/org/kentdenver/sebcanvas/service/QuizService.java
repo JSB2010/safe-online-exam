@@ -33,6 +33,7 @@ public class QuizService {
     private final FirestoreQuizRepository quizRepository;
     private final FirestoreSebSettingRepository sebSettingRepository;
     private final CanvasService canvasService;
+    private final LtiAgsService ltiAgsService;
     private final SebConfigGenerator sebConfigGenerator;
 
     /**
@@ -41,6 +42,7 @@ public class QuizService {
      * @param quizRepository Repository for quiz data
      * @param sebSettingRepository Repository for SEB settings
      * @param canvasService Service for Canvas API integration (uses OAuth2-based implementation)
+     * @param ltiAgsService Service for LTI Assignment and Grade Services
      * @param sebConfigGenerator Utility for generating SEB config files
      */
     @Autowired
@@ -48,12 +50,14 @@ public class QuizService {
             FirestoreQuizRepository quizRepository,
             FirestoreSebSettingRepository sebSettingRepository,
             @Qualifier("oauthCanvasService") CanvasService canvasService,
+            LtiAgsService ltiAgsService,
             SebConfigGenerator sebConfigGenerator) {
         this.quizRepository = quizRepository;
         this.sebSettingRepository = sebSettingRepository;
         this.canvasService = canvasService;
+        this.ltiAgsService = ltiAgsService;
         this.sebConfigGenerator = sebConfigGenerator;
-        log.info("Initialized QuizService with canvasService implementation: {}",
+        log.info("Initialized QuizService with canvasService implementation: {} and LTI AGS support",
                 canvasService.getClass().getSimpleName());
     }
 
@@ -71,10 +75,10 @@ public class QuizService {
 
     /**
      * Retrieves all quizzes for a specific course.
-     * If not found in the local database, fetches them from Canvas and saves them to Firestore.
+     * If not found in the local database, fetches them from Canvas using LTI AGS (preferred) or OAuth fallback.
      *
      * @param courseId The Canvas course ID
-     * @param userId The user ID for OAuth authentication
+     * @param userId The user ID for authentication context
      * @return List of quizzes
      */
     public List<Quiz> getQuizzesForCourse(String courseId, String userId) {
@@ -82,10 +86,19 @@ public class QuizService {
         List<Quiz> quizzes = quizRepository.findByCourseId(courseId);
 
         if (quizzes.isEmpty()) {
-            log.debug("No quizzes found in database for course: {}, fetching from Canvas with user: {}", courseId, userId);
+            log.debug("No quizzes found in database for course: {}, fetching from Canvas", courseId);
 
-            // Use the actual user ID for OAuth authentication
-            quizzes = canvasService.getQuizzesForCourse(courseId, userId);
+            // Try LTI AGS first (preferred method - no Canvas admin config needed)
+            log.info("Attempting to fetch quizzes using LTI Assignment and Grade Services");
+            quizzes = ltiAgsService.getQuizzesForCourse(courseId, userId);
+
+            // If LTI AGS didn't return quizzes, fallback to OAuth Canvas service
+            if (quizzes.isEmpty()) {
+                log.info("LTI AGS returned no quizzes, falling back to OAuth Canvas service");
+                quizzes = canvasService.getQuizzesForCourse(courseId, userId);
+            } else {
+                log.info("Successfully retrieved {} quizzes using LTI AGS", quizzes.size());
+            }
 
             // Save fetched quizzes to database if any were returned
             if (!quizzes.isEmpty()) {
@@ -97,7 +110,7 @@ public class QuizService {
                     // Continue with the fetched quizzes even if saving fails
                 }
             } else {
-                log.info("No quizzes found in Canvas for course: {}", courseId);
+                log.info("No quizzes found in Canvas for course: {} using any method", courseId);
             }
         }
 

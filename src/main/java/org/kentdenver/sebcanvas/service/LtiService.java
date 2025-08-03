@@ -124,6 +124,19 @@ public class LtiService {
         // Extract claims
         Map<String, Object> claims = jwsObject.getPayload().toJSONObject();
 
+        // Log all claims for debugging (be careful with sensitive data)
+        log.debug("LTI Token Claims Debug:");
+        for (Map.Entry<String, Object> entry : claims.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            // Don't log sensitive information
+            if (key.contains("email") || key.contains("name") || key.equals("sub")) {
+                log.debug("  {}: [REDACTED]", key);
+            } else {
+                log.debug("  {}: {}", key, value);
+            }
+        }
+
         // Verify required properties according to Canvas LTI documentation
         validateClaims(claims, expectedNonce);
 

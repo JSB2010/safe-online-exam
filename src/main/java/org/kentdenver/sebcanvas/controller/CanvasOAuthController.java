@@ -149,12 +149,15 @@ public class CanvasOAuthController {
         }
 
         // Build the authorization URL
+        String scopeString = String.join(" ", registration.getScopes());
+        log.info("Requesting OAuth2 scopes: {}", scopeString);
+
         String authUrl = UriComponentsBuilder
                 .fromHttpUrl(registration.getProviderDetails().getAuthorizationUri())
                 .queryParam("client_id", registration.getClientId())
                 .queryParam("response_type", "code")
                 .queryParam("redirect_uri", registration.getRedirectUri())
-                .queryParam("scope", String.join(" ", registration.getScopes()))
+                .queryParam("scope", scopeString)
                 .queryParam("state", encryptedState)
                 .build()
                 .toUriString();
@@ -180,15 +183,24 @@ public class CanvasOAuthController {
             @RequestParam(value = "code", required = false) String code,
             @RequestParam(value = "state", required = false) String state,
             @RequestParam(value = "error", required = false) String error,
+            @RequestParam(value = "error_description", required = false) String errorDescription,
             HttpSession session,
             Model model) {
 
         log.info("Received OAuth2 callback from Canvas");
+        log.debug("OAuth2 callback parameters - code: {}, state: {}, error: {}, error_description: {}",
+                code != null ? "[PRESENT]" : "[MISSING]",
+                state != null ? "[PRESENT]" : "[MISSING]",
+                error, errorDescription);
 
         // Check for error
         if (error != null) {
-            log.error("Canvas OAuth2 authorization failed: {}", error);
-            model.addAttribute("error", "Canvas authorization failed: " + error);
+            log.error("Canvas OAuth2 authorization failed: {} - {}", error, errorDescription);
+            String fullError = error;
+            if (errorDescription != null) {
+                fullError += ": " + errorDescription;
+            }
+            model.addAttribute("error", "Canvas authorization failed: " + fullError);
             return "oauthError";
         }
 

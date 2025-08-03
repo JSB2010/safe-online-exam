@@ -280,32 +280,44 @@ public class LtiController {
         boolean isInstructor = launchData.isInstructor();
         model.addAttribute("isInstructor", isInstructor);
 
-        // Check if the user has authorized the Canvas API
-        boolean hasApiAuthorization = canvasService.hasValidCredentials(userId);
-        model.addAttribute("hasApiAuthorization", hasApiAuthorization);
-
-        // If the user hasn't authorized the API, show the authorization page
-        if (!hasApiAuthorization) {
-            log.info("User {} does not have Canvas API authorization. Redirecting to authorization page", userId);
-
-            // Generate the OAuth2 authorization URL
-            String authUrl = request.getContextPath() + "/api/oauth2authorize?course_id=" +
-                    courseId + "&user_id=" + userId +
-                    "&redirect_url=" + request.getRequestURI();
-
-            model.addAttribute("authUrl", authUrl);
-            model.addAttribute("needsAuthorization", true);
-
-            // Return the view that will show the authorization button
-            return "apiAuthorization";
-        }
-
-        // User has API access, proceed with normal flow
+        // For instructors, try to get quizzes first (using LTI AGS or OAuth fallback)
         if (isInstructor) {
-            // Instructor view - they can manage SEB settings for quizzes
+            log.info("Instructor access detected. Attempting to retrieve quizzes using LTI AGS first, then OAuth fallback");
+
+            // Try to get quizzes (this will attempt LTI AGS first, then OAuth fallback)
             List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
-            model.addAttribute("quizzes", quizzes);
-            return "teacherView";
+
+            if (!quizzes.isEmpty()) {
+                // Successfully got quizzes (either via LTI AGS or OAuth)
+                log.info("Successfully retrieved {} quizzes for course {}", quizzes.size(), courseId);
+                model.addAttribute("quizzes", quizzes);
+                model.addAttribute("hasApiAuthorization", true);
+                return "teacherView";
+            } else {
+                // No quizzes found - check if it's due to missing OAuth authorization
+                boolean hasApiAuthorization = canvasService.hasValidCredentials(userId);
+                model.addAttribute("hasApiAuthorization", hasApiAuthorization);
+
+                if (!hasApiAuthorization) {
+                    log.info("No quizzes found and user {} does not have Canvas API authorization. Showing authorization page", userId);
+
+                    // Generate the OAuth2 authorization URL
+                    String authUrl = request.getContextPath() + "/api/oauth2authorize?course_id=" +
+                            courseId + "&user_id=" + userId +
+                            "&redirect_url=" + request.getRequestURI();
+
+                    model.addAttribute("authUrl", authUrl);
+                    model.addAttribute("needsAuthorization", true);
+
+                    // Return the view that will show the authorization button
+                    return "apiAuthorization";
+                } else {
+                    // User has authorization but no quizzes found
+                    log.info("User {} has API authorization but no quizzes found in course {}", userId, courseId);
+                    model.addAttribute("quizzes", quizzes); // Empty list
+                    return "teacherView";
+                }
+            }
         } else {
             // Student view - they see either the quiz or a message about SEB requirements
             String resourceLinkId = launchData.getResourceLinkId();

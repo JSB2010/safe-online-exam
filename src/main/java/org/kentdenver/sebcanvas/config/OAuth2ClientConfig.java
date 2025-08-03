@@ -41,10 +41,10 @@ public class OAuth2ClientConfig {
 
         // Create Canvas API scopes - request scopes needed for quiz access
         Set<String> scopes = new HashSet<>();
-        // Add scopes for quiz access - these are the specific scopes needed
-        scopes.add("url:GET|/api/v1/courses");
+        // Use Canvas's URL-based scope format - these are the correct format for Canvas OAuth2
+        // Based on Canvas API documentation: https://canvas.instructure.com/doc/api/file.oauth_endpoints.html
+        scopes.add("url:GET|/api/v1/courses/:id");
         scopes.add("url:GET|/api/v1/courses/:course_id/quizzes");
-        scopes.add("url:GET|/api/v1/courses/:course_id");
         // Note: LTI scopes are NOT requested via OAuth2, they come from LTI launch
 
         // Only create a real registration if we have client ID and secret
