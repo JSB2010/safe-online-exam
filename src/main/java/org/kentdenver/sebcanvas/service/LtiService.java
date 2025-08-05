@@ -207,6 +207,12 @@ public class LtiService {
             launchData.setPlatformProductFamilyCode((String) platform.get("product_family_code"));
         }
 
+        // Extract LTI AGS (Assignment and Grade Services) endpoint information
+        Map<String, Object> agsEndpoint = (Map<String, Object>) claims.get("https://purl.imsglobal.org/spec/lti-ags/claim/endpoint");
+        if (agsEndpoint != null) {
+            launchData.setAgsLineitemsUrl((String) agsEndpoint.get("lineitems"));
+        }
+
         log.debug("Successfully validated LTI token for user: {}, course: {}, resource: {}",
                 launchData.getUserId(), launchData.getCourseId(), launchData.getResourceLinkId());
 
@@ -383,6 +389,9 @@ public class LtiService {
         private List<String> deepLinkAcceptMedia;
         private List<String> deepLinkDocumentTargets;
         private String deepLinkData;
+
+        // LTI AGS (Assignment and Grade Services) information
+        private String agsLineitemsUrl;
 
         /**
          * Checks if the user is an instructor based on their roles.

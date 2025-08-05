@@ -7,7 +7,6 @@ import org.kentdenver.sebcanvas.repository.FirestoreQuizRepository;
 import org.kentdenver.sebcanvas.repository.FirestoreSebSettingRepository;
 import org.kentdenver.sebcanvas.util.SebConfigGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -32,8 +31,7 @@ public class QuizService {
 
     private final FirestoreQuizRepository quizRepository;
     private final FirestoreSebSettingRepository sebSettingRepository;
-    private final CanvasService canvasService;
-    private final LtiAgsService ltiAgsService;
+    private final HybridCanvasAuthService hybridAuthService;
     private final SebConfigGenerator sebConfigGenerator;
 
     /**
@@ -41,24 +39,20 @@ public class QuizService {
      *
      * @param quizRepository Repository for quiz data
      * @param sebSettingRepository Repository for SEB settings
-     * @param canvasService Service for Canvas API integration (uses OAuth2-based implementation)
-     * @param ltiAgsService Service for LTI Assignment and Grade Services
+     * @param hybridAuthService Service for hybrid Canvas authentication
      * @param sebConfigGenerator Utility for generating SEB config files
      */
     @Autowired
     public QuizService(
             FirestoreQuizRepository quizRepository,
             FirestoreSebSettingRepository sebSettingRepository,
-            @Qualifier("oauthCanvasService") CanvasService canvasService,
-            LtiAgsService ltiAgsService,
+            HybridCanvasAuthService hybridAuthService,
             SebConfigGenerator sebConfigGenerator) {
         this.quizRepository = quizRepository;
         this.sebSettingRepository = sebSettingRepository;
-        this.canvasService = canvasService;
-        this.ltiAgsService = ltiAgsService;
+        this.hybridAuthService = hybridAuthService;
         this.sebConfigGenerator = sebConfigGenerator;
-        log.info("Initialized QuizService with canvasService implementation: {} and LTI AGS support",
-                canvasService.getClass().getSimpleName());
+        log.info("Initialized QuizService with hybrid authentication support");
     }
 
     /**
@@ -88,16 +82,24 @@ public class QuizService {
         if (quizzes.isEmpty()) {
             log.debug("No quizzes found in database for course: {}, fetching from Canvas", courseId);
 
-            // Try LTI AGS first (preferred method - no Canvas admin config needed)
-            log.info("Attempting to fetch quizzes using LTI Assignment and Grade Services");
-            quizzes = ltiAgsService.getQuizzesForCourse(courseId, userId);
+            // Use hybrid authentication service for intelligent fallback
+            log.info("Attempting to fetch quizzes using hybrid authentication strategy");
+            List<Map<String, Object>> rawQuizzes = hybridAuthService.getQuizzes(courseId, userId);
 
-            // If LTI AGS didn't return quizzes, fallback to OAuth Canvas service
-            if (quizzes.isEmpty()) {
-                log.info("LTI AGS returned no quizzes, falling back to OAuth Canvas service");
-                quizzes = canvasService.getQuizzesForCourse(courseId, userId);
-            } else {
-                log.info("Successfully retrieved {} quizzes using LTI AGS", quizzes.size());
+            // Convert raw quiz data to Quiz objects
+            quizzes = rawQuizzes.stream()
+                    .map(rawQuiz -> {
+                        Quiz quiz = convertToQuiz(rawQuiz);
+                        // Ensure course ID is set
+                        if (quiz.getCourseId() == null || quiz.getCourseId().isEmpty()) {
+                            quiz.setCourseId(courseId);
+                        }
+                        return quiz;
+                    })
+                    .collect(Collectors.toList());
+
+            if (!quizzes.isEmpty()) {
+                log.info("Successfully retrieved {} quizzes using hybrid authentication", quizzes.size());
             }
 
             // Save fetched quizzes to database if any were returned
@@ -354,5 +356,35 @@ public class QuizService {
             hexString.append(hex);
         }
         return hexString.toString();
+    }
+
+    /**
+     * Converts a raw Canvas API quiz data map to a Quiz object.
+     * This method handles the mapping from Canvas API format to our internal model.
+     *
+     * @param rawQuiz The raw quiz data from Canvas API
+     * @return Quiz object
+     */
+    private Quiz convertToQuiz(Map<String, Object> rawQuiz) {
+        Quiz quiz = new Quiz();
+
+        // Extract basic information
+        Object idObj = rawQuiz.get("id");
+        if (idObj != null) {
+            quiz.setId(idObj.toString());
+            quiz.setCanvasQuizId(idObj.toString());
+        }
+
+        quiz.setTitle((String) rawQuiz.get("title"));
+        quiz.setDescription((String) rawQuiz.getOrDefault("description", ""));
+        quiz.setHtmlUrl((String) rawQuiz.get("html_url"));
+
+        // Set course ID if available in the raw data, otherwise it should be set by the caller
+        Object courseIdObj = rawQuiz.get("course_id");
+        if (courseIdObj != null) {
+            quiz.setCourseId(courseIdObj.toString());
+        }
+
+        return quiz;
     }
 }

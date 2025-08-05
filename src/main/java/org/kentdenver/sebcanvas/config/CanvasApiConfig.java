@@ -145,7 +145,7 @@ public class CanvasApiConfig {
      * Falls back to environment variables if Secret Manager fails.
      */
     private void loadSecrets() {
-        // Determine secret names based on active profile
+        // Use dedicated API client ID for OAuth API calls (it has full Canvas API scopes)
         String clientIdSecretName = activeProfile.equals("prod") ?
                 "prod_api_client_id" : "dev_api_client_id";
         String clientSecretSecretName = activeProfile.equals("prod") ?
@@ -153,6 +153,7 @@ public class CanvasApiConfig {
 
         try {
             log.info("Attempting to load Canvas API OAuth2 secrets from Secret Manager");
+            log.info("Using dedicated API client ID for OAuth API calls (it has full Canvas API scopes)");
 
             // Load client ID
             String loadedClientId = secretManagerService.getSecret(clientIdSecretName, "latest");
@@ -193,12 +194,14 @@ public class CanvasApiConfig {
      * Tries various naming patterns to be flexible.
      */
     private void loadClientIdFromEnvironment() {
-        // Try various patterns for environment variable names
+        // Try various patterns for environment variable names (prioritize API client ID)
         String[] patterns = {
-                "CANVAS_API_CLIENT_ID",
                 activeProfile.equals("prod") ? "PROD_API_CLIENT_ID" : "DEV_API_CLIENT_ID",
+                activeProfile.equals("prod") ? "prod_api_client_id" : "dev_api_client_id",
+                "CANVAS_API_CLIENT_ID",
                 "canvas_api_client_id",
-                activeProfile.equals("prod") ? "prod_api_client_id" : "dev_api_client_id"
+                activeProfile.equals("prod") ? "PROD_LTI_CLIENT_ID" : "DEV_LTI_CLIENT_ID",
+                activeProfile.equals("prod") ? "prod_lti_client_id" : "dev_lti_client_id"
         };
 
         for (String pattern : patterns) {

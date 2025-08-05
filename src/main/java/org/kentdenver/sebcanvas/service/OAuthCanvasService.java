@@ -476,4 +476,86 @@ public class OAuthCanvasService implements CanvasService {
             log.warn("No access token found in OAuth2 authentication for user: {}", userId);
         }
     }
+
+    /**
+     * Gets quizzes for a course and returns them as raw Canvas API data.
+     * This method is used by the HybridCanvasAuthService for fallback authentication.
+     *
+     * @param courseId The Canvas course ID
+     * @param userId The Canvas user ID
+     * @return List of raw quiz data from Canvas API
+     */
+    public List<Map<String, Object>> getQuizzes(String courseId, String userId) {
+        log.debug("Fetching raw quiz data for course: {} for user: {}", courseId, userId);
+
+        try {
+            // Get access token for this user
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null) {
+                log.error("No access token available for user: {}. OAuth flow required.", userId);
+                return new ArrayList<>();
+            }
+
+            // First, try to resolve the course ID to a numeric ID if it's a hash
+            String numericCourseId = resolveNumericCourseId(courseId, accessToken, userId);
+            if (numericCourseId == null) {
+                log.error("Could not resolve course ID {} to numeric ID", courseId);
+                return new ArrayList<>();
+            }
+
+            // Build the API URL
+            String apiPath = "/courses/" + numericCourseId + "/quizzes";
+            String url = UriComponentsBuilder
+                    .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
+                    .path(apiPath)
+                    .queryParam("per_page", 100)
+                    .toUriString();
+
+            log.debug("Making Canvas API request to: {}", url);
+
+            // Set up headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            // Make the API call
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+
+            log.debug("Canvas API Response Status: {}", response.getStatusCode());
+
+            // Parse the response to raw data
+            if (response.getBody() == null || response.getBody().isEmpty()) {
+                log.warn("Empty response from Canvas API for course: {}", courseId);
+                return new ArrayList<>();
+            }
+
+            List<Map<String, Object>> rawQuizzes = objectMapper.readValue(
+                    response.getBody(),
+                    new TypeReference<List<Map<String, Object>>>() {}
+            );
+
+            log.info("Successfully fetched {} raw quizzes from Canvas for course: {}", rawQuizzes.size(), courseId);
+            return rawQuizzes;
+
+        } catch (HttpClientErrorException e) {
+            log.error("Error fetching quizzes from Canvas: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+            // Check if it's an authentication error
+            if (e.getStatusCode() == HttpStatus.UNAUTHORIZED || e.getStatusCode() == HttpStatus.FORBIDDEN) {
+                // Remove the token from cache to force re-authentication
+                tokenCache.remove(userId);
+                log.warn("Authentication error - token removed from cache for user: {}", userId);
+            }
+            return new ArrayList<>();
+        } catch (Exception e) {
+            log.error("Error fetching raw quizzes from Canvas", e);
+            return new ArrayList<>();
+        }
+    }
 }

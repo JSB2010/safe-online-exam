@@ -37,14 +37,37 @@ public class QuizController {
     public ResponseEntity<QuizSebSetting> updateSebRequirement(
             @PathVariable String quizId,
             @RequestBody Map<String, Boolean> requestBody,
+            @RequestHeader(value = "X-Auth-Token", required = false) String authToken,
             HttpSession session) {
 
         // Verify that the user is authorized (should be instructor)
+        // Try session-based authentication first
         LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
-        if (launchData == null || !launchData.isInstructor()) {
-            log.warn("Unauthorized attempt to update SEB requirement for quiz: {}", quizId);
+        log.debug("Session launchData: {}", launchData != null ? "present" : "null");
+        log.debug("Auth token header: {}", authToken != null ? "present" : "null");
+        log.debug("Session ID: {}", session.getId());
+
+        boolean isAuthorized = false;
+        String authMethod = "none";
+
+        if (launchData != null && launchData.isInstructor()) {
+            isAuthorized = true;
+            authMethod = "session";
+            log.debug("User authorized via session - roles: {}", launchData.getRoles());
+        } else if (authToken != null) {
+            // Try token-based authentication as fallback
+            log.debug("Attempting token-based authentication");
+            isAuthorized = validateAuthToken(authToken, session);
+            authMethod = isAuthorized ? "token" : "invalid-token";
+        }
+
+        if (!isAuthorized) {
+            log.warn("Unauthorized attempt to update SEB requirement for quiz: {} (method: {}, launchData: {}, token: {})",
+                    quizId, authMethod, launchData != null ? "present" : "null", authToken != null ? "present" : "null");
             return ResponseEntity.status(403).build();
         }
+
+        log.info("User authorized via {} to update SEB requirement for quiz: {}", authMethod, quizId);
 
         boolean required = requestBody.getOrDefault("required", false);
         log.debug("Updating SEB requirement for quiz {} to {}", quizId, required);
@@ -152,5 +175,64 @@ public class QuizController {
         }
 
         return ResponseEntity.ok(quiz);
+    }
+
+    /**
+     * Test endpoint for hybrid authentication - gets quizzes without requiring LTI session.
+     * This is for testing the new hybrid authentication system.
+     */
+    @GetMapping("/test-hybrid")
+    @ResponseBody
+    public ResponseEntity<List<Quiz>> testHybridAuth(
+            @RequestParam String courseId,
+            @RequestParam String userId) {
+
+        log.info("Testing hybrid authentication for course: {}, user: {}", courseId, userId);
+
+        try {
+            List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
+            log.info("Successfully retrieved {} quizzes using hybrid authentication", quizzes.size());
+            return ResponseEntity.ok(quizzes);
+        } catch (Exception e) {
+            log.error("Error testing hybrid authentication", e);
+            return ResponseEntity.status(500).build();
+        }
+    }
+
+    /**
+     * Validates the authentication token as a fallback for session issues.
+     */
+    private boolean validateAuthToken(String authToken, HttpSession session) {
+        try {
+            // Check if token matches the one stored in session
+            String sessionToken = (String) session.getAttribute("authToken");
+            if (sessionToken != null && sessionToken.equals(authToken)) {
+                log.debug("Token validation successful via session match");
+                return true;
+            }
+
+            // Decode and validate token structure
+            String decodedToken = new String(java.util.Base64.getDecoder().decode(authToken));
+            String[] parts = decodedToken.split(":");
+
+            if (parts.length == 4) {
+                String userId = parts[0];
+                String courseId = parts[1];
+                String role = parts[2];
+                long timestamp = Long.parseLong(parts[3]);
+
+                // Check if token is not too old (1 hour max)
+                long currentTime = System.currentTimeMillis();
+                if (currentTime - timestamp < 3600000) { // 1 hour
+                    boolean isInstructor = "instructor".equals(role);
+                    log.debug("Token validation successful - user: {}, course: {}, instructor: {}", userId, courseId, isInstructor);
+                    return isInstructor;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Token validation failed: {}", e.getMessage());
+        }
+
+        return false;
     }
 }

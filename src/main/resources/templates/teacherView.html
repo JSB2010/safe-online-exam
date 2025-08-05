@@ -72,7 +72,7 @@
     </style>
 </head>
 <body>
-<div class="container mt-4">
+<div class="container mt-4" th:data-auth-token="${authToken}">
     <div class="row mb-4">
         <div class="col">
             <h1>Safe Exam Browser Quiz Manager</h1>
@@ -148,11 +148,32 @@
 
         // Function to send AJAX request to update SEB requirement
         function updateSebRequirement(quizId, required) {
+            const headers = {
+                'Content-Type': 'application/json',
+            };
+
+            // Add auth token if available (fallback for session issues)
+            // Try multiple ways to get the auth token
+            const authToken = /*[[${authToken}]]*/ null;
+            const authTokenFromThymeleaf = '[[${authToken}]]';
+            const authTokenFromData = document.querySelector('.container').getAttribute('data-auth-token');
+
+            console.log('Auth token (inline):', authToken ? 'yes' : 'no');
+            console.log('Auth token (thymeleaf):', authTokenFromThymeleaf);
+            console.log('Auth token (data attr):', authTokenFromData);
+
+            // Use the first available token
+            const finalToken = authToken || (authTokenFromThymeleaf !== 'null' ? authTokenFromThymeleaf : null) || authTokenFromData;
+            console.log('Final token:', finalToken ? 'present' : 'null');
+
+            if (finalToken && finalToken !== 'null') {
+                headers['X-Auth-Token'] = finalToken;
+                console.log('Added X-Auth-Token header');
+            }
+
             fetch('/api/quizzes/' + quizId + '/seb', {
                 method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: headers,
                 body: JSON.stringify({ required: required })
             })
                 .then(response => {
