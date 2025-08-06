@@ -554,4 +554,164 @@ public class CanvasApiService implements CanvasService {
         log.warn("getAccessTokenWithScope called in CanvasApiService. This method is not implemented in this service and only exists for compatibility.");
         return null;
     }
+
+    /**
+     * Updates a Canvas assignment to use external tool submission type.
+     * This redirects students to our SEB enforcement service.
+     *
+     * @param courseId Canvas course ID
+     * @param assignmentId Canvas assignment ID
+     * @param quizId Canvas quiz ID
+     * @param externalToolUrl The external tool URL to redirect to
+     * @param userId User ID for authentication
+     * @return true if update was successful
+     */
+    @SuppressWarnings("unchecked")
+    public boolean updateAssignmentToExternalTool(String courseId, String assignmentId, String quizId, String externalToolUrl, String userId) {
+        log.info("Updating Canvas assignment {} to use external tool for SEB enforcement", assignmentId);
+
+        try {
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null) {
+                log.error("No access token available for user {}", userId);
+                return false;
+            }
+
+            // Prepare the API request
+            String url = String.format("%s/api/v1/courses/%s/assignments/%s", canvasApiConfig.getApiBaseUrl(), courseId, assignmentId);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(accessToken);
+
+            // Create the assignment update payload
+            Map<String, Object> assignmentData = new HashMap<>();
+            assignmentData.put("submission_types", new String[]{"external_tool"});
+
+            // External tool configuration
+            Map<String, Object> externalToolConfig = new HashMap<>();
+            externalToolConfig.put("url", externalToolUrl);
+            externalToolConfig.put("new_tab", false);
+            assignmentData.put("external_tool_tag_attributes", externalToolConfig);
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("assignment", assignmentData);
+
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
+
+            // Make the API call
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.PUT, request, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("Successfully updated Canvas assignment {} to use external tool", assignmentId);
+                return true;
+            } else {
+                log.error("Failed to update Canvas assignment {}. Status: {}", assignmentId, response.getStatusCode());
+                return false;
+            }
+
+        } catch (Exception e) {
+            log.error("Error updating Canvas assignment {} to external tool: {}", assignmentId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Reverts a Canvas assignment back to normal quiz submission type.
+     *
+     * @param courseId Canvas course ID
+     * @param assignmentId Canvas assignment ID
+     * @param userId User ID for authentication
+     * @return true if revert was successful
+     */
+    public boolean revertAssignmentFromExternalTool(String courseId, String assignmentId, String userId) {
+        log.info("Reverting Canvas assignment {} from external tool back to normal quiz", assignmentId);
+
+        try {
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null) {
+                log.error("No access token available for user {}", userId);
+                return false;
+            }
+
+            String url = String.format("%s/api/v1/courses/%s/assignments/%s", canvasApiConfig.getApiBaseUrl(), courseId, assignmentId);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(accessToken);
+
+            // Create the assignment update payload to revert to quiz
+            Map<String, Object> assignmentData = new HashMap<>();
+            assignmentData.put("submission_types", new String[]{"online_quiz"});
+
+            // Remove external tool configuration
+            assignmentData.put("external_tool_tag_attributes", null);
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("assignment", assignmentData);
+
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
+
+            // Make the API call
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.PUT, request, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("Successfully reverted Canvas assignment {} from external tool", assignmentId);
+                return true;
+            } else {
+                log.error("Failed to revert Canvas assignment {}. Status: {}", assignmentId, response.getStatusCode());
+                return false;
+            }
+
+        } catch (Exception e) {
+            log.error("Error reverting Canvas assignment {} from external tool: {}", assignmentId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Finds the assignment ID for a given quiz ID.
+     * In Canvas, quizzes can be associated with assignments.
+     *
+     * @param courseId Canvas course ID
+     * @param quizId Canvas quiz ID
+     * @param userId User ID for authentication
+     * @return Assignment ID or null if not found
+     */
+    public String findAssignmentIdForQuiz(String courseId, String quizId, String userId) {
+        log.debug("Finding assignment ID for quiz {} in course {}", quizId, courseId);
+
+        try {
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null) {
+                log.error("No access token available for user {}", userId);
+                return null;
+            }
+
+            // First, try to get the quiz details to see if it has an assignment_id
+            String quizUrl = String.format("%s/api/v1/courses/%s/quizzes/%s", canvasApiConfig.getApiBaseUrl(), courseId, quizId);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+
+            HttpEntity<String> request = new HttpEntity<>(headers);
+
+            ResponseEntity<Map> response = restTemplate.exchange(quizUrl, HttpMethod.GET, request, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                Map<String, Object> quiz = response.getBody();
+                Object assignmentId = quiz.get("assignment_id");
+                if (assignmentId != null) {
+                    return assignmentId.toString();
+                }
+            }
+
+            log.warn("No assignment found for quiz {} in course {}", quizId, courseId);
+            return null;
+
+        } catch (Exception e) {
+            log.error("Error finding assignment ID for quiz {}: {}", quizId, e.getMessage(), e);
+            return null;
+        }
+    }
 }

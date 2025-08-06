@@ -224,6 +224,69 @@ public class QuizService {
     }
 
     /**
+     * Updates comprehensive SEB settings including allowed sites and external tool URL.
+     *
+     * @param quizId The quiz ID
+     * @param allowedSites JSON string of allowed sites
+     * @param externalToolUrl The external tool URL for Canvas integration
+     * @return The updated setting
+     */
+    public QuizSebSetting updateSebConfiguration(String quizId, String allowedSites, String externalToolUrl) {
+        log.debug("Updating comprehensive SEB configuration for quiz: {}", quizId);
+
+        // Find existing setting or create a new one
+        QuizSebSetting setting = sebSettingRepository.findByQuizId(quizId)
+                .orElseGet(() -> {
+                    QuizSebSetting newSetting = new QuizSebSetting();
+                    newSetting.setQuizId(quizId);
+                    newSetting.setSebRequired(true); // Enable SEB when configuring
+                    return newSetting;
+                });
+
+        // Update the comprehensive settings
+        setting.setAllowedSites(allowedSites);
+        setting.setExternalToolUrl(externalToolUrl);
+        setting.setSebRequired(true); // Ensure SEB is enabled
+
+        // Generate Browser Exam Key if needed
+        if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isEmpty()) {
+            try {
+                String browserExamKey = generateBrowserExamKey();
+                setting.setBrowserExamKey(browserExamKey);
+                log.debug("Generated new Browser Exam Key for quiz: {}", quizId);
+            } catch (NoSuchAlgorithmException e) {
+                log.error("Error generating Browser Exam Key for quiz: {}", quizId, e);
+            }
+        }
+
+        // Save to Firestore
+        QuizSebSetting savedSetting = sebSettingRepository.save(setting);
+        log.info("Updated comprehensive SEB configuration for quiz: {}", quizId);
+        return savedSetting;
+    }
+
+    /**
+     * Updates the Browser Exam Key for a specific quiz.
+     *
+     * @param quizId The quiz ID
+     * @param browserExamKey The Browser Exam Key to set
+     * @return The updated setting
+     */
+    public QuizSebSetting updateBrowserExamKey(String quizId, String browserExamKey) {
+        log.debug("Updating Browser Exam Key for quiz: {}", quizId);
+
+        QuizSebSetting setting = sebSettingRepository.findByQuizId(quizId)
+                .orElseThrow(() -> new RuntimeException("SEB setting not found for quiz: " + quizId));
+
+        setting.setBrowserExamKey(browserExamKey);
+
+        QuizSebSetting savedSetting = sebSettingRepository.save(setting);
+        log.debug("Updated Browser Exam Key for quiz: {}", quizId);
+
+        return savedSetting;
+    }
+
+    /**
      * Gets the URL of a quiz.
      *
      * @param quizId The quiz ID

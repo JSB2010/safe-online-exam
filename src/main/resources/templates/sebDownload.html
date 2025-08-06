@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safe Exam Browser Required</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .seb-container {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 2rem;
+        }
+        .seb-icon {
+            font-size: 4rem;
+            color: #dc3545;
+            margin-bottom: 1rem;
+        }
+        .step-card {
+            border-left: 4px solid #007bff;
+            margin-bottom: 1rem;
+        }
+        .download-btn {
+            font-size: 1.2rem;
+            padding: 1rem 2rem;
+            margin: 0.5rem;
+        }
+        .platform-section {
+            background-color: #f8f9fa;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .warning-box {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container seb-container">
+        <!-- Header -->
+        <div class="text-center mb-4">
+            <i class="fas fa-shield-alt seb-icon"></i>
+            <h1 class="display-4">Safe Exam Browser Required</h1>
+            <p class="lead text-muted">This quiz requires Safe Exam Browser (SEB) for secure testing</p>
+        </div>
+
+        <!-- Warning Box -->
+        <div class="warning-box">
+            <div class="d-flex align-items-center">
+                <i class="fas fa-exclamation-triangle text-warning me-3" style="font-size: 1.5rem;"></i>
+                <div>
+                    <strong>Important:</strong> You must use Safe Exam Browser to take this quiz. 
+                    Regular web browsers are not permitted for this assessment.
+                </div>
+            </div>
+        </div>
+
+        <!-- Step-by-step instructions -->
+        <div class="row">
+            <div class="col-12">
+                <h3 class="mb-3">
+                    <i class="fas fa-list-ol me-2"></i>
+                    How to Take This Quiz
+                </h3>
+
+                <!-- Step 1: Download SEB -->
+                <div class="card step-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <span class="badge bg-primary me-2">1</span>
+                            Download Safe Exam Browser
+                        </h5>
+                        <p class="card-text">
+                            Download and install Safe Exam Browser for your operating system:
+                        </p>
+                        
+                        <!-- Platform Downloads -->
+                        <div class="platform-section">
+                            <h6><i class="fab fa-windows me-2"></i>Windows</h6>
+                            <a href="https://safeexambrowser.org/download_en.html" 
+                               class="btn btn-outline-primary download-btn" 
+                               target="_blank">
+                                <i class="fas fa-download me-2"></i>Download for Windows
+                            </a>
+                        </div>
+
+                        <div class="platform-section">
+                            <h6><i class="fab fa-apple me-2"></i>macOS</h6>
+                            <a href="https://safeexambrowser.org/download_en.html" 
+                               class="btn btn-outline-primary download-btn" 
+                               target="_blank">
+                                <i class="fas fa-download me-2"></i>Download for macOS
+                            </a>
+                        </div>
+
+                        <div class="platform-section">
+                            <h6><i class="fab fa-apple me-2"></i>iPad/iOS</h6>
+                            <a href="https://apps.apple.com/app/safe-exam-browser/id1348168435" 
+                               class="btn btn-outline-primary download-btn" 
+                               target="_blank">
+                                <i class="fab fa-app-store me-2"></i>Download from App Store
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Download Quiz Configuration -->
+                <div class="card step-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <span class="badge bg-primary me-2">2</span>
+                            Download Quiz Configuration
+                        </h5>
+                        <p class="card-text">
+                            Download the specific configuration file for this quiz:
+                        </p>
+                        <a th:href="${sebConfigUrl}" 
+                           class="btn btn-success download-btn">
+                            <i class="fas fa-cog me-2"></i>Download Quiz Configuration (.seb)
+                        </a>
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                <i class="fas fa-info-circle me-1"></i>
+                                This file contains the specific settings for your quiz
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Open Configuration -->
+                <div class="card step-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <span class="badge bg-primary me-2">3</span>
+                            Open Configuration File
+                        </h5>
+                        <p class="card-text">
+                            Double-click the downloaded .seb file to automatically:
+                        </p>
+                        <ul>
+                            <li>Launch Safe Exam Browser</li>
+                            <li>Apply the correct security settings</li>
+                            <li>Navigate directly to your quiz</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Step 4: Take Quiz -->
+                <div class="card step-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <span class="badge bg-success me-2">4</span>
+                            Take Your Quiz
+                        </h5>
+                        <p class="card-text">
+                            Safe Exam Browser will open in secure mode and navigate to your quiz automatically.
+                            Complete your quiz as normal within the secure browser environment.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Troubleshooting -->
+        <div class="mt-4">
+            <h4><i class="fas fa-question-circle me-2"></i>Need Help?</h4>
+            <div class="accordion" id="troubleshootingAccordion">
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingOne">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
+                            I can't download or install Safe Exam Browser
+                        </button>
+                    </h2>
+                    <div id="collapseOne" class="accordion-collapse collapse" data-bs-parent="#troubleshootingAccordion">
+                        <div class="accordion-body">
+                            <ul>
+                                <li>Make sure you have administrator privileges on your computer</li>
+                                <li>Temporarily disable antivirus software during installation</li>
+                                <li>Try downloading from the official website: <a href="https://safeexambrowser.org" target="_blank">safeexambrowser.org</a></li>
+                                <li>Contact your IT support if you're using a managed device</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingTwo">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo">
+                            The .seb file won't open
+                        </button>
+                    </h2>
+                    <div id="collapseTwo" class="accordion-collapse collapse" data-bs-parent="#troubleshootingAccordion">
+                        <div class="accordion-body">
+                            <ul>
+                                <li>Make sure Safe Exam Browser is installed first</li>
+                                <li>Right-click the .seb file and choose "Open with Safe Exam Browser"</li>
+                                <li>Try opening Safe Exam Browser first, then use File > Open to load the .seb file</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingThree">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree">
+                            I'm having technical issues during the quiz
+                        </button>
+                    </h2>
+                    <div id="collapseThree" class="accordion-collapse collapse" data-bs-parent="#troubleshootingAccordion">
+                        <div class="accordion-body">
+                            <ul>
+                                <li>Contact your instructor immediately</li>
+                                <li>Use the quit password provided by your instructor if needed</li>
+                                <li>Document any error messages you see</li>
+                                <li>Check your internet connection stability</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="text-center mt-4 pt-4 border-top">
+            <p class="text-muted">
+                <i class="fas fa-shield-alt me-1"></i>
+                This security measure ensures academic integrity and fair testing for all students.
+            </p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

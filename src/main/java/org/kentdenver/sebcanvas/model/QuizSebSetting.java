@@ -49,6 +49,25 @@ public class QuizSebSetting {
     private String configKey;
 
     /**
+     * JSON array of additional allowed sites for this quiz.
+     * These sites will be included in the SEB URL filter configuration.
+     * Example: ["docs.google.com", "calculator.net"]
+     */
+    private String allowedSites;
+
+    /**
+     * The external tool URL that Canvas will redirect to.
+     * Format: https://our-service.com/quiz/{orgId}/{courseId}/{quizId}
+     */
+    private String externalToolUrl;
+
+    /**
+     * Canvas assignment ID for API updates.
+     * Used to update the Canvas assignment to use external tool submission type.
+     */
+    private String canvasAssignmentId;
+
+    /**
      * When this setting was created in our system.
      * Using Firestore's server timestamp for consistency.
      */

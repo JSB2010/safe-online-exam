@@ -4,8 +4,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
 import org.kentdenver.sebcanvas.service.QuizService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -28,6 +30,7 @@ import java.util.stream.Collectors;
 public class QuizController {
 
     private final QuizService quizService;
+    private final CanvasApiService canvasApiService;
 
     /**
      * API endpoint to update SEB requirement for a quiz.
@@ -74,6 +77,70 @@ public class QuizController {
 
         QuizSebSetting setting = quizService.updateSebRequirement(quizId, required);
         return ResponseEntity.ok(setting);
+    }
+
+    /**
+     * Saves comprehensive SEB configuration including allowed sites and Canvas integration.
+     *
+     * @param request SEB configuration request
+     * @param userId User ID from authentication
+     * @return Updated SEB setting
+     */
+    @PostMapping("/seb-config")
+    public ResponseEntity<QuizSebSetting> saveSebConfiguration(
+            @RequestBody SebConfigRequest request,
+            @RequestParam String userId,
+            HttpSession session) {
+
+        log.info("Saving SEB configuration for quiz {} by user {}", request.getQuizId(), userId);
+
+        try {
+            // Update comprehensive SEB settings
+            QuizSebSetting updatedSetting = quizService.updateSebConfiguration(
+                request.getQuizId(),
+                request.getAllowedSites(),
+                request.getExternalToolUrl()
+            );
+
+            // Update Canvas assignment if requested
+            if (request.isUpdateCanvas()) {
+                LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+                if (launchData != null) {
+                    updateCanvasAssignment(launchData.getCourseId(), request.getQuizId(), request.getExternalToolUrl(), userId);
+                }
+            }
+
+            log.info("Successfully saved SEB configuration for quiz {}", request.getQuizId());
+            return ResponseEntity.ok(updatedSetting);
+
+        } catch (Exception e) {
+            log.error("Error saving SEB configuration for quiz {}: {}", request.getQuizId(), e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * Updates the Canvas assignment to use external tool.
+     */
+    private void updateCanvasAssignment(String courseId, String quizId, String externalToolUrl, String userId) {
+        try {
+            // Find the assignment ID for this quiz
+            String assignmentId = canvasApiService.findAssignmentIdForQuiz(courseId, quizId, userId);
+            if (assignmentId != null) {
+                boolean success = canvasApiService.updateAssignmentToExternalTool(
+                    courseId, assignmentId, quizId, externalToolUrl, userId);
+
+                if (success) {
+                    log.info("Successfully updated Canvas assignment {} to use external tool", assignmentId);
+                } else {
+                    log.error("Failed to update Canvas assignment {} to use external tool", assignmentId);
+                }
+            } else {
+                log.warn("No assignment found for quiz {}, cannot update Canvas", quizId);
+            }
+        } catch (Exception e) {
+            log.error("Error updating Canvas assignment for quiz {}: {}", quizId, e.getMessage(), e);
+        }
     }
 
     /**
@@ -234,5 +301,28 @@ public class QuizController {
         }
 
         return false;
+    }
+
+    /**
+     * Request object for SEB configuration.
+     */
+    public static class SebConfigRequest {
+        private String quizId;
+        private String allowedSites;
+        private String externalToolUrl;
+        private boolean updateCanvas;
+
+        // Getters and setters
+        public String getQuizId() { return quizId; }
+        public void setQuizId(String quizId) { this.quizId = quizId; }
+
+        public String getAllowedSites() { return allowedSites; }
+        public void setAllowedSites(String allowedSites) { this.allowedSites = allowedSites; }
+
+        public String getExternalToolUrl() { return externalToolUrl; }
+        public void setExternalToolUrl(String externalToolUrl) { this.externalToolUrl = externalToolUrl; }
+
+        public boolean isUpdateCanvas() { return updateCanvas; }
+        public void setUpdateCanvas(boolean updateCanvas) { this.updateCanvas = updateCanvas; }
     }
 }
