@@ -68,6 +68,12 @@ public class QuizSebSetting {
     private String canvasAssignmentId;
 
     /**
+     * Deep Linking URL for updating module items.
+     * This URL can be used by instructors to update Canvas module items via LTI Deep Linking.
+     */
+    private String deepLinkUrl;
+
+    /**
      * When this setting was created in our system.
      * Using Firestore's server timestamp for consistency.
      */

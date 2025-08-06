@@ -71,57 +71,41 @@ public class CanvasApiService implements CanvasService {
 
     /**
      * Gets a list of quizzes for a specific course from Canvas.
+     * This method fetches both Classic Quizzes and New Quizzes.
      * This method uses the OAuth2 access token to authorize the request.
      *
      * @param courseId The Canvas course ID
      * @param userId The Canvas user ID (used for token lookup)
-     * @return List of quizzes in the course, or empty list if no token or error
+     * @return List of quizzes in the course (both classic and new), or empty list if no token or error
      */
     @Override
     public List<Quiz> getQuizzesForCourse(String courseId, String userId) {
         log.debug("Fetching quizzes for course: {} for user: {}", courseId, userId);
+
+        List<Quiz> allQuizzes = new ArrayList<>();
 
         try {
             // Get access token for this user
             String accessToken = getAccessToken(userId);
             if (accessToken == null) {
                 log.error("No access token available for user: {}. OAuth flow required.", userId);
-                return new ArrayList<>();
+                return allQuizzes;
             }
 
-            // Build the API URL
-            String apiPath = "/courses/" + courseId + "/quizzes";
-            String url = UriComponentsBuilder
-                    .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
-                    .path(apiPath)
-                    .queryParam("per_page", 100)
-                    .toUriString();
+            // Get Classic Quizzes
+            log.debug("Attempting to fetch classic quizzes for course: {}", courseId);
+            List<Quiz> classicQuizzes = getClassicQuizzes(courseId, accessToken);
+            allQuizzes.addAll(classicQuizzes);
+            log.info("Retrieved {} classic quizzes for course: {}", classicQuizzes.size(), courseId);
 
-            log.info("Making Canvas API request: {}", url);
+            // Get New Quizzes
+            log.debug("Attempting to fetch new quizzes for course: {}", courseId);
+            List<Quiz> newQuizzes = getNewQuizzes(courseId, accessToken);
+            allQuizzes.addAll(newQuizzes);
+            log.info("Retrieved {} new quizzes for course: {}", newQuizzes.size(), courseId);
 
-            // Set up headers with authorization
-            HttpHeaders headers = new HttpHeaders();
-            headers.setBearerAuth(accessToken);
-            headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
-
-            // Create the HTTP request
-            HttpEntity<String> entity = new HttpEntity<>(headers);
-
-            // Execute the request
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.GET,
-                    entity,
-                    String.class
-            );
-
-            log.debug("Canvas API Response Status: {}", response.getStatusCode());
-
-            // Parse the response to a list of Quiz objects
-            List<Quiz> quizzes = parseQuizList(response.getBody(), courseId);
-            log.info("Successfully fetched {} quizzes from Canvas for course: {}", quizzes.size(), courseId);
-
-            return quizzes;
+            log.info("Successfully fetched {} total quizzes from Canvas for course: {}", allQuizzes.size(), courseId);
+            return allQuizzes;
         } catch (HttpClientErrorException e) {
             log.error("Error fetching quizzes from Canvas: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
             // Check if it's an authentication error
@@ -299,7 +283,7 @@ public class CanvasApiService implements CanvasService {
      * @param userId The user ID
      * @return The access token or null if not found
      */
-    private String getAccessToken(String userId) {
+    public String getAccessToken(String userId) {
         // Check cache first for performance
         if (tokenCache.containsKey(userId)) {
             log.debug("Using cached access token for user: {}", userId);
@@ -318,6 +302,122 @@ public class CanvasApiService implements CanvasService {
 
         log.debug("No access token found for user: {}. OAuth flow required.", userId);
         return null;
+    }
+
+    /**
+     * Gets Classic Quizzes for a course.
+     */
+    private List<Quiz> getClassicQuizzes(String courseId, String accessToken) {
+        try {
+            // Build the API URL for classic quizzes
+            String apiPath = "/courses/" + courseId + "/quizzes";
+            String url = UriComponentsBuilder
+                    .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
+                    .path(apiPath)
+                    .queryParam("per_page", 100)
+                    .toUriString();
+
+            log.info("Making Canvas API request for classic quizzes to: {}", url);
+
+            // Set up headers with authorization
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+
+            // Create the HTTP request
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            // Execute the request
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("Canvas API response for classic quizzes: {}", response.getBody());
+
+                // Parse the response to a list of Quiz objects
+                List<Quiz> quizzes = parseQuizList(response.getBody(), courseId);
+
+                log.info("Parsed {} classic quizzes from Canvas API response", quizzes.size());
+
+                // Mark these as classic quizzes
+                quizzes.forEach(quiz -> {
+                    quiz.setQuizEngine("classic");
+                    quiz.setQuizTypeDisplay("Classic Quiz");
+                    log.info("Classic Quiz found: ID={}, Title={}", quiz.getId(), quiz.getTitle());
+                });
+
+                return quizzes;
+            } else {
+                log.warn("Canvas API returned non-success status for classic quizzes: {}", response.getStatusCode());
+                return new ArrayList<>();
+            }
+
+        } catch (Exception e) {
+            log.error("Error getting classic quizzes from Canvas API", e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Gets New Quizzes for a course.
+     */
+    private List<Quiz> getNewQuizzes(String courseId, String accessToken) {
+        try {
+            // Build the API URL for new quizzes - New Quizzes use a different API path
+            String apiPath = "/quiz/v1/courses/" + courseId + "/quizzes";
+            String url = UriComponentsBuilder
+                    .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
+                    .path(apiPath)
+                    .queryParam("per_page", 100)
+                    .toUriString();
+
+            log.debug("Making Canvas API request for new quizzes to: {}", url);
+
+            // Set up headers with authorization
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+
+            // Create the HTTP request
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            // Execute the request
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+
+            log.debug("New Quizzes API response status: {}", response.getStatusCode());
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.debug("New Quizzes API response body: {}", response.getBody());
+
+                // Parse the response to a list of Quiz objects
+                List<Quiz> quizzes = parseNewQuizList(response.getBody(), courseId);
+
+                // Mark these as new quizzes
+                quizzes.forEach(quiz -> {
+                    quiz.setQuizEngine("new");
+                    quiz.setQuizTypeDisplay("New Quiz");
+                });
+
+                log.debug("Parsed {} new quizzes from API response", quizzes.size());
+                return quizzes;
+            } else {
+                log.warn("Canvas API returned non-success status for new quizzes: {} - {}", response.getStatusCode(), response.getBody());
+                return new ArrayList<>();
+            }
+
+        } catch (Exception e) {
+            log.error("Error getting new quizzes from Canvas API", e);
+            return new ArrayList<>();
+        }
     }
 
     /**
@@ -359,6 +459,59 @@ public class CanvasApiService implements CanvasService {
             return quizzes;
         } catch (Exception e) {
             log.error("Error parsing quiz list from Canvas API", e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Parses the JSON response from Canvas New Quizzes API into Quiz objects.
+     * New Quizzes have a different structure than Classic Quizzes.
+     *
+     * @param jsonResponse The JSON response from Canvas New Quizzes API
+     * @param courseId The course ID to associate with the quizzes
+     * @return List of Quiz objects
+     */
+    private List<Quiz> parseNewQuizList(String jsonResponse, String courseId) {
+        if (jsonResponse == null || jsonResponse.isEmpty()) {
+            log.warn("Empty JSON response from Canvas New Quizzes API");
+            return new ArrayList<>();
+        }
+
+        try {
+            // Parse the response into a list of maps
+            ObjectMapper mapper = new ObjectMapper();
+            List<Map<String, Object>> rawQuizzes = mapper.readValue(jsonResponse, List.class);
+
+            List<Quiz> quizzes = new ArrayList<>();
+            for (Map<String, Object> rawQuiz : rawQuizzes) {
+                Quiz quiz = new Quiz();
+                quiz.setId(rawQuiz.get("id").toString());
+
+                // New Quizzes might use "name" instead of "title"
+                String title = (String) rawQuiz.get("title");
+                if (title == null) {
+                    title = (String) rawQuiz.get("name");
+                }
+                quiz.setTitle(title);
+
+                quiz.setDescription((String) rawQuiz.get("description"));
+
+                // New Quizzes might use "url" instead of "html_url"
+                String htmlUrl = (String) rawQuiz.get("html_url");
+                if (htmlUrl == null) {
+                    htmlUrl = (String) rawQuiz.get("url");
+                }
+                quiz.setHtmlUrl(htmlUrl);
+
+                quiz.setCourseId(courseId);
+                quiz.setCanvasQuizId(rawQuiz.get("id").toString());
+
+                quizzes.add(quiz);
+            }
+
+            return quizzes;
+        } catch (Exception e) {
+            log.error("Error parsing new quiz list from Canvas API", e);
             return new ArrayList<>();
         }
     }
@@ -578,7 +731,7 @@ public class CanvasApiService implements CanvasService {
             }
 
             // Prepare the API request
-            String url = String.format("%s/api/v1/courses/%s/assignments/%s", canvasApiConfig.getApiBaseUrl(), courseId, assignmentId);
+            String url = String.format("%s/courses/%s/assignments/%s", canvasApiConfig.getApiBaseUrl(), courseId, assignmentId);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -634,7 +787,7 @@ public class CanvasApiService implements CanvasService {
                 return false;
             }
 
-            String url = String.format("%s/api/v1/courses/%s/assignments/%s", canvasApiConfig.getApiBaseUrl(), courseId, assignmentId);
+            String url = String.format("%s/courses/%s/assignments/%s", canvasApiConfig.getApiBaseUrl(), courseId, assignmentId);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -688,29 +841,135 @@ public class CanvasApiService implements CanvasService {
                 return null;
             }
 
-            // First, try to get the quiz details to see if it has an assignment_id
-            String quizUrl = String.format("%s/api/v1/courses/%s/quizzes/%s", canvasApiConfig.getApiBaseUrl(), courseId, quizId);
-
             HttpHeaders headers = new HttpHeaders();
             headers.setBearerAuth(accessToken);
-
             HttpEntity<String> request = new HttpEntity<>(headers);
 
-            ResponseEntity<Map> response = restTemplate.exchange(quizUrl, HttpMethod.GET, request, Map.class);
+            // First, try to get the Classic Quiz details to see if it has an assignment_id
+            try {
+                String quizUrl = String.format("%s/courses/%s/quizzes/%s", canvasApiConfig.getApiBaseUrl(), courseId, quizId);
+                log.debug("Attempting to access Classic Quiz URL: {}", quizUrl);
 
-            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                Map<String, Object> quiz = response.getBody();
-                Object assignmentId = quiz.get("assignment_id");
-                if (assignmentId != null) {
-                    return assignmentId.toString();
+                ResponseEntity<Map> response = restTemplate.exchange(quizUrl, HttpMethod.GET, request, Map.class);
+
+                if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                    Map<String, Object> quiz = response.getBody();
+                    Object assignmentId = quiz.get("assignment_id");
+                    if (assignmentId != null) {
+                        log.debug("Found assignment ID {} for Classic Quiz {}", assignmentId, quizId);
+                        return assignmentId.toString();
+                    }
                 }
+            } catch (Exception e) {
+                log.debug("Classic Quiz API failed for quiz {}, trying New Quizzes API: {}", quizId, e.getMessage());
             }
 
-            log.warn("No assignment found for quiz {} in course {}", quizId, courseId);
+            // If Classic Quiz failed, try New Quizzes API
+            try {
+                String newQuizUrl = String.format("%s/quiz/v1/courses/%s/quizzes/%s", canvasApiConfig.getApiBaseUrl(), courseId, quizId);
+                log.debug("Attempting to access New Quiz URL: {}", newQuizUrl);
+
+                ResponseEntity<Map> response = restTemplate.exchange(newQuizUrl, HttpMethod.GET, request, Map.class);
+
+                if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                    Map<String, Object> quiz = response.getBody();
+                    Object assignmentId = quiz.get("assignment_id");
+                    if (assignmentId != null) {
+                        log.debug("Found assignment ID {} for New Quiz {}", assignmentId, quizId);
+                        return assignmentId.toString();
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("New Quiz API also failed for quiz {}: {}", quizId, e.getMessage());
+            }
+
+            log.warn("No assignment found for quiz {} in course {} (tried both Classic and New Quiz APIs)", quizId, courseId);
             return null;
 
         } catch (Exception e) {
             log.error("Error finding assignment ID for quiz {}: {}", quizId, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Creates a Canvas assignment for a quiz that doesn't have one, configured as an external tool.
+     * This is needed for quizzes that were created as practice/survey quizzes without assignments.
+     *
+     * @param courseId The course ID
+     * @param quizId The quiz ID
+     * @param externalToolUrl The external tool URL to configure
+     * @param userId The user ID for authentication
+     * @return The created assignment ID, or null if creation failed
+     */
+    public String createAssignmentForQuiz(String courseId, String quizId, String externalToolUrl, String userId) {
+        log.info("Creating Canvas assignment for quiz {} in course {}", quizId, courseId);
+
+        try {
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null) {
+                log.error("No access token available for user {}", userId);
+                return null;
+            }
+
+            // First, get the quiz details to use for the assignment
+            String quizUrl = String.format("%s/courses/%s/quizzes/%s", canvasApiConfig.getApiBaseUrl(), courseId, quizId);
+            HttpHeaders quizHeaders = new HttpHeaders();
+            quizHeaders.setBearerAuth(accessToken);
+            HttpEntity<Void> quizRequest = new HttpEntity<>(quizHeaders);
+
+            ResponseEntity<Map> quizResponse = restTemplate.exchange(quizUrl, HttpMethod.GET, quizRequest, Map.class);
+            if (!quizResponse.getStatusCode().is2xxSuccessful() || quizResponse.getBody() == null) {
+                log.error("Failed to fetch quiz details for quiz {}", quizId);
+                return null;
+            }
+
+            Map<String, Object> quiz = quizResponse.getBody();
+            String quizTitle = (String) quiz.get("title");
+            String quizDescription = (String) quiz.get("description");
+
+            // Create the assignment
+            String assignmentUrl = String.format("%s/courses/%s/assignments", canvasApiConfig.getApiBaseUrl(), courseId);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(accessToken);
+
+            // Create the assignment payload
+            Map<String, Object> assignmentData = new HashMap<>();
+            assignmentData.put("name", quizTitle + " (SEB Required)");
+            assignmentData.put("description", quizDescription != null ? quizDescription : "This quiz requires Safe Exam Browser");
+            assignmentData.put("submission_types", new String[]{"external_tool"});
+            assignmentData.put("points_possible", quiz.get("points_possible"));
+            assignmentData.put("due_at", quiz.get("due_at"));
+            assignmentData.put("published", true);
+
+            // External tool configuration
+            Map<String, Object> externalToolConfig = new HashMap<>();
+            externalToolConfig.put("url", externalToolUrl);
+            externalToolConfig.put("new_tab", false);
+            assignmentData.put("external_tool_tag_attributes", externalToolConfig);
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("assignment", assignmentData);
+
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
+
+            // Make the API call to create the assignment
+            ResponseEntity<Map> response = restTemplate.exchange(assignmentUrl, HttpMethod.POST, request, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                Map<String, Object> createdAssignment = response.getBody();
+                String assignmentId = createdAssignment.get("id").toString();
+                log.info("Successfully created Canvas assignment {} for quiz {}", assignmentId, quizId);
+                return assignmentId;
+            } else {
+                log.error("Failed to create Canvas assignment for quiz {}. Status: {}", quizId, response.getStatusCode());
+                return null;
+            }
+
+        } catch (Exception e) {
+            log.error("Error creating Canvas assignment for quiz {}: {}", quizId, e.getMessage(), e);
             return null;
         }
     }

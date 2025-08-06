@@ -216,6 +216,9 @@ public class LtiController {
             session.setAttribute("canvas_user_id", launchData.getUserId());
             session.setAttribute("canvas_course_id", launchData.getCourseId());
 
+            // Log the course ID that was extracted/used
+            log.info("Stored course ID in session: {} (from LTI launch)", launchData.getCourseId());
+
             // Detect if this is a Deep Linking request or a resource launch
             String messageType = launchData.getMessageType();
 

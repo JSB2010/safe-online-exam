@@ -229,9 +229,10 @@ public class QuizService {
      * @param quizId The quiz ID
      * @param allowedSites JSON string of allowed sites
      * @param externalToolUrl The external tool URL for Canvas integration
+     * @param sebRequired Whether SEB is required for this quiz
      * @return The updated setting
      */
-    public QuizSebSetting updateSebConfiguration(String quizId, String allowedSites, String externalToolUrl) {
+    public QuizSebSetting updateSebConfiguration(String quizId, String allowedSites, String externalToolUrl, boolean sebRequired) {
         log.debug("Updating comprehensive SEB configuration for quiz: {}", quizId);
 
         // Find existing setting or create a new one
@@ -239,14 +240,14 @@ public class QuizService {
                 .orElseGet(() -> {
                     QuizSebSetting newSetting = new QuizSebSetting();
                     newSetting.setQuizId(quizId);
-                    newSetting.setSebRequired(true); // Enable SEB when configuring
+                    newSetting.setSebRequired(sebRequired);
                     return newSetting;
                 });
 
         // Update the comprehensive settings
         setting.setAllowedSites(allowedSites);
         setting.setExternalToolUrl(externalToolUrl);
-        setting.setSebRequired(true); // Ensure SEB is enabled
+        setting.setSebRequired(sebRequired);
 
         // Generate Browser Exam Key if needed
         if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isEmpty()) {

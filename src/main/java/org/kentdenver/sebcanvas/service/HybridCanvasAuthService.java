@@ -71,23 +71,39 @@ public class HybridCanvasAuthService {
         }
 
         // Strategy 1: Try LTI AGS first
-        log.debug("Attempting LTI AGS approach (LTI Client ID 252)");
+        // NOTE: LTI AGS only returns quizzes configured for gradebook integration
+        log.debug("Attempting LTI AGS approach (LTI Client ID 252) - only returns gradebook-integrated quizzes");
         try {
             List<Quiz> agsQuizzes = ltiAgsService.getQuizzesForCourse(courseId, userId);
             if (agsQuizzes != null && !agsQuizzes.isEmpty()) {
-                log.info("Successfully retrieved {} quizzes using LTI AGS", agsQuizzes.size());
+                log.info("LTI AGS retrieved {} gradebook-integrated quizzes", agsQuizzes.size());
+                // Don't return here - continue to get ALL quizzes from Canvas API
+                log.info("Continuing to Canvas API to get ALL quizzes (including non-gradebook ones)");
+            } else {
+                log.debug("LTI AGS returned no quizzes");
+            }
+        } catch (Exception e) {
+            log.warn("LTI AGS failed: {}, falling back to Canvas API", e.getMessage());
+        }
+
+        // Strategy 2: Try CanvasApiService with New Quizzes support
+        log.debug("Attempting CanvasApiService with New Quizzes support");
+        try {
+            List<Quiz> allQuizzes = canvasApiService.getQuizzesForCourse(courseId, userId);
+            if (allQuizzes != null && !allQuizzes.isEmpty()) {
+                log.info("Successfully retrieved {} quizzes (Classic + New) using CanvasApiService", allQuizzes.size());
                 // Convert Quiz objects to raw Map format for consistency
-                List<Map<String, Object>> rawQuizzes = agsQuizzes.stream()
+                List<Map<String, Object>> rawQuizzes = allQuizzes.stream()
                         .map(this::convertQuizToMap)
                         .collect(java.util.stream.Collectors.toList());
                 return rawQuizzes;
             }
-            log.debug("LTI AGS returned no quizzes, trying OAuth fallback");
+            log.debug("CanvasApiService returned no quizzes, trying OAuth fallback");
         } catch (Exception e) {
-            log.warn("LTI AGS failed: {}, falling back to OAuth Canvas API", e.getMessage());
+            log.warn("CanvasApiService failed: {}, falling back to OAuth Canvas API", e.getMessage());
         }
 
-        // Strategy 2: Fall back to OAuth Canvas API
+        // Strategy 3: Fall back to OAuth Canvas API
         log.debug("Attempting OAuth Canvas API approach (API Client ID 253)");
         try {
             List<Map<String, Object>> oauthQuizzes = oauthCanvasService.getQuizzes(courseId, userId);

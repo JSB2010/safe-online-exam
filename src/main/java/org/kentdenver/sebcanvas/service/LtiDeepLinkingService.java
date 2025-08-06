@@ -178,4 +178,37 @@ public class LtiDeepLinkingService {
 
         return contentItem;
     }
+
+    /**
+     * Creates a Deep Linking response for a single quiz with SEB settings.
+     * This is used when updating module items for SEB enforcement.
+     *
+     * @param quiz The quiz to create content item for
+     * @param sebRequired Whether SEB is required for this quiz
+     * @return A signed JWT containing the deep linking response
+     * @throws JOSEException If signing the JWT fails
+     * @throws IOException If serializing JSON content fails
+     */
+    public String createSingleQuizDeepLinkResponse(Quiz quiz, boolean sebRequired) throws JOSEException, IOException {
+        log.info("Creating single quiz Deep Linking response for quiz: {} (SEB required: {})", quiz.getId(), sebRequired);
+
+        // Create content item for the quiz
+        Map<String, Object> contentItem = createQuizContentItem(quiz, sebRequired);
+
+        // Create the Deep Linking response payload
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("iss", ltiConfig.getClientId());
+        payload.put("aud", ltiConfig.getIssuer());
+        payload.put("exp", System.currentTimeMillis() / 1000 + 3600); // 1 hour expiry
+        payload.put("iat", System.currentTimeMillis() / 1000);
+        payload.put("nonce", java.util.UUID.randomUUID().toString());
+
+        // Deep Linking specific claims
+        payload.put("https://purl.imsglobal.org/spec/lti/claim/message_type", "LtiDeepLinkingResponse");
+        payload.put("https://purl.imsglobal.org/spec/lti/claim/version", "1.3.0");
+        payload.put("https://purl.imsglobal.org/spec/lti-dl/claim/content_items", List.of(contentItem));
+
+        // Sign and return the JWT
+        return jwkService.signDeepLinkingJwt(payload);
+    }
 }

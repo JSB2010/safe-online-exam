@@ -63,4 +63,14 @@ public class Quiz {
      * The full URL to the quiz in Canvas.
      */
     private String htmlUrl;
+
+    /**
+     * The quiz engine type (classic or new).
+     */
+    private String quizEngine;
+
+    /**
+     * Display name for the quiz type.
+     */
+    private String quizTypeDisplay;
 }

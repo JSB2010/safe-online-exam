@@ -4,9 +4,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.kentdenver.sebcanvas.model.ModuleItemUpdate;
 import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
 import org.kentdenver.sebcanvas.service.QuizService;
+import org.kentdenver.sebcanvas.service.ModuleItemService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -31,13 +33,14 @@ public class QuizController {
 
     private final QuizService quizService;
     private final CanvasApiService canvasApiService;
+    private final ModuleItemService moduleItemService;
 
     /**
      * API endpoint to update SEB requirement for a quiz.
      */
     @PutMapping("/{quizId}/seb")
     @ResponseBody
-    public ResponseEntity<QuizSebSetting> updateSebRequirement(
+    public ResponseEntity<?> updateSebRequirement(
             @PathVariable String quizId,
             @RequestBody Map<String, Boolean> requestBody,
             @RequestHeader(value = "X-Auth-Token", required = false) String authToken,
@@ -76,6 +79,93 @@ public class QuizController {
         log.debug("Updating SEB requirement for quiz {} to {}", quizId, required);
 
         QuizSebSetting setting = quizService.updateSebRequirement(quizId, required);
+
+        // Update Canvas assignment when enabling/disabling SEB
+        String courseId = null;
+        String userId = null;
+
+        if (launchData != null) {
+            courseId = launchData.getCourseId();
+            userId = launchData.getUserId();
+        } else if (authToken != null && "token".equals(authMethod)) {
+            // Extract course and user info from token
+            try {
+                String decodedToken = new String(java.util.Base64.getDecoder().decode(authToken));
+                String[] parts = decodedToken.split(":");
+                if (parts.length == 4) {
+                    userId = parts[0];
+                    courseId = parts[1];
+                    log.debug("Extracted from token - user: {}, course: {}", userId, courseId);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to extract course/user info from token: {}", e.getMessage());
+            }
+        }
+
+        if (courseId != null && userId != null) {
+            // Check if we have a valid Canvas API access token
+            if (!canvasApiService.hasAccessToken(userId)) {
+                log.info("No Canvas API access token found for user {}. Requiring OAuth2 authorization.", userId);
+
+                // Return a response indicating OAuth2 authorization is needed
+                try {
+                    String oauthUrl = "/api/oauth2authorize?course_id=" + courseId + "&user_id=" + userId +
+                                     "&redirect_url=" + java.net.URLEncoder.encode("/lti/launch?course_id=" + courseId + "&user_id=" + userId, "UTF-8");
+
+                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                            .body(Map.of(
+                                "error", "Canvas API authorization required",
+                                "oauth_url", oauthUrl,
+                                "message", "Please authorize this application to access Canvas API to enable SEB features."
+                            ));
+                } catch (Exception e) {
+                    log.error("Error creating OAuth URL: {}", e.getMessage());
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(Map.of("error", "Failed to create authorization URL"));
+                }
+            }
+
+            if (required) {
+                // Enable SEB: Automatically update module items
+                String sebRedirectUrl = generateSebRedirectUrl(quizId);
+                setting.setExternalToolUrl(sebRedirectUrl);
+                setting = quizService.updateSebConfiguration(quizId, setting.getAllowedSites(), sebRedirectUrl, true);
+
+                log.info("SEB enabled for quiz {} - automatically updating module items", quizId);
+
+                // Automatically find and update module items
+                try {
+                    List<ModuleItemUpdate> moduleItems = moduleItemService.findModuleItemsForQuiz(courseId, quizId, userId);
+                    int updatedCount = moduleItemService.updateModuleItemsToSeb(moduleItems, sebRedirectUrl, userId);
+
+                    log.info("Successfully updated {} module items for quiz {}", updatedCount, quizId);
+                    setting.setDeepLinkUrl(String.format("Updated %d module items automatically", updatedCount));
+                } catch (Exception e) {
+                    log.error("Error updating module items for quiz {}: {}", quizId, e.getMessage(), e);
+                    setting.setDeepLinkUrl("Error updating module items: " + e.getMessage());
+                }
+            } else {
+                // Disable SEB: Automatically revert module items
+                setting.setSebRequired(false);
+                setting = quizService.updateSebConfiguration(quizId, setting.getAllowedSites(), null, false);
+
+                log.info("SEB disabled for quiz {} - automatically reverting module items", quizId);
+
+                // Automatically revert module items
+                try {
+                    int revertedCount = moduleItemService.revertModuleItemsForQuiz(quizId, userId);
+
+                    log.info("Successfully reverted {} module items for quiz {}", revertedCount, quizId);
+                    setting.setDeepLinkUrl(String.format("Reverted %d module items automatically", revertedCount));
+                } catch (Exception e) {
+                    log.error("Error reverting module items for quiz {}: {}", quizId, e.getMessage(), e);
+                    setting.setDeepLinkUrl("Error reverting module items: " + e.getMessage());
+                }
+            }
+        } else {
+            log.warn("No course/user information available, cannot update Canvas assignment for quiz {}", quizId);
+        }
+
         return ResponseEntity.ok(setting);
     }
 
@@ -99,16 +189,12 @@ public class QuizController {
             QuizSebSetting updatedSetting = quizService.updateSebConfiguration(
                 request.getQuizId(),
                 request.getAllowedSites(),
-                request.getExternalToolUrl()
+                request.getExternalToolUrl(),
+                true
             );
 
-            // Update Canvas assignment if requested
-            if (request.isUpdateCanvas()) {
-                LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
-                if (launchData != null) {
-                    updateCanvasAssignment(launchData.getCourseId(), request.getQuizId(), request.getExternalToolUrl(), userId);
-                }
-            }
+            // Note: Canvas module items will be updated via LTI Deep Linking
+            log.info("SEB configuration saved - module items will be updated via Deep Linking");
 
             log.info("Successfully saved SEB configuration for quiz {}", request.getQuizId());
             return ResponseEntity.ok(updatedSetting);
@@ -119,29 +205,7 @@ public class QuizController {
         }
     }
 
-    /**
-     * Updates the Canvas assignment to use external tool.
-     */
-    private void updateCanvasAssignment(String courseId, String quizId, String externalToolUrl, String userId) {
-        try {
-            // Find the assignment ID for this quiz
-            String assignmentId = canvasApiService.findAssignmentIdForQuiz(courseId, quizId, userId);
-            if (assignmentId != null) {
-                boolean success = canvasApiService.updateAssignmentToExternalTool(
-                    courseId, assignmentId, quizId, externalToolUrl, userId);
 
-                if (success) {
-                    log.info("Successfully updated Canvas assignment {} to use external tool", assignmentId);
-                } else {
-                    log.error("Failed to update Canvas assignment {} to use external tool", assignmentId);
-                }
-            } else {
-                log.warn("No assignment found for quiz {}, cannot update Canvas", quizId);
-            }
-        } catch (Exception e) {
-            log.error("Error updating Canvas assignment for quiz {}: {}", quizId, e.getMessage(), e);
-        }
-    }
 
     /**
      * Gets all quizzes for the current course.
@@ -324,5 +388,14 @@ public class QuizController {
 
         public boolean isUpdateCanvas() { return updateCanvas; }
         public void setUpdateCanvas(boolean updateCanvas) { this.updateCanvas = updateCanvas; }
+    }
+
+    /**
+     * Generates the SEB redirect URL for a quiz.
+     * Format: https://our-service.com/seb/redirect/{quizId}
+     */
+    private String generateSebRedirectUrl(String quizId) {
+        String baseUrl = "https://canvas-seb-dev-184075650720.us-central1.run.app";
+        return String.format("%s/seb/redirect/%s", baseUrl, quizId);
     }
 }

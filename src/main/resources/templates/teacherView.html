@@ -92,7 +92,10 @@
 
             <div class="card quiz-card" th:each="quiz : ${quizzes}" th:classappend="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired ? 'seb-required' : 'seb-not-required'}">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <span th:text="${quiz.title}">Quiz Title</span>
+                    <div>
+                        <span th:text="${quiz.title}">Quiz Title</span>
+                        <small class="text-muted ms-2" th:if="${quiz.quizTypeDisplay}" th:text="'(' + ${quiz.quizTypeDisplay} + ')'">Quiz Type</small>
+                    </div>
                     <label class="toggle-switch">
                         <input type="checkbox" class="seb-toggle" th:data-quiz-id="${quiz.id}" th:checked="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}">
                         <span class="slider"></span>
@@ -116,6 +119,27 @@
                             <i class="fas fa-cog me-1"></i>
                             Configure SEB Settings
                         </button>
+                    </div>
+
+                    <!-- Module Update Status Section (shown when SEB is enabled) -->
+                    <div th:if="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}"
+                         class="mt-2 module-update-section" th:id="'module-update-' + ${quiz.id}">
+                        <div class="alert alert-success py-2 mb-0">
+                            <small>
+                                <i class="fas fa-check-circle me-1"></i>
+                                <strong>Module Items Updated:</strong>
+                                <span th:text="${quizSebSettings.get(quiz.id).deepLinkUrl ?: 'Canvas module items automatically updated'}">
+                                    Canvas module items automatically updated
+                                </span>
+                            </small>
+                            <div class="mt-2">
+                                <p class="mb-0 small">
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    All Canvas module items linking to this quiz have been automatically updated to use SEB enforcement.
+                                    Students accessing this quiz through Canvas modules will now be required to use Safe Exam Browser.
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- SEB Quiz Link (shown when SEB is enabled) -->
@@ -500,6 +524,9 @@
                 saveBtn.disabled = false;
             });
         }
+
+        // Module items are now updated automatically when SEB is toggled
+        // No manual Deep Linking buttons needed
     });
 </script>
 </body>

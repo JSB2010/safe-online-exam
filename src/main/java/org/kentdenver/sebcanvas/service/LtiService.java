@@ -151,7 +151,9 @@ public class LtiService {
         // Extract context information
         Map<String, Object> context = (Map<String, Object>) claims.get("https://purl.imsglobal.org/spec/lti/claim/context");
         if (context != null) {
-            launchData.setCourseId((String) context.get("id"));
+            // Use Canvas course ID from custom parameters if available, otherwise fall back to context ID
+            String contextId = (String) context.get("id");
+            launchData.setCourseId(contextId); // This will be overridden below if custom parameter is available
             launchData.setCourseName((String) context.get("title"));
 
             if (context.get("type") instanceof List) {
@@ -186,7 +188,16 @@ public class LtiService {
         Map<String, String> custom = (Map<String, String>) claims.get("https://purl.imsglobal.org/spec/lti/claim/custom");
         if (custom != null) {
             launchData.setCustomParameters(custom);
+
+            // Override course ID with Canvas course ID if available in custom parameters
+            String canvasCourseId = custom.get("canvas_course_id");
+            if (canvasCourseId != null && !canvasCourseId.isEmpty()) {
+                log.debug("Using Canvas course ID from custom parameters: {} (was: {})", canvasCourseId, launchData.getCourseId());
+                launchData.setCourseId(canvasCourseId);
+            }
         }
+
+        // Note: Course ID extraction from AGS URL will happen after AGS endpoint is processed
 
         // Extract deep linking settings if available (for content item selection)
         Map<String, Object> deepLinkingSettings = (Map<String, Object>) claims.get("https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings");
@@ -211,6 +222,33 @@ public class LtiService {
         Map<String, Object> agsEndpoint = (Map<String, Object>) claims.get("https://purl.imsglobal.org/spec/lti-ags/claim/endpoint");
         if (agsEndpoint != null) {
             launchData.setAgsLineitemsUrl((String) agsEndpoint.get("lineitems"));
+        }
+
+        // If custom parameters didn't provide course ID, try to extract from AGS endpoint
+        // Check if current course ID is not numeric (likely a UUID) and AGS URL is available
+        log.debug("Course ID extraction check - courseId: {}, agsUrl: {}, isNumeric: {}",
+                 launchData.getCourseId(), launchData.getAgsLineitemsUrl(),
+                 launchData.getCourseId() != null ? launchData.getCourseId().matches("\\d+") : "null");
+
+        if (launchData.getAgsLineitemsUrl() != null && !launchData.getCourseId().matches("\\d+")) {
+            // AGS URL format: https://kentdenver.instructure.com/api/lti/courses/11825/line_items
+            String agsUrl = launchData.getAgsLineitemsUrl();
+            String pattern = "/courses/(\\d+)/line_items";
+            java.util.regex.Pattern regex = java.util.regex.Pattern.compile(pattern);
+            java.util.regex.Matcher matcher = regex.matcher(agsUrl);
+            log.debug("AGS URL pattern matching - URL: {}, pattern: {}, matches: {}", agsUrl, pattern, matcher.find());
+            matcher.reset(); // Reset matcher after find() call
+            if (matcher.find()) {
+                String canvasCourseId = matcher.group(1);
+                log.info("Extracted Canvas course ID from AGS URL: {} (was: {})", canvasCourseId, launchData.getCourseId());
+                launchData.setCourseId(canvasCourseId);
+            } else {
+                log.warn("Failed to extract course ID from AGS URL: {}", agsUrl);
+            }
+        } else {
+            log.debug("Skipping AGS course ID extraction - agsUrl present: {}, courseId numeric: {}",
+                     launchData.getAgsLineitemsUrl() != null,
+                     launchData.getCourseId() != null ? launchData.getCourseId().matches("\\d+") : "null");
         }
 
         log.debug("Successfully validated LTI token for user: {}, course: {}, resource: {}",

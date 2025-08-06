@@ -4,10 +4,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.LtiDeepLinkingService;
-import org.kentdenver.sebcanvas.service.LtiService;
+
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -144,6 +146,50 @@ public class LtiDeepLinkingController {
             log.error("Error processing Deep Linking content selection", e);
             return "<html><body><h1>Error</h1><p>Failed to process content selection: " +
                     e.getMessage() + "</p></body></html>";
+        }
+    }
+
+    /**
+     * Updates module items for SEB-enabled quizzes using Deep Linking.
+     * This endpoint can be called when SEB settings are changed.
+     */
+    @PostMapping("/update-seb")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> updateSebModuleItems(
+            @RequestParam String courseId,
+            @RequestParam String quizId,
+            @RequestParam boolean sebRequired,
+            HttpSession session) {
+
+        try {
+            log.info("Updating module items for quiz {} in course {} - SEB required: {}", quizId, courseId, sebRequired);
+
+            // Get the quiz details
+            Quiz quiz = quizService.getQuiz(quizId);
+            if (quiz == null) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Quiz not found: " + quizId));
+            }
+
+            // Create Deep Linking response for this quiz
+            String jwt = deepLinkingService.createSingleQuizDeepLinkResponse(quiz, sebRequired);
+
+            // For now, we'll return the JWT that would be sent to Canvas
+            // In a full implementation, this would be sent to Canvas via the Deep Linking flow
+            Map<String, Object> response = Map.of(
+                "success", true,
+                "message", "Deep Linking response created for quiz " + quizId,
+                "sebRequired", sebRequired,
+                "jwt", jwt
+            );
+
+            log.info("Successfully created Deep Linking response for quiz {}", quizId);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error updating module items for quiz {}", quizId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to update module items: " + e.getMessage()));
         }
     }
 }
