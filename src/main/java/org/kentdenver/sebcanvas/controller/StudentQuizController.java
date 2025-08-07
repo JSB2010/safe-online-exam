@@ -14,9 +14,12 @@ import jakarta.servlet.http.HttpServletRequest;
  * Controller for student quiz access.
  * Handles the external tool URLs that Canvas redirects to.
  * Format: /quiz/{orgId}/{courseId}/{quizId}
+ *
+ * DEPRECATED: This controller is disabled in favor of LTI Deep Linking workflow.
+ * All quiz access should go through the LTI flow in LtiController.
  */
-@Controller
-@RequestMapping("/quiz")
+// @Controller
+// @RequestMapping("/quiz")
 @Slf4j
 @RequiredArgsConstructor
 public class StudentQuizController {
@@ -27,7 +30,9 @@ public class StudentQuizController {
      * Main student quiz access endpoint.
      * This is where Canvas external tool links redirect to.
      * Shows "Ready to take quiz?" page and handles SEB enforcement.
-     * 
+     *
+     * DEPRECATED: Disabled in favor of LTI Deep Linking workflow.
+     *
      * @param orgId Organization ID (e.g., "kentdenver")
      * @param courseId Canvas course ID
      * @param quizId Canvas quiz ID
@@ -35,7 +40,7 @@ public class StudentQuizController {
      * @param model Spring model for template rendering
      * @return Template name for quiz access page
      */
-    @GetMapping("/{orgId}/{courseId}/{quizId}")
+    // @GetMapping("/{orgId}/{courseId}/{quizId}")
     public String accessQuiz(
             @PathVariable String orgId,
             @PathVariable String courseId,
@@ -76,8 +81,10 @@ public class StudentQuizController {
     /**
      * LTI Deep Linking launch endpoint.
      * Called when student clicks "Yes, I'm ready" and SEB is detected.
+     *
+     * DEPRECATED: Disabled in favor of LTI Deep Linking workflow.
      */
-    @PostMapping("/{orgId}/{courseId}/{quizId}/launch")
+    // @PostMapping("/{orgId}/{courseId}/{quizId}/launch")
     public String launchQuiz(
             @PathVariable String orgId,
             @PathVariable String courseId,

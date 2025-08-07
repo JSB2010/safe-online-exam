@@ -130,11 +130,13 @@ public class LtiController {
         }
 
         // Build the redirect URL to the OIDC authorization endpoint
+        // IMPORTANT: redirect_uri must be the LTI launch endpoint, not the target_link_uri
+        String ltiLaunchUri = ltiConfig.getToolUrl() + "/lti/launch";
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(ltiConfig.getAuthUrl())
                 .queryParam("scope", "openid")
                 .queryParam("response_type", "id_token")
                 .queryParam("client_id", clientId)
-                .queryParam("redirect_uri", targetLinkUri)
+                .queryParam("redirect_uri", ltiLaunchUri)
                 .queryParam("login_hint", loginHint)
                 .queryParam("state", state)
                 .queryParam("response_mode", "form_post")
@@ -345,6 +347,31 @@ public class LtiController {
             // Student view - they see either the quiz or a message about SEB requirements
             String resourceLinkId = launchData.getResourceLinkId();
             Quiz quiz = quizService.getQuiz(resourceLinkId);
+
+            // If quiz not found in database, try to extract quiz info from target_link_uri
+            if (quiz == null) {
+                String targetLinkUri = launchData.getTargetLinkUri();
+                log.warn("Quiz not found in database: {}. Attempting to extract from target_link_uri: {}", resourceLinkId, targetLinkUri);
+
+                // Extract quiz ID from target_link_uri (format: /quiz/org/courseId/quizId)
+                String extractedQuizId = extractQuizIdFromTargetUri(targetLinkUri);
+                if (extractedQuizId != null) {
+                    // Create a minimal quiz object for immediate access
+                    quiz = createMinimalQuizFromTargetUri(targetLinkUri, extractedQuizId, courseId);
+                    log.info("Created minimal quiz object for immediate access: {}", extractedQuizId);
+
+                    // Add warning message for fallback mode
+                    model.addAttribute("fallbackWarning", true);
+                    model.addAttribute("fallbackMessage",
+                        "⚠️ FALLBACK MODE: This quiz is using basic settings because the instructor hasn't completed the full Canvas API setup. " +
+                        "For full functionality and custom SEB settings, the instructor should access the LTI app and complete OAuth authorization.");
+                } else {
+                    log.error("Could not extract quiz ID from target_link_uri: {}", targetLinkUri);
+                    model.addAttribute("error", "Quiz not found. Please contact your instructor to set up the quiz in the SEB system.");
+                    return "error";
+                }
+            }
+
             model.addAttribute("quiz", quiz);
 
             // Get SEB settings for this quiz
@@ -356,8 +383,11 @@ public class LtiController {
             // Check if SEB is required but student is not using it
             if (quiz != null && sebSetting != null && sebSetting.isSebRequired() && !isUsingSeb) {
                 // Student needs to use SEB
-                // Generate the download URL for the config file
-                String configUrl = "/seb/config/" + quiz.getId();
+                // Generate the download URL for the config file with proper parameters
+                String configUrl = String.format("/seb/config/%s/%s?canvas_url=%s&user_id=%s",
+                    courseId, quiz.getCanvasQuizId(),
+                    quiz.getHtmlUrl(),
+                    launchData.getUserId());
                 model.addAttribute("configUrl", configUrl);
                 return "sebRequired";
             }
@@ -524,5 +554,54 @@ public class LtiController {
             log.error("Error generating secure token", e);
             return null;
         }
+    }
+
+    /**
+     * Extracts quiz ID from target link URI.
+     * Expected format: /quiz/{org}/{courseId}/{quizId}
+     */
+    private String extractQuizIdFromTargetUri(String targetLinkUri) {
+        if (targetLinkUri == null || targetLinkUri.isEmpty()) {
+            return null;
+        }
+
+        // Pattern: /quiz/{org}/{courseId}/{quizId}
+        String pattern = "/quiz/[^/]+/[^/]+/(\\d+)";
+        java.util.regex.Pattern regex = java.util.regex.Pattern.compile(pattern);
+        java.util.regex.Matcher matcher = regex.matcher(targetLinkUri);
+
+        if (matcher.find()) {
+            String quizId = matcher.group(1);
+            log.debug("Extracted quiz ID {} from target URI: {}", quizId, targetLinkUri);
+            return quizId;
+        }
+
+        log.debug("No quiz ID found in target URI: {}", targetLinkUri);
+        return null;
+    }
+
+    /**
+     * Creates a minimal Quiz object from target URI for immediate access.
+     * This allows students to access quizzes even if they're not in the database yet.
+     */
+    private Quiz createMinimalQuizFromTargetUri(String targetLinkUri, String quizId, String courseId) {
+        Quiz quiz = new Quiz();
+        quiz.setId(quizId);
+        quiz.setCanvasQuizId(quizId);
+        quiz.setCourseId(courseId);
+        quiz.setTitle("Quiz " + quizId); // Fallback title
+        quiz.setDescription("Canvas Quiz"); // Fallback description
+
+        // Generate Canvas quiz URL
+        String canvasBaseUrl = "https://kentdenver.instructure.com";
+        String htmlUrl = canvasBaseUrl + "/courses/" + courseId + "/quizzes/" + quizId;
+        quiz.setHtmlUrl(htmlUrl);
+
+        // Set quiz engine and type display for compatibility
+        quiz.setQuizEngine("classic"); // Default to classic
+        quiz.setQuizTypeDisplay("Quiz"); // Default display type
+
+        log.debug("Created minimal quiz object: ID={}, URL={}", quizId, htmlUrl);
+        return quiz;
     }
 }

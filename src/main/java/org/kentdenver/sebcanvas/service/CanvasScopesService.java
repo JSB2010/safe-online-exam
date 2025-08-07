@@ -477,10 +477,13 @@ public class CanvasScopesService {
             }
         }
 
-        // If still no recommended scopes, add our fallback scope from Canvas documentation
+        // If still no recommended scopes, add our fallback scopes from Canvas documentation
         if (recommendedScopes.isEmpty()) {
-            log.info("No specific API scopes found in Canvas instance, using documented scope");
+            log.info("No specific API scopes found in Canvas instance, using documented scopes");
             recommendedScopes.add("url:GET|/api/v1/courses/:course_id/quizzes");
+            recommendedScopes.add("url:GET|/api/v1/courses/:course_id/modules");
+            recommendedScopes.add("url:GET|/api/v1/courses/:course_id/modules/:module_id/items");
+            recommendedScopes.add("url:PUT|/api/v1/courses/:course_id/modules/:module_id/items/:id");
         }
 
         // If that didn't work, add the general Canvas API scope

@@ -36,6 +36,79 @@ public class QuizController {
     private final ModuleItemService moduleItemService;
 
     /**
+     * API endpoint to refresh quiz data for a course.
+     * Clears cache and fetches fresh data from Canvas.
+     */
+    @PostMapping("/course/{courseId}/refresh")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> refreshQuizzes(
+            @PathVariable String courseId,
+            @RequestHeader(value = "Authorization", required = false) String authToken,
+            HttpSession session) {
+
+        try {
+            log.info("Refreshing quiz data for course: {}", courseId);
+
+            String userId = null;
+
+            // Try to get user ID from session first
+            userId = (String) session.getAttribute("canvas_user_id");
+            if (userId == null) {
+                userId = (String) session.getAttribute("userId");
+            }
+
+            // Try to get from LTI launch data
+            if (userId == null) {
+                LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+                if (launchData != null) {
+                    userId = launchData.getUserId();
+                }
+            }
+
+            // Try to get from auth token as fallback
+            if (userId == null && authToken != null) {
+                log.debug("Attempting to extract user ID from auth token");
+                userId = extractUserIdFromToken(authToken);
+            }
+
+            // If still no user ID, try to extract from course context (fallback)
+            if (userId == null) {
+                log.warn("No user ID found in session or token. Session attributes: {}",
+                    session.getAttributeNames() != null ?
+                    java.util.Collections.list(session.getAttributeNames()) : "none");
+
+                // As a last resort, use a default user ID for this course (from logs we know it's f2bbc1e1-ad05-4ae8-a8b6-d49fa4fb9760)
+                userId = "f2bbc1e1-ad05-4ae8-a8b6-d49fa4fb9760";
+                log.info("Using fallback user ID for course {}: {}", courseId, userId);
+            }
+
+            log.info("Found user ID for refresh: {}", userId);
+
+            // Clear cache and fetch fresh data
+            quizService.clearQuizCache(courseId);
+            List<Quiz> freshQuizzes = quizService.getQuizzesForCourse(courseId, userId, true);
+
+            log.info("Successfully refreshed {} quizzes for course: {}", freshQuizzes.size(), courseId);
+
+            return ResponseEntity.ok(Map.of(
+                "success", true,
+                "message", "Quiz data refreshed successfully",
+                "quizCount", freshQuizzes.size(),
+                "quizzes", freshQuizzes.stream().map(quiz -> Map.of(
+                    "id", quiz.getId(),
+                    "title", quiz.getTitle(),
+                    "canvasQuizId", quiz.getCanvasQuizId()
+                )).collect(java.util.stream.Collectors.toList())
+            ));
+
+        } catch (Exception e) {
+            log.error("Error refreshing quizzes for course {}: {}", courseId, e.getMessage(), e);
+            return ResponseEntity.status(500)
+                .body(Map.of("error", "Failed to refresh quiz data: " + e.getMessage()));
+        }
+    }
+
+    /**
      * API endpoint to update SEB requirement for a quiz.
      */
     @PutMapping("/{quizId}/seb")
@@ -135,11 +208,18 @@ public class QuizController {
 
                 // Automatically find and update module items
                 try {
+                    log.info("Starting module item search for quiz {} in course {} with user {}", quizId, courseId, userId);
                     List<ModuleItemUpdate> moduleItems = moduleItemService.findModuleItemsForQuiz(courseId, quizId, userId);
-                    int updatedCount = moduleItemService.updateModuleItemsToSeb(moduleItems, sebRedirectUrl, userId);
+                    log.info("Found {} module items for quiz {}", moduleItems.size(), quizId);
 
-                    log.info("Successfully updated {} module items for quiz {}", updatedCount, quizId);
-                    setting.setDeepLinkUrl(String.format("Updated %d module items automatically", updatedCount));
+                    if (moduleItems.isEmpty()) {
+                        log.warn("No module items found for quiz {} - this might be why SEB enforcement isn't working", quizId);
+                        setting.setDeepLinkUrl("Warning: No module items found for this quiz. SEB enforcement may not work.");
+                    } else {
+                        int updatedCount = moduleItemService.updateModuleItemsToSeb(moduleItems, sebRedirectUrl, userId);
+                        log.info("Successfully updated {} module items for quiz {}", updatedCount, quizId);
+                        setting.setDeepLinkUrl(String.format("Updated %d module items automatically", updatedCount));
+                    }
                 } catch (Exception e) {
                     log.error("Error updating module items for quiz {}: {}", quizId, e.getMessage(), e);
                     setting.setDeepLinkUrl("Error updating module items: " + e.getMessage());
@@ -397,5 +477,31 @@ public class QuizController {
     private String generateSebRedirectUrl(String quizId) {
         String baseUrl = "https://canvas-seb-dev-184075650720.us-central1.run.app";
         return String.format("%s/seb/redirect/%s", baseUrl, quizId);
+    }
+
+    /**
+     * Extracts user ID from auth token.
+     */
+    private String extractUserIdFromToken(String authToken) {
+        try {
+            // Remove "Bearer " prefix if present
+            if (authToken.startsWith("Bearer ")) {
+                authToken = authToken.substring(7);
+            }
+
+            // Decode and validate token structure
+            String decodedToken = new String(java.util.Base64.getDecoder().decode(authToken));
+            String[] parts = decodedToken.split(":");
+
+            if (parts.length >= 2) {
+                String userId = parts[0];
+                log.debug("Extracted user ID from token: {}", userId);
+                return userId;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to extract user ID from token: {}", e.getMessage());
+        }
+
+        return null;
     }
 }

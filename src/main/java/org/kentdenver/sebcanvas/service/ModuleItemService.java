@@ -51,21 +51,34 @@ public class ModuleItemService {
         try {
             // Get all modules in the course
             List<JsonNode> modules = getModulesInCourse(courseId, userId);
-            
+            log.info("Found {} modules in course {}", modules.size(), courseId);
+
             for (JsonNode module : modules) {
                 String moduleId = module.get("id").asText();
                 String moduleName = module.get("name").asText();
-                
-                log.debug("Checking module: {} ({})", moduleName, moduleId);
-                
+
+                log.info("Checking module: {} ({})", moduleName, moduleId);
+
                 // Get all items in this module
                 List<JsonNode> moduleItems = getModuleItems(courseId, moduleId, userId);
-                
+                log.info("Found {} items in module {}", moduleItems.size(), moduleName);
+
                 for (JsonNode item : moduleItems) {
+                    // Log all items for debugging
+                    String itemType = item.has("type") ? item.get("type").asText() : "unknown";
+                    String itemTitle = item.has("title") ? item.get("title").asText() : "unknown";
+                    String contentId = item.has("content_id") ? item.get("content_id").asText() : "unknown";
+                    String url = item.has("url") ? item.get("url").asText() : "none";
+                    String htmlUrl = item.has("html_url") ? item.get("html_url").asText() : "none";
+
+                    log.info("Module item: '{}' (type: {}, content_id: {}, url: {}, html_url: {})",
+                        itemTitle, itemType, contentId, url, htmlUrl);
+
                     if (isQuizModuleItem(item, quizId)) {
                         ModuleItemUpdate moduleItemUpdate = createModuleItemUpdate(item, moduleId, moduleName, courseId, quizId);
                         quizModuleItems.add(moduleItemUpdate);
-                        log.info("Found quiz module item: {} in module {}", item.get("title").asText(), moduleName);
+                        log.info("✅ FOUND MATCHING QUIZ MODULE ITEM: {} in module {} (type: {}, content_id: {})",
+                            itemTitle, moduleName, itemType, contentId);
                     }
                 }
             }
@@ -196,15 +209,37 @@ public class ModuleItemService {
      * Checks if a module item links to a specific quiz.
      */
     private boolean isQuizModuleItem(JsonNode item, String quizId) {
-        if (!item.has("type") || !item.has("content_id")) {
+        if (!item.has("type")) {
             return false;
         }
-        
+
         String type = item.get("type").asText();
-        String contentId = item.get("content_id").asText();
-        
-        // Check if it's a quiz type and matches our quiz ID
-        return "Quiz".equals(type) && quizId.equals(contentId);
+
+        // Check for Quiz type with content_id
+        if ("Quiz".equals(type) && item.has("content_id")) {
+            String contentId = item.get("content_id").asText();
+            boolean matches = quizId.equals(contentId);
+            log.debug("Quiz type item: content_id={}, target_quiz={}, matches={}", contentId, quizId, matches);
+            return matches;
+        }
+
+        // Check for ExternalUrl type that might link to a quiz
+        if ("ExternalUrl".equals(type) && item.has("external_url")) {
+            String externalUrl = item.get("external_url").asText();
+            boolean matches = externalUrl.contains("/quizzes/" + quizId);
+            log.debug("ExternalUrl type item: url={}, target_quiz={}, matches={}", externalUrl, quizId, matches);
+            return matches;
+        }
+
+        // Check for Assignment type (quizzes can be assignments)
+        if ("Assignment".equals(type) && item.has("content_id")) {
+            String contentId = item.get("content_id").asText();
+            boolean matches = quizId.equals(contentId);
+            log.debug("Assignment type item: content_id={}, target_quiz={}, matches={}", contentId, quizId, matches);
+            return matches;
+        }
+
+        return false;
     }
 
     /**

@@ -214,6 +214,9 @@ public class DebugController {
             // Add standard scopes from CanvasService
             String[] standardScopes = {
                     "url:GET|/api/v1/courses/:course_id/quizzes",
+                    "url:GET|/api/v1/courses/:course_id/modules",
+                    "url:GET|/api/v1/courses/:course_id/modules/:module_id/items",
+                    "url:PUT|/api/v1/courses/:course_id/modules/:module_id/items/:id",
                     "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
                     "https://purl.imsglobal.org/spec/lti-ags/scope/score",
                     "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly",

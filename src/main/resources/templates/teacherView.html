@@ -80,6 +80,15 @@
                 Course: <span th:text="${launchData.courseName}">Course Name</span>
             </p>
             <p>Use the toggles below to require Safe Exam Browser for specific quizzes.</p>
+
+            <!-- Refresh Quizzes Button -->
+            <div class="mb-3">
+                <button type="button" id="refreshQuizzesBtn" class="btn btn-outline-primary">
+                    <i class="fas fa-sync-alt me-2"></i>
+                    Refresh Quiz Data
+                </button>
+                <small class="text-muted ms-2">Click to fetch the latest quiz data from Canvas</small>
+            </div>
         </div>
     </div>
 
@@ -527,6 +536,51 @@
 
         // Module items are now updated automatically when SEB is toggled
         // No manual Deep Linking buttons needed
+
+        // Refresh Quizzes Button Handler
+        document.getElementById('refreshQuizzesBtn').addEventListener('click', function() {
+            const btn = this;
+            const originalText = btn.innerHTML;
+
+            // Get course ID from the page data
+            const courseId = '[[${launchData?.courseId}]]' || '[[${courseId}]]';
+            console.log('Using course ID for refresh:', courseId);
+
+            // Show loading state
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Refreshing...';
+            btn.disabled = true;
+
+            // Make refresh request
+            fetch(`/api/quizzes/course/${courseId}/refresh`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Quiz refresh response:', data);
+
+                if (data.success) {
+                    // Show success message with quiz count
+                    alert(`Successfully refreshed ${data.quizCount} quizzes from Canvas!`);
+
+                    // Reload the page to show fresh data
+                    window.location.reload();
+                } else {
+                    throw new Error(data.error || 'Unknown error occurred');
+                }
+            })
+            .catch(error => {
+                console.error('Error refreshing quizzes:', error);
+                alert('Failed to refresh quiz data: ' + error.message + '\nPlease try again or contact support.');
+            })
+            .finally(() => {
+                // Restore button state
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            });
+        });
     });
 </script>
 </body>

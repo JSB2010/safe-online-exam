@@ -45,6 +45,11 @@ public class LtiCanvasService implements CanvasService {
             // Scopes in exact format from Canvas documentation
             "url:GET|/api/v1/courses/:course_id/quizzes",
 
+            // Module scopes (CRITICAL for SEB enforcement)
+            "url:GET|/api/v1/courses/:course_id/modules",
+            "url:GET|/api/v1/courses/:course_id/modules/:module_id/items",
+            "url:PUT|/api/v1/courses/:course_id/modules/:module_id/items/:id",
+
             // More general URL-format scopes (less specific endpoints)
             "url:GET|/api/v1/courses/:course_id",
             "url:GET|/api/v1/courses",

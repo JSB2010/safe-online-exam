@@ -9,6 +9,8 @@ import org.kentdenver.sebcanvas.util.SebConfigGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -69,57 +71,112 @@ public class QuizService {
 
     /**
      * Retrieves all quizzes for a specific course.
-     * If not found in the local database, fetches them from Canvas using LTI AGS (preferred) or OAuth fallback.
+     * By default, fetches fresh data from Canvas to ensure up-to-date information.
      *
      * @param courseId The Canvas course ID
      * @param userId The user ID for authentication context
      * @return List of quizzes
      */
     public List<Quiz> getQuizzesForCourse(String courseId, String userId) {
-        log.debug("Getting quizzes for course: {} with user: {}", courseId, userId);
-        List<Quiz> quizzes = quizRepository.findByCourseId(courseId);
+        return getQuizzesForCourse(courseId, userId, true); // Default to fresh data
+    }
 
-        if (quizzes.isEmpty()) {
-            log.debug("No quizzes found in database for course: {}, fetching from Canvas", courseId);
+    /**
+     * Retrieves all quizzes for a specific course with option to use cached data.
+     *
+     * @param courseId The Canvas course ID
+     * @param userId The user ID for authentication context
+     * @param forceRefresh If true, fetches fresh data from Canvas; if false, uses cache if available
+     * @return List of quizzes
+     */
+    public List<Quiz> getQuizzesForCourse(String courseId, String userId, boolean forceRefresh) {
+        log.debug("Getting quizzes for course: {} with user: {} (forceRefresh: {})", courseId, userId, forceRefresh);
 
-            // Use hybrid authentication service for intelligent fallback
-            log.info("Attempting to fetch quizzes using hybrid authentication strategy");
-            List<Map<String, Object>> rawQuizzes = hybridAuthService.getQuizzes(courseId, userId);
+        List<Quiz> quizzes = new ArrayList<>();
 
-            // Convert raw quiz data to Quiz objects
-            quizzes = rawQuizzes.stream()
-                    .map(rawQuiz -> {
-                        Quiz quiz = convertToQuiz(rawQuiz);
-                        // Ensure course ID is set
-                        if (quiz.getCourseId() == null || quiz.getCourseId().isEmpty()) {
-                            quiz.setCourseId(courseId);
-                        }
-                        return quiz;
-                    })
-                    .collect(Collectors.toList());
-
+        // Check cache first only if not forcing refresh
+        if (!forceRefresh) {
+            quizzes = quizRepository.findByCourseId(courseId);
             if (!quizzes.isEmpty()) {
-                log.info("Successfully retrieved {} quizzes using hybrid authentication", quizzes.size());
+                log.info("Using cached quizzes for course: {} ({} quizzes found)", courseId, quizzes.size());
+                return quizzes;
             }
+        } else {
+            log.info("Force refresh enabled - fetching fresh quiz data from Canvas for course: {}", courseId);
+        }
 
-            // Save fetched quizzes to database if any were returned
-            if (!quizzes.isEmpty()) {
-                try {
-                    quizzes = quizRepository.saveAll(quizzes);
-                    log.debug("Saved {} quizzes from Canvas to database", quizzes.size());
-                } catch (Exception e) {
-                    log.error("Error saving quizzes to database: {}", e.getMessage());
-                    // Continue with the fetched quizzes even if saving fails
+        // Fetch fresh data from Canvas
+        log.debug("Fetching fresh quiz data from Canvas for course: {}", courseId);
+
+        // Use hybrid authentication service for intelligent fallback
+        log.info("Attempting to fetch quizzes using hybrid authentication strategy");
+        List<Map<String, Object>> rawQuizzes = hybridAuthService.getQuizzes(courseId, userId);
+
+        // Convert raw quiz data to Quiz objects
+        quizzes = rawQuizzes.stream()
+                .map(rawQuiz -> {
+                    Quiz quiz = convertToQuiz(rawQuiz);
+                    // Ensure course ID is set
+                    if (quiz.getCourseId() == null || quiz.getCourseId().isEmpty()) {
+                        quiz.setCourseId(courseId);
+                    }
+                    return quiz;
+                })
+                .collect(Collectors.toList());
+
+        if (!quizzes.isEmpty()) {
+            log.info("Successfully retrieved {} fresh quizzes from Canvas using hybrid authentication", quizzes.size());
+
+            // Clear old cached data and save fresh data
+            try {
+                // Delete old cached quizzes for this course
+                List<Quiz> oldQuizzes = quizRepository.findByCourseId(courseId);
+                for (Quiz oldQuiz : oldQuizzes) {
+                    quizRepository.deleteById(oldQuiz.getId());
                 }
-            } else {
-                log.info("No quizzes found in Canvas for course: {} using any method", courseId);
+                log.debug("Cleared {} old cached quizzes for course: {}", oldQuizzes.size(), courseId);
+
+                // Save fresh quizzes to cache
+                quizzes = quizRepository.saveAll(quizzes);
+                log.debug("Cached {} fresh quizzes from Canvas", quizzes.size());
+            } catch (Exception e) {
+                log.error("Error updating quiz cache: {}", e.getMessage());
+                // Continue with the fetched quizzes even if caching fails
+            }
+        } else {
+            log.warn("No quizzes found in Canvas for course: {} using any method", courseId);
+
+            // If fresh fetch failed, try cache as last resort
+            if (forceRefresh) {
+                log.info("Fresh fetch failed, checking cache as fallback");
+                quizzes = quizRepository.findByCourseId(courseId);
+                if (!quizzes.isEmpty()) {
+                    log.warn("Using stale cached data - {} quizzes found in cache", quizzes.size());
+                }
             }
         }
 
         return quizzes;
     }
 
-
+    /**
+     * Clears all cached quiz data for a specific course.
+     * This forces the next quiz fetch to get fresh data from Canvas.
+     *
+     * @param courseId The Canvas course ID
+     */
+    public void clearQuizCache(String courseId) {
+        log.info("Clearing quiz cache for course: {}", courseId);
+        try {
+            List<Quiz> cachedQuizzes = quizRepository.findByCourseId(courseId);
+            for (Quiz quiz : cachedQuizzes) {
+                quizRepository.deleteById(quiz.getId());
+            }
+            log.info("Cleared {} cached quizzes for course: {}", cachedQuizzes.size(), courseId);
+        } catch (Exception e) {
+            log.error("Error clearing quiz cache for course {}: {}", courseId, e.getMessage());
+        }
+    }
 
     // The rest of the QuizService methods can remain unchanged
     // They operate on local data and don't interact with Canvas API

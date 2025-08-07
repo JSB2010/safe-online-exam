@@ -41,9 +41,15 @@ public class SebConfigService {
         log.info("Generating SEB config for quiz {} in course {}", quizId, courseId);
 
         try {
-            // Get or create SEB settings for this quiz
-            QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
-            if (sebSetting == null) {
+            // Get or create SEB settings for this quiz (handle fallback mode gracefully)
+            QuizSebSetting sebSetting = null;
+            try {
+                sebSetting = quizService.getSebSettingForQuiz(quizId);
+                if (sebSetting == null) {
+                    sebSetting = createDefaultSebSetting(quizId);
+                }
+            } catch (Exception e) {
+                log.warn("Could not retrieve SEB settings for quiz {} (fallback mode), using defaults: {}", quizId, e.getMessage());
                 sebSetting = createDefaultSebSetting(quizId);
             }
 
@@ -61,11 +67,17 @@ public class SebConfigService {
             // Convert to XML plist format
             String xmlConfig = convertToXmlPlist(sebConfig);
 
-            // Generate Browser Exam Key and update setting
+            // Generate Browser Exam Key
             String browserExamKey = generateBrowserExamKey(xmlConfig);
-            quizService.updateBrowserExamKey(quizId, browserExamKey);
 
-            log.info("Generated SEB config with Browser Exam Key: {}", browserExamKey.substring(0, 8) + "...");
+            // Try to update browser exam key, but don't fail if it doesn't work (fallback mode)
+            try {
+                quizService.updateBrowserExamKey(quizId, browserExamKey);
+                log.info("Generated SEB config with Browser Exam Key: {}", browserExamKey.substring(0, 8) + "...");
+            } catch (Exception e) {
+                log.warn("Could not update browser exam key for quiz {} (fallback mode): {}", quizId, e.getMessage());
+                log.info("Generated SEB config with Browser Exam Key (not stored): {}", browserExamKey.substring(0, 8) + "...");
+            }
 
             return xmlConfig.getBytes(StandardCharsets.UTF_8);
 
