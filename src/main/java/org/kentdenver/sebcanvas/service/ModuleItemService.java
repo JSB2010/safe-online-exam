@@ -285,7 +285,10 @@ public class ModuleItemService {
             
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
-            
+
+            log.info("Canvas API response for module item update: Status={}, Body={}",
+                response.getStatusCode(), response.getBody());
+
             return response.getStatusCode().is2xxSuccessful();
             
         } catch (Exception e) {
