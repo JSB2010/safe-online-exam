@@ -1,255 +1,265 @@
 package org.kentdenver.sebcanvas.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
 
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import java.io.ByteArrayOutputStream;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Service for generating Safe Exam Browser (SEB) configuration files.
- * 
- * SEB config files are XML files in Apple plist format that configure
- * the browser environment for secure exam taking.
+ * Creates .seb XML configuration files with quiz URLs, access codes, and security settings.
  */
 @Service
+@Slf4j
 public class SebConfigService {
 
-    private static final Logger log = LoggerFactory.getLogger(SebConfigService.class);
-
-    @Autowired
-    private QuizService quizService;
+    private static final String SEB_CONFIG_VERSION = "2.4.1";
+    private static final String DEFAULT_CANVAS_DOMAIN = "kentdenver.instructure.com";
 
     /**
-     * Generates a SEB configuration file for a specific quiz.
-     * 
-     * @param courseId Canvas course ID
-     * @param quizId Canvas quiz ID
-     * @param canvasUrl Original Canvas quiz URL
-     * @param userId Canvas user ID
-     * @return SEB configuration file as byte array
+     * Generates a complete SEB configuration file for a quiz.
      */
-    public byte[] generateSebConfig(String courseId, String quizId, String canvasUrl, String userId) {
-        log.info("Generating SEB config for quiz {} in course {}", quizId, courseId);
-
+    public byte[] generateSebConfig(String courseId, String quizId, String accessCode,
+                                   QuizSebSetting sebSetting, Map<String, Object> customSettings) {
         try {
-            // Get or create SEB settings for this quiz (handle fallback mode gracefully)
-            QuizSebSetting sebSetting = null;
-            try {
-                sebSetting = quizService.getSebSettingForQuiz(quizId);
-                if (sebSetting == null) {
-                    sebSetting = createDefaultSebSetting(quizId);
-                }
-            } catch (Exception e) {
-                log.warn("Could not retrieve SEB settings for quiz {} (fallback mode), using defaults: {}", quizId, e.getMessage());
-                sebSetting = createDefaultSebSetting(quizId);
-            }
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.newDocument();
 
-            // Decode Canvas URL
-            String startUrl = canvasUrl;
-            if (startUrl != null) {
-                startUrl = URLDecoder.decode(startUrl, StandardCharsets.UTF_8);
-            } else {
-                startUrl = String.format("https://kentdenver.instructure.com/courses/%s/quizzes/%s", courseId, quizId);
-            }
+            // Root element
+            Element root = doc.createElement("dict");
+            doc.appendChild(root);
 
-            // Generate SEB configuration
-            Map<String, Object> sebConfig = createSebConfiguration(startUrl, courseId, quizId, sebSetting);
+            // Add SEB configuration settings
+            addBasicSettings(doc, root, courseId, quizId, accessCode);
+            addSecuritySettings(doc, root, sebSetting);
+            addUrlFilterSettings(doc, root, customSettings);
+            addBrowserSettings(doc, root, sebSetting);
+            addExamSettings(doc, root, sebSetting, customSettings);
 
-            // Convert to XML plist format
-            String xmlConfig = convertToXmlPlist(sebConfig);
-
-            // Generate Browser Exam Key
-            String browserExamKey = generateBrowserExamKey(xmlConfig);
-
-            // Try to update browser exam key, but don't fail if it doesn't work (fallback mode)
-            try {
-                quizService.updateBrowserExamKey(quizId, browserExamKey);
-                log.info("Generated SEB config with Browser Exam Key: {}", browserExamKey.substring(0, 8) + "...");
-            } catch (Exception e) {
-                log.warn("Could not update browser exam key for quiz {} (fallback mode): {}", quizId, e.getMessage());
-                log.info("Generated SEB config with Browser Exam Key (not stored): {}", browserExamKey.substring(0, 8) + "...");
-            }
-
-            return xmlConfig.getBytes(StandardCharsets.UTF_8);
+            // Convert to XML string
+            return documentToByteArray(doc);
 
         } catch (Exception e) {
-            log.error("Error generating SEB config: {}", e.getMessage(), e);
+            log.error("Error generating SEB configuration: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to generate SEB configuration", e);
         }
     }
 
     /**
-     * Creates the SEB configuration map with all necessary settings.
+     * Adds basic SEB configuration settings.
      */
-    private Map<String, Object> createSebConfiguration(String startUrl, String courseId, String quizId, QuizSebSetting sebSetting) {
-        Map<String, Object> config = new HashMap<>();
-
-        // Basic SEB settings
-        config.put("startURL", startUrl);
-        config.put("sendBrowserExamKey", true);
-        config.put("examKeySalt", generateSalt());
-        
-        // Browser settings
-        config.put("allowBrowsingBackForward", false);
-        config.put("allowReloading", true);
-        config.put("showReloadButton", true);
-        config.put("allowDisplaySettingsMenu", false);
-        config.put("allowPreferencesMenu", false);
-        
-        // Security settings
-        config.put("enableSebBrowser", true);
-        config.put("browserMessagingSocket", "ws://localhost:8706");
-        config.put("browserMessagingPingTime", 120000);
-        
-        // URL filtering - only allow Canvas domain
-        config.put("URLFilterEnable", true);
-        config.put("URLFilterEnableContentFilter", false);
-        
-        // Allow Canvas domain and our SEB enforcement service
-        Map<String, Object> urlFilter = new HashMap<>();
-        urlFilter.put("URLFilterRuleAction", 1); // Allow
-        urlFilter.put("URLFilterRuleExpression", "kentdenver.instructure.com");
-        urlFilter.put("URLFilterRuleRegex", false);
-        config.put("URLFilterRules", new Object[]{urlFilter});
-
-        // Add our SEB enforcement domain
-        Map<String, Object> sebServiceFilter = new HashMap<>();
-        sebServiceFilter.put("URLFilterRuleAction", 1); // Allow
-        sebServiceFilter.put("URLFilterRuleExpression", "canvas-seb-dev-184075650720.us-central1.run.app");
-        sebServiceFilter.put("URLFilterRuleRegex", false);
-        
-        // Quit settings
-        String quitUrl = startUrl.contains("?") ? startUrl + "&seb_quit=true" : startUrl + "?seb_quit=true";
-        config.put("quitURL", quitUrl);
-        config.put("quitURLConfirm", false);
-        
-        // Exam settings
-        config.put("hashedQuitPassword", generateHashedPassword("quit123")); // Default quit password
-        config.put("allowQuit", true);
-        config.put("ignoreExitKeys", true);
-        
-        // Disable potentially dangerous features
-        config.put("allowSpellCheck", false);
-        config.put("allowDictionaryLookup", false);
-        config.put("allowPDFPlugIn", false);
-        config.put("allowFlashFullscreen", false);
-        
-        // Touch and gesture settings (for tablets)
-        config.put("touchOptimized", false);
-        config.put("enableTouchExit", false);
-        
-        // Logging
-        config.put("enableLogging", true);
-        config.put("logLevel", 1); // Info level
-        
-        log.debug("Created SEB configuration with {} settings", config.size());
-        return config;
-    }
-
-    /**
-     * Converts the configuration map to XML plist format.
-     * SEB uses Apple's plist (property list) format.
-     */
-    private String convertToXmlPlist(Map<String, Object> config) {
-        StringBuilder xml = new StringBuilder();
-        xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        xml.append("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
-        xml.append("<plist version=\"1.0\">\n");
-        xml.append("<dict>\n");
-
-        for (Map.Entry<String, Object> entry : config.entrySet()) {
-            xml.append("    <key>").append(entry.getKey()).append("</key>\n");
-            appendValue(xml, entry.getValue(), "    ");
+    private void addBasicSettings(Document doc, Element root, String courseId, String quizId, String accessCode) {
+        // Start URL - direct link to the Canvas quiz with access code parameter
+        // This allows SEB to automatically provide the access code when accessing the quiz
+        String startUrl = String.format("https://%s/courses/%s/quizzes/%s", DEFAULT_CANVAS_DOMAIN, courseId, quizId);
+        if (accessCode != null && !accessCode.isEmpty()) {
+            startUrl += "?access_code=" + accessCode;
         }
+        addKeyValue(doc, root, "startURL", startUrl);
 
-        xml.append("</dict>\n");
-        xml.append("</plist>\n");
+        // SEB version and configuration
+        addKeyValue(doc, root, "sebConfigPurpose", 1); // 1 = starting exam
+        addKeyValue(doc, root, "sebServicePolicy", 1); // 1 = use SEB service
+        addKeyValue(doc, root, "hashedQuitPassword", generateHashedPassword("quit123")); // Default quit password
 
-        return xml.toString();
+        // Browser Exam Key (BEK) - unique identifier for this configuration
+        String browserExamKey = generateBrowserExamKey(courseId, quizId, accessCode);
+        addKeyValue(doc, root, "browserExamKey", browserExamKey);
+
+        // Config Key - hash of the configuration for verification
+        addKeyValue(doc, root, "configKey", generateConfigKey(browserExamKey));
+
+        // Add access code for automatic form filling (additional method)
+        if (accessCode != null && !accessCode.isEmpty()) {
+            addKeyValue(doc, root, "examSessionClearCookiesOnStart", true);
+            // Add JavaScript injection for automatic access code entry
+            addKeyValue(doc, root, "additionalResources", createAccessCodeJavaScript(accessCode));
+        }
     }
 
     /**
-     * Appends a value to the XML with proper type handling.
+     * Adds security settings to prevent cheating.
      */
-    private void appendValue(StringBuilder xml, Object value, String indent) {
-        if (value instanceof String) {
-            xml.append(indent).append("<string>").append(escapeXml((String) value)).append("</string>\n");
-        } else if (value instanceof Boolean) {
-            xml.append(indent).append((Boolean) value ? "<true/>" : "<false/>").append("\n");
-        } else if (value instanceof Integer) {
-            xml.append(indent).append("<integer>").append(value).append("</integer>\n");
-        } else if (value instanceof Object[]) {
-            xml.append(indent).append("<array>\n");
-            for (Object item : (Object[]) value) {
-                appendValue(xml, item, indent + "    ");
-            }
-            xml.append(indent).append("</array>\n");
-        } else if (value instanceof Map) {
-            xml.append(indent).append("<dict>\n");
+    private void addSecuritySettings(Document doc, Element root, QuizSebSetting sebSetting) {
+        // Disable dangerous features
+        addKeyValue(doc, root, "allowBrowsingBackForward", false);
+        addKeyValue(doc, root, "allowReload", false);
+        addKeyValue(doc, root, "showReloadButton", false);
+        addKeyValue(doc, root, "allowQuit", false);
+        addKeyValue(doc, root, "ignoreExitKeys", true);
+        addKeyValue(doc, root, "enableAltEsc", false);
+        addKeyValue(doc, root, "enableAltTab", false);
+        addKeyValue(doc, root, "enableCtrlAltDel", false);
+        addKeyValue(doc, root, "enableF1", false);
+        addKeyValue(doc, root, "enableF2", false);
+        addKeyValue(doc, root, "enableF3", false);
+        addKeyValue(doc, root, "enableF4", false);
+        addKeyValue(doc, root, "enableF5", false);
+        addKeyValue(doc, root, "enableF6", false);
+        addKeyValue(doc, root, "enableF7", false);
+        addKeyValue(doc, root, "enableF8", false);
+        addKeyValue(doc, root, "enableF9", false);
+        addKeyValue(doc, root, "enableF10", false);
+        addKeyValue(doc, root, "enableF11", false);
+        addKeyValue(doc, root, "enableF12", false);
+
+        // Screen capture prevention
+        addKeyValue(doc, root, "enablePrintScreen", false);
+        addKeyValue(doc, root, "enableRightMouse", false);
+
+        // Application switching prevention
+        addKeyValue(doc, root, "allowSwitchToApplications", false);
+        addKeyValue(doc, root, "allowFlashFullscreen", false);
+
+        // Audio/video restrictions
+        addKeyValue(doc, root, "audioControlEnabled", true);
+        addKeyValue(doc, root, "audioMute", false);
+        addKeyValue(doc, root, "audioSetVolumeLevel", true);
+        addKeyValue(doc, root, "audioVolumeLevel", 25);
+    }
+
+    /**
+     * Adds URL filtering settings to restrict browsing.
+     */
+    private void addUrlFilterSettings(Document doc, Element root, Map<String, Object> customSettings) {
+        // Enable URL filtering
+        addKeyValue(doc, root, "URLFilterEnable", true);
+        addKeyValue(doc, root, "URLFilterEnableContentFilter", true);
+
+        // Create URL filter rules array
+        Element urlFilterRules = doc.createElement("array");
+        addKeyElement(doc, root, "URLFilterRules", urlFilterRules);
+
+        // Allow Canvas domain
+        addUrlFilterRule(doc, urlFilterRules, true, "https://" + DEFAULT_CANVAS_DOMAIN + "/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*." + DEFAULT_CANVAS_DOMAIN + "/*");
+
+        // Allow common Canvas CDN domains
+        addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads.s3.amazonaws.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.instructure.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://du11hjcvx0uqb.cloudfront.net/*");
+
+        // Add custom allowed URLs if provided
+        if (customSettings != null && customSettings.containsKey("allowedUrls")) {
             @SuppressWarnings("unchecked")
-            Map<String, Object> dict = (Map<String, Object>) value;
-            for (Map.Entry<String, Object> entry : dict.entrySet()) {
-                xml.append(indent).append("    <key>").append(entry.getKey()).append("</key>\n");
-                appendValue(xml, entry.getValue(), indent + "    ");
+            List<String> allowedUrls = (List<String>) customSettings.get("allowedUrls");
+            for (String url : allowedUrls) {
+                addUrlFilterRule(doc, urlFilterRules, true, url);
             }
-            xml.append(indent).append("</dict>\n");
-        } else {
-            xml.append(indent).append("<string>").append(escapeXml(value.toString())).append("</string>\n");
         }
+
+        // Block everything else
+        addUrlFilterRule(doc, urlFilterRules, false, "*");
     }
 
     /**
-     * Escapes XML special characters.
+     * Adds browser-specific settings.
      */
-    private String escapeXml(String text) {
-        return text.replace("&", "&amp;")
-                  .replace("<", "&lt;")
-                  .replace(">", "&gt;")
-                  .replace("\"", "&quot;")
-                  .replace("'", "&apos;");
+    private void addBrowserSettings(Document doc, Element root, QuizSebSetting sebSetting) {
+        // Browser window settings
+        addKeyValue(doc, root, "browserWindowAllowReload", false);
+        addKeyValue(doc, root, "browserWindowShowURL", false);
+        addKeyValue(doc, root, "newBrowserWindowByLinkPolicy", 2); // 2 = block
+        addKeyValue(doc, root, "newBrowserWindowByScriptPolicy", 2); // 2 = block
+
+        // Zoom settings
+        addKeyValue(doc, root, "zoomMode", 0); // 0 = page zoom
+        addKeyValue(doc, root, "allowZoomText", true);
+        addKeyValue(doc, root, "allowZoomPage", true);
+
+        // User agent string
+        addKeyValue(doc, root, "browserUserAgent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 SEB/3.5");
     }
 
     /**
-     * Generates a Browser Exam Key hash for the configuration.
-     * This is used by SEB to verify the configuration integrity.
+     * Adds exam-specific settings.
      */
-    private String generateBrowserExamKey(String configXml) {
+    private void addExamSettings(Document doc, Element root, QuizSebSetting sebSetting, Map<String, Object> customSettings) {
+        // Quit settings
+        if (customSettings != null && customSettings.containsKey("quitPassword")) {
+            String quitPassword = (String) customSettings.get("quitPassword");
+            addKeyValue(doc, root, "hashedQuitPassword", generateHashedPassword(quitPassword));
+        }
+
+        // Quit URL for after exam completion
+        addKeyValue(doc, root, "quitURL",
+            String.format("https://%s/courses", DEFAULT_CANVAS_DOMAIN));
+
+        // Restart exam URL
+        addKeyValue(doc, root, "restartExamURL", "");
+
+        // Additional settings
+        addKeyValue(doc, root, "showTaskBar", false);
+        addKeyValue(doc, root, "hideTaskBarOnFullscreen", true);
+        addKeyValue(doc, root, "taskBarHeight", 40);
+    }
+
+    /**
+     * Adds a URL filter rule to the rules array.
+     */
+    private void addUrlFilterRule(Document doc, Element rulesArray, boolean allow, String expression) {
+        Element rule = doc.createElement("dict");
+        rulesArray.appendChild(rule);
+
+        addKeyValue(doc, rule, "action", allow ? 1 : 0); // 1 = allow, 0 = block
+        addKeyValue(doc, rule, "active", true);
+        addKeyValue(doc, rule, "expression", expression);
+        addKeyValue(doc, rule, "regex", false);
+    }
+
+    /**
+     * Generates a Browser Exam Key for the configuration.
+     */
+    private String generateBrowserExamKey(String courseId, String quizId, String accessCode) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(configXml.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(hash);
+            String input = String.format("SEB_%s_%s_%s_%d", courseId, quizId, accessCode, System.currentTimeMillis());
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(input.getBytes());
+            return Base64.getEncoder().encodeToString(hash).substring(0, 32);
         } catch (Exception e) {
-            log.error("Error generating Browser Exam Key: {}", e.getMessage());
-            return generateSalt(); // Fallback to random salt
+            log.error("Error generating browser exam key: {}", e.getMessage());
+            return generateRandomString(32);
         }
     }
 
     /**
-     * Generates a random salt for exam key generation.
+     * Generates a Config Key hash for verification.
      */
-    private String generateSalt() {
-        SecureRandom random = new SecureRandom();
-        byte[] salt = new byte[32];
-        random.nextBytes(salt);
-        return Base64.getEncoder().encodeToString(salt);
+    private String generateConfigKey(String browserExamKey) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(browserExamKey.getBytes());
+            return Base64.getEncoder().encodeToString(hash).substring(0, 32);
+        } catch (Exception e) {
+            log.error("Error generating config key: {}", e.getMessage());
+            return generateRandomString(32);
+        }
     }
 
     /**
-     * Generates a hashed password for SEB quit functionality.
+     * Generates a hashed password for SEB.
      */
     private String generateHashedPassword(String password) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(password.getBytes(StandardCharsets.UTF_8));
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(password.getBytes());
             return Base64.getEncoder().encodeToString(hash);
         } catch (Exception e) {
             log.error("Error generating hashed password: {}", e.getMessage());
@@ -258,13 +268,131 @@ public class SebConfigService {
     }
 
     /**
-     * Creates default SEB settings for a quiz.
+     * Generates a random string of specified length.
      */
-    private QuizSebSetting createDefaultSebSetting(String quizId) {
-        QuizSebSetting setting = new QuizSebSetting();
-        setting.setQuizId(quizId);
-        setting.setSebRequired(true);
-        setting.setBrowserExamKey(""); // Will be generated
-        return setting;
+    private String generateRandomString(int length) {
+        SecureRandom random = new SecureRandom();
+        byte[] bytes = new byte[length];
+        random.nextBytes(bytes);
+        return Base64.getEncoder().encodeToString(bytes).substring(0, length);
+    }
+
+    /**
+     * Helper method to add a key-value pair to the XML document.
+     */
+    private void addKeyValue(Document doc, Element parent, String key, Object value) {
+        Element keyElement = doc.createElement("key");
+        keyElement.setTextContent(key);
+        parent.appendChild(keyElement);
+
+        Element valueElement;
+        if (value instanceof Boolean) {
+            valueElement = doc.createElement((Boolean) value ? "true" : "false");
+        } else if (value instanceof Integer) {
+            valueElement = doc.createElement("integer");
+            valueElement.setTextContent(value.toString());
+        } else if (value instanceof String) {
+            valueElement = doc.createElement("string");
+            valueElement.setTextContent((String) value);
+        } else {
+            valueElement = doc.createElement("string");
+            valueElement.setTextContent(value.toString());
+        }
+        parent.appendChild(valueElement);
+    }
+
+    /**
+     * Helper method to add a key with an element value.
+     */
+    private void addKeyElement(Document doc, Element parent, String key, Element element) {
+        Element keyElement = doc.createElement("key");
+        keyElement.setTextContent(key);
+        parent.appendChild(keyElement);
+        parent.appendChild(element);
+    }
+
+    /**
+     * Converts XML document to byte array.
+     */
+    private byte[] documentToByteArray(Document doc) throws Exception {
+        TransformerFactory transformerFactory = TransformerFactory.newInstance();
+        Transformer transformer = transformerFactory.newTransformer();
+        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+        transformer.setOutputProperty(OutputKeys.DOCTYPE_PUBLIC,
+            "-//Apple//DTD PLIST 1.0//EN");
+        transformer.setOutputProperty(OutputKeys.DOCTYPE_SYSTEM,
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd");
+
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        DOMSource source = new DOMSource(doc);
+        StreamResult result = new StreamResult(outputStream);
+        transformer.transform(source, result);
+
+        return outputStream.toByteArray();
+    }
+
+    /**
+     * Creates JavaScript code for automatic access code entry.
+     * This JavaScript will be injected into the SEB browser to automatically
+     * fill in access code fields when they appear.
+     */
+    private String createAccessCodeJavaScript(String accessCode) {
+        return String.format("""
+            // SEB Auto Access Code Entry Script
+            (function() {
+                const accessCode = '%s';
+
+                // Function to automatically fill access code fields
+                function fillAccessCode() {
+                    // Look for Canvas access code input fields
+                    const accessCodeInputs = document.querySelectorAll(
+                        'input[name="access_code"], ' +
+                        'input[id*="access_code"], ' +
+                        'input[placeholder*="access code"], ' +
+                        'input[placeholder*="Access Code"]'
+                    );
+
+                    accessCodeInputs.forEach(input => {
+                        if (input.value === '' || input.value === null) {
+                            input.value = accessCode;
+                            // Trigger change events
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            console.log('SEB: Auto-filled access code');
+                        }
+                    });
+
+                    // Auto-submit if there's a submit button
+                    const submitButtons = document.querySelectorAll(
+                        'button[type="submit"], ' +
+                        'input[type="submit"], ' +
+                        'button:contains("Submit"), ' +
+                        'button:contains("Continue")'
+                    );
+
+                    if (submitButtons.length > 0 && accessCodeInputs.length > 0) {
+                        setTimeout(() => {
+                            submitButtons[0].click();
+                            console.log('SEB: Auto-submitted access code form');
+                        }, 500);
+                    }
+                }
+
+                // Run immediately
+                fillAccessCode();
+
+                // Run when DOM changes (for dynamic content)
+                const observer = new MutationObserver(fillAccessCode);
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+
+                // Run periodically as fallback
+                setInterval(fillAccessCode, 1000);
+
+                console.log('SEB: Access code auto-entry script loaded');
+            })();
+            """, accessCode);
     }
 }

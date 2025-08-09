@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
 
 import java.util.HashMap;
@@ -35,6 +36,8 @@ public class QuizService {
     private final FirestoreSebSettingRepository sebSettingRepository;
     private final HybridCanvasAuthService hybridAuthService;
     private final SebConfigGenerator sebConfigGenerator;
+    private final CanvasApiService canvasApiService;
+    private final SebConfigService sebConfigService;
 
     /**
      * Constructor for QuizService with dependency injection.
@@ -43,18 +46,24 @@ public class QuizService {
      * @param sebSettingRepository Repository for SEB settings
      * @param hybridAuthService Service for hybrid Canvas authentication
      * @param sebConfigGenerator Utility for generating SEB config files
+     * @param canvasApiService Service for Canvas API interactions
+     * @param sebConfigService Service for SEB configuration file generation
      */
     @Autowired
     public QuizService(
             FirestoreQuizRepository quizRepository,
             FirestoreSebSettingRepository sebSettingRepository,
             HybridCanvasAuthService hybridAuthService,
-            SebConfigGenerator sebConfigGenerator) {
+            SebConfigGenerator sebConfigGenerator,
+            CanvasApiService canvasApiService,
+            SebConfigService sebConfigService) {
         this.quizRepository = quizRepository;
         this.sebSettingRepository = sebSettingRepository;
         this.hybridAuthService = hybridAuthService;
         this.sebConfigGenerator = sebConfigGenerator;
-        log.info("Initialized QuizService with hybrid authentication support");
+        this.canvasApiService = canvasApiService;
+        this.sebConfigService = sebConfigService;
+        log.info("Initialized QuizService with enhanced SEB support");
     }
 
     /**
@@ -507,5 +516,177 @@ public class QuizService {
         }
 
         return quiz;
+    }
+
+    /**
+     * Enables SEB for a quiz with access code enforcement.
+     */
+    public boolean enableSebWithAccessCode(String courseId, String quizId, String userId, Map<String, Object> customSettings) {
+        try {
+            log.info("Attempting to enable SEB for quiz {} in course {} for user {}", quizId, courseId, userId);
+
+            // Check if user has valid access token
+            if (userId == null || userId.isEmpty()) {
+                log.error("No user ID provided for enabling SEB");
+                return false;
+            }
+
+            // Generate secure access code
+            String accessCode = generateSecureAccessCode();
+            log.info("Generated access code for quiz {}: {}", quizId, accessCode);
+
+            // Set access code on Canvas quiz
+            boolean accessCodeSet = canvasApiService.setQuizAccessCode(courseId, quizId, accessCode, userId);
+            if (!accessCodeSet) {
+                log.error("Failed to set access code for quiz {} in course {} - Canvas API call failed", quizId, courseId);
+                return false;
+            }
+
+            // Get or create SEB setting
+            QuizSebSetting sebSetting = getSebSettingForQuiz(quizId);
+            if (sebSetting == null) {
+                log.info("Creating new SEB setting for quiz {}", quizId);
+                sebSetting = new QuizSebSetting();
+                sebSetting.setQuizId(quizId);
+                sebSetting.setCourseId(courseId);
+            } else {
+                log.info("Updating existing SEB setting for quiz {}", quizId);
+            }
+
+            // Update SEB settings
+            sebSetting.setSebRequired(true);
+            sebSetting.setAccessCode(accessCode);
+            sebSetting.setEnabled(true);
+
+            // Save SEB settings
+            sebSettingRepository.save(sebSetting);
+            log.info("SEB database setting saved for quiz {}", quizId);
+
+            log.info("Successfully enabled SEB with access code for quiz {} in course {}", quizId, courseId);
+            return true;
+
+        } catch (Exception e) {
+            log.error("Error enabling SEB for quiz {}: {}", quizId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Disables SEB for a quiz and removes access code.
+     */
+    public boolean disableSebWithAccessCode(String courseId, String quizId, String userId) {
+        try {
+            log.info("Attempting to disable SEB for quiz {} in course {} for user {}", quizId, courseId, userId);
+
+            // Check if user has valid access token
+            if (userId == null || userId.isEmpty()) {
+                log.error("No user ID provided for disabling SEB");
+                return false;
+            }
+
+            // Get current SEB settings to determine if this is a legacy quiz
+            QuizSebSetting sebSetting = getSebSettingForQuiz(quizId);
+            boolean isLegacyQuiz = (sebSetting == null || sebSetting.getAccessCode() == null || sebSetting.getAccessCode().isEmpty());
+
+            log.info("Quiz {} is {} quiz (has access code: {})", quizId,
+                isLegacyQuiz ? "legacy" : "modern",
+                sebSetting != null ? (sebSetting.getAccessCode() != null && !sebSetting.getAccessCode().isEmpty()) : false);
+
+            // For modern quizzes with access codes, try to remove the access code from Canvas
+            boolean accessCodeRemoved = true; // Default to true for legacy quizzes
+            if (!isLegacyQuiz) {
+                log.info("Attempting to remove access code from Canvas for modern quiz {}", quizId);
+                accessCodeRemoved = canvasApiService.removeQuizAccessCode(courseId, quizId, userId);
+                if (!accessCodeRemoved) {
+                    log.error("Failed to remove access code for quiz {} in course {} - Canvas API call failed", quizId, courseId);
+                    // For modern quizzes, we need the Canvas API call to succeed
+                    return false;
+                }
+                log.info("Successfully removed access code from Canvas for quiz {}", quizId);
+            } else {
+                log.info("Skipping Canvas access code removal for legacy quiz {} (no access code to remove)", quizId);
+            }
+
+            // Update SEB settings in our database
+            if (sebSetting != null) {
+                sebSetting.setSebRequired(false);
+                sebSetting.setAccessCode(null);
+                sebSetting.setEnabled(false);
+                sebSettingRepository.save(sebSetting);
+                log.info("SEB database setting updated for quiz {}", quizId);
+            } else {
+                log.info("Creating new disabled SEB setting for legacy quiz {}", quizId);
+                // Create a disabled setting to track that SEB was disabled
+                sebSetting = new QuizSebSetting();
+                sebSetting.setQuizId(quizId);
+                sebSetting.setCourseId(courseId);
+                sebSetting.setSebRequired(false);
+                sebSetting.setEnabled(false);
+                sebSetting.setAccessCode(null);
+                sebSettingRepository.save(sebSetting);
+            }
+
+            log.info("Successfully disabled SEB for quiz {} in course {} (legacy: {})", quizId, courseId, isLegacyQuiz);
+            return true;
+
+        } catch (Exception e) {
+            log.error("Error disabling SEB for quiz {} in course {}: {}", quizId, courseId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Generates a SEB configuration file for a quiz.
+     */
+    public byte[] generateSebConfigFile(String courseId, String quizId, Map<String, Object> customSettings) {
+        try {
+            QuizSebSetting sebSetting = getSebSettingForQuiz(quizId);
+            if (sebSetting == null || !sebSetting.isSebRequired()) {
+                throw new IllegalStateException("SEB is not enabled for quiz " + quizId);
+            }
+
+            String accessCode = sebSetting.getAccessCode();
+            if (accessCode == null || accessCode.isEmpty()) {
+                throw new IllegalStateException("No access code found for quiz " + quizId);
+            }
+
+            return sebConfigService.generateSebConfig(courseId, quizId, accessCode, sebSetting, customSettings);
+
+        } catch (Exception e) {
+            log.error("Error generating SEB config file for quiz {}: {}", quizId, e.getMessage(), e);
+            throw new RuntimeException("Failed to generate SEB configuration file", e);
+        }
+    }
+
+    /**
+     * Generates a secure random access code.
+     */
+    private String generateSecureAccessCode() {
+        SecureRandom random = new SecureRandom();
+        StringBuilder accessCode = new StringBuilder();
+
+        // Generate 8-character alphanumeric code
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        for (int i = 0; i < 8; i++) {
+            accessCode.append(chars.charAt(random.nextInt(chars.length())));
+        }
+
+        return accessCode.toString();
+    }
+
+    /**
+     * Validates if a quiz has proper SEB configuration.
+     */
+    public boolean validateSebConfiguration(String quizId) {
+        try {
+            QuizSebSetting sebSetting = getSebSettingForQuiz(quizId);
+            return sebSetting != null &&
+                   sebSetting.isSebRequired() &&
+                   sebSetting.getAccessCode() != null &&
+                   !sebSetting.getAccessCode().isEmpty();
+        } catch (Exception e) {
+            log.error("Error validating SEB configuration for quiz {}: {}", quizId, e.getMessage());
+            return false;
+        }
     }
 }

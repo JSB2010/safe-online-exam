@@ -51,6 +51,9 @@ public class OAuth2ClientConfig {
         scopes.add("url:GET|/api/v1/courses/:course_id/assignments");
         scopes.add("url:GET|/api/v1/courses/:course_id/assignments/:id");
 
+        // Quiz write permissions (CRITICAL for SEB access code management)
+        scopes.add("url:PUT|/api/v1/courses/:course_id/quizzes/:id");
+
         // Module permissions (CRITICAL for SEB enforcement)
         scopes.add("url:GET|/api/v1/courses/:course_id/modules");
         scopes.add("url:GET|/api/v1/courses/:course_id/modules/:module_id/items");

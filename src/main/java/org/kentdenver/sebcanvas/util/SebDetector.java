@@ -27,6 +27,29 @@ public class SebDetector {
     private static final String REQUEST_HASH_HEADER = "X-SafeExamBrowser-RequestHash";
     private static final String SEB_UA_PATTERN = "SEB";
 
+    // Enhanced SEB User-Agent patterns to detect
+    private static final String[] SEB_USER_AGENT_PATTERNS = {
+        "SEB/2",                    // SEB 2.x
+        "SEB/3",                    // SEB 3.x
+        "SEB/4",                    // SEB 4.x (future)
+        "SEB ",                     // Generic SEB
+        "SafeExamBrowser",          // Full name
+        "Safe Exam Browser",        // Alternative name
+        "SEB-macOS",               // macOS version
+        "SEB-Win",                 // Windows version
+        "SEB-iOS",                 // iOS version
+        "SEB-Android"              // Android version
+    };
+
+    // Additional SEB-specific headers
+    private static final String[] SEB_HEADERS = {
+        "X-SafeExamBrowser-RequestHash",
+        "X-SafeExamBrowser-ConfigKeyHash",
+        "X-SafeExamBrowser-Version",
+        "X-SEB-Version",
+        "X-SEB-OS"
+    };
+
     /**
      * Checks if the request is coming from Safe Exam Browser.
      */
@@ -39,14 +62,33 @@ public class SebDetector {
         // Log all headers for debugging purposes
         logAllHeaders(request);
 
-        // Check User-Agent header for SEB
+        // Check User-Agent header for SEB with enhanced patterns
         String userAgent = request.getHeader(USER_AGENT_HEADER);
-        if (userAgent != null && userAgent.contains(SEB_UA_PATTERN)) {
-            log.debug("SEB detected through User-Agent: {}", userAgent);
-            return true;
+        if (userAgent != null) {
+            // Check against all SEB patterns
+            for (String pattern : SEB_USER_AGENT_PATTERNS) {
+                if (userAgent.contains(pattern)) {
+                    log.debug("SEB detected through User-Agent pattern '{}': {}", pattern, userAgent);
+                    return true;
+                }
+            }
+            // Fallback to original pattern
+            if (userAgent.contains(SEB_UA_PATTERN)) {
+                log.debug("SEB detected through fallback User-Agent: {}", userAgent);
+                return true;
+            }
         }
 
-        // Check for SEB-specific headers
+        // Check for SEB-specific headers (enhanced)
+        for (String headerName : SEB_HEADERS) {
+            String headerValue = request.getHeader(headerName);
+            if (headerValue != null && !headerValue.isEmpty()) {
+                log.debug("SEB detected through header '{}': {}", headerName, headerValue);
+                return true;
+            }
+        }
+
+        // Legacy header checks for backward compatibility
         String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
         if (configKeyHash != null && !configKeyHash.isEmpty()) {
             log.debug("SEB detected through Config Key Hash header: {}", configKeyHash);

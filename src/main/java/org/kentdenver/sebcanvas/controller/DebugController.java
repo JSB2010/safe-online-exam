@@ -9,6 +9,7 @@ import org.kentdenver.sebcanvas.service.JwkService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.*;
+import org.springframework.ui.Model;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
@@ -604,7 +605,47 @@ public class DebugController {
      * Useful when OAuth configuration changes or tokens become invalid.
      */
     @GetMapping("/clear-oauth-token")
-    public ResponseEntity<Map<String, Object>> clearOAuthToken(
+    public String clearOAuthTokenWithRedirect(
+            @RequestParam(value = "user_id", required = false) String userId,
+            @RequestParam(value = "redirect", required = false) String redirectUrl,
+            Model model) {
+
+        try {
+            if (userId == null || userId.isEmpty()) {
+                userId = "f2bbc1e1-ad05-4ae8-a8b6-d49fa4fb9760"; // Default to your user ID
+            }
+
+            // Clear OAuth token from both services
+            canvasService.clearCredentials(userId);
+
+            log.info("OAuth token cleared for user: {}", userId);
+
+            // If redirect URL is provided, redirect there
+            if (redirectUrl != null && !redirectUrl.isEmpty()) {
+                return "redirect:" + redirectUrl;
+            }
+
+            // Otherwise show success page
+            model.addAttribute("message", "OAuth token cleared successfully for user: " + userId);
+            model.addAttribute("userId", userId);
+            model.addAttribute("status", "success");
+
+            return "debug/oauth-cleared";
+        } catch (Exception e) {
+            log.error("Error clearing OAuth token", e);
+
+            model.addAttribute("message", "Error clearing OAuth token: " + e.getMessage());
+            model.addAttribute("status", "error");
+
+            return "debug/oauth-cleared";
+        }
+    }
+
+    /**
+     * API endpoint version that returns JSON response
+     */
+    @PostMapping("/clear-oauth-token")
+    public ResponseEntity<Map<String, Object>> clearOAuthTokenApi(
             @RequestParam(value = "user_id", required = false) String userId) {
         Map<String, Object> response = new HashMap<>();
 

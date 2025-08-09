@@ -504,4 +504,238 @@ public class QuizController {
 
         return null;
     }
+
+    /**
+     * Extracts user ID from session.
+     */
+    private String getUserIdFromSession(HttpSession session) {
+        try {
+            log.debug("Session ID: {}", session.getId());
+            log.debug("Session creation time: {}", new java.util.Date(session.getCreationTime()));
+            log.debug("Session last accessed: {}", new java.util.Date(session.getLastAccessedTime()));
+
+            // Try to get user ID from LTI launch data in session
+            LtiLaunchData ltiData = (LtiLaunchData) session.getAttribute("ltiLaunchData");
+            if (ltiData != null && ltiData.getUserId() != null) {
+                log.debug("Found user ID from LTI launch data: {}", ltiData.getUserId());
+                return ltiData.getUserId();
+            }
+
+            // Fallback to direct session attributes (try multiple possible keys)
+            String userId = (String) session.getAttribute("userId");
+            if (userId != null) {
+                log.debug("Found user ID from 'userId' attribute: {}", userId);
+                return userId;
+            }
+
+            userId = (String) session.getAttribute("canvas_user_id");
+            if (userId != null) {
+                log.debug("Found user ID from 'canvas_user_id' attribute: {}", userId);
+                return userId;
+            }
+
+            userId = (String) session.getAttribute("user_id");
+            if (userId != null) {
+                log.debug("Found user ID from 'user_id' attribute: {}", userId);
+                return userId;
+            }
+
+            // Debug: List all session attributes
+            java.util.Enumeration<String> attributeNames = session.getAttributeNames();
+            log.debug("All session attributes:");
+            while (attributeNames.hasMoreElements()) {
+                String name = attributeNames.nextElement();
+                Object value = session.getAttribute(name);
+                log.debug("  {} = {}", name, value);
+            }
+
+            log.debug("No user ID found in session");
+            return null;
+
+        } catch (Exception e) {
+            log.debug("Failed to extract user ID from session: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * API endpoint to enable SEB with access code enforcement for a quiz.
+     */
+    @PostMapping("/{courseId}/{quizId}/seb/enable")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> enableSebWithAccessCode(
+            @PathVariable String courseId,
+            @PathVariable String quizId,
+            @RequestBody(required = false) Map<String, Object> customSettings,
+            HttpSession session) {
+
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // Get user ID from session
+            String userId = getUserIdFromSession(session);
+            if (userId == null) {
+                response.put("success", false);
+                response.put("message", "User not authenticated. Please refresh the page or re-launch from Canvas.");
+                response.put("error_code", "NO_USER_SESSION");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+            }
+
+            // Enable SEB with access code
+            boolean success = quizService.enableSebWithAccessCode(courseId, quizId, userId, customSettings);
+
+            if (success) {
+                response.put("success", true);
+                response.put("message", "SEB enabled successfully with access code enforcement");
+                log.info("SEB enabled for quiz {} in course {} by user {}", quizId, courseId, userId);
+            } else {
+                // Check if this is an OAuth token issue
+                String accessToken = canvasApiService.getAccessToken(userId);
+                if (accessToken == null || accessToken.isEmpty()) {
+                    response.put("success", false);
+                    response.put("message", "Canvas authorization required. Please click 'Authorize Canvas Access' to re-authorize.");
+                    response.put("requiresAuth", true);
+                    response.put("authUrl", "/api/oauth2authorize?course_id=" + courseId + "&user_id=" + userId);
+                } else {
+                    response.put("success", false);
+                    response.put("message", "Failed to enable SEB");
+                }
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error enabling SEB for quiz {}: {}", quizId, e.getMessage(), e);
+            response.put("success", false);
+            response.put("message", "Error enabling SEB: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    /**
+     * API endpoint to disable SEB for a quiz.
+     */
+    @PostMapping("/{courseId}/{quizId}/seb/disable")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> disableSebWithAccessCode(
+            @PathVariable String courseId,
+            @PathVariable String quizId,
+            HttpSession session) {
+
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // Get user ID from session
+            String userId = getUserIdFromSession(session);
+            if (userId == null) {
+                response.put("success", false);
+                response.put("message", "User not authenticated. Please refresh the page or re-launch from Canvas.");
+                response.put("error_code", "NO_USER_SESSION");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+            }
+
+            // Disable SEB
+            boolean success = quizService.disableSebWithAccessCode(courseId, quizId, userId);
+
+            if (success) {
+                response.put("success", true);
+                response.put("message", "SEB disabled successfully");
+                log.info("SEB disabled for quiz {} in course {} by user {}", quizId, courseId, userId);
+            } else {
+                // Check if this is an OAuth token issue
+                String accessToken = canvasApiService.getAccessToken(userId);
+                if (accessToken == null || accessToken.isEmpty()) {
+                    response.put("success", false);
+                    response.put("message", "Canvas authorization required. Please click 'Authorize Canvas Access' to re-authorize.");
+                    response.put("requiresAuth", true);
+                    response.put("authUrl", "/api/oauth2authorize?course_id=" + courseId + "&user_id=" + userId);
+                } else {
+                    response.put("success", false);
+                    response.put("message", "Failed to disable SEB");
+                }
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error disabling SEB for quiz {}: {}", quizId, e.getMessage(), e);
+            response.put("success", false);
+            response.put("message", "Error disabling SEB: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    /**
+     * API endpoint to download SEB configuration file for a quiz.
+     */
+    @GetMapping("/{courseId}/{quizId}/seb/config")
+    public ResponseEntity<byte[]> downloadSebConfig(
+            @PathVariable String courseId,
+            @PathVariable String quizId,
+            @RequestParam(required = false) Map<String, Object> customSettings,
+            HttpSession session) {
+
+        try {
+            // Get user ID from session
+            String userId = getUserIdFromSession(session);
+            if (userId == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            }
+
+            // Generate SEB configuration file
+            byte[] configFile = quizService.generateSebConfigFile(courseId, quizId, customSettings);
+
+            // Set response headers for file download
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=quiz_" + quizId + "_seb_config.seb")
+                    .header("Content-Type", "application/octet-stream")
+                    .body(configFile);
+
+        } catch (Exception e) {
+            log.error("Error generating SEB config file for quiz {}: {}", quizId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * API endpoint to check SEB configuration status for a quiz.
+     */
+    @GetMapping("/{courseId}/{quizId}/seb/status")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> getSebStatus(
+            @PathVariable String courseId,
+            @PathVariable String quizId,
+            HttpSession session) {
+
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // Get user ID from session
+            String userId = getUserIdFromSession(session);
+            if (userId == null) {
+                response.put("authenticated", false);
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+            }
+
+            // Get SEB setting for quiz
+            QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
+
+            response.put("authenticated", true);
+            response.put("sebEnabled", sebSetting != null && sebSetting.isSebRequired());
+            response.put("hasAccessCode", sebSetting != null && sebSetting.getAccessCode() != null);
+            response.put("configValid", quizService.validateSebConfiguration(quizId));
+
+            if (sebSetting != null) {
+                response.put("browserExamKey", sebSetting.getBrowserExamKey());
+                response.put("allowedSites", sebSetting.getAllowedSites());
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error getting SEB status for quiz {}: {}", quizId, e.getMessage(), e);
+            response.put("error", "Error getting SEB status: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
 }

@@ -214,9 +214,12 @@ public class LtiController {
             // Store the launch data in the session
             session.setAttribute(SESSION_LAUNCH_DATA, launchData);
 
-            // Also store user ID for easy access
+            // Also store user ID for easy access (multiple keys for compatibility)
             session.setAttribute("canvas_user_id", launchData.getUserId());
+            session.setAttribute("userId", launchData.getUserId()); // For QuizController compatibility
+            session.setAttribute("user_id", launchData.getUserId()); // Alternative key
             session.setAttribute("canvas_course_id", launchData.getCourseId());
+            session.setAttribute("courseId", launchData.getCourseId()); // For consistency
 
             // Log the course ID that was extracted/used
             log.info("Stored course ID in session: {} (from LTI launch)", launchData.getCourseId());

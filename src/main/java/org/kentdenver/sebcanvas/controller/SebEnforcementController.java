@@ -106,8 +106,22 @@ public class SebEnforcementController {
         log.info("Generating SEB config for quiz {} in course {}", quizId, courseId);
 
         try {
+            // Get SEB settings for the quiz
+            QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
+            if (sebSetting == null || !sebSetting.isSebRequired()) {
+                log.warn("SEB not enabled for quiz {}", quizId);
+                return ResponseEntity.badRequest().build();
+            }
+
+            // Get access code
+            String accessCode = sebSetting.getAccessCode();
+            if (accessCode == null || accessCode.isEmpty()) {
+                log.warn("No access code found for quiz {}", quizId);
+                return ResponseEntity.badRequest().build();
+            }
+
             // Generate SEB configuration file
-            byte[] sebConfigData = sebConfigService.generateSebConfig(courseId, quizId, canvasUrl, userId);
+            byte[] sebConfigData = sebConfigService.generateSebConfig(courseId, quizId, accessCode, sebSetting, null);
 
             HttpHeaders headers = new HttpHeaders();
             headers.add("Content-Disposition", "attachment; filename=quiz_" + quizId + ".seb");

@@ -31,10 +31,28 @@ public class QuizSebSetting {
     private String quizId;
 
     /**
+     * The Canvas course ID that this quiz belongs to.
+     * Used for Canvas API operations.
+     */
+    private String courseId;
+
+    /**
      * Flag to indicate whether SEB is required for this quiz.
      * When true, students must use SEB to access the quiz.
      */
     private boolean sebRequired;
+
+    /**
+     * Flag to indicate whether SEB enforcement is currently enabled.
+     * This allows temporary disabling without losing configuration.
+     */
+    private boolean enabled;
+
+    /**
+     * The access code set on the Canvas quiz for SEB enforcement.
+     * Students must enter this code to access the quiz.
+     */
+    private String accessCode;
 
     /**
      * The Browser Exam Key used for SEB validation.

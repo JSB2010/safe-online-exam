@@ -87,7 +87,12 @@
                     <i class="fas fa-sync-alt me-2"></i>
                     Refresh Quiz Data
                 </button>
-                <small class="text-muted ms-2">Click to fetch the latest quiz data from Canvas</small>
+                <button type="button" id="clearOAuthBtn" class="btn btn-outline-warning ms-2">
+                    <i class="fas fa-key me-2"></i>
+                    Clear OAuth Token
+                </button>
+                <br>
+                <small class="text-muted">Click "Refresh" to fetch latest quiz data or "Clear OAuth Token" if you're getting authentication errors</small>
             </div>
         </div>
     </div>
@@ -117,62 +122,58 @@
                         <span class="badge" th:classappend="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired ? 'bg-success' : 'bg-secondary'}" th:text="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired ? 'SEB Required' : 'SEB Not Required'}">SEB Status</span>
                     </div>
 
-                    <!-- SEB Configuration Button (shown when SEB is enabled) -->
+                    <!-- SEB Configuration Section (shown when SEB is enabled) -->
                     <div th:if="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}"
                          class="mt-2 seb-config-section" th:id="'seb-config-' + ${quiz.id}">
-                        <button type="button"
-                                class="btn btn-sm btn-outline-primary seb-config-btn"
-                                th:data-quiz-id="${quiz.id}"
-                                data-bs-toggle="modal"
-                                data-bs-target="#sebConfigModal">
-                            <i class="fas fa-cog me-1"></i>
-                            Configure SEB Settings
-                        </button>
-                    </div>
 
-                    <!-- Module Update Status Section (shown when SEB is enabled) -->
-                    <div th:if="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}"
-                         class="mt-2 module-update-section" th:id="'module-update-' + ${quiz.id}">
-                        <div class="alert alert-success py-2 mb-0">
+                        <!-- Access Code Protection Status -->
+                        <div class="alert alert-success py-2 mb-2">
                             <small>
-                                <i class="fas fa-check-circle me-1"></i>
-                                <strong>Module Items Updated:</strong>
-                                <span th:text="${quizSebSettings.get(quiz.id).deepLinkUrl ?: 'Canvas module items automatically updated'}">
-                                    Canvas module items automatically updated
-                                </span>
+                                <i class="fas fa-lock me-1"></i>
+                                <strong>Access Code Protection:</strong> Quiz is protected with a secure access code
                             </small>
                             <div class="mt-2">
                                 <p class="mb-0 small">
                                     <i class="fas fa-info-circle me-1"></i>
-                                    All Canvas module items linking to this quiz have been automatically updated to use SEB enforcement.
-                                    Students accessing this quiz through Canvas modules will now be required to use Safe Exam Browser.
+                                    Students can only access this quiz using Safe Exam Browser with the correct configuration file.
+                                    All direct access attempts will be blocked by Canvas.
                                 </p>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- SEB Quiz Link (shown when SEB is enabled) -->
-                    <div th:if="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}"
-                         class="mt-3 seb-link-section" th:id="'seb-link-' + ${quiz.id}">
-                        <div class="alert alert-info py-2 mb-0">
-                            <small>
-                                <i class="fas fa-shield-alt me-1"></i>
-                                <strong>SEB Required:</strong> Students must use this link to access the quiz
-                            </small>
-                            <div class="mt-2">
-                                <div class="input-group input-group-sm">
-                                    <input type="text"
-                                           class="form-control font-monospace"
-                                           th:id="'seb-url-' + ${quiz.id}"
-                                           th:value="'https://canvas-seb-dev-184075650720.us-central1.run.app/seb/quiz/' + ${courseId} + '/' + ${quiz.id} + '?canvas_url=' + ${quiz.htmlUrl}"
-                                           readonly>
-                                    <button class="btn btn-outline-secondary copy-btn"
-                                            type="button"
-                                            th:data-target="'seb-url-' + ${quiz.id}"
-                                            title="Copy SEB link">
-                                        <i class="fas fa-copy"></i>
-                                    </button>
-                                </div>
+                        <!-- SEB Configuration Actions -->
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="button"
+                                    class="btn btn-sm btn-primary download-seb-config-btn"
+                                    th:data-quiz-id="${quiz.id}"
+                                    th:data-course-id="${courseId}">
+                                <i class="fas fa-download me-1"></i>
+                                Download SEB Config
+                            </button>
+
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary seb-settings-btn"
+                                    th:data-quiz-id="${quiz.id}"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#sebSettingsModal">
+                                <i class="fas fa-cog me-1"></i>
+                                Advanced Settings
+                            </button>
+                        </div>
+
+                        <!-- Instructions for Students -->
+                        <div class="mt-3">
+                            <div class="alert alert-info py-2 mb-0">
+                                <small>
+                                    <i class="fas fa-graduation-cap me-1"></i>
+                                    <strong>Student Instructions:</strong>
+                                </small>
+                                <ol class="mb-0 mt-2 small">
+                                    <li>Download and install Safe Exam Browser</li>
+                                    <li>Download the SEB configuration file (above)</li>
+                                    <li>Double-click the .seb file to launch the quiz</li>
+                                    <li>Enter the access code when prompted by Canvas</li>
+                                </ol>
                             </div>
                         </div>
                     </div>
@@ -197,20 +198,20 @@
     </div>
 </div>
 
-<!-- SEB Configuration Modal -->
-<div class="modal fade" id="sebConfigModal" tabindex="-1" aria-labelledby="sebConfigModalLabel" aria-hidden="true">
+<!-- SEB Settings Modal -->
+<div class="modal fade" id="sebSettingsModal" tabindex="-1" aria-labelledby="sebSettingsModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="sebConfigModalLabel">
+                <h5 class="modal-title" id="sebSettingsModalLabel">
                     <i class="fas fa-shield-alt me-2"></i>
-                    Configure Safe Exam Browser Settings
+                    Advanced SEB Settings
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <form id="sebConfigForm">
-                    <input type="hidden" id="configQuizId" name="quizId">
+                <form id="sebSettingsForm">
+                    <input type="hidden" id="settingsQuizId" name="quizId">
 
                     <!-- Allowed Sites Section -->
                     <div class="mb-4">
@@ -220,7 +221,7 @@
                         </label>
                         <div class="form-text mb-2">
                             Enter additional websites that students can access during the quiz (one per line).
-                            Canvas and your quiz site are automatically allowed.
+                            Canvas and common educational sites are automatically allowed.
                         </div>
                         <textarea class="form-control"
                                   id="allowedSites"
@@ -232,41 +233,45 @@
                         </div>
                     </div>
 
-                    <!-- External Tool URL Preview -->
+                    <!-- Quit Password Section -->
                     <div class="mb-4">
-                        <label class="form-label">
-                            <i class="fas fa-link me-1"></i>
-                            Student Access URL
+                        <label for="quitPassword" class="form-label">
+                            <i class="fas fa-key me-1"></i>
+                            SEB Quit Password
                         </label>
                         <div class="form-text mb-2">
-                            This URL will replace the Canvas quiz link. Students will be redirected here first.
+                            Password required to exit Safe Exam Browser. Leave blank to use default.
                         </div>
-                        <div class="input-group">
-                            <input type="text"
-                                   class="form-control font-monospace"
-                                   id="externalToolUrl"
-                                   readonly>
-                            <button class="btn btn-outline-secondary"
-                                    type="button"
-                                    id="copyExternalUrlBtn"
-                                    title="Copy URL">
-                                <i class="fas fa-copy"></i>
-                            </button>
+                        <input type="password"
+                               class="form-control"
+                               id="quitPassword"
+                               name="quitPassword"
+                               placeholder="Enter custom quit password (optional)">
+                        <div class="form-text">
+                            <strong>Default:</strong> quit123
                         </div>
                     </div>
 
-                    <!-- Canvas Integration Warning -->
-                    <div class="alert alert-warning">
-                        <i class="fas fa-exclamation-triangle me-2"></i>
-                        <strong>Important:</strong> When you save these settings, the Canvas quiz will be updated to redirect students to our secure SEB enforcement service. Students will need to use Safe Exam Browser to access the quiz.
+                    <!-- Information Section -->
+                    <div class="alert alert-info">
+                        <h6><i class="fas fa-info-circle me-1"></i>How SEB Enforcement Works:</h6>
+                        <ol class="mb-0">
+                            <li>Quiz is protected with a secure access code in Canvas</li>
+                            <li>Students download the SEB configuration file</li>
+                            <li>SEB launches and opens the quiz with the access code</li>
+                            <li>Students cannot access the quiz without SEB</li>
+                        </ol>
                     </div>
+                        </div>
+                    </div>
+
                 </form>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="saveSebConfigBtn">
+                <button type="button" class="btn btn-primary" id="saveSebSettingsBtn">
                     <i class="fas fa-save me-1"></i>
-                    Save SEB Configuration
+                    Save Settings
                 </button>
             </div>
         </div>
@@ -324,83 +329,123 @@
             });
         });
 
-        // Add event listeners to SEB config buttons
-        const sebConfigButtons = document.querySelectorAll('.seb-config-btn');
-        sebConfigButtons.forEach(button => {
+        // Add event listeners to SEB download config buttons
+        const downloadSebConfigButtons = document.querySelectorAll('.download-seb-config-btn');
+        downloadSebConfigButtons.forEach(button => {
             button.addEventListener('click', function() {
                 const quizId = this.getAttribute('data-quiz-id');
-                openSebConfigModal(quizId);
+                const courseId = this.getAttribute('data-course-id');
+                downloadSebConfig(quizId, courseId);
             });
         });
 
-        // Copy external URL button
-        document.getElementById('copyExternalUrlBtn').addEventListener('click', function() {
-            const input = document.getElementById('externalToolUrl');
-            if (input) {
-                input.select();
-                input.setSelectionRange(0, 99999);
-                navigator.clipboard.writeText(input.value).then(() => {
-                    const icon = this.querySelector('i');
-                    const originalClass = icon.className;
-                    icon.className = 'fas fa-check';
-                    this.classList.add('btn-success');
-                    this.classList.remove('btn-outline-secondary');
-
-                    setTimeout(() => {
-                        icon.className = originalClass;
-                        this.classList.remove('btn-success');
-                        this.classList.add('btn-outline-secondary');
-                    }, 2000);
-                }).catch(err => {
-                    console.error('Failed to copy: ', err);
-                    alert('Failed to copy URL. Please select and copy manually.');
-                });
-            }
+        // Add event listeners to SEB settings buttons
+        const sebSettingsButtons = document.querySelectorAll('.seb-settings-btn');
+        sebSettingsButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const quizId = this.getAttribute('data-quiz-id');
+                openSebSettingsModal(quizId);
+            });
         });
 
-        // Save SEB config button
-        document.getElementById('saveSebConfigBtn').addEventListener('click', function() {
-            saveSebConfiguration();
+        // Copy external URL button (only if it exists)
+        const copyExternalUrlBtn = document.getElementById('copyExternalUrlBtn');
+        if (copyExternalUrlBtn) {
+            copyExternalUrlBtn.addEventListener('click', function() {
+                const input = document.getElementById('externalToolUrl');
+                if (input) {
+                    input.select();
+                    input.setSelectionRange(0, 99999);
+                    navigator.clipboard.writeText(input.value).then(() => {
+                        const icon = this.querySelector('i');
+                        const originalClass = icon.className;
+                        icon.className = 'fas fa-check';
+                        this.classList.add('btn-success');
+                        this.classList.remove('btn-outline-secondary');
+
+                        setTimeout(() => {
+                            icon.className = originalClass;
+                            this.classList.remove('btn-success');
+                            this.classList.add('btn-outline-secondary');
+                        }, 2000);
+                    }).catch(err => {
+                        console.error('Failed to copy: ', err);
+                        alert('Failed to copy URL. Please select and copy manually.');
+                    });
+                }
+            });
+        }
+
+        // Save SEB settings button
+        document.getElementById('saveSebSettingsBtn').addEventListener('click', function() {
+            saveSebSettings();
+        });
+
+        // Clear OAuth Token button
+        document.getElementById('clearOAuthBtn').addEventListener('click', function() {
+            if (confirm('This will clear your OAuth token and require re-authentication. Continue?')) {
+                window.location.href = '/api/debug/clear-oauth-token?redirect=' + encodeURIComponent(window.location.href);
+            }
         });
 
         // Function to send AJAX request to update SEB requirement
         function updateSebRequirement(quizId, required) {
+            const courseId = '[[${courseId}]]'; // Get course ID from Thymeleaf
             const headers = {
                 'Content-Type': 'application/json',
             };
 
-            // Add auth token if available (fallback for session issues)
-            // Try multiple ways to get the auth token
-            const authToken = /*[[${authToken}]]*/ null;
-            const authTokenFromThymeleaf = '[[${authToken}]]';
-            const authTokenFromData = document.querySelector('.container').getAttribute('data-auth-token');
+            // Determine the endpoint based on whether we're enabling or disabling SEB
+            const endpoint = required
+                ? `/api/quizzes/${courseId}/${quizId}/seb/enable`
+                : `/api/quizzes/${courseId}/${quizId}/seb/disable`;
 
-            console.log('Auth token (inline):', authToken ? 'yes' : 'no');
-            console.log('Auth token (thymeleaf):', authTokenFromThymeleaf);
-            console.log('Auth token (data attr):', authTokenFromData);
+            console.log(`${required ? 'Enabling' : 'Disabling'} SEB for quiz ${quizId} in course ${courseId}`);
 
-            // Use the first available token
-            const finalToken = authToken || (authTokenFromThymeleaf !== 'null' ? authTokenFromThymeleaf : null) || authTokenFromData;
-            console.log('Final token:', finalToken ? 'present' : 'null');
-
-            if (finalToken && finalToken !== 'null') {
-                headers['X-Auth-Token'] = finalToken;
-                console.log('Added X-Auth-Token header');
-            }
-
-            fetch('/api/quizzes/' + quizId + '/seb', {
-                method: 'PUT',
+            fetch(endpoint, {
+                method: 'POST',
                 headers: headers,
-                body: JSON.stringify({ required: required })
+                body: JSON.stringify({
+                    customSettings: {
+                        allowedUrls: [], // Can be customized later
+                        quitPassword: 'quit123' // Default quit password
+                    }
+                })
             })
                 .then(response => {
+                    if (response.status === 401) {
+                        // Authentication issue - redirect to clear token and re-authenticate
+                        console.log('Authentication expired, clearing token and redirecting...');
+                        window.location.href = '/api/debug/clear-oauth-token?user_id=&redirect=' + encodeURIComponent(window.location.href);
+                        return;
+                    }
                     if (!response.ok) {
                         throw new Error('Network response was not ok');
                     }
                     return response.json();
                 })
                 .then(data => {
+                    if (!data) return; // Skip if we redirected for auth
+
                     console.log('SEB requirement updated:', data);
+
+                    if (!data.success) {
+                        // Check if this is an OAuth authorization issue
+                        if (data.requiresAuth) {
+                            console.log('OAuth authorization required');
+                            if (confirm(data.message + '\n\nWould you like to re-authorize now?')) {
+                                window.location.href = data.authUrl || '/api/oauth2authorize';
+                            } else {
+                                // Reset the toggle to its previous state
+                                const toggle = document.querySelector(`.seb-toggle[data-quiz-id="${quizId}"]`);
+                                if (toggle) {
+                                    toggle.checked = !required;
+                                }
+                            }
+                            return;
+                        }
+                        throw new Error(data.message || 'Failed to update SEB requirement');
+                    }
                     // Update the UI
                     const card = document.querySelector(`.quiz-card[data-quiz-id="${quizId}"]`);
                     if (card) {
@@ -451,81 +496,132 @@
         }
 
         /**
-         * Opens the SEB configuration modal for a specific quiz.
+         * Downloads the SEB configuration file for a quiz.
          */
-        function openSebConfigModal(quizId) {
-            console.log('Opening SEB config modal for quiz:', quizId);
+        function downloadSebConfig(quizId, courseId) {
+            console.log('Downloading SEB config for quiz:', quizId);
+
+            // Create download URL
+            const downloadUrl = `/api/quizzes/${courseId}/${quizId}/seb/config`;
+
+            // Create a temporary link element and trigger download
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = `quiz_${quizId}_seb_config.seb`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            // Show success message
+            showNotification('SEB configuration file downloaded successfully!', 'success');
+        }
+
+        /**
+         * Opens the SEB settings modal for a specific quiz.
+         */
+        function openSebSettingsModal(quizId) {
+            console.log('Opening SEB settings modal for quiz:', quizId);
 
             // Set the quiz ID in the hidden field
-            document.getElementById('configQuizId').value = quizId;
+            document.getElementById('settingsQuizId').value = quizId;
 
-            // Generate the external tool URL
-            const orgId = 'kentdenver'; // TODO: Make this dynamic
-            const courseId = '[[${courseId}]]'; // Thymeleaf variable
-            const externalToolUrl = `https://canvas-seb-dev-184075650720.us-central1.run.app/quiz/${orgId}/${courseId}/${quizId}`;
-            document.getElementById('externalToolUrl').value = externalToolUrl;
-
-            // Load existing settings if any
-            loadExistingSebSettings(quizId);
+            // Load existing settings
+            loadSebSettings(quizId);
         }
 
         /**
          * Loads existing SEB settings for a quiz.
          */
-        function loadExistingSebSettings(quizId) {
-            // TODO: Fetch existing settings from server
-            // For now, clear the form
-            document.getElementById('allowedSites').value = '';
+        function loadSebSettings(quizId) {
+            const courseId = '[[${courseId}]]';
+
+            fetch(`/api/quizzes/${courseId}/${quizId}/seb/status`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.authenticated) {
+                        // Populate form with existing settings
+                        document.getElementById('allowedSites').value = data.allowedSites || '';
+                        document.getElementById('quitPassword').value = ''; // Don't show password
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading SEB settings:', error);
+                });
         }
 
         /**
-         * Saves the SEB configuration.
+         * Shows a notification message to the user.
          */
-        function saveSebConfiguration() {
-            const quizId = document.getElementById('configQuizId').value;
+        function showNotification(message, type = 'info') {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            notification.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+
+            // Add to page
+            document.body.appendChild(notification);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 5000);
+        }
+
+        /**
+         * Saves the SEB configuration settings.
+         */
+        function saveSebSettings() {
+            const quizId = document.getElementById('settingsQuizId').value;
+            const courseId = '[[${courseId}]]';
             const allowedSites = document.getElementById('allowedSites').value;
-            const externalToolUrl = document.getElementById('externalToolUrl').value;
+            const quitPassword = document.getElementById('quitPassword').value;
 
-            console.log('Saving SEB configuration for quiz:', quizId);
+            console.log('Saving SEB settings for quiz:', quizId);
 
-            const payload = {
-                quizId: quizId,
-                allowedSites: allowedSites,
-                externalToolUrl: externalToolUrl,
-                updateCanvas: true // Flag to update Canvas assignment
+            const customSettings = {
+                allowedUrls: allowedSites ? allowedSites.split('\n').filter(url => url.trim()) : [],
+                quitPassword: quitPassword || 'quit123'
             };
 
             // Show loading state
-            const saveBtn = document.getElementById('saveSebConfigBtn');
+            const saveBtn = document.getElementById('saveSebSettingsBtn');
             const originalText = saveBtn.innerHTML;
             saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
             saveBtn.disabled = true;
 
-            fetch('/api/quiz/seb-config', {
+            // Re-enable SEB with new settings
+            fetch(`/api/quizzes/${courseId}/${quizId}/seb/enable`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'X-Auth-Token': authToken
+                    'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({ customSettings })
             })
             .then(response => response.json())
             .then(data => {
-                console.log('SEB configuration saved successfully:', data);
+                console.log('SEB settings saved successfully:', data);
 
-                // Close the modal
-                const modal = bootstrap.Modal.getInstance(document.getElementById('sebConfigModal'));
-                modal.hide();
+                if (data.success) {
+                    showNotification('SEB settings saved successfully!', 'success');
 
-                // Show success message
-                alert('SEB configuration saved successfully! Canvas quiz has been updated to use the external tool.');
-
-                // Refresh the page to show updated settings
-                window.location.reload();
+                    // Close the modal
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('sebSettingsModal'));
+                    if (modal) {
+                        modal.hide();
+                    }
+                } else {
+                    throw new Error(data.message || 'Failed to save settings');
+                }
             })
             .catch(error => {
-                console.error('Error saving SEB configuration:', error);
-                alert('Failed to save SEB configuration. Please try again.');
+                console.error('Error saving SEB settings:', error);
+                showNotification('Failed to save SEB settings: ' + error.message, 'danger');
             })
             .finally(() => {
                 // Restore button state
@@ -557,8 +653,18 @@
                     'Content-Type': 'application/json'
                 }
             })
-            .then(response => response.json())
+            .then(response => {
+                if (response.status === 401) {
+                    // Authentication issue - redirect to clear token and re-authenticate
+                    console.log('Authentication expired, clearing token and redirecting...');
+                    window.location.href = '/api/debug/clear-oauth-token?user_id=&redirect=' + encodeURIComponent(window.location.href);
+                    return;
+                }
+                return response.json();
+            })
             .then(data => {
+                if (!data) return; // Skip if we redirected for auth
+
                 console.log('Quiz refresh response:', data);
 
                 if (data.success) {
@@ -573,7 +679,7 @@
             })
             .catch(error => {
                 console.error('Error refreshing quizzes:', error);
-                alert('Failed to refresh quiz data: ' + error.message + '\nPlease try again or contact support.');
+                alert('Failed to refresh quiz data: ' + error.message + '\nTry clicking "Clear OAuth Token" below or contact support.');
             })
             .finally(() => {
                 // Restore button state

@@ -1,6 +1,7 @@
 package org.kentdenver.sebcanvas.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.CanvasApiConfig;
@@ -972,5 +973,112 @@ public class CanvasApiService implements CanvasService {
             log.error("Error creating Canvas assignment for quiz {}: {}", quizId, e.getMessage(), e);
             return null;
         }
+    }
+
+    /**
+     * Updates a quiz's settings in Canvas.
+     */
+    public boolean updateQuizSettings(String courseId, String quizId, Map<String, Object> settings, String userId) {
+        try {
+            String url = String.format("https://kentdenver.instructure.com/api/v1/courses/%s/quizzes/%s", courseId, quizId);
+
+            log.info("Updating quiz settings for quiz {} in course {} with settings: {}", quizId, courseId, settings);
+
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null || accessToken.isEmpty()) {
+                log.error("No access token available for user {}", userId);
+                return false;
+            }
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + accessToken);
+            headers.set("Content-Type", "application/json");
+
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("quiz", settings);
+
+            log.debug("Request URL: {}", url);
+            log.debug("Request headers: {}", headers);
+            log.debug("Request body: {}", requestBody);
+
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
+
+            log.info("Canvas API response for quiz update: Status={}, Body={}",
+                response.getStatusCode(), response.getBody());
+
+            boolean success = response.getStatusCode().is2xxSuccessful();
+            if (!success) {
+                log.error("Canvas API returned non-success status: {} for quiz {}", response.getStatusCode(), quizId);
+            }
+
+            return success;
+
+        } catch (Exception e) {
+            log.error("Error updating quiz settings for quiz {} in course {}: {}", quizId, courseId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Sets an access code for a Canvas quiz to enforce SEB requirements.
+     */
+    public boolean setQuizAccessCode(String courseId, String quizId, String accessCode, String userId) {
+        log.info("Setting access code for quiz {} in course {}", quizId, courseId);
+
+        // Check if we have an access token first
+        String accessToken = getAccessToken(userId);
+        if (accessToken == null || accessToken.isEmpty()) {
+            log.warn("No access token available for user {} - cannot set access code on Canvas", userId);
+            return false;
+        }
+
+        Map<String, Object> settings = new HashMap<>();
+        settings.put("access_code", accessCode);
+
+        return updateQuizSettings(courseId, quizId, settings, userId);
+    }
+
+    /**
+     * Removes the access code from a Canvas quiz.
+     */
+    public boolean removeQuizAccessCode(String courseId, String quizId, String userId) {
+        log.info("Removing access code for quiz {} in course {}", quizId, courseId);
+
+        // Check if we have an access token first
+        String accessToken = getAccessToken(userId);
+        if (accessToken == null || accessToken.isEmpty()) {
+            log.warn("No access token available for user {} - cannot remove access code from Canvas", userId);
+            return false;
+        }
+
+        Map<String, Object> settings = new HashMap<>();
+        settings.put("access_code", ""); // Empty string removes the access code
+
+        return updateQuizSettings(courseId, quizId, settings, userId);
+    }
+
+    /**
+     * Gets detailed quiz information including current access code.
+     */
+    public JsonNode getQuizDetails(String courseId, String quizId, String userId) {
+        try {
+            String url = String.format("https://kentdenver.instructure.com/api/v1/courses/%s/quizzes/%s", courseId, quizId);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + getAccessToken(userId));
+
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                return objectMapper.readTree(response.getBody());
+            }
+
+        } catch (Exception e) {
+            log.error("Error getting quiz details for quiz {}: {}", quizId, e.getMessage(), e);
+        }
+
+        return null;
     }
 }
