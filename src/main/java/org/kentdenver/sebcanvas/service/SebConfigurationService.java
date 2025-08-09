@@ -1,5 +1,6 @@
 package org.kentdenver.sebcanvas.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.w3c.dom.Document;
@@ -33,6 +34,7 @@ import java.util.Base64;
  * Platform-specific settings are included for both Mac and Windows in the same file.
  * Each platform ignores settings it doesn't support.
  */
+@Slf4j
 @Service
 public class SebConfigurationService {
 
@@ -128,17 +130,32 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "touchOptimized", "false", null); // Not touch optimized
 
             // === BROWSER CONFIGURATION ===
-            
-            // Start URL - Direct to quiz
-            addKeyValue(doc, dict, "startURL", "string", quizUrl);
+
+            // Start URL - Use Canvas login page to ensure authentication
+            // Canvas requires authentication before accessing quizzes
+            String startUrl;
+            if (quizUrl != null && quizUrl.contains("kentdenver.instructure.com")) {
+                // For Kent Denver Canvas, start with the main Canvas login page
+                startUrl = "https://kentdenver.instructure.com/login/canvas";
+                log.info("Setting SEB startURL to Canvas login page: {}", startUrl);
+                log.info("Target quiz URL: {}", quizUrl);
+            } else {
+                // For other Canvas instances or direct URLs, use the provided URL
+                startUrl = quizUrl;
+                log.info("Setting SEB startURL to provided URL: {}", startUrl);
+            }
+
+            addKeyValue(doc, dict, "startURL", "string", startUrl);
             addKeyValue(doc, dict, "sendBrowserExamKey", "true", null); // Send browser exam key
             addKeyValue(doc, dict, "browserExamKey", "string", generateBrowserExamKey(courseId, quizId, accessCode));
             addKeyValue(doc, dict, "configKey", "string", generateConfigKey(courseId, quizId, accessCode));
 
-            // Browser Security
+            // Browser Security (allow reload to fix blank page issues)
             addKeyValue(doc, dict, "allowBrowsingBackForward", "false", null); // No back/forward
-            addKeyValue(doc, dict, "allowReload", "false", null); // No page reload
-            addKeyValue(doc, dict, "showReloadButton", "false", null); // Hide reload button
+            addKeyValue(doc, dict, "allowReload", "true", null); // Allow page reload (fixes blank pages)
+            addKeyValue(doc, dict, "showReloadButton", "true", null); // Show reload button
+            addKeyValue(doc, dict, "browserWindowAllowReload", "true", null); // Allow window reload
+            addKeyValue(doc, dict, "newBrowserWindowAllowReload", "true", null); // Allow new window reload
             addKeyValue(doc, dict, "allowDownUploads", "false", null); // Block downloads
             addKeyValue(doc, dict, "downloadDirectoryOSX", "string", ""); // No download directory
             addKeyValue(doc, dict, "downloadDirectoryWin", "string", ""); // No download directory
@@ -153,6 +170,27 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "enablePlugIns", "false", null); // Block plugins
             addKeyValue(doc, dict, "allowPrint", "false", null); // Block printing
             addKeyValue(doc, dict, "allowRightMouse", "false", null); // Block right-click
+
+            // Content and Storage Settings (fix blank page issues)
+            addKeyValue(doc, dict, "removeBrowserProfile", "false", null); // Keep browser profile
+            addKeyValue(doc, dict, "removeLocalStorage", "false", null); // Keep local storage
+            addKeyValue(doc, dict, "browserURLSalt", "false", null); // Disable URL salt
+            addKeyValue(doc, dict, "blockPopUpWindows", "false", null); // Allow popups (Canvas may need)
+            addKeyValue(doc, dict, "allowSpellCheck", "true", null); // Allow spell check
+            addKeyValue(doc, dict, "allowDictionaryLookup", "false", null); // Block dictionary lookup
+
+            // Additional page loading settings
+            addKeyValue(doc, dict, "restartExamPasswordProtected", "false", null); // No restart password
+            addKeyValue(doc, dict, "restartExamText", "string", ""); // No restart text
+            addKeyValue(doc, dict, "restartExamURL", "string", ""); // No restart URL
+            addKeyValue(doc, dict, "quitURL", "string", ""); // No quit URL
+            addKeyValue(doc, dict, "startResource", "string", ""); // No start resource
+            addKeyValue(doc, dict, "additionalResources", "array", null); // No additional resources
+
+            // Browser session settings
+            addKeyValue(doc, dict, "browserSessionPolicy", "integer", "1"); // Separate session
+            addKeyValue(doc, dict, "browserUserAgentWinDesktopMode", "integer", "0"); // Standard mode
+            addKeyValue(doc, dict, "browserUserAgentWinTouchMode", "integer", "0"); // Standard mode
 
             // === NETWORK AND URL FILTERING ===
 
@@ -248,14 +286,32 @@ public class SebConfigurationService {
 
             // === EXAM INTEGRITY FEATURES ===
             
-            // Browser Exam Key for Canvas integration (remove problematic examKeySalt)
+            // Browser Exam Key for Canvas integration
             addKeyValue(doc, dict, "browserUserAgent", "string",
                 "SEB/3.7 (X11; Linux x86_64) Chrome/120.0.0.0 Safari/537.36");
+
+            // Browser Window Settings (fix blank page and WebView issues)
+            addKeyValue(doc, dict, "browserWindowShowURL", "false", null); // Hide URL bar
+            addKeyValue(doc, dict, "browserWindowShowToolBar", "false", null); // Hide toolbar
+            addKeyValue(doc, dict, "browserWindowShowMenuBar", "false", null); // Hide menu bar
+            addKeyValue(doc, dict, "browserWindowShowStatusBar", "false", null); // Hide status bar
+            addKeyValue(doc, dict, "browserWindowTitleSuffix", "string", ""); // No title suffix
+            addKeyValue(doc, dict, "mainBrowserWindowWidth", "string", "100%"); // Full width
+            addKeyValue(doc, dict, "mainBrowserWindowHeight", "string", "100%"); // Full height
+            addKeyValue(doc, dict, "mainBrowserWindowPositioning", "integer", "1"); // Center window
+            addKeyValue(doc, dict, "enableBrowserWindowToolbar", "false", null); // Disable toolbar
+            addKeyValue(doc, dict, "hideBrowserWindowToolbar", "true", null); // Hide toolbar
+
+            // Force proper browser engine (address WebView deprecation)
+            addKeyValue(doc, dict, "browserEngine", "integer", "1"); // Use WebKit engine
+            addKeyValue(doc, dict, "browserWindowWebView", "integer", "0"); // Use standard WebView
+            addKeyValue(doc, dict, "newBrowserWindowByLinkBlockForeign", "true", null); // Block foreign links
+            addKeyValue(doc, dict, "newBrowserWindowByScriptBlockForeign", "true", null); // Block foreign scripts
 
             // Canvas-specific settings for access code integration
             if (accessCode != null && !accessCode.trim().isEmpty()) {
                 // Note: Access code is embedded in the Browser Exam Key for Canvas integration
-                // Remove potentially problematic custom settings
+                // Browser engine settings should handle WebView properly
             }
 
             // Convert to XML string
