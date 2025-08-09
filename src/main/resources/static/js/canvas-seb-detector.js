@@ -120,37 +120,56 @@
     }
     
     /**
-     * Checks if this quiz requires SEB by calling our API
+     * Checks if this quiz has an access code requirement (indicating SEB enforcement)
+     * This is a client-side check that doesn't require API calls
      */
-    async function checkSebRequirement(courseId, quizId) {
-        try {
-            const url = `${SEB_DOWNLOAD_BASE_URL}/seb/check?quizId=${encodeURIComponent(quizId)}`;
-            const response = await fetch(url, {
-                method: 'GET',
-                credentials: 'omit',
-                headers: { 'Accept': 'application/json' }
-            });
+    function checkForAccessCodeRequirement() {
+        // Look for Canvas access code input fields or prompts
+        const accessCodeElements = [
+            'input[name="access_code"]',
+            'input[id*="access_code"]',
+            'input[placeholder*="access code"]',
+            'input[placeholder*="Access Code"]',
+            '.access_code',
+            '#access_code_form',
+            'form[action*="access_code"]'
+        ];
 
-            if (response.ok) {
-                const data = await response.json();
-                return data.seb_required === true;
-            } else {
-                console.warn('SEB check returned non-OK status:', response.status);
+        for (const selector of accessCodeElements) {
+            if (document.querySelector(selector)) {
+                console.log('Canvas SEB Detector: Access code requirement detected via selector:', selector);
+                return true;
             }
-        } catch (error) {
-            console.error('Error checking SEB requirement:', error);
         }
 
-        // Unknown -> do not assume; return null so caller can decide a fallback
-        return null;
+        // Check for text content indicating access code requirement
+        const bodyText = document.body.textContent || '';
+        const accessCodeIndicators = [
+            'access code',
+            'Access Code',
+            'enter the access code',
+            'quiz access code',
+            'This quiz requires an access code'
+        ];
+
+        for (const indicator of accessCodeIndicators) {
+            if (bodyText.includes(indicator)) {
+                console.log('Canvas SEB Detector: Access code requirement detected via text:', indicator);
+                return true;
+            }
+        }
+
+        return false;
     }
     
     /**
-     * Redirects to SEB download page
+     * Redirects to SEB download page with current Canvas URL for return navigation
      */
     function redirectToSebDownload(courseId, quizId) {
-        const downloadUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/quiz/${courseId}/${quizId}`;
-        
+        // Include the current Canvas URL so our app can redirect back after SEB setup
+        const currentUrl = encodeURIComponent(window.location.href);
+        const downloadUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/quiz/${courseId}/${quizId}?canvas_url=${currentUrl}`;
+
         // Show a brief message before redirecting
         const message = document.createElement('div');
         message.style.cssText = `
@@ -159,7 +178,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.9);
             color: white;
             display: flex;
             flex-direction: column;
@@ -169,24 +188,43 @@
             font-family: Arial, sans-serif;
             text-align: center;
         `;
-        
+
         message.innerHTML = `
-            <div style="background: #fff; color: #333; padding: 30px; border-radius: 10px; max-width: 500px;">
-                <h2 style="color: #d32f2f; margin-bottom: 20px;">
-                    <i style="font-size: 48px;">⚠️</i><br>
+            <div style="background: #fff; color: #333; padding: 40px; border-radius: 15px; max-width: 600px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+                <div style="font-size: 64px; margin-bottom: 20px; color: #d32f2f;">&#128274;</div>
+                <h2 style="color: #d32f2f; margin-bottom: 20px; font-size: 24px;">
                     Safe Exam Browser Required
                 </h2>
-                <p style="margin-bottom: 20px; font-size: 16px;">
-                    This quiz requires Safe Exam Browser (SEB). You will be redirected to download and set up SEB.
+                <p style="margin-bottom: 20px; font-size: 16px; line-height: 1.5;">
+                    This quiz requires <strong>Safe Exam Browser (SEB)</strong> for security.<br>
+                    You will be redirected to download and set up SEB.
                 </p>
+                <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <p style="font-size: 14px; color: #666; margin: 0;">
+                        <strong>What happens next:</strong><br>
+                        1. Download Safe Exam Browser<br>
+                        2. Download the quiz configuration file<br>
+                        3. Open the quiz in SEB to continue
+                    </p>
+                </div>
                 <p style="font-size: 14px; color: #666;">
-                    Redirecting in <span id="countdown">3</span> seconds...
+                    Redirecting in <span id="countdown" style="font-weight: bold; color: #d32f2f;">3</span> seconds...
                 </p>
+                <button onclick="window.location.href='${downloadUrl}'" style="
+                    background: #1976d2;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    margin-top: 10px;
+                    font-size: 14px;
+                ">Continue Now</button>
             </div>
         `;
-        
+
         document.body.appendChild(message);
-        
+
         // Countdown and redirect
         let countdown = 3;
         const countdownElement = document.getElementById('countdown');
@@ -195,7 +233,7 @@
             if (countdownElement) {
                 countdownElement.textContent = countdown;
             }
-            
+
             if (countdown <= 0) {
                 clearInterval(timer);
                 window.location.href = downloadUrl;
@@ -206,41 +244,41 @@
     /**
      * Main function to check and enforce SEB requirement
      */
-    async function enforceSebRequirement() {
+    function enforceSebRequirement() {
         console.log('Canvas SEB Detector: Starting enforcement check');
-        
+
         // Only run on Canvas quiz pages
         if (!isCanvasQuizPage()) {
             console.log('Canvas SEB Detector: Not a quiz page, skipping');
             return;
         }
-        
+
         // Extract quiz information
         const quizInfo = extractQuizInfo();
         if (!quizInfo) {
             console.log('Canvas SEB Detector: Could not extract quiz info');
             return;
         }
-        
+
         console.log('Canvas SEB Detector: Quiz detected', quizInfo);
-        
-        // Check if this quiz requires SEB
-        const requiresSeb = await checkSebRequirement(quizInfo.courseId, quizInfo.quizId);
-        if (!requiresSeb) {
-            console.log('Canvas SEB Detector: Quiz does not require SEB');
-            return;
-        }
-        
-        console.log('Canvas SEB Detector: Quiz requires SEB, checking browser');
-        
-        // Check if using SEB
+
+        // Check if using SEB first
         if (isSafeBrowser()) {
             console.log('Canvas SEB Detector: SEB detected, allowing access');
             return;
         }
-        
-        console.log('Canvas SEB Detector: Non-SEB browser detected, redirecting');
-        redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+
+        console.log('Canvas SEB Detector: Non-SEB browser detected, checking for access code requirement');
+
+        // Check if this quiz has an access code requirement (indicating SEB enforcement)
+        const hasAccessCodeRequirement = checkForAccessCodeRequirement();
+
+        if (hasAccessCodeRequirement) {
+            console.log('Canvas SEB Detector: Access code requirement detected, redirecting to SEB download');
+            redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+        } else {
+            console.log('Canvas SEB Detector: No access code requirement detected, allowing normal access');
+        }
     }
     
     // Run when DOM is ready

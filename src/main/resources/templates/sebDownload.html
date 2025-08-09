@@ -3,238 +3,478 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Safe Exam Browser Required</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>Safe Exam Browser - Secure Exam Configuration</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        .seb-container {
-            max-width: 800px;
-            margin: 2rem auto;
-            padding: 2rem;
+        :root {
+            --primary-color: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary-color: #64748b;
+            --success-color: #059669;
+            --warning-color: #d97706;
+            --error-color: #dc2626;
+            --background-color: #f8fafc;
+            --surface-color: #ffffff;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-xl: 1rem;
         }
-        .seb-icon {
-            font-size: 4rem;
-            color: #dc3545;
-            margin-bottom: 1rem;
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        .step-card {
-            border-left: 4px solid #007bff;
-            margin-bottom: 1rem;
-        }
-        .download-btn {
-            font-size: 1.2rem;
-            padding: 1rem 2rem;
-            margin: 0.5rem;
-        }
-        .platform-section {
-            background-color: #f8f9fa;
-            border-radius: 0.5rem;
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--background-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
             padding: 1.5rem;
+        }
+
+        .main-container {
+            max-width: 56rem;
+            margin: 0 auto;
+            background: var(--surface-color);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-xl);
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+            color: white;
+            padding: 3rem 2rem 2.5rem;
+            text-align: center;
+            position: relative;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+            opacity: 0.3;
+        }
+
+        .header-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .security-icon {
+            width: 5rem;
+            height: 5rem;
+            margin: 0 auto 1.5rem;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.25rem;
+        }
+
+        .header h1 {
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+            letter-spacing: -0.025em;
+        }
+
+        .header .subtitle {
+            font-size: 1.125rem;
+            opacity: 0.9;
+            font-weight: 400;
+            max-width: 32rem;
+            margin: 0 auto;
+        }
+
+        .content {
+            padding: 3rem 2rem;
+        }
+
+        .status-alert {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2.5rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .status-alert .icon {
+            color: var(--warning-color);
+            font-size: 1.5rem;
+            flex-shrink: 0;
+            margin-top: 0.125rem;
+        }
+
+        .status-alert .content {
+            padding: 0;
+        }
+
+        .status-alert h3 {
+            color: #92400e;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .status-alert p {
+            color: #92400e;
+            font-size: 0.875rem;
+            margin: 0;
+        }
+
+        .instructions-section {
+            margin-bottom: 3rem;
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .section-title .icon {
+            color: var(--primary-color);
+        }
+
+        .steps-grid {
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        .step-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 2rem;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .step-card:hover {
+            box-shadow: var(--shadow-md);
+            border-color: var(--primary-color);
+        }
+
+        .step-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
             margin-bottom: 1.5rem;
         }
-        .warning-box {
-            background-color: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 0.5rem;
-            padding: 1rem;
+
+        .step-number {
+            background: var(--primary-color);
+            color: white;
+            border-radius: 50%;
+            width: 2.5rem;
+            height: 2.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1rem;
+            flex-shrink: 0;
+        }
+
+        .step-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .step-description {
+            color: var(--text-secondary);
             margin-bottom: 1.5rem;
+            line-height: 1.6;
+        }
+
+        .download-section {
+            margin-top: 1.5rem;
+        }
+
+        .download-btn {
+            background: linear-gradient(135deg, var(--success-color) 0%, #047857 100%);
+            color: white;
+            border: none;
+            padding: 1rem 1.5rem;
+            border-radius: var(--radius-lg);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid transparent;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+            text-decoration: none;
+            color: white;
+        }
+
+        .download-btn:active {
+            transform: translateY(0);
+        }
+
+        .download-btn.primary {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-dark) 100%);
+        }
+
+        .download-btn.secondary {
+            background: var(--surface-color);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .download-btn.secondary:hover {
+            color: var(--text-primary);
+            background: #f1f5f9;
+        }
+
+        .platform-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .platform-card {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            text-align: center;
+        }
+
+        .platform-card .icon {
+            font-size: 2rem;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        .platform-card h4 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
         }
     </style>
 </head>
 <body>
-    <div class="container seb-container">
+    <div class="main-container">
         <!-- Header -->
-        <div class="text-center mb-4">
-            <i class="fas fa-shield-alt seb-icon"></i>
-            <h1 class="display-4">Safe Exam Browser Required</h1>
-            <p class="lead text-muted">This quiz requires Safe Exam Browser (SEB) for secure testing</p>
-        </div>
-
-        <!-- Warning Box -->
-        <div class="warning-box">
-            <div class="d-flex align-items-center">
-                <i class="fas fa-exclamation-triangle text-warning me-3" style="font-size: 1.5rem;"></i>
-                <div>
-                    <strong>Important:</strong> You must use Safe Exam Browser to take this quiz. 
-                    Regular web browsers are not permitted for this assessment.
+        <div class="header">
+            <div class="header-content">
+                <div class="security-icon">
+                    🔒
                 </div>
+                <h1>Safe Exam Browser Required</h1>
+                <p class="subtitle">This quiz requires Safe Exam Browser for secure testing. Follow the steps below to access your exam.</p>
             </div>
         </div>
 
-        <!-- Step-by-step instructions -->
-        <div class="row">
-            <div class="col-12">
-                <h3 class="mb-3">
-                    <i class="fas fa-list-ol me-2"></i>
-                    How to Take This Quiz
-                </h3>
+        <!-- Content -->
+        <div class="content">
+            <!-- Important Notice -->
+            <div class="status-alert">
+                <div class="icon">⚠️</div>
+                <div class="content">
+                    <h3>Secure Exam Environment Required</h3>
+                    <p>This assessment must be taken using Safe Exam Browser to ensure academic integrity. Regular web browsers are not permitted for this exam.</p>
+                </div>
+            </div>
 
-                <!-- Step 1: Download SEB -->
-                <div class="card step-card">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            <span class="badge bg-primary me-2">1</span>
-                            Download Safe Exam Browser
-                        </h5>
-                        <p class="card-text">
-                            Download and install Safe Exam Browser for your operating system:
+            <!-- Instructions -->
+            <div class="instructions-section">
+                <h2 class="section-title">
+                    <span class="icon">📋</span>
+                    How to Access Your Secure Exam
+                </h2>
+
+                <div class="steps-grid">
+                    <!-- Step 1: Ensure SEB is Installed -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-number">1</div>
+                            <h3 class="step-title">Ensure Safe Exam Browser is Installed</h3>
+                        </div>
+                        <p class="step-description">
+                            Safe Exam Browser should already be installed on your device. If not, contact your IT administrator for assistance.
                         </p>
-                        
-                        <!-- Platform Downloads -->
-                        <div class="platform-section">
-                            <h6><i class="fab fa-windows me-2"></i>Windows</h6>
-                            <a href="https://safeexambrowser.org/download_en.html" 
-                               class="btn btn-outline-primary download-btn" 
-                               target="_blank">
-                                <i class="fas fa-download me-2"></i>Download for Windows
-                            </a>
-                        </div>
 
-                        <div class="platform-section">
-                            <h6><i class="fab fa-apple me-2"></i>macOS</h6>
-                            <a href="https://safeexambrowser.org/download_en.html" 
-                               class="btn btn-outline-primary download-btn" 
-                               target="_blank">
-                                <i class="fas fa-download me-2"></i>Download for macOS
-                            </a>
+                        <div class="platform-grid">
+                            <div class="platform-card">
+                                <div class="icon">🖥️</div>
+                                <h4>Windows</h4>
+                                <a href="https://safeexambrowser.org/download_en.html"
+                                   class="download-btn secondary"
+                                   target="_blank" rel="noopener">
+                                    Download for Windows
+                                </a>
+                            </div>
+                            <div class="platform-card">
+                                <div class="icon">🍎</div>
+                                <h4>macOS</h4>
+                                <a href="https://safeexambrowser.org/download_en.html"
+                                   class="download-btn secondary"
+                                   target="_blank" rel="noopener">
+                                    Download for macOS
+                                </a>
+                            </div>
+                            <div class="platform-card">
+                                <div class="icon">📱</div>
+                                <h4>iPad/iOS</h4>
+                                <a href="https://apps.apple.com/app/safe-exam-browser/id1348168435"
+                                   class="download-btn secondary"
+                                   target="_blank" rel="noopener">
+                                    App Store
+                                </a>
+                            </div>
                         </div>
+                    </div>
 
-                        <div class="platform-section">
-                            <h6><i class="fab fa-apple me-2"></i>iPad/iOS</h6>
-                            <a href="https://apps.apple.com/app/safe-exam-browser/id1348168435" 
-                               class="btn btn-outline-primary download-btn" 
-                               target="_blank">
-                                <i class="fab fa-app-store me-2"></i>Download from App Store
+                    <!-- Step 2: Download Configuration -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-number">2</div>
+                            <h3 class="step-title">Download Your Exam Configuration</h3>
+                        </div>
+                        <p class="step-description">
+                            Download the secure configuration file that contains your exam settings and access credentials.
+                        </p>
+
+                        <div class="download-section">
+                            <a th:href="${sebConfigUrl}" class="download-btn primary">
+                                📥 Download Exam Configuration (.seb)
                             </a>
+                            <p style="margin-top: 0.75rem; font-size: 0.875rem; color: var(--text-muted);">
+                                This file is specifically configured for your exam and includes all necessary security settings.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Launch Secure Browser -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-number">3</div>
+                            <h3 class="step-title">Launch Secure Browser</h3>
+                        </div>
+                        <p class="step-description">
+                            Double-click the downloaded .seb file to automatically launch Safe Exam Browser with the correct settings.
+                        </p>
+
+                        <div style="background: #f8fafc; border-radius: var(--radius-md); padding: 1rem; margin-top: 1rem;">
+                            <p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">
+                                ✅ Safe Exam Browser will open in secure mode<br>
+                                ✅ Your computer will be locked down for the exam<br>
+                                ✅ You'll be automatically directed to your quiz
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: Complete Exam -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-number">4</div>
+                            <h3 class="step-title">Complete Your Exam</h3>
+                        </div>
+                        <p class="step-description">
+                            Take your exam within the secure browser environment. The system will automatically maintain security throughout your session.
+                        </p>
+
+                        <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: var(--radius-md); padding: 1rem; margin-top: 1rem;">
+                            <p style="margin: 0; font-size: 0.875rem; color: #065f46;">
+                                <strong>Remember:</strong> Do not attempt to exit Safe Exam Browser during your exam. If you encounter technical issues, contact your instructor immediately.
+                            </p>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- Step 2: Download Quiz Configuration -->
-                <div class="card step-card">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            <span class="badge bg-primary me-2">2</span>
-                            Download Quiz Configuration
-                        </h5>
-                        <p class="card-text">
-                            Download the specific configuration file for this quiz:
-                        </p>
-                        <a th:href="${sebConfigUrl}" 
-                           class="btn btn-success download-btn">
-                            <i class="fas fa-cog me-2"></i>Download Quiz Configuration (.seb)
-                        </a>
-                        <div class="mt-2">
-                            <small class="text-muted">
-                                <i class="fas fa-info-circle me-1"></i>
-                                This file contains the specific settings for your quiz
-                            </small>
-                        </div>
-                    </div>
-                </div>
+            <!-- Help Section -->
+            <div class="help-section">
+                <h2 class="section-title">
+                    <span class="icon">❓</span>
+                    Need Help?
+                </h2>
 
-                <!-- Step 3: Open Configuration -->
-                <div class="card step-card">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            <span class="badge bg-primary me-2">3</span>
-                            Open Configuration File
-                        </h5>
-                        <p class="card-text">
-                            Double-click the downloaded .seb file to automatically:
-                        </p>
-                        <ul>
-                            <li>Launch Safe Exam Browser</li>
-                            <li>Apply the correct security settings</li>
-                            <li>Navigate directly to your quiz</li>
+                <div class="help-grid" style="display: grid; gap: 1.5rem;">
+                    <div class="help-card" style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 1.5rem;">
+                        <h4 style="color: var(--text-primary); font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">
+                            🚫 Can't install Safe Exam Browser?
+                        </h4>
+                        <ul style="color: var(--text-secondary); font-size: 0.875rem; line-height: 1.6; margin: 0; padding-left: 1.25rem;">
+                            <li>Contact your IT administrator for assistance</li>
+                            <li>Ensure you have administrator privileges</li>
+                            <li>Try downloading from <a href="https://safeexambrowser.org" target="_blank" rel="noopener" style="color: var(--primary-color);">safeexambrowser.org</a></li>
                         </ul>
                     </div>
-                </div>
 
-                <!-- Step 4: Take Quiz -->
-                <div class="card step-card">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            <span class="badge bg-success me-2">4</span>
-                            Take Your Quiz
-                        </h5>
-                        <p class="card-text">
-                            Safe Exam Browser will open in secure mode and navigate to your quiz automatically.
-                            Complete your quiz as normal within the secure browser environment.
-                        </p>
+                    <div class="help-card" style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 1.5rem;">
+                        <h4 style="color: var(--text-primary); font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">
+                            📁 Configuration file won't open?
+                        </h4>
+                        <ul style="color: var(--text-secondary); font-size: 0.875rem; line-height: 1.6; margin: 0; padding-left: 1.25rem;">
+                            <li>Ensure Safe Exam Browser is installed first</li>
+                            <li>Right-click the .seb file and select "Open with Safe Exam Browser"</li>
+                            <li>Try opening Safe Exam Browser manually, then File → Open</li>
+                        </ul>
                     </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- Troubleshooting -->
-        <div class="mt-4">
-            <h4><i class="fas fa-question-circle me-2"></i>Need Help?</h4>
-            <div class="accordion" id="troubleshootingAccordion">
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="headingOne">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
-                            I can't download or install Safe Exam Browser
-                        </button>
-                    </h2>
-                    <div id="collapseOne" class="accordion-collapse collapse" data-bs-parent="#troubleshootingAccordion">
-                        <div class="accordion-body">
-                            <ul>
-                                <li>Make sure you have administrator privileges on your computer</li>
-                                <li>Temporarily disable antivirus software during installation</li>
-                                <li>Try downloading from the official website: <a href="https://safeexambrowser.org" target="_blank">safeexambrowser.org</a></li>
-                                <li>Contact your IT support if you're using a managed device</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="headingTwo">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo">
-                            The .seb file won't open
-                        </button>
-                    </h2>
-                    <div id="collapseTwo" class="accordion-collapse collapse" data-bs-parent="#troubleshootingAccordion">
-                        <div class="accordion-body">
-                            <ul>
-                                <li>Make sure Safe Exam Browser is installed first</li>
-                                <li>Right-click the .seb file and choose "Open with Safe Exam Browser"</li>
-                                <li>Try opening Safe Exam Browser first, then use File > Open to load the .seb file</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="headingThree">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree">
-                            I'm having technical issues during the quiz
-                        </button>
-                    </h2>
-                    <div id="collapseThree" class="accordion-collapse collapse" data-bs-parent="#troubleshootingAccordion">
-                        <div class="accordion-body">
-                            <ul>
-                                <li>Contact your instructor immediately</li>
-                                <li>Use the quit password provided by your instructor if needed</li>
-                                <li>Document any error messages you see</li>
-                                <li>Check your internet connection stability</li>
-                            </ul>
-                        </div>
+                    <div class="help-card" style="background: #f8fafc; border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 1.5rem;">
+                        <h4 style="color: var(--text-primary); font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">
+                            ⚠️ Technical issues during exam?
+                        </h4>
+                        <ul style="color: var(--text-secondary); font-size: 0.875rem; line-height: 1.6; margin: 0; padding-left: 1.25rem;">
+                            <li>Contact your instructor immediately</li>
+                            <li>Document any error messages</li>
+                            <li>Check your internet connection</li>
+                            <li>Use the quit password if provided by your instructor</li>
+                        </ul>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- Footer -->
-        <div class="text-center mt-4 pt-4 border-top">
-            <p class="text-muted">
-                <i class="fas fa-shield-alt me-1"></i>
-                This security measure ensures academic integrity and fair testing for all students.
+        <div class="footer">
+            <p>
+                🔒 This security measure ensures academic integrity and provides a fair testing environment for all students.
             </p>
         </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

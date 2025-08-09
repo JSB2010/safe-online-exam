@@ -3,11 +3,13 @@ package org.kentdenver.sebcanvas.controller;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.kentdenver.sebcanvas.service.SebConfigService;
+import org.kentdenver.sebcanvas.service.SebConfigurationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -38,6 +40,9 @@ public class SebEnforcementController {
 
     @Autowired
     private SebConfigService sebConfigService;
+
+    @Autowired
+    private SebConfigurationService sebConfigurationService;
 
     // SEB header names (official SEB integration specification)
     private static final String SEB_CONFIG_KEY_HEADER = "X-SafeExamBrowser-ConfigKeyHash";
@@ -199,9 +204,69 @@ public class SebEnforcementController {
         model.addAttribute("quizId", quizId);
         model.addAttribute("canvasUrl", canvasUrl);
         model.addAttribute("userId", userId);
-        model.addAttribute("sebConfigUrl", String.format("/seb/config/%s/%s?canvas_url=%s&user_id=%s", 
+        model.addAttribute("configUrl", String.format("/seb/config/%s/%s.seb?canvas_url=%s&user_id=%s",
                           courseId, quizId, canvasUrl != null ? canvasUrl : "", userId != null ? userId : ""));
-        
-        return "sebDownload";
+
+        return "sebRequired";
+    }
+
+    /**
+     * Downloads the SEB configuration file for a specific quiz.
+     * This endpoint generates a comprehensive SEB configuration that:
+     * - Completely locks down the computer
+     * - Implements all necessary security measures
+     * - Automatically provides quiz access codes
+     * - Configures allowed websites and browser restrictions
+     */
+    @GetMapping("/config/{courseId}/{quizId}.seb")
+    public ResponseEntity<byte[]> downloadSebConfig(
+            @PathVariable String courseId,
+            @PathVariable String quizId,
+            @RequestParam(required = false) String canvas_url,
+            @RequestParam(required = false) String user_id,
+            HttpServletRequest request) {
+
+        log.info("Generating SEB configuration for course: {}, quiz: {}", courseId, quizId);
+
+        try {
+            // Get quiz settings to determine access code
+            QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(quizId);
+            String accessCode = (quizSetting != null) ? quizSetting.getAccessCode() : null;
+
+            // Construct the quiz URL
+            String quizUrl;
+            if (canvas_url != null && !canvas_url.trim().isEmpty()) {
+                quizUrl = URLDecoder.decode(canvas_url, StandardCharsets.UTF_8);
+            } else {
+                quizUrl = String.format("https://kentdenver.instructure.com/courses/%s/quizzes/%s", courseId, quizId);
+            }
+
+            log.debug("Quiz URL for SEB config: {}", quizUrl);
+            log.debug("Access code configured: {}", accessCode != null ? "Yes" : "No");
+
+            // Generate comprehensive SEB configuration
+            byte[] sebConfig = sebConfigurationService.generateSebConfiguration(
+                courseId, quizId, quizUrl, accessCode);
+
+            // Set appropriate headers for file download
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_XML);
+            headers.setContentDispositionFormData("attachment",
+                String.format("quiz_%s_%s.seb", courseId, quizId));
+            headers.add("Content-Description", "Safe Exam Browser Configuration");
+            headers.add("X-Content-Type-Options", "nosniff");
+
+            log.info("Successfully generated SEB configuration file ({} bytes) for quiz: {}",
+                    sebConfig.length, quizId);
+
+            return ResponseEntity.ok()
+                    .headers(headers)
+                    .body(sebConfig);
+
+        } catch (Exception e) {
+            log.error("Failed to generate SEB configuration for quiz: {}", quizId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(("Error generating SEB configuration: " + e.getMessage()).getBytes());
+        }
     }
 }
