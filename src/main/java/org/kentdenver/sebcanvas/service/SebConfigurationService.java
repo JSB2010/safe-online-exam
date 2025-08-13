@@ -131,21 +131,9 @@ public class SebConfigurationService {
 
             // === BROWSER CONFIGURATION ===
 
-            // Start URL - Use Canvas login page to ensure authentication
-            // Canvas requires authentication before accessing quizzes
-            String startUrl;
-            if (quizUrl != null && quizUrl.contains("kentdenver.instructure.com")) {
-                // For Kent Denver Canvas, start with the main Canvas login page
-                startUrl = "https://kentdenver.instructure.com/login/canvas";
-                log.info("Setting SEB startURL to Canvas login page: {}", startUrl);
-                log.info("Target quiz URL: {}", quizUrl);
-            } else {
-                // For other Canvas instances or direct URLs, use the provided URL
-                startUrl = quizUrl;
-                log.info("Setting SEB startURL to provided URL: {}", startUrl);
-            }
-
-            addKeyValue(doc, dict, "startURL", "string", startUrl);
+            // Start URL - Use direct quiz URL (Canvas will redirect to SSO if needed)
+            log.info("Setting SEB startURL to quiz URL: {}", quizUrl);
+            addKeyValue(doc, dict, "startURL", "string", quizUrl);
             addKeyValue(doc, dict, "sendBrowserExamKey", "true", null); // Send browser exam key
             addKeyValue(doc, dict, "browserExamKey", "string", generateBrowserExamKey(courseId, quizId, accessCode));
             addKeyValue(doc, dict, "configKey", "string", generateConfigKey(courseId, quizId, accessCode));
@@ -195,10 +183,12 @@ public class SebConfigurationService {
             // === NETWORK AND URL FILTERING ===
 
             // URL Filter - Only allow Canvas and essential domains
-            addKeyValue(doc, dict, "URLFilterEnable", "true", null);
+            // TEMPORARILY DISABLED FOR DEBUGGING - TODO: Re-enable after testing
+            addKeyValue(doc, dict, "URLFilterEnable", "false", null);
+            log.info("URL filtering DISABLED for debugging - all domains allowed");
             Element urlFilterRules = addKeyValue(doc, dict, "URLFilterRules", "array", null);
             
-            // Allow Canvas domains
+            // Allow Canvas domains (comprehensive list)
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructure.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://kentdenver.instructure.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.canvaslms.com/*");
@@ -206,10 +196,28 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.org/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.com/*");
 
-            // Allow essential Canvas CDN and API domains
+            // Canvas authentication and login domains
+            addUrlFilterRule(doc, urlFilterRules, true, "https://sso.canvaslms.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://login.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://auth.instructure.com/*");
+
+            // Canvas CDN and static content domains
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructuremedia.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.cloudfront.net/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-files-prod.s3.amazonaws.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.amazonaws.com/*"); // AWS S3 for Canvas files
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.s3.amazonaws.com/*"); // S3 direct access
+
+            // Canvas API and service domains
+            addUrlFilterRule(doc, urlFilterRules, true, "https://api.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-api.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-network.s3.amazonaws.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads.s3.amazonaws.com/*");
+
+            // Canvas static assets and resources
+            addUrlFilterRule(doc, urlFilterRules, true, "https://du11hjcvx0uqb.cloudfront.net/*"); // Canvas CDN
+            addUrlFilterRule(doc, urlFilterRules, true, "https://d2l3jyjp24noqc.cloudfront.net/*"); // Canvas assets
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-static.s3.amazonaws.com/*"); // Static files
 
             // Google SSO and Services (for schools using Google Workspace)
             addUrlFilterRule(doc, urlFilterRules, true, "https://accounts.google.com/*");
@@ -237,6 +245,20 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.auth0.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.shibboleth.net/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://shibboleth.*.edu/*");
+
+            // Essential web infrastructure (Canvas dependencies)
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.jquery.com/*"); // jQuery CDN
+            addUrlFilterRule(doc, urlFilterRules, true, "https://cdnjs.cloudflare.com/*"); // Common JS libraries
+            addUrlFilterRule(doc, urlFilterRules, true, "https://ajax.googleapis.com/*"); // Google AJAX APIs
+            addUrlFilterRule(doc, urlFilterRules, true, "https://code.jquery.com/*"); // jQuery official CDN
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.bootstrapcdn.com/*"); // Bootstrap CDN
+            addUrlFilterRule(doc, urlFilterRules, true, "https://maxcdn.bootstrapcdn.com/*"); // MaxCDN Bootstrap
+
+            // Canvas may use these for analytics and functionality
+            addUrlFilterRule(doc, urlFilterRules, true, "https://www.google-analytics.com/*"); // Analytics
+            addUrlFilterRule(doc, urlFilterRules, true, "https://analytics.google.com/*"); // Google Analytics
+            addUrlFilterRule(doc, urlFilterRules, true, "https://googletagmanager.com/*"); // Tag Manager
+            addUrlFilterRule(doc, urlFilterRules, true, "https://www.googletagmanager.com/*"); // Tag Manager
 
             // Essential CDNs and services
             addUrlFilterRule(doc, urlFilterRules, true, "https://cdn.jsdelivr.net/*");
@@ -302,11 +324,14 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "enableBrowserWindowToolbar", "false", null); // Disable toolbar
             addKeyValue(doc, dict, "hideBrowserWindowToolbar", "true", null); // Hide toolbar
 
-            // Force proper browser engine (address WebView deprecation)
+            // Modern WebView Configuration (fix classic WebView deprecation)
             addKeyValue(doc, dict, "browserEngine", "integer", "1"); // Use WebKit engine
-            addKeyValue(doc, dict, "browserWindowWebView", "integer", "0"); // Use standard WebView
+            addKeyValue(doc, dict, "browserWindowWebView", "integer", "1"); // Use modern WebView (not classic)
             addKeyValue(doc, dict, "newBrowserWindowByLinkBlockForeign", "true", null); // Block foreign links
             addKeyValue(doc, dict, "newBrowserWindowByScriptBlockForeign", "true", null); // Block foreign scripts
+            addKeyValue(doc, dict, "browserWindowAllowAddressBar", "false", null); // Hide address bar
+            addKeyValue(doc, dict, "browserWindowAllowNavigationBar", "false", null); // Hide navigation
+            addKeyValue(doc, dict, "browserWindowAllowDeveloperConsole", "false", null); // Block dev console
 
             // Canvas-specific settings for access code integration
             if (accessCode != null && !accessCode.trim().isEmpty()) {
