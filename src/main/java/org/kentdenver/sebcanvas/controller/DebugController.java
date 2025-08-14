@@ -6,6 +6,7 @@ import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.kentdenver.sebcanvas.service.CanvasScopesService;
 import org.kentdenver.sebcanvas.service.CanvasService;
 import org.kentdenver.sebcanvas.service.JwkService;
+import org.kentdenver.sebcanvas.service.ApiSecurityService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.*;
@@ -15,6 +16,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
 
 /**
@@ -33,6 +35,7 @@ public class DebugController {
     private final JwkService jwkService;
     private final LtiConfig ltiConfig;
     private final RestTemplate restTemplate;
+    private final ApiSecurityService apiSecurityService;
 
     @Autowired
     public DebugController(
@@ -41,15 +44,17 @@ public class DebugController {
             CanvasApiService canvasApiService,
             JwkService jwkService,
             LtiConfig ltiConfig,
-            RestTemplate restTemplate) {
+            RestTemplate restTemplate,
+            ApiSecurityService apiSecurityService) {
         this.canvasScopesService = canvasScopesService;
         this.canvasService = canvasService;
         this.canvasApiService = canvasApiService;
         this.jwkService = jwkService;
         this.ltiConfig = ltiConfig;
         this.restTemplate = restTemplate;
+        this.apiSecurityService = apiSecurityService;
 
-        log.info("DebugController initialized with canvasService: {}", canvasService.getClass().getSimpleName());
+        log.warn("DebugController initialized - THIS SHOULD BE SECURED IN PRODUCTION");
     }
 
     @GetMapping({"/scopes/search", "/api/scopes/search"})
@@ -319,14 +324,29 @@ public class DebugController {
     /**
      * Displays environment details to help with debugging.
      * Shows key configuration settings and environment variables.
+     * SECURITY: Requires valid API key for access.
      */
     @GetMapping("/environment")
-    public ResponseEntity<Map<String, String>> getEnvironmentDetails() {
+    public ResponseEntity<Map<String, Object>> getEnvironmentDetails(HttpServletRequest request) {
         try {
-            log.info("Getting environment details");
+            log.warn("SECURITY: Environment details requested - validating access");
 
-            Map<String, String> details = new HashMap<>();
-            details.put("clientId", ltiConfig.getClientId());
+            // SECURITY: Validate admin request
+            ApiSecurityService.SecurityValidationResult securityResult =
+                    apiSecurityService.validateAdminRequest(request);
+
+            if (!securityResult.isValid()) {
+                log.warn("SECURITY: Unauthorized access attempt to environment details: {}", securityResult.getReason());
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("error", "Access denied");
+                errorResponse.put("reason", securityResult.getReason());
+                return ResponseEntity.status(securityResult.getHttpStatus()).body(errorResponse);
+            }
+
+            log.info("SECURITY PASSED: Getting environment details");
+
+            Map<String, Object> details = new HashMap<>();
+            details.put("clientId", maskSensitiveInfo(ltiConfig.getClientId()));
             details.put("issuer", ltiConfig.getIssuer());
             details.put("keySetUrl", ltiConfig.getKeySetUrl());
             details.put("tokenUrl", ltiConfig.getTokenUrl());
@@ -358,7 +378,7 @@ public class DebugController {
         } catch (Exception e) {
             log.error("Error getting environment details", e);
 
-            Map<String, String> error = new HashMap<>();
+            Map<String, Object> error = new HashMap<>();
             error.put("error", e.getMessage());
 
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -686,6 +706,46 @@ public class DebugController {
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * Masks sensitive information for logging/display purposes
+     */
+    private String maskSensitiveInfo(String value) {
+        if (value == null || value.length() <= 8) {
+            return "***";
+        }
+        return value.substring(0, 4) + "***" + value.substring(value.length() - 4);
+    }
 
+    /**
+     * Test endpoint to check New Quizzes API URL construction
+     */
+    @GetMapping("/test-new-quiz-url")
+    public ResponseEntity<Map<String, Object>> testNewQuizUrl() {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // Test URL construction for New Quizzes API
+            String testCourseId = "11825";
+            String baseUrl = "https://kentdenver.instructure.com/api/v1";
+            String correctedBaseUrl = baseUrl.replace("/api/v1", "");
+            String newQuizUrl = correctedBaseUrl + "/api/quiz/v1/courses/" + testCourseId + "/quizzes";
+
+            response.put("status", "ok");
+            response.put("original_base_url", baseUrl);
+            response.put("corrected_base_url", correctedBaseUrl);
+            response.put("new_quiz_url", newQuizUrl);
+            response.put("expected_url", "https://kentdenver.instructure.com/api/quiz/v1/courses/11825/quizzes");
+            response.put("url_correct", newQuizUrl.equals("https://kentdenver.instructure.com/api/quiz/v1/courses/11825/quizzes"));
+
+            log.info("New Quizzes URL test: {}", newQuizUrl);
+
+        } catch (Exception e) {
+            log.error("Error testing New Quizzes URL construction", e);
+            response.put("status", "error");
+            response.put("error", e.getMessage());
+        }
+
+        return ResponseEntity.ok(response);
+    }
 
 }

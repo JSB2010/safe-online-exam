@@ -61,6 +61,7 @@ public class OAuth2ClientConfig {
 
         // New Quizzes API (different API path)
         scopes.add("url:GET|/api/quiz/v1/courses/:course_id/quizzes");
+        scopes.add("url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id");
 
         // Write permissions for updating and creating assignments (needed for SEB enforcement)
         scopes.add("url:PUT|/api/v1/courses/:course_id/assignments/:id");

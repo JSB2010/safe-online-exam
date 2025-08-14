@@ -12,6 +12,7 @@
 
     // Configuration
     const SEB_DOWNLOAD_BASE_URL = 'https://canvas-seb-dev-184075650720.us-central1.run.app';
+    const SEB_API_KEY = '${SEB_API_KEY}'; // This will be replaced by the server with the actual API key
 
     // Debug panel for SEB (since we can't see console)
     let debugPanel = null;
@@ -387,12 +388,14 @@
         try {
             const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/access-code/${courseId}/${quizId}`;
             debugLog('Fetching from URL: ' + url);
+            debugLog('Using API key: ' + SEB_API_KEY.substring(0, 8) + '...');
 
             const response = await fetch(url, {
                 method: 'GET',
                 credentials: 'include',
                 headers: {
-                    'Accept': 'application/json'
+                    'Accept': 'application/json',
+                    'X-SEB-API-Key': SEB_API_KEY
                 }
             });
 

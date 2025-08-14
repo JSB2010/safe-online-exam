@@ -447,6 +447,47 @@ public class QuizService {
     }
 
     /**
+     * Determines the quiz engine type (classic or new) by checking both APIs.
+     * This method directly queries Canvas APIs to determine the quiz type,
+     * which is more reliable than relying on cached data.
+     *
+     * @param courseId The course ID
+     * @param quizId The quiz ID
+     * @param userId The user ID for authentication
+     * @return "new" if it's a New Quiz, "classic" if it's a Classic Quiz, or "classic" as default
+     */
+    private String determineQuizEngine(String courseId, String quizId, String userId) {
+        log.debug("Determining quiz engine type for quiz {} in course {}", quizId, courseId);
+
+        try {
+            // Get access token for the user
+            String accessToken = canvasApiService.getAccessToken(userId);
+            if (accessToken == null) {
+                log.warn("No access token found for user {}, defaulting to classic quiz", userId);
+                return "classic";
+            }
+
+            // First check if it exists in New Quizzes
+            List<Quiz> newQuizzes = canvasApiService.getNewQuizzes(courseId, accessToken);
+            boolean isNewQuiz = newQuizzes.stream()
+                    .anyMatch(quiz -> quizId.equals(quiz.getId()));
+
+            if (isNewQuiz) {
+                log.info("Quiz {} detected as New Quiz", quizId);
+                return "new";
+            }
+
+            // If not found in New Quizzes, assume it's a Classic Quiz
+            log.info("Quiz {} detected as Classic Quiz", quizId);
+            return "classic";
+
+        } catch (Exception e) {
+            log.warn("Error determining quiz engine type for quiz {}, defaulting to classic: {}", quizId, e.getMessage());
+            return "classic";
+        }
+    }
+
+    /**
      * Gets the SEB setting for a specific quiz.
      *
      * @param quizId The quiz ID
@@ -535,8 +576,18 @@ public class QuizService {
             String accessCode = generateSecureAccessCode();
             log.info("Generated access code for quiz {}: {}", quizId, accessCode);
 
-            // Set access code on Canvas quiz
-            boolean accessCodeSet = canvasApiService.setQuizAccessCode(courseId, quizId, accessCode, userId);
+            // Determine quiz engine type by checking both APIs
+            boolean accessCodeSet = false;
+            String quizEngine = determineQuizEngine(courseId, quizId, userId);
+
+            if ("new".equals(quizEngine)) {
+                log.info("Setting access code for New Quiz {} using New Quizzes API", quizId);
+                accessCodeSet = canvasApiService.setNewQuizAccessCode(courseId, quizId, accessCode, userId);
+            } else {
+                log.info("Setting access code for Classic Quiz {} using Classic Quizzes API", quizId);
+                accessCodeSet = canvasApiService.setQuizAccessCode(courseId, quizId, accessCode, userId);
+            }
+
             if (!accessCodeSet) {
                 log.error("Failed to set access code for quiz {} in course {} - Canvas API call failed", quizId, courseId);
                 return false;
@@ -584,27 +635,32 @@ public class QuizService {
                 return false;
             }
 
-            // Get current SEB settings to determine if this is a legacy quiz
+            // Get current SEB settings
             QuizSebSetting sebSetting = getSebSettingForQuiz(quizId);
-            boolean isLegacyQuiz = (sebSetting == null || sebSetting.getAccessCode() == null || sebSetting.getAccessCode().isEmpty());
+            boolean hasAccessCode = (sebSetting != null && sebSetting.getAccessCode() != null && !sebSetting.getAccessCode().isEmpty());
 
-            log.info("Quiz {} is {} quiz (has access code: {})", quizId,
-                isLegacyQuiz ? "legacy" : "modern",
-                sebSetting != null ? (sebSetting.getAccessCode() != null && !sebSetting.getAccessCode().isEmpty()) : false);
+            // Determine quiz engine type
+            String quizEngine = determineQuizEngine(courseId, quizId, userId);
+            log.info("Quiz {} is {} quiz (has access code: {})", quizId, quizEngine, hasAccessCode);
 
-            // For modern quizzes with access codes, try to remove the access code from Canvas
-            boolean accessCodeRemoved = true; // Default to true for legacy quizzes
-            if (!isLegacyQuiz) {
-                log.info("Attempting to remove access code from Canvas for modern quiz {}", quizId);
-                accessCodeRemoved = canvasApiService.removeQuizAccessCode(courseId, quizId, userId);
+            // For quizzes with access codes, try to remove the access code from Canvas
+            boolean accessCodeRemoved = true; // Default to true for quizzes without access codes
+            if (hasAccessCode) {
+                if ("new".equals(quizEngine)) {
+                    log.info("Attempting to remove access code from Canvas for New Quiz {}", quizId);
+                    accessCodeRemoved = canvasApiService.removeNewQuizAccessCode(courseId, quizId, userId);
+                } else {
+                    log.info("Attempting to remove access code from Canvas for Classic Quiz {}", quizId);
+                    accessCodeRemoved = canvasApiService.removeQuizAccessCode(courseId, quizId, userId);
+                }
+
                 if (!accessCodeRemoved) {
                     log.error("Failed to remove access code for quiz {} in course {} - Canvas API call failed", quizId, courseId);
-                    // For modern quizzes, we need the Canvas API call to succeed
                     return false;
                 }
                 log.info("Successfully removed access code from Canvas for quiz {}", quizId);
             } else {
-                log.info("Skipping Canvas access code removal for legacy quiz {} (no access code to remove)", quizId);
+                log.info("Skipping Canvas access code removal for quiz {} (no access code to remove)", quizId);
             }
 
             // Update SEB settings in our database
@@ -626,7 +682,7 @@ public class QuizService {
                 sebSettingRepository.save(sebSetting);
             }
 
-            log.info("Successfully disabled SEB for quiz {} in course {} (legacy: {})", quizId, courseId, isLegacyQuiz);
+            log.info("Successfully disabled SEB for quiz {} in course {} (engine: {})", quizId, courseId, quizEngine);
             return true;
 
         } catch (Exception e) {

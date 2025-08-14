@@ -366,13 +366,14 @@ public class CanvasApiService implements CanvasService {
     /**
      * Gets New Quizzes for a course.
      */
-    private List<Quiz> getNewQuizzes(String courseId, String accessToken) {
+    public List<Quiz> getNewQuizzes(String courseId, String accessToken) {
         try {
             // Build the API URL for new quizzes - New Quizzes use a different API path
-            String apiPath = "/quiz/v1/courses/" + courseId + "/quizzes";
+            // Note: New Quizzes API uses /api/quiz/v1/ instead of /api/v1/
+            String baseUrl = canvasApiConfig.getApiBaseUrl().replace("/api/v1", "");
             String url = UriComponentsBuilder
-                    .fromHttpUrl(canvasApiConfig.getApiBaseUrl())
-                    .path(apiPath)
+                    .fromHttpUrl(baseUrl)
+                    .path("/api/quiz/v1/courses/" + courseId + "/quizzes")
                     .queryParam("per_page", 100)
                     .toUriString();
 
@@ -1056,6 +1057,144 @@ public class CanvasApiService implements CanvasService {
         settings.put("access_code", ""); // Empty string removes the access code
 
         return updateQuizSettings(courseId, quizId, settings, userId);
+    }
+
+    /**
+     * Sets an access code for a Canvas New Quiz to enforce SEB requirements.
+     * New Quizzes use a different API structure with nested quiz_settings.
+     */
+    public boolean setNewQuizAccessCode(String courseId, String assignmentId, String accessCode, String userId) {
+        log.info("Setting access code for New Quiz {} in course {}", assignmentId, courseId);
+
+        // Check if we have an access token first
+        String accessToken = getAccessToken(userId);
+        if (accessToken == null || accessToken.isEmpty()) {
+            log.warn("No access token available for user {} - cannot set access code on New Quiz", userId);
+            return false;
+        }
+
+        return updateNewQuizSettings(courseId, assignmentId, accessCode, true, userId);
+    }
+
+    /**
+     * Removes the access code from a Canvas New Quiz.
+     * New Quizzes use a different API structure with nested quiz_settings.
+     */
+    public boolean removeNewQuizAccessCode(String courseId, String assignmentId, String userId) {
+        log.info("Removing access code for New Quiz {} in course {}", assignmentId, courseId);
+
+        // Check if we have an access token first
+        String accessToken = getAccessToken(userId);
+        if (accessToken == null || accessToken.isEmpty()) {
+            log.warn("No access token available for user {} - cannot remove access code from New Quiz", userId);
+            return false;
+        }
+
+        return updateNewQuizSettings(courseId, assignmentId, null, false, userId);
+    }
+
+    /**
+     * Updates New Quiz settings using the Canvas New Quizzes API.
+     * New Quizzes use a different API structure with nested quiz_settings.
+     */
+    private boolean updateNewQuizSettings(String courseId, String assignmentId, String accessCode,
+                                        boolean requireAccessCode, String userId) {
+        try {
+            log.info("Updating New Quiz settings for assignment {} in course {}", assignmentId, courseId);
+
+            String accessToken = getAccessToken(userId);
+            if (accessToken == null || accessToken.isEmpty()) {
+                log.warn("No access token available for user {} - cannot update New Quiz settings", userId);
+                return false;
+            }
+
+            // Build the API URL for New Quizzes
+            // Note: New Quizzes API uses /api/quiz/v1/ instead of /api/v1/
+            String baseUrl = canvasApiConfig.getApiBaseUrl().replace("/api/v1", "");
+            String url = UriComponentsBuilder
+                    .fromHttpUrl(baseUrl)
+                    .path("/api/quiz/v1/courses/" + courseId + "/quizzes/" + assignmentId)
+                    .toUriString();
+
+            // First, test if the New Quizzes API endpoint exists by trying to GET the quiz
+            log.debug("Testing New Quizzes API availability by attempting to GET quiz: {}", url);
+            HttpHeaders testHeaders = new HttpHeaders();
+            testHeaders.setBearerAuth(accessToken);
+            HttpEntity<Void> testEntity = new HttpEntity<>(testHeaders);
+
+            try {
+                ResponseEntity<String> testResponse = restTemplate.exchange(
+                        url,
+                        HttpMethod.GET,
+                        testEntity,
+                        String.class
+                );
+                log.debug("New Quizzes API GET test successful. Status: {}", testResponse.getStatusCode());
+            } catch (HttpClientErrorException.NotFound e) {
+                log.warn("New Quizzes API endpoint not found (404) for assignment {} in course {}. " +
+                        "This Canvas instance may not have the New Quizzes API enabled. " +
+                        "New Quizzes cannot be automatically configured for SEB.", assignmentId, courseId);
+                return false;
+            } catch (Exception e) {
+                log.warn("New Quizzes API test failed for assignment {} in course {}: {}. " +
+                        "Proceeding with update attempt anyway.", assignmentId, courseId, e.getMessage());
+            }
+
+            // Create the request body with nested quiz_settings structure
+            Map<String, Object> requestBody = new HashMap<>();
+            Map<String, Object> quizSettings = new HashMap<>();
+
+            quizSettings.put("require_student_access_code", requireAccessCode);
+            if (requireAccessCode && accessCode != null) {
+                quizSettings.put("student_access_code", accessCode);
+            } else if (!requireAccessCode) {
+                quizSettings.put("student_access_code", null);
+            }
+
+            Map<String, Object> quiz = new HashMap<>();
+            quiz.put("quiz_settings", quizSettings);
+            requestBody.put("quiz", quiz);
+
+            // Set up headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(accessToken);
+
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+
+            log.debug("Making PUT request to New Quizzes API: {}", url);
+            log.debug("Request body: {}", requestBody);
+
+            // Make the PUT request (New Quizzes API uses PUT instead of PATCH)
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.PUT,
+                    entity,
+                    String.class
+            );
+
+            log.debug("New Quizzes API response status: {}", response.getStatusCode());
+            log.debug("New Quizzes API response body: {}", response.getBody());
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("Successfully updated New Quiz settings for assignment {} in course {}", assignmentId, courseId);
+                return true;
+            } else {
+                log.error("Failed to update New Quiz settings. Status: {}, Body: {}",
+                         response.getStatusCode(), response.getBody());
+                return false;
+            }
+
+        } catch (HttpClientErrorException.NotFound e) {
+            log.warn("New Quizzes API endpoint not found (404) for assignment {} in course {}. " +
+                    "This Canvas instance may not have the New Quizzes API enabled. " +
+                    "New Quizzes cannot be automatically configured for SEB.", assignmentId, courseId);
+            return false;
+        } catch (Exception e) {
+            log.error("Error updating New Quiz settings for assignment {} in course {}: {}",
+                     assignmentId, courseId, e.getMessage(), e);
+            return false;
+        }
     }
 
     /**
