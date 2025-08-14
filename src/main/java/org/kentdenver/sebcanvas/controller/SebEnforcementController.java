@@ -250,11 +250,14 @@ public class SebEnforcementController {
 
             // Set appropriate headers for file download
             HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_XML);
+            // Use application/octet-stream to force download instead of display
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             headers.setContentDispositionFormData("attachment",
                 String.format("quiz_%s_%s.seb", courseId, quizId));
             headers.add("Content-Description", "Safe Exam Browser Configuration");
             headers.add("X-Content-Type-Options", "nosniff");
+            headers.add("Content-Transfer-Encoding", "binary");
+            headers.add("Accept-Ranges", "bytes");
 
             log.info("Successfully generated SEB configuration file ({} bytes) for quiz: {}",
                     sebConfig.length, quizId);

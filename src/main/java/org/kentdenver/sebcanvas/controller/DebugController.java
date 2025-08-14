@@ -672,6 +672,20 @@ public class DebugController {
         }
     }
 
+    // ===== SEB DEBUG ENDPOINTS =====
+
+    /**
+     * Simple test endpoint to verify SEB debug endpoints are working.
+     */
+    @GetMapping("/seb-test")
+    public ResponseEntity<Map<String, Object>> testSebEndpoint() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", "success");
+        response.put("message", "SEB debug endpoints are working");
+        response.put("timestamp", System.currentTimeMillis());
+        return ResponseEntity.ok(response);
+    }
+
 
 
 }

@@ -12,6 +12,7 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProvider
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProviderBuilder;
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizedClientManager;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 /**
  * Security configuration for the Canvas SEB Integration application.
@@ -30,6 +31,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    @Autowired
+    private CorsConfigurationSource corsConfigurationSource;
+
     /**
      * Configures the security filter chain with minimal restrictions.
      * Also sets up OAuth2 login for Canvas API integration.
@@ -42,6 +46,7 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/lti/**", "/api/**", "/seb/**", "/").permitAll()
                         .anyRequest().permitAll())
