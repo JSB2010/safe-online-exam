@@ -1,6 +1,8 @@
 package org.kentdenver.sebcanvas.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.CanvasApiConfig;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.w3c.dom.Document;
@@ -43,6 +45,36 @@ public class SebConfigurationService {
 
     @Value("${app.seb.quit-password:}")
     private String quitPassword;
+
+    @Value("${app.base-url:}")
+    private String configuredBaseUrl;
+
+    @Autowired
+    private CanvasApiConfig canvasApiConfig;
+
+    /**
+     * Gets the base URL for this application, dynamically determined from configuration.
+     */
+    private String getBaseUrl() {
+        // First try configured base URL
+        if (configuredBaseUrl != null && !configuredBaseUrl.isEmpty()) {
+            return configuredBaseUrl;
+        }
+
+        // Try to get from Canvas API config redirect URI
+        try {
+            String redirectUri = canvasApiConfig.getRedirectUri();
+            if (redirectUri != null && !redirectUri.isEmpty()) {
+                // Extract base URL from redirect URI (remove /api/oauth2callback)
+                return redirectUri.replace("/api/oauth2callback", "");
+            }
+        } catch (Exception e) {
+            log.warn("Could not get base URL from Canvas API config: {}", e.getMessage());
+        }
+
+        // Fallback to current deployment URL
+        return "https://canvas-seb-dev-184075650720.us-central1.run.app";
+    }
 
     /**
      * Generates a comprehensive SEB configuration file for a specific quiz.
@@ -170,8 +202,14 @@ public class SebConfigurationService {
             // Additional page loading settings
             addKeyValue(doc, dict, "restartExamPasswordProtected", "false", null); // No restart password
             addKeyValue(doc, dict, "restartExamText", "string", ""); // No restart text
-            addKeyValue(doc, dict, "restartExamURL", "string", ""); // No restart URL
-            addKeyValue(doc, dict, "quitURL", "string", ""); // No quit URL
+
+            // Set proper quit URLs for SEB exit functionality
+            String baseUrl = getBaseUrl();
+            String quitUrl = String.format("%s/seb/exit/quit/%s/%s", baseUrl, courseId, quizId);
+            String exitPageUrl = String.format("%s/seb/exit/%s/%s", baseUrl, courseId, quizId);
+
+            addKeyValue(doc, dict, "restartExamURL", "string", exitPageUrl); // Exit page URL
+            addKeyValue(doc, dict, "quitURL", "string", quitUrl); // Quit URL for automatic SEB exit
             addKeyValue(doc, dict, "startResource", "string", ""); // No start resource
             addKeyValue(doc, dict, "additionalResources", "array", null); // No additional resources
 

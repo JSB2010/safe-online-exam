@@ -570,6 +570,237 @@
     }
 
     /**
+     * Detects quiz completion and redirects to SEB exit page
+     */
+    function setupQuizCompletionHandler() {
+        debugLog('Setting up quiz completion handler');
+
+        // Only set up handler if we're in SEB
+        if (!isSafeBrowser()) {
+            debugLog('Not in SEB, skipping quiz completion handler');
+            return;
+        }
+
+        const quizInfo = extractQuizInfo();
+        if (!quizInfo) {
+            debugLog('Could not extract quiz info for completion handler');
+            return;
+        }
+
+        debugLog('Quiz completion handler active for Course ' + quizInfo.courseId + ', Quiz ' + quizInfo.quizId);
+
+        // Method 1: Intercept form submissions
+        interceptQuizSubmission(quizInfo);
+
+        // Method 2: Watch for completion indicators
+        watchForCompletionIndicators(quizInfo);
+
+        // Method 3: Monitor URL changes for completion
+        monitorUrlForCompletion(quizInfo);
+    }
+
+    /**
+     * Intercepts quiz form submissions to redirect to exit page
+     */
+    function interceptQuizSubmission(quizInfo) {
+        debugLog('Setting up quiz submission interceptor');
+
+        // Enhanced form detection - look for ANY form on quiz pages
+        const allForms = document.querySelectorAll('form');
+        debugLog('Found ' + allForms.length + ' total forms on page');
+
+        allForms.forEach((form, index) => {
+            debugLog('Form ' + index + ': action=' + (form.action || 'no action') + ', id=' + (form.id || 'no id'));
+
+            form.addEventListener('submit', function(event) {
+                debugLog('FORM SUBMISSION DETECTED on form ' + index + '!', 'success');
+                debugLog('Form action: ' + (this.action || 'no action'));
+                debugLog('Form method: ' + (this.method || 'no method'));
+
+                // Check if this is a final submission (not just save)
+                const submitButton = event.submitter || document.activeElement;
+                debugLog('Submit button: ' + (submitButton ? submitButton.textContent || submitButton.value || submitButton.id : 'none'));
+
+                const isSubmitQuiz = submitButton && (
+                    (submitButton.textContent && submitButton.textContent.toLowerCase().includes('submit')) ||
+                    (submitButton.value && submitButton.value.toLowerCase().includes('submit')) ||
+                    (submitButton.id && submitButton.id.toLowerCase().includes('submit')) ||
+                    (submitButton.name && submitButton.name.toLowerCase().includes('submit'))
+                );
+
+                debugLog('Is submit quiz: ' + isSubmitQuiz);
+
+                if (isSubmitQuiz) {
+                    debugLog('FINAL QUIZ SUBMISSION DETECTED! Preparing redirect...', 'success');
+
+                    // Allow the form to submit first, then redirect after a delay
+                    setTimeout(() => {
+                        debugLog('Executing redirect to SEB exit page', 'success');
+                        redirectToSebExit(quizInfo);
+                    }, 2000); // 2 second delay to allow submission to process
+                } else {
+                    debugLog('Form submission detected but not a final quiz submit', 'error');
+                }
+            });
+        });
+
+        // Enhanced button detection - look for ALL buttons and inputs
+        const allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
+        debugLog('Found ' + allButtons.length + ' total buttons/inputs on page');
+
+        allButtons.forEach((button, index) => {
+            const buttonText = button.textContent || button.value || button.id || button.name || 'no text';
+            debugLog('Button ' + index + ': "' + buttonText + '" (type: ' + button.type + ')');
+
+            button.addEventListener('click', function(event) {
+                const clickedText = (this.textContent || this.value || this.id || this.name || '').toLowerCase();
+                debugLog('BUTTON CLICKED: "' + clickedText + '"', 'success');
+
+                if (clickedText.includes('submit') && !clickedText.includes('save')) {
+                    debugLog('SUBMIT BUTTON CLICKED! Preparing redirect...', 'success');
+
+                    // Redirect after allowing the submission to process
+                    setTimeout(() => {
+                        debugLog('Executing redirect to SEB exit page from button click', 'success');
+                        redirectToSebExit(quizInfo);
+                    }, 3000); // 3 second delay for submit processing
+                } else {
+                    debugLog('Button clicked but not a submit button: "' + clickedText + '"');
+                }
+            });
+        });
+
+        // Additional: Watch for ANY click that might be a submit action
+        document.addEventListener('click', function(event) {
+            const target = event.target;
+            const targetText = (target.textContent || target.value || target.id || target.className || '').toLowerCase();
+
+            if (targetText.includes('submit') || targetText.includes('finish') || targetText.includes('complete')) {
+                debugLog('POTENTIAL SUBMIT CLICK DETECTED: "' + targetText + '"', 'success');
+
+                setTimeout(() => {
+                    debugLog('Executing redirect from generic click handler', 'success');
+                    redirectToSebExit(quizInfo);
+                }, 4000); // Longer delay for generic clicks
+            }
+        });
+    }
+
+    /**
+     * Watches for visual indicators that the quiz is complete
+     */
+    function watchForCompletionIndicators(quizInfo) {
+        debugLog('Setting up completion indicator watcher');
+
+        // Watch for completion messages or success indicators
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        const text = node.textContent || '';
+                        const completionIndicators = [
+                            'quiz submitted',
+                            'submission successful',
+                            'quiz completed',
+                            'thank you for taking',
+                            'your quiz has been submitted',
+                            'quiz submission complete'
+                        ];
+
+                        for (const indicator of completionIndicators) {
+                            if (text.toLowerCase().includes(indicator)) {
+                                debugLog('Quiz completion indicator detected: ' + indicator, 'success');
+                                setTimeout(() => {
+                                    redirectToSebExit(quizInfo);
+                                }, 1000);
+                                return;
+                            }
+                        }
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        // Stop observing after 10 minutes to prevent memory leaks
+        setTimeout(() => {
+            observer.disconnect();
+        }, 600000);
+    }
+
+    /**
+     * Monitors URL changes that indicate quiz completion
+     */
+    function monitorUrlForCompletion(quizInfo) {
+        debugLog('Setting up URL completion monitor');
+
+        let lastUrl = location.href;
+
+        const urlObserver = new MutationObserver(() => {
+            const currentUrl = location.href;
+            if (currentUrl !== lastUrl) {
+                debugLog('URL changed from ' + lastUrl + ' to ' + currentUrl);
+                lastUrl = currentUrl;
+
+                // Check if URL indicates completion
+                const completionPatterns = [
+                    '/courses/\\d+$',  // Redirected back to course
+                    '/courses/\\d+/grades',  // Redirected to grades
+                    '/courses/\\d+/quizzes$',  // Redirected to quiz list
+                    'quiz.*complete',
+                    'submission.*complete'
+                ];
+
+                for (const pattern of completionPatterns) {
+                    if (new RegExp(pattern).test(currentUrl)) {
+                        debugLog('Completion URL pattern detected: ' + pattern, 'success');
+                        setTimeout(() => {
+                            redirectToSebExit(quizInfo);
+                        }, 500);
+                        return;
+                    }
+                }
+            }
+        });
+
+        urlObserver.observe(document, { subtree: true, childList: true });
+    }
+
+    /**
+     * Redirects to the SEB exit page
+     */
+    function redirectToSebExit(quizInfo) {
+        debugLog('Redirecting to SEB exit page...', 'success');
+
+        const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${quizInfo.courseId}/${quizInfo.quizId}`;
+
+        debugLog('Exit URL: ' + exitUrl);
+
+        // Simple immediate redirect - no fancy animations that might cause SEB to hang
+        try {
+            debugLog('Attempting immediate redirect...', 'success');
+            window.location.href = exitUrl;
+        } catch (error) {
+            debugLog('Redirect failed: ' + error.message, 'error');
+
+            // Fallback: try window.open
+            try {
+                debugLog('Trying window.open fallback...', 'success');
+                window.open(exitUrl, '_self');
+            } catch (error2) {
+                debugLog('Window.open failed: ' + error2.message, 'error');
+
+                // Last resort: show URL for manual navigation
+                alert('Please navigate to: ' + exitUrl);
+            }
+        }
+    }
+
+    /**
      * Main function to check and enforce SEB requirement
      */
     function enforceSebRequirement() {
@@ -596,12 +827,18 @@
 
         // Check if using SEB first
         if (isSafeBrowser()) {
-            debugLog('SEB DETECTED! Proceeding with auto-fill', 'success');
+            debugLog('SEB DETECTED! Proceeding with auto-fill and completion handler', 'success');
 
             // Auto-fill access code if needed
             setTimeout(() => {
                 autoFillAccessCode();
             }, 2000); // Wait 2 seconds for page to fully load
+
+            // Set up quiz completion handler
+            setTimeout(() => {
+                setupQuizCompletionHandler();
+            }, 3000); // Wait 3 seconds for page to fully load
+
             return;
         }
 
@@ -660,7 +897,51 @@
 
     // Show that script is loaded
     debugLog('Canvas SEB Detector Script Loaded!', 'success');
-    debugLog('Version: 2.0 with Visual Debugging');
+    debugLog('Version: 2.1 with Enhanced Detection and Manual Test');
+
+    // Add manual test button for debugging (only in SEB)
+    if (isSafeBrowser()) {
+        setTimeout(() => {
+            try {
+                const testButton = document.createElement('button');
+                testButton.textContent = 'TEST EXIT';
+                testButton.style.cssText = `
+                    position: fixed;
+                    top: 50px;
+                    right: 10px;
+                    background: #ff4444;
+                    color: white;
+                    border: none;
+                    padding: 8px;
+                    border-radius: 3px;
+                    z-index: 999998;
+                    cursor: pointer;
+                    font-size: 12px;
+                `;
+                testButton.onclick = () => {
+                    try {
+                        const quizInfo = extractQuizInfo();
+                        if (quizInfo) {
+                            debugLog('Manual test triggered!', 'success');
+                            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${quizInfo.courseId}/${quizInfo.quizId}`;
+                            debugLog('Redirecting to: ' + exitUrl, 'success');
+                            window.location.href = exitUrl;
+                        } else {
+                            debugLog('Cannot test - no quiz info available', 'error');
+                            alert('No quiz info available for testing');
+                        }
+                    } catch (error) {
+                        debugLog('Test button error: ' + error.message, 'error');
+                        alert('Test failed: ' + error.message);
+                    }
+                };
+                document.body.appendChild(testButton);
+                debugLog('Manual test button added', 'success');
+            } catch (error) {
+                debugLog('Failed to create test button: ' + error.message, 'error');
+            }
+        }, 3000);
+    }
 
     // Run when DOM is ready
     if (document.readyState === 'loading') {

@@ -1,7 +1,10 @@
 package org.kentdenver.sebcanvas.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -31,6 +34,36 @@ public class SebConfigService {
     private static final String SEB_CONFIG_VERSION = "2.4.1";
     private static final String DEFAULT_CANVAS_DOMAIN = "kentdenver.instructure.com";
 
+    @Value("${app.base-url:}")
+    private String configuredBaseUrl;
+
+    @Autowired
+    private CanvasApiConfig canvasApiConfig;
+
+    /**
+     * Gets the base URL for this application, dynamically determined from configuration.
+     */
+    private String getBaseUrl() {
+        // First try configured base URL
+        if (configuredBaseUrl != null && !configuredBaseUrl.isEmpty()) {
+            return configuredBaseUrl;
+        }
+
+        // Try to get from Canvas API config redirect URI
+        try {
+            String redirectUri = canvasApiConfig.getRedirectUri();
+            if (redirectUri != null && !redirectUri.isEmpty()) {
+                // Extract base URL from redirect URI (remove /api/oauth2callback)
+                return redirectUri.replace("/api/oauth2callback", "");
+            }
+        } catch (Exception e) {
+            log.warn("Could not get base URL from Canvas API config: {}", e.getMessage());
+        }
+
+        // Fallback to current deployment URL
+        return "https://canvas-seb-dev-184075650720.us-central1.run.app";
+    }
+
     /**
      * Generates a complete SEB configuration file for a quiz.
      */
@@ -50,7 +83,7 @@ public class SebConfigService {
             addSecuritySettings(doc, root, sebSetting);
             addUrlFilterSettings(doc, root, customSettings);
             addBrowserSettings(doc, root, sebSetting);
-            addExamSettings(doc, root, sebSetting, customSettings);
+            addExamSettings(doc, root, sebSetting, customSettings, courseId, quizId);
 
             // Convert to XML string
             return documentToByteArray(doc);
@@ -191,19 +224,31 @@ public class SebConfigService {
     /**
      * Adds exam-specific settings.
      */
-    private void addExamSettings(Document doc, Element root, QuizSebSetting sebSetting, Map<String, Object> customSettings) {
+    private void addExamSettings(Document doc, Element root, QuizSebSetting sebSetting, Map<String, Object> customSettings, String courseId, String quizId) {
         // Quit settings
         if (customSettings != null && customSettings.containsKey("quitPassword")) {
             String quitPassword = (String) customSettings.get("quitPassword");
             addKeyValue(doc, root, "hashedQuitPassword", generateHashedPassword(quitPassword));
         }
 
-        // Quit URL for after exam completion
-        addKeyValue(doc, root, "quitURL",
-            String.format("https://%s/courses", DEFAULT_CANVAS_DOMAIN));
+        // Quit URL for after exam completion - points to our SEB exit handler
+        String baseUrl = getBaseUrl();
+        String quitUrl = String.format("%s/seb/exit/quit/%s/%s",
+                                       baseUrl, courseId, quizId);
+        addKeyValue(doc, root, "quitURL", quitUrl);
 
-        // Restart exam URL
-        addKeyValue(doc, root, "restartExamURL", "");
+        // Additional quit URLs for different scenarios
+        String exitPageUrl = String.format("%s/seb/exit/%s/%s",
+                                           baseUrl, courseId, quizId);
+        addKeyValue(doc, root, "sebExitPageURL", exitPageUrl);
+
+        // Restart exam URL - this is where SEB goes when exam is restarted/completed
+        // Point this to our exit page so students see the completion screen
+        addKeyValue(doc, root, "restartExamURL", exitPageUrl);
+
+        // Additional SEB completion handling settings
+        addKeyValue(doc, root, "examSessionClearCookiesOnEnd", true);
+        addKeyValue(doc, root, "examSessionClearCookiesOnStart", false);
 
         // Additional settings
         addKeyValue(doc, root, "showTaskBar", false);
