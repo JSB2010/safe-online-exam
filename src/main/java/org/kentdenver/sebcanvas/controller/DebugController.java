@@ -9,6 +9,7 @@ import org.kentdenver.sebcanvas.service.JwkService;
 import org.kentdenver.sebcanvas.service.ApiSecurityService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.ui.Model;
 import org.springframework.util.LinkedMultiValueMap;
@@ -36,6 +37,9 @@ public class DebugController {
     private final LtiConfig ltiConfig;
     private final RestTemplate restTemplate;
     private final ApiSecurityService apiSecurityService;
+
+    @Value("${app.debug.enabled:false}")
+    private boolean debugEnabled;
 
     @Autowired
     public DebugController(
@@ -693,6 +697,20 @@ public class DebugController {
     }
 
     // ===== SEB DEBUG ENDPOINTS =====
+
+    /**
+     * Returns the current debug status for the SEB JavaScript to determine if debug UI should be shown.
+     * This endpoint is called by the Canvas-injected JavaScript to control debug visibility.
+     */
+    @GetMapping("/debug-status")
+    @CrossOrigin(origins = "*") // Allow Canvas to call this endpoint
+    public ResponseEntity<Map<String, Object>> getDebugStatus() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("debugEnabled", debugEnabled);
+        response.put("timestamp", System.currentTimeMillis());
+        response.put("environment", System.getenv("SPRING_PROFILES_ACTIVE"));
+        return ResponseEntity.ok(response);
+    }
 
     /**
      * Simple test endpoint to verify SEB debug endpoints are working.

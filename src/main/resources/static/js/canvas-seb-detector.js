@@ -1,6 +1,7 @@
 /**
  * Canvas SEB Browser Detection and Redirection Script
- * 
+ * Version: 2.5 - Fixed JavaScript Scoping Issue
+ *
  * This script should be injected into Canvas quiz pages to:
  * 1. Detect if the browser is Safe Exam Browser (SEB)
  * 2. If not SEB, redirect to SEB download page
@@ -13,6 +14,49 @@
     // Configuration
     const SEB_DOWNLOAD_BASE_URL = 'https://canvas-seb-dev-184075650720.us-central1.run.app';
     const SEB_API_KEY = '${SEB_API_KEY}'; // This will be replaced by the server with the actual API key
+
+    // Debug mode - will be set by fetching from server
+    let debugMode = false;
+
+    /**
+     * Fetches debug status from server to determine if debug UI should be shown
+     */
+    async function fetchDebugStatus() {
+        try {
+            const response = await fetch(`${SEB_DOWNLOAD_BASE_URL}/api/debug/debug-status`);
+            if (response.ok) {
+                const data = await response.json();
+                debugMode = data.debugEnabled || false;
+                console.log('Canvas SEB Detector: Debug mode set to', debugMode);
+                return debugMode;
+            } else {
+                console.log('Canvas SEB Detector: Failed to fetch debug status, defaulting to false');
+                debugMode = false;
+                return false;
+            }
+        } catch (error) {
+            console.log('Canvas SEB Detector: Error fetching debug status, defaulting to false:', error);
+            debugMode = false;
+            return false;
+        }
+    }
+
+    // Initialize script - fetch debug status first, then show debug info
+    async function initializeScript() {
+        // Fetch debug status from server
+        await fetchDebugStatus();
+
+        // Show that script is loaded (only if debug mode is enabled)
+        debugLog('Canvas SEB Detector Script Loaded!', 'success');
+        debugLog('Version: 2.4 with Configurable Debug Mode');
+        debugLog('Debug Mode: ' + (debugMode ? 'ENABLED' : 'DISABLED'));
+        debugLog('User Agent: ' + navigator.userAgent);
+        debugLog('Current URL: ' + window.location.href);
+        debugLog('SEB Detection Result: ' + (isSafeBrowser() ? 'SEB DETECTED' : 'NOT SEB'));
+
+        // Continue with the rest of the initialization
+        continueInitialization();
+    }
 
     // Redirect management
     const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
@@ -181,6 +225,9 @@
 
     function debugLog(message, type = 'info') {
         console.log('Canvas SEB Detector:', message);
+
+        // Only show visual debug if debug mode is enabled
+        if (!debugMode) return;
 
         // Also show visually in SEB
         if (!debugPanel) createDebugPanel();
@@ -1145,12 +1192,7 @@
         }, 30000);
     }
 
-    // Show that script is loaded
-    debugLog('Canvas SEB Detector Script Loaded!', 'success');
-    debugLog('Version: 2.3 with Enhanced Debugging and Aggressive Detection');
-    debugLog('User Agent: ' + navigator.userAgent);
-    debugLog('Current URL: ' + window.location.href);
-    debugLog('SEB Detection Result: ' + (isSafeBrowser() ? 'SEB DETECTED' : 'NOT SEB'));
+    function continueInitialization() {
 
     // Enhanced debugging for redirect detection
     debugLog('=== REDIRECT DEBUG INFO ===');
@@ -1183,7 +1225,7 @@
         }
     });
 
-    // Add global test functions for debugging
+    // Add global test functions for debugging (only available when debug mode is enabled)
     window.testSebRedirect = function() {
         debugLog('=== MANUAL TEST TRIGGERED ===', 'success');
         const quizInfo = extractQuizInfo();
@@ -1216,10 +1258,13 @@
     debugLog('Call testSebRedirect() to test the redirect logic');
     debugLog('Call forceRedirect() to force an immediate redirect');
 
-    // Add manual test button for debugging (only in SEB)
+    // Add manual test button for debugging (only in SEB and when debug mode is enabled)
     if (isSafeBrowser()) {
         setTimeout(() => {
             try {
+                // Only show test button if debug mode is enabled
+                if (!debugMode) return;
+
                 const testButton = document.createElement('button');
                 testButton.textContent = 'TEST EXIT';
                 testButton.style.cssText = `
@@ -1284,15 +1329,19 @@
         }
     });
     
-    // Also run when page content changes (for single-page app navigation)
-    let lastUrl = location.href;
-    new MutationObserver(() => {
-        const url = location.href;
-        if (url !== lastUrl) {
-            lastUrl = url;
-            setTimeout(enforceSebRequirement, 1000); // Delay to allow page to load
-            setTimeout(maybeRedirectAfterSubmission, 1200); // Check for post-submission redirect
-        }
-    }).observe(document, { subtree: true, childList: true });
-    
+        // Also run when page content changes (for single-page app navigation)
+        let lastUrl = location.href;
+        new MutationObserver(() => {
+            const url = location.href;
+            if (url !== lastUrl) {
+                lastUrl = url;
+                setTimeout(enforceSebRequirement, 1000); // Delay to allow page to load
+                setTimeout(maybeRedirectAfterSubmission, 1200); // Check for post-submission redirect
+            }
+        }).observe(document, { subtree: true, childList: true });
+    }
+
+    // Start the initialization
+    initializeScript();
+
 })();
