@@ -14,6 +14,117 @@
     const SEB_DOWNLOAD_BASE_URL = 'https://canvas-seb-dev-184075650720.us-central1.run.app';
     const SEB_API_KEY = '${SEB_API_KEY}'; // This will be replaced by the server with the actual API key
 
+    // Redirect management
+    const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
+
+    function markPendingRedirect(quizInfo) {
+        const payload = {
+            courseId: quizInfo.courseId,
+            quizId: quizInfo.quizId,
+            ts: Date.now()
+        };
+        try {
+            sessionStorage.setItem(REDIRECT_FLAG_KEY, JSON.stringify(payload));
+            debugLog('Marked pending redirect for Course ' + quizInfo.courseId + ', Quiz ' + quizInfo.quizId, 'success');
+        } catch (e) {
+            debugLog('Failed to mark pending redirect: ' + e.message, 'error');
+        }
+    }
+
+    function clearPendingRedirect() {
+        try {
+            sessionStorage.removeItem(REDIRECT_FLAG_KEY);
+            debugLog('Cleared pending redirect flag');
+        } catch (e) {
+            debugLog('Failed to clear pending redirect: ' + e.message, 'error');
+        }
+    }
+
+    function getPendingRedirect() {
+        try {
+            const raw = sessionStorage.getItem(REDIRECT_FLAG_KEY);
+            if (!raw) return null;
+            const data = JSON.parse(raw);
+            // Expire after 10 minutes to avoid stale redirects
+            if (!data.ts || (Date.now() - data.ts) > 10 * 60 * 1000) {
+                clearPendingRedirect();
+                return null;
+            }
+            return data;
+        } catch (e) {
+            debugLog('Failed to get pending redirect: ' + e.message, 'error');
+            return null;
+        }
+    }
+
+    function isOnTakePage() {
+        return /\/courses\/\d+\/quizzes\/\d+\/take\b/.test(location.pathname);
+    }
+
+    function looksLikePostSubmitPage() {
+        // Check URL patterns for post-submission pages
+        const url = location.href;
+        const patterns = [
+            /\/quizzes\/\d+\/submissions\b/,
+            /\/quizzes\/\d+\/results\b/,
+            /\/courses\/\d+\/quizzes\b/,
+            /submitted=true\b/,
+            /submission_id=\d+/,
+            /quiz_submission_id=\d+/
+        ];
+        if (patterns.some(rx => rx.test(url))) {
+            debugLog('Post-submit page detected via URL pattern', 'success');
+            return true;
+        }
+
+        // Heuristic DOM checks (works for Classic + many New Quizzes UIs)
+        const text = (document.body && document.body.textContent || '').toLowerCase();
+        const completionIndicators = [
+            'your quiz has been submitted',
+            'quiz submitted',
+            'submission complete',
+            'successfully submitted',
+            'submission received',
+            'turned in successfully',
+            'assignment submitted',
+            'assignment turned in',
+            'thank you for your submission'
+        ];
+
+        for (const indicator of completionIndicators) {
+            if (text.includes(indicator)) {
+                debugLog('Post-submit page detected via text: ' + indicator, 'success');
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Call this on load and whenever URL content changes
+    function maybeRedirectAfterSubmission() {
+        const pending = getPendingRedirect();
+        if (!pending) return;
+
+        debugLog('Checking for post-submission redirect...');
+        debugLog('On take page: ' + isOnTakePage() + ', Looks like post-submit: ' + looksLikePostSubmitPage());
+
+        // FIXED: If we detect post-submit indicators, redirect regardless of take page status
+        // This handles cases where Canvas shows completion messages on the same page
+        if (looksLikePostSubmitPage()) {
+            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${pending.courseId}/${pending.quizId}`;
+            debugLog('🎯 Post-submission detected! Redirecting to: ' + exitUrl, 'success');
+            clearPendingRedirect();
+            // Small delay to let Canvas render any receipt UI (UX nicety)
+            setTimeout(() => {
+                debugLog('✅ Executing redirect to SEB exit page...', 'success');
+                window.location.assign(exitUrl);
+            }, 500);
+        } else {
+            debugLog('Post-submission conditions not yet met, waiting...');
+        }
+    }
+
     // Debug panel for SEB (since we can't see console)
     let debugPanel = null;
     let debugMessages = [];
@@ -95,12 +206,24 @@
     function isSafeBrowser() {
         const userAgent = navigator.userAgent;
         
-        // Check for SEB user agent patterns
+        // Check for SEB user agent patterns (enhanced detection)
         const sebPatterns = [
             'SEB/',
             'SafeExamBrowser',
             'Safe Exam Browser',
-            'SEB_'
+            'SEB_',
+            'SEB ',
+            'seb/',
+            'safeexambrowser',
+            'safe exam browser',
+            'SEB-',
+            'SEB-macOS',
+            'SEB-Windows',
+            'SEB-Linux',
+            'SEB 3.',
+            'SEB 2.',
+            'SEB/3.',
+            'SEB/2.'
         ];
         
         for (const pattern of sebPatterns) {
@@ -575,10 +698,17 @@
     function setupQuizCompletionHandler() {
         debugLog('Setting up quiz completion handler');
 
-        // Only set up handler if we're in SEB
-        if (!isSafeBrowser()) {
-            debugLog('Not in SEB, skipping quiz completion handler');
+        // Check for debug mode or SEB
+        const isDebugMode = window.location.href.includes('debug=true') || window.location.href.includes('seb_debug=1');
+        const sebDetected = isSafeBrowser();
+
+        if (!sebDetected && !isDebugMode) {
+            debugLog('Not in SEB and not in debug mode, skipping quiz completion handler');
             return;
+        }
+
+        if (isDebugMode && !sebDetected) {
+            debugLog('DEBUG MODE: Setting up completion handler in non-SEB browser', 'success');
         }
 
         const quizInfo = extractQuizInfo();
@@ -621,25 +751,74 @@
                 const submitButton = event.submitter || document.activeElement;
                 debugLog('Submit button: ' + (submitButton ? submitButton.textContent || submitButton.value || submitButton.id : 'none'));
 
+                // Enhanced detection for Canvas quiz submission buttons
                 const isSubmitQuiz = submitButton && (
-                    (submitButton.textContent && submitButton.textContent.toLowerCase().includes('submit')) ||
-                    (submitButton.value && submitButton.value.toLowerCase().includes('submit')) ||
-                    (submitButton.id && submitButton.id.toLowerCase().includes('submit')) ||
-                    (submitButton.name && submitButton.name.toLowerCase().includes('submit'))
+                    // Text content checks
+                    (submitButton.textContent && (
+                        submitButton.textContent.toLowerCase().includes('submit quiz') ||
+                        submitButton.textContent.toLowerCase().includes('submit assignment') ||
+                        submitButton.textContent.toLowerCase().includes('turn in') ||
+                        submitButton.textContent.toLowerCase().includes('finish') ||
+                        submitButton.textContent.toLowerCase().includes('complete') ||
+                        (submitButton.textContent.toLowerCase().includes('submit') &&
+                         !submitButton.textContent.toLowerCase().includes('save'))
+                    )) ||
+                    // Value attribute checks
+                    (submitButton.value && (
+                        submitButton.value.toLowerCase().includes('submit quiz') ||
+                        submitButton.value.toLowerCase().includes('submit assignment') ||
+                        submitButton.value.toLowerCase().includes('turn in') ||
+                        (submitButton.value.toLowerCase().includes('submit') &&
+                         !submitButton.value.toLowerCase().includes('save'))
+                    )) ||
+                    // ID and name attribute checks
+                    (submitButton.id && (
+                        submitButton.id.toLowerCase().includes('submit_quiz') ||
+                        submitButton.id.toLowerCase().includes('submit-quiz') ||
+                        submitButton.id.toLowerCase().includes('quiz_submit') ||
+                        submitButton.id.toLowerCase().includes('quiz-submit')
+                    )) ||
+                    (submitButton.name && (
+                        submitButton.name.toLowerCase().includes('submit_quiz') ||
+                        submitButton.name.toLowerCase().includes('submit-quiz') ||
+                        submitButton.name.toLowerCase().includes('quiz_submit') ||
+                        submitButton.name.toLowerCase().includes('quiz-submit')
+                    )) ||
+                    // Class name checks for Canvas-specific classes
+                    (submitButton.className && (
+                        submitButton.className.includes('submit_quiz_button') ||
+                        submitButton.className.includes('btn-primary') ||
+                        submitButton.className.includes('quiz-submit')
+                    ))
                 );
 
-                debugLog('Is submit quiz: ' + isSubmitQuiz);
+                // Additional check: exclude save/draft buttons explicitly
+                const isSaveButton = submitButton && (
+                    (submitButton.textContent && (
+                        submitButton.textContent.toLowerCase().includes('save') ||
+                        submitButton.textContent.toLowerCase().includes('draft') ||
+                        submitButton.textContent.toLowerCase().includes('continue')
+                    )) ||
+                    (submitButton.value && (
+                        submitButton.value.toLowerCase().includes('save') ||
+                        submitButton.value.toLowerCase().includes('draft')
+                    )) ||
+                    (submitButton.id && (
+                        submitButton.id.toLowerCase().includes('save') ||
+                        submitButton.id.toLowerCase().includes('draft')
+                    ))
+                );
 
-                if (isSubmitQuiz) {
-                    debugLog('FINAL QUIZ SUBMISSION DETECTED! Preparing redirect...', 'success');
+                debugLog('Is submit quiz: ' + isSubmitQuiz + ', Is save button: ' + isSaveButton);
 
-                    // Allow the form to submit first, then redirect after a delay
-                    setTimeout(() => {
-                        debugLog('Executing redirect to SEB exit page', 'success');
-                        redirectToSebExit(quizInfo);
-                    }, 2000); // 2 second delay to allow submission to process
+                if (isSubmitQuiz && !isSaveButton) {
+                    debugLog('🎯 FINAL QUIZ SUBMISSION DETECTED! Marking pending redirect...', 'success');
+                    debugLog('Button details: text="' + (submitButton.textContent || '') + '", value="' + (submitButton.value || '') + '", id="' + (submitButton.id || '') + '"');
+
+                    // DO NOT preventDefault. DO NOT redirect here. Just mark the intent.
+                    markPendingRedirect(quizInfo);
                 } else {
-                    debugLog('Form submission detected but not a final quiz submit', 'error');
+                    debugLog('Form submission detected but not a final quiz submit (save/draft button or other action)', 'info');
                 }
             });
         });
@@ -674,14 +853,38 @@
         document.addEventListener('click', function(event) {
             const target = event.target;
             const targetText = (target.textContent || target.value || target.id || target.className || '').toLowerCase();
+            debugLog('CLICK DETECTED: "' + targetText + '"');
 
             if (targetText.includes('submit') || targetText.includes('finish') || targetText.includes('complete')) {
-                debugLog('POTENTIAL SUBMIT CLICK DETECTED: "' + targetText + '"', 'success');
+                debugLog('🎯 POTENTIAL SUBMIT CLICK DETECTED: "' + targetText + '"', 'success');
+                debugLog('Marking pending redirect from click handler...');
+                markPendingRedirect(quizInfo);
 
-                setTimeout(() => {
-                    debugLog('Executing redirect from generic click handler', 'success');
-                    redirectToSebExit(quizInfo);
-                }, 4000); // Longer delay for generic clicks
+                // Also set up aggressive polling to check for completion
+                let pollCount = 0;
+                const pollInterval = setInterval(() => {
+                    pollCount++;
+                    debugLog('Polling for completion... attempt ' + pollCount);
+                    debugLog('Current URL: ' + window.location.href);
+                    debugLog('On take page: ' + isOnTakePage());
+                    debugLog('Looks like post-submit: ' + looksLikePostSubmitPage());
+
+                    maybeRedirectAfterSubmission();
+
+                    if (pollCount >= 20) { // Stop after 20 attempts (10 seconds)
+                        clearInterval(pollInterval);
+                        debugLog('Polling stopped after 20 attempts');
+
+                        // FALLBACK: If we still have a pending redirect after 10 seconds, force it
+                        const stillPending = getPendingRedirect();
+                        if (stillPending) {
+                            debugLog('⚠️ FALLBACK: Forcing redirect after timeout...', 'success');
+                            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${stillPending.courseId}/${stillPending.quizId}`;
+                            clearPendingRedirect();
+                            window.location.assign(exitUrl);
+                        }
+                    }
+                }, 500); // Poll every 500ms
             }
         });
     }
@@ -699,20 +902,39 @@
                     if (node.nodeType === Node.ELEMENT_NODE) {
                         const text = node.textContent || '';
                         const completionIndicators = [
+                            // Canvas Classic Quizzes
                             'quiz submitted',
                             'submission successful',
                             'quiz completed',
                             'thank you for taking',
                             'your quiz has been submitted',
-                            'quiz submission complete'
+                            'quiz submission complete',
+                            'your submission has been recorded',
+                            'submission recorded',
+
+                            // Canvas New Quizzes
+                            'assignment submitted',
+                            'assignment turned in',
+                            'submission complete',
+                            'successfully submitted',
+                            'turned in successfully',
+                            'submission received',
+
+                            // General success indicators
+                            'submission confirmed',
+                            'thank you for your submission',
+                            'your work has been saved',
+                            'submission timestamp',
+                            'submitted at'
                         ];
 
                         for (const indicator of completionIndicators) {
                             if (text.toLowerCase().includes(indicator)) {
-                                debugLog('Quiz completion indicator detected: ' + indicator, 'success');
-                                setTimeout(() => {
-                                    redirectToSebExit(quizInfo);
-                                }, 1000);
+                                debugLog('🎯 Quiz completion indicator detected: ' + indicator, 'success');
+                                debugLog('Marking pending redirect and triggering check...');
+                                markPendingRedirect(quizInfo);
+                                // Trigger a check in case we're already on the confirmation screen
+                                setTimeout(maybeRedirectAfterSubmission, 300);
                                 return;
                             }
                         }
@@ -748,19 +970,37 @@
 
                 // Check if URL indicates completion
                 const completionPatterns = [
+                    // Canvas Classic Quizzes
                     '/courses/\\d+$',  // Redirected back to course
                     '/courses/\\d+/grades',  // Redirected to grades
                     '/courses/\\d+/quizzes$',  // Redirected to quiz list
+                    '/quizzes/\\d+/submissions',  // Quiz submission page
+                    '/quizzes/\\d+/results',  // Quiz results page
                     'quiz.*complete',
-                    'submission.*complete'
+                    'submission.*complete',
+                    'quiz_submission_id=',  // URL parameter indicating submission
+                    'submission_id=',  // General submission parameter
+
+                    // Canvas New Quizzes (Assignments)
+                    '/assignments/\\d+/submissions',  // Assignment submission page
+                    '/assignments/\\d+/results',  // Assignment results page
+                    '/courses/\\d+/assignments$',  // Redirected to assignment list
+                    'assignment.*complete',
+                    'submitted=true',  // URL parameter for successful submission
+
+                    // General Canvas completion indicators
+                    '/courses/\\d+/gradebook',  // Redirected to gradebook
+                    'submission_attempt=',  // Submission attempt parameter
+                    'quiz.*submitted',
+                    'assignment.*submitted'
                 ];
 
                 for (const pattern of completionPatterns) {
                     if (new RegExp(pattern).test(currentUrl)) {
-                        debugLog('Completion URL pattern detected: ' + pattern, 'success');
-                        setTimeout(() => {
-                            redirectToSebExit(quizInfo);
-                        }, 500);
+                        debugLog('🎯 Completion URL pattern detected: ' + pattern, 'success');
+                        debugLog('Current URL: ' + currentUrl);
+                        debugLog('Re-checking for post-submit page...');
+                        setTimeout(maybeRedirectAfterSubmission, 300);
                         return;
                     }
                 }
@@ -825,16 +1065,26 @@
 
         debugLog('Quiz info: Course ' + quizInfo.courseId + ', Quiz ' + quizInfo.quizId, 'success');
 
+        // Check for debug mode (for testing)
+        const isDebugMode = window.location.href.includes('debug=true') || window.location.href.includes('seb_debug=1');
+
         // Check if using SEB first
-        if (isSafeBrowser()) {
-            debugLog('SEB DETECTED! Proceeding with auto-fill and completion handler', 'success');
+        const sebDetected = isSafeBrowser();
+        if (sebDetected || isDebugMode) {
+            if (sebDetected) {
+                debugLog('SEB DETECTED! Proceeding with auto-fill and completion handler', 'success');
+            } else {
+                debugLog('DEBUG MODE ENABLED! Running completion handler in non-SEB browser', 'success');
+            }
 
-            // Auto-fill access code if needed
-            setTimeout(() => {
-                autoFillAccessCode();
-            }, 2000); // Wait 2 seconds for page to fully load
+            // Auto-fill access code if needed (only in actual SEB)
+            if (sebDetected) {
+                setTimeout(() => {
+                    autoFillAccessCode();
+                }, 2000); // Wait 2 seconds for page to fully load
+            }
 
-            // Set up quiz completion handler
+            // Set up quiz completion handler (works in both SEB and debug mode)
             setTimeout(() => {
                 setupQuizCompletionHandler();
             }, 3000); // Wait 3 seconds for page to fully load
@@ -897,7 +1147,74 @@
 
     // Show that script is loaded
     debugLog('Canvas SEB Detector Script Loaded!', 'success');
-    debugLog('Version: 2.1 with Enhanced Detection and Manual Test');
+    debugLog('Version: 2.3 with Enhanced Debugging and Aggressive Detection');
+    debugLog('User Agent: ' + navigator.userAgent);
+    debugLog('Current URL: ' + window.location.href);
+    debugLog('SEB Detection Result: ' + (isSafeBrowser() ? 'SEB DETECTED' : 'NOT SEB'));
+
+    // Enhanced debugging for redirect detection
+    debugLog('=== REDIRECT DEBUG INFO ===');
+    debugLog('Is on take page: ' + isOnTakePage());
+    debugLog('Looks like post-submit: ' + looksLikePostSubmitPage());
+    debugLog('Pending redirect: ' + JSON.stringify(getPendingRedirect()));
+    debugLog('Session storage available: ' + (typeof sessionStorage !== 'undefined'));
+
+    // Log all forms and buttons for debugging
+    setTimeout(() => {
+        const forms = document.querySelectorAll('form');
+        debugLog('=== FORMS ON PAGE ===');
+        forms.forEach((form, i) => {
+            debugLog('Form ' + i + ': action=' + (form.action || 'none') + ', method=' + (form.method || 'none'));
+        });
+
+        const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
+        debugLog('=== BUTTONS ON PAGE ===');
+        buttons.forEach((btn, i) => {
+            const text = btn.textContent || btn.value || btn.id || 'no text';
+            debugLog('Button ' + i + ': "' + text + '" (type: ' + btn.type + ')');
+        });
+    }, 2000);
+
+    // Log all available window properties that might indicate SEB
+    const sebProperties = ['SafeExamBrowser', 'SEB', 'seb', 'SafeBrowser'];
+    sebProperties.forEach(prop => {
+        if (window[prop]) {
+            debugLog('Found SEB property: ' + prop + ' = ' + typeof window[prop]);
+        }
+    });
+
+    // Add global test functions for debugging
+    window.testSebRedirect = function() {
+        debugLog('=== MANUAL TEST TRIGGERED ===', 'success');
+        const quizInfo = extractQuizInfo();
+        if (quizInfo) {
+            debugLog('Quiz info: ' + JSON.stringify(quizInfo));
+            markPendingRedirect(quizInfo);
+            debugLog('Pending redirect marked, checking conditions...');
+            setTimeout(() => {
+                debugLog('Testing redirect conditions...');
+                maybeRedirectAfterSubmission();
+            }, 1000);
+        } else {
+            debugLog('No quiz info available for test', 'error');
+        }
+    };
+
+    window.forceRedirect = function() {
+        debugLog('=== FORCE REDIRECT TRIGGERED ===', 'success');
+        const quizInfo = extractQuizInfo();
+        if (quizInfo) {
+            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${quizInfo.courseId}/${quizInfo.quizId}`;
+            debugLog('Force redirecting to: ' + exitUrl);
+            window.location.href = exitUrl;
+        } else {
+            debugLog('No quiz info available for force redirect', 'error');
+        }
+    };
+
+    debugLog('=== TEST FUNCTIONS AVAILABLE ===');
+    debugLog('Call testSebRedirect() to test the redirect logic');
+    debugLog('Call forceRedirect() to force an immediate redirect');
 
     // Add manual test button for debugging (only in SEB)
     if (isSafeBrowser()) {
@@ -946,10 +1263,14 @@
     // Run when DOM is ready
     if (document.readyState === 'loading') {
         debugLog('DOM still loading, waiting for DOMContentLoaded');
-        document.addEventListener('DOMContentLoaded', enforceSebRequirement);
+        document.addEventListener('DOMContentLoaded', () => {
+            enforceSebRequirement();
+            setTimeout(maybeRedirectAfterSubmission, 300);
+        });
     } else {
         debugLog('DOM already loaded, running immediately');
         enforceSebRequirement();
+        setTimeout(maybeRedirectAfterSubmission, 300);
     }
 
     // Also run when the page becomes visible (in case of tab switching)
@@ -957,6 +1278,9 @@
         if (!document.hidden && isSafeBrowser()) {
             console.log('Canvas SEB Detector: Page became visible, checking for auto-fill');
             autoFillAccessCode();
+        }
+        if (!document.hidden) {
+            setTimeout(maybeRedirectAfterSubmission, 200);
         }
     });
     
@@ -967,6 +1291,7 @@
         if (url !== lastUrl) {
             lastUrl = url;
             setTimeout(enforceSebRequirement, 1000); // Delay to allow page to load
+            setTimeout(maybeRedirectAfterSubmission, 1200); // Check for post-submission redirect
         }
     }).observe(document, { subtree: true, childList: true });
     
