@@ -228,8 +228,7 @@ public class SebConfigService {
             }
         }
 
-        // Block everything else
-        addUrlFilterRule(doc, urlFilterRules, false, "*");
+        // Note: No "block all" rule needed - SEB automatically blocks anything not explicitly allowed when URL filtering is enabled
     }
 
     /**
@@ -250,17 +249,44 @@ public class SebConfigService {
         // User agent string
         addKeyValue(doc, root, "browserUserAgent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 SEB/3.5");
+
+        // === MODERN WEBVIEW CONFIGURATION (Fix Classic WebView Deprecation Warning) ===
+        addKeyValue(doc, root, "browserEngine", 1); // 1 = WebKit engine (modern)
+        addKeyValue(doc, root, "browserWindowWebView", 1); // 1 = modern WebView (not classic UIWebView)
+        addKeyValue(doc, root, "hideClassicWebViewDeprecationMessage", true); // Hide deprecation warning if available
+
+        // Additional modern browser settings
+        addKeyValue(doc, root, "newBrowserWindowByLinkBlockForeign", true); // Block foreign links in new windows
+        addKeyValue(doc, root, "newBrowserWindowByScriptBlockForeign", true); // Block foreign scripts in new windows
     }
 
     /**
      * Adds exam-specific settings.
      */
     private void addExamSettings(Document doc, Element root, QuizSebSetting sebSetting, Map<String, Object> customSettings, String courseId, String quizId) {
-        // Quit settings
+        // === ENHANCED PASSWORD PROTECTION SETTINGS ===
+        // Use the test quit password (should be removed in production)
+        String quitPassword = "5845Alton625!@"; // Test password - remove in production
+
+        // Set both quit password and admin password for proper security
+        String hashedPassword = generateHashedPassword(quitPassword);
+        addKeyValue(doc, root, "hashedQuitPassword", hashedPassword);
+        addKeyValue(doc, root, "hashedAdminPassword", hashedPassword); // Same password for admin access
+
+        // Override with custom password if provided
         if (customSettings != null && customSettings.containsKey("quitPassword")) {
-            String quitPassword = (String) customSettings.get("quitPassword");
-            addKeyValue(doc, root, "hashedQuitPassword", generateHashedPassword(quitPassword));
+            String customQuitPassword = (String) customSettings.get("quitPassword");
+            String customHashedPassword = generateHashedPassword(customQuitPassword);
+            addKeyValue(doc, root, "hashedQuitPassword", customHashedPassword);
+            addKeyValue(doc, root, "hashedAdminPassword", customHashedPassword);
         }
+
+        // Require password for accessing SEB settings and quitting
+        addKeyValue(doc, root, "allowQuit", true); // Allow quit but require password
+        addKeyValue(doc, root, "ignoreQuitPassword", false); // Don't ignore quit password
+        addKeyValue(doc, root, "showMenuBar", false); // Hide menu bar to prevent easy access
+        addKeyValue(doc, root, "enableTouchExit", false); // Disable touch exit on tablets
+        addKeyValue(doc, root, "allowPreferencesWindow", false); // Block access to preferences without password
 
         // Quit URL for after exam completion - points to our SEB exit handler
         String baseUrl = getBaseUrl();
@@ -280,6 +306,13 @@ public class SebConfigService {
         // Additional SEB completion handling settings
         addKeyValue(doc, root, "examSessionClearCookiesOnEnd", true);
         addKeyValue(doc, root, "examSessionClearCookiesOnStart", false);
+
+        // === SUPPRESS RE-CONFIGURATION DIALOG ===
+        // These settings help suppress the "SEB Re-Configured" dialog
+        addKeyValue(doc, root, "showReconfigurationDialog", false); // Don't show reconfiguration dialog
+        addKeyValue(doc, root, "allowReconfiguration", true); // Allow reconfiguration but silently
+        addKeyValue(doc, root, "forceAppFolderInstall", false); // Don't force app folder install dialog
+        addKeyValue(doc, root, "sebConfigPurpose", 1); // 1 = starting exam (vs configuring client)
 
         // Additional settings
         addKeyValue(doc, root, "showTaskBar", false);
@@ -514,13 +547,19 @@ public class SebConfigService {
 
         // Add educational tool domains from sebSetting
         if (sebSetting != null && sebSetting.getEducationalToolDomains() != null) {
+            log.info("Adding {} educational tool domains to SEB configuration", sebSetting.getEducationalToolDomains().size());
             for (String domain : sebSetting.getEducationalToolDomains()) {
                 if (isValidEducationalDomain(domain)) {
-                    addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain);
+                    // Add both HTTPS and HTTP versions for compatibility, with wildcard paths
+                    addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain + "/*");
+                    addUrlFilterRule(doc, urlFilterRules, true, "http://" + domain + "/*");
+                    log.info("Added educational tool domain: {}", domain);
                 } else {
                     log.warn("Skipping invalid educational domain: {}", domain);
                 }
             }
+        } else {
+            log.info("No educational tool domains configured for this quiz");
         }
 
         // Add custom domains from sebSetting
@@ -555,7 +594,9 @@ public class SebConfigService {
                 List<String> eduDomains = (List<String>) customSettings.get("educationalToolDomains");
                 for (String domain : eduDomains) {
                     if (isValidEducationalDomain(domain)) {
-                        addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain);
+                        // Add both HTTPS and HTTP versions for compatibility, with wildcard paths
+                        addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain + "/*");
+                        addUrlFilterRule(doc, urlFilterRules, true, "http://" + domain + "/*");
                     } else {
                         log.warn("Skipping invalid educational domain: {}", domain);
                     }
