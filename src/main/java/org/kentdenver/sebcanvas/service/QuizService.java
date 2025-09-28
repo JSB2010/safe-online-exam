@@ -1,6 +1,7 @@
 package org.kentdenver.sebcanvas.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.repository.FirestoreQuizRepository;
@@ -38,6 +39,7 @@ public class QuizService {
     private final SebConfigGenerator sebConfigGenerator;
     private final CanvasApiService canvasApiService;
     private final SebConfigService sebConfigService;
+    private final CanvasApiConfig canvasApiConfig;
 
     /**
      * Constructor for QuizService with dependency injection.
@@ -56,13 +58,15 @@ public class QuizService {
             HybridCanvasAuthService hybridAuthService,
             SebConfigGenerator sebConfigGenerator,
             CanvasApiService canvasApiService,
-            SebConfigService sebConfigService) {
+            SebConfigService sebConfigService,
+            CanvasApiConfig canvasApiConfig) {
         this.quizRepository = quizRepository;
         this.sebSettingRepository = sebSettingRepository;
         this.hybridAuthService = hybridAuthService;
         this.sebConfigGenerator = sebConfigGenerator;
         this.canvasApiService = canvasApiService;
         this.sebConfigService = sebConfigService;
+        this.canvasApiConfig = canvasApiConfig;
         log.info("Initialized QuizService with enhanced SEB support");
     }
 
@@ -329,6 +333,64 @@ public class QuizService {
         // Save to Firestore
         QuizSebSetting savedSetting = sebSettingRepository.save(setting);
         log.info("Updated comprehensive SEB configuration for quiz: {}", quizId);
+        return savedSetting;
+    }
+
+    /**
+     * Updates SEB configuration with structured domain settings.
+     *
+     * @param quizId The quiz ID
+     * @param ssoDomains List of SSO domains
+     * @param educationalToolDomains List of educational tool domains
+     * @param customDomains List of custom domains
+     * @param externalToolUrl The external tool URL for Canvas integration
+     * @param sebRequired Whether SEB is required for this quiz
+     * @return The updated setting
+     */
+    public QuizSebSetting updateSebConfigurationStructured(String quizId, List<String> ssoDomains,
+                                                          List<String> educationalToolDomains,
+                                                          List<String> customDomains,
+                                                          String externalToolUrl, boolean sebRequired) {
+        log.debug("Updating structured SEB configuration for quiz: {}", quizId);
+
+        QuizSebSetting setting = sebSettingRepository.findByQuizId(quizId)
+                .orElseGet(() -> {
+                    QuizSebSetting newSetting = new QuizSebSetting();
+                    newSetting.setQuizId(quizId);
+                    return newSetting;
+                });
+
+        // Update structured domain settings
+        setting.setSsoDomains(ssoDomains != null ? ssoDomains : new ArrayList<>());
+        setting.setEducationalToolDomains(educationalToolDomains != null ? educationalToolDomains : new ArrayList<>());
+        setting.setCustomDomains(customDomains != null ? customDomains : new ArrayList<>());
+        setting.setExternalToolUrl(externalToolUrl);
+        setting.setSebRequired(sebRequired);
+
+        // Set Canvas domain from configuration
+        try {
+            String canvasDomain = canvasApiConfig.getCanvasDomain();
+            if (canvasDomain != null && !canvasDomain.isEmpty()) {
+                setting.setCanvasDomain(canvasDomain.replace("https://", ""));
+            }
+        } catch (Exception e) {
+            log.warn("Could not set Canvas domain: {}", e.getMessage());
+        }
+
+        // Generate Browser Exam Key if needed
+        if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isEmpty()) {
+            try {
+                String browserExamKey = generateBrowserExamKey();
+                setting.setBrowserExamKey(browserExamKey);
+                log.debug("Generated new Browser Exam Key for quiz: {}", quizId);
+            } catch (NoSuchAlgorithmException e) {
+                log.error("Error generating Browser Exam Key for quiz: {}", quizId, e);
+            }
+        }
+
+        // Save to Firestore
+        QuizSebSetting savedSetting = sebSettingRepository.save(setting);
+        log.info("Updated structured SEB configuration for quiz: {}", quizId);
         return savedSetting;
     }
 

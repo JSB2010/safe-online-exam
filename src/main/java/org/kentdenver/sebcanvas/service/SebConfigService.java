@@ -32,7 +32,6 @@ import java.util.Map;
 public class SebConfigService {
 
     private static final String SEB_CONFIG_VERSION = "2.4.1";
-    private static final String DEFAULT_CANVAS_DOMAIN = "kentdenver.instructure.com";
 
     @Value("${app.base-url:}")
     private String configuredBaseUrl;
@@ -65,6 +64,25 @@ public class SebConfigService {
     }
 
     /**
+     * Gets the Canvas domain dynamically from the Canvas API configuration.
+     */
+    private String getCanvasDomain() {
+        try {
+            String domain = canvasApiConfig.getCanvasDomain();
+            if (domain != null && !domain.isEmpty()) {
+                // Remove https:// if present
+                return domain.replace("https://", "");
+            }
+        } catch (Exception e) {
+            log.warn("Could not get Canvas domain from config: {}", e.getMessage());
+        }
+
+        // Fallback to a default (this should rarely be used)
+        log.warn("Using fallback Canvas domain - this should be configured properly");
+        return "kentdenver.instructure.com";
+    }
+
+    /**
      * Generates a complete SEB configuration file for a quiz.
      */
     public byte[] generateSebConfig(String courseId, String quizId, String accessCode,
@@ -81,7 +99,7 @@ public class SebConfigService {
             // Add SEB configuration settings
             addBasicSettings(doc, root, courseId, quizId, accessCode);
             addSecuritySettings(doc, root, sebSetting);
-            addUrlFilterSettings(doc, root, customSettings);
+            addUrlFilterSettings(doc, root, sebSetting, customSettings);
             addBrowserSettings(doc, root, sebSetting);
             addExamSettings(doc, root, sebSetting, customSettings, courseId, quizId);
 
@@ -98,9 +116,12 @@ public class SebConfigService {
      * Adds basic SEB configuration settings.
      */
     private void addBasicSettings(Document doc, Element root, String courseId, String quizId, String accessCode) {
+        // Get Canvas domain dynamically from configuration
+        String canvasDomain = getCanvasDomain();
+
         // Start URL - direct link to the Canvas quiz with access code parameter
         // This allows SEB to automatically provide the access code when accessing the quiz
-        String startUrl = String.format("https://%s/courses/%s/quizzes/%s", DEFAULT_CANVAS_DOMAIN, courseId, quizId);
+        String startUrl = String.format("https://%s/courses/%s/quizzes/%s", canvasDomain, courseId, quizId);
         if (accessCode != null && !accessCode.isEmpty()) {
             startUrl += "?access_code=" + accessCode;
         }
@@ -170,7 +191,7 @@ public class SebConfigService {
     /**
      * Adds URL filtering settings to restrict browsing.
      */
-    private void addUrlFilterSettings(Document doc, Element root, Map<String, Object> customSettings) {
+    private void addUrlFilterSettings(Document doc, Element root, QuizSebSetting sebSetting, Map<String, Object> customSettings) {
         // Enable URL filtering
         addKeyValue(doc, root, "URLFilterEnable", true);
         addKeyValue(doc, root, "URLFilterEnableContentFilter", true);
@@ -179,21 +200,31 @@ public class SebConfigService {
         Element urlFilterRules = doc.createElement("array");
         addKeyElement(doc, root, "URLFilterRules", urlFilterRules);
 
-        // Allow Canvas domain
-        addUrlFilterRule(doc, urlFilterRules, true, "https://" + DEFAULT_CANVAS_DOMAIN + "/*");
-        addUrlFilterRule(doc, urlFilterRules, true, "https://*." + DEFAULT_CANVAS_DOMAIN + "/*");
+        // Get Canvas domain dynamically
+        String canvasDomain = getCanvasDomain();
 
-        // Allow common Canvas CDN domains
-        addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads.s3.amazonaws.com/*");
-        addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.instructure.com/*");
-        addUrlFilterRule(doc, urlFilterRules, true, "https://du11hjcvx0uqb.cloudfront.net/*");
+        // Allow Canvas domain with specific paths for security
+        addUrlFilterRule(doc, urlFilterRules, true, "https://" + canvasDomain + "/courses/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://" + canvasDomain + "/api/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://" + canvasDomain + "/login/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://" + canvasDomain + "/files/*");
 
-        // Add custom allowed URLs if provided
+        // Allow Canvas infrastructure domains
+        addCanvasInfrastructureDomains(doc, urlFilterRules);
+
+        // Add structured domain configuration if available
+        addStructuredDomains(doc, urlFilterRules, sebSetting, customSettings);
+
+        // Add legacy custom allowed URLs if provided
         if (customSettings != null && customSettings.containsKey("allowedUrls")) {
             @SuppressWarnings("unchecked")
             List<String> allowedUrls = (List<String>) customSettings.get("allowedUrls");
             for (String url : allowedUrls) {
-                addUrlFilterRule(doc, urlFilterRules, true, url);
+                if (isValidUrlPattern(url)) {
+                    addUrlFilterRule(doc, urlFilterRules, true, url);
+                } else {
+                    log.warn("Skipping invalid URL pattern: {}", url);
+                }
             }
         }
 
@@ -439,5 +470,219 @@ public class SebConfigService {
                 console.log('SEB: Access code auto-entry script loaded');
             })();
             """, accessCode);
+    }
+
+    /**
+     * Adds Canvas infrastructure domains that are required for Canvas to function properly.
+     */
+    private void addCanvasInfrastructureDomains(Document doc, Element urlFilterRules) {
+        // Canvas core infrastructure
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructure.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.canvaslms.com/*");
+
+        // Canvas file storage and CDN
+        addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads.s3.amazonaws.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads-*.s3.amazonaws.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.cloudfront.net/dist/images/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.cloudfront.net/dist/fonts/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.cloudfront.net/dist/css/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.cloudfront.net/dist/js/*");
+
+        // Canvas authentication and API
+        addUrlFilterRule(doc, urlFilterRules, true, "https://sso.canvaslms.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.instructure.com/api/*");
+
+        // Canvas media and content delivery
+        addUrlFilterRule(doc, urlFilterRules, true, "https://media.instructuremedia.com/*");
+        addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructuremedia.com/*");
+    }
+
+    /**
+     * Adds structured domain configuration based on the new domain categories.
+     */
+    private void addStructuredDomains(Document doc, Element urlFilterRules, QuizSebSetting sebSetting, Map<String, Object> customSettings) {
+        // Add SSO domains from sebSetting
+        if (sebSetting != null && sebSetting.getSsoDomains() != null) {
+            for (String domain : sebSetting.getSsoDomains()) {
+                if (isValidSsoDomain(domain)) {
+                    addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain + "/*");
+                } else {
+                    log.warn("Skipping invalid SSO domain: {}", domain);
+                }
+            }
+        }
+
+        // Add educational tool domains from sebSetting
+        if (sebSetting != null && sebSetting.getEducationalToolDomains() != null) {
+            for (String domain : sebSetting.getEducationalToolDomains()) {
+                if (isValidEducationalDomain(domain)) {
+                    addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain);
+                } else {
+                    log.warn("Skipping invalid educational domain: {}", domain);
+                }
+            }
+        }
+
+        // Add custom domains from sebSetting
+        if (sebSetting != null && sebSetting.getCustomDomains() != null) {
+            for (String domain : sebSetting.getCustomDomains()) {
+                if (isValidCustomDomain(domain)) {
+                    addUrlFilterRule(doc, urlFilterRules, true, domain);
+                } else {
+                    log.warn("Skipping invalid custom domain: {}", domain);
+                }
+            }
+        }
+
+        // Legacy support: Add domains from customSettings if sebSetting domains are empty
+        if (customSettings != null) {
+            // Add SSO domains from customSettings
+            if (customSettings.containsKey("ssoDomains")) {
+                @SuppressWarnings("unchecked")
+                List<String> ssoDomains = (List<String>) customSettings.get("ssoDomains");
+                for (String domain : ssoDomains) {
+                    if (isValidSsoDomain(domain)) {
+                        addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain + "/*");
+                    } else {
+                        log.warn("Skipping invalid SSO domain: {}", domain);
+                    }
+                }
+            }
+
+            // Add educational tool domains from customSettings
+            if (customSettings.containsKey("educationalToolDomains")) {
+                @SuppressWarnings("unchecked")
+                List<String> eduDomains = (List<String>) customSettings.get("educationalToolDomains");
+                for (String domain : eduDomains) {
+                    if (isValidEducationalDomain(domain)) {
+                        addUrlFilterRule(doc, urlFilterRules, true, "https://" + domain);
+                    } else {
+                        log.warn("Skipping invalid educational domain: {}", domain);
+                    }
+                }
+            }
+
+            // Add custom domains from customSettings
+            if (customSettings.containsKey("customDomains")) {
+                @SuppressWarnings("unchecked")
+                List<String> customDomains = (List<String>) customSettings.get("customDomains");
+                for (String domain : customDomains) {
+                    if (isValidCustomDomain(domain)) {
+                        addUrlFilterRule(doc, urlFilterRules, true, domain);
+                    } else {
+                        log.warn("Skipping invalid custom domain: {}", domain);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Validates URL patterns to ensure they are not overly broad or dangerous.
+     */
+    private boolean isValidUrlPattern(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return false;
+        }
+
+        // Remove whitespace
+        url = url.trim();
+
+        // Must start with https://
+        if (!url.startsWith("https://")) {
+            return false;
+        }
+
+        // Should not be overly broad patterns
+        String[] dangerousPatterns = {"*", "https://*", "https://*/*", "*.com/*", "*.org/*", "*.edu/*"};
+        for (String pattern : dangerousPatterns) {
+            if (url.equals(pattern)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Validates SSO domains to ensure they are specific authentication endpoints.
+     */
+    private boolean isValidSsoDomain(String domain) {
+        if (domain == null || domain.trim().isEmpty()) {
+            return false;
+        }
+
+        domain = domain.trim().toLowerCase();
+
+        // List of known valid SSO domain patterns
+        String[] validSsoPatterns = {
+            "accounts.google.com",
+            "login.microsoftonline.com",
+            "login.live.com",
+            "auth.okta.com",
+            "*.okta.com",
+            "*.oktapreview.com",
+            "sso.*.edu",
+            "login.*.edu"
+        };
+
+        for (String pattern : validSsoPatterns) {
+            if (domain.equals(pattern) || (pattern.contains("*") && domain.matches(pattern.replace("*", ".*")))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Validates educational tool domains.
+     */
+    private boolean isValidEducationalDomain(String domain) {
+        if (domain == null || domain.trim().isEmpty()) {
+            return false;
+        }
+
+        domain = domain.trim().toLowerCase();
+
+        // List of known educational tool domains
+        String[] validEduDomains = {
+            "www.desmos.com/calculator",
+            "teacher.desmos.com",
+            "www.khanacademy.org",
+            "www.geogebra.org",
+            "www.wolframalpha.com",
+            "calculator.net",
+            "www.calculator.net",
+            "translate.google.com",
+            "docs.google.com"
+        };
+
+        for (String validDomain : validEduDomains) {
+            if (domain.equals(validDomain)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Validates custom domains to ensure they are not overly broad.
+     */
+    private boolean isValidCustomDomain(String domain) {
+        if (domain == null || domain.trim().isEmpty()) {
+            return false;
+        }
+
+        domain = domain.trim();
+
+        // Must be a specific domain pattern
+        if (!domain.startsWith("https://")) {
+            return false;
+        }
+
+        // Should not be overly broad
+        return isValidUrlPattern(domain);
     }
 }

@@ -221,9 +221,9 @@ public class SebConfigurationService {
             // === NETWORK AND URL FILTERING ===
 
             // URL Filter - Only allow Canvas and essential domains
-            // TEMPORARILY DISABLED FOR DEBUGGING - TODO: Re-enable after testing
-            addKeyValue(doc, dict, "URLFilterEnable", "false", null);
-            log.info("URL filtering DISABLED for debugging - all domains allowed");
+            // ENABLED for production security - blocks access to unauthorized sites
+            addKeyValue(doc, dict, "URLFilterEnable", "true", null);
+            log.info("URL filtering ENABLED - only authorized domains allowed");
             Element urlFilterRules = addKeyValue(doc, dict, "URLFilterRules", "array", null);
             
             // Allow Canvas domains (comprehensive list)
@@ -257,6 +257,18 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "https://d2l3jyjp24noqc.cloudfront.net/*"); // Canvas assets
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-static.s3.amazonaws.com/*"); // Static files
 
+            // Additional Canvas media and content domains
+            addUrlFilterRule(doc, urlFilterRules, true, "https://media.instructuremedia.com/*"); // Canvas media
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-media.instructure.com/*"); // Canvas media
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-user-content.s3.amazonaws.com/*"); // User content
+            addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads-prod.s3.amazonaws.com/*"); // Uploads
+
+            // Canvas quiz and assessment specific domains
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-iad-prod.instructure.com/*"); // Quiz LTI
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-pdx-prod.instructure.com/*"); // Quiz LTI
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-dub-prod.instructure.com/*"); // Quiz LTI
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.quiz-lti-*.instructure.com/*"); // Quiz LTI wildcard
+
             // Google SSO and Services (for schools using Google Workspace)
             addUrlFilterRule(doc, urlFilterRules, true, "https://accounts.google.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://login.google.com/*");
@@ -267,6 +279,13 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "https://www.gstatic.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://fonts.googleapis.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://fonts.gstatic.com/*");
+
+            // Additional Google authentication endpoints (for comprehensive SSO support)
+            addUrlFilterRule(doc, urlFilterRules, true, "https://myaccount.google.com/*"); // Google account management
+            addUrlFilterRule(doc, urlFilterRules, true, "https://security.google.com/*"); // Google security
+            addUrlFilterRule(doc, urlFilterRules, true, "https://www.google.com/accounts/*"); // Google accounts
+            addUrlFilterRule(doc, urlFilterRules, true, "https://google.com/accounts/*"); // Google accounts (no www)
+            addUrlFilterRule(doc, urlFilterRules, true, "https://ogs.google.com/*"); // Google OAuth Gateway Service
 
             // Microsoft SSO and Services (for schools using Microsoft 365)
             addUrlFilterRule(doc, urlFilterRules, true, "https://login.microsoftonline.com/*");
@@ -303,14 +322,37 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "https://cdnjs.cloudflare.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://ajax.googleapis.com/*");
 
-            // Block everything else
-            addUrlFilterRule(doc, urlFilterRules, false, "*");
+            // Additional Canvas-specific domains that may be needed
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-rce-api.instructure.com/*"); // Rich Content Editor
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-rce.instructure.com/*"); // Rich Content Editor
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-commons.s3.amazonaws.com/*"); // Canvas Commons
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-catalog.s3.amazonaws.com/*"); // Canvas Catalog
+
+            // Canvas New Quizzes domains (if using New Quizzes engine)
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti.instructure.com/*"); // New Quizzes
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-api.instructure.com/*"); // New Quizzes API
+
+            // SEB-Canvas LTI Application (our own service)
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-seb-dev-184075650720.us-central1.run.app/*"); // Our Cloud Run service
+            addUrlFilterRule(doc, urlFilterRules, true, "http://canvas-seb-dev-184075650720.us-central1.run.app/*"); // HTTP fallback
+
+            // Allow HTTP versions of essential domains (for redirects and mixed content)
+            addUrlFilterRule(doc, urlFilterRules, true, "http://kentdenver.instructure.com/*"); // HTTP Canvas
+            addUrlFilterRule(doc, urlFilterRules, true, "http://*.instructure.com/*"); // HTTP Instructure
+
+            // Additional essential domains that might be missing
+            addUrlFilterRule(doc, urlFilterRules, true, "https://www.google.com/*"); // Google main domain
+            addUrlFilterRule(doc, urlFilterRules, true, "https://google.com/*"); // Google without www
+            addUrlFilterRule(doc, urlFilterRules, true, "https://gstatic.com/*"); // Google static content
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.gstatic.com/*"); // Google static subdomains
+
+            // Note: No "block all" rule needed - SEB automatically blocks anything not explicitly allowed when URL filtering is enabled
 
             // === QUIZ ACCESS CONFIGURATION ===
 
-            // Configure session management
-            addKeyValue(doc, dict, "examSessionClearCookiesOnStart", "true", null);
-            addKeyValue(doc, dict, "examSessionClearCookiesOnEnd", "true", null);
+            // Configure session management (modified for SSO compatibility)
+            addKeyValue(doc, dict, "examSessionClearCookiesOnStart", "false", null); // Don't clear cookies to preserve SSO session
+            addKeyValue(doc, dict, "examSessionClearCookiesOnEnd", "true", null); // Clear cookies at end for security
 
             // TEST QUIT PASSWORD - TODO: Remove in production
             // This is a test password only for Jacob: 5845Alton625!@

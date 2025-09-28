@@ -2,6 +2,7 @@ package org.kentdenver.sebcanvas.controller;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.dto.StructuredSebConfigRequest;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.model.ModuleItemUpdate;
@@ -285,7 +286,40 @@ public class QuizController {
         }
     }
 
+    /**
+     * Saves structured SEB configuration with domain categories.
+     *
+     * @param request Structured SEB configuration request
+     * @param userId User ID from authentication
+     * @return Updated SEB setting
+     */
+    @PostMapping("/seb-config-structured")
+    public ResponseEntity<QuizSebSetting> saveSebConfigurationStructured(
+            @RequestBody StructuredSebConfigRequest request,
+            @RequestParam String userId,
+            HttpSession session) {
 
+        log.info("Saving structured SEB configuration for quiz {} by user {}", request.getQuizId(), userId);
+
+        try {
+            // Update structured SEB settings
+            QuizSebSetting updatedSetting = quizService.updateSebConfigurationStructured(
+                request.getQuizId(),
+                request.getSsoDomains(),
+                request.getEducationalToolDomains(),
+                request.getCustomDomains(),
+                request.getExternalToolUrl(),
+                true
+            );
+
+            log.info("Successfully saved structured SEB configuration for quiz {}", request.getQuizId());
+            return ResponseEntity.ok(updatedSetting);
+
+        } catch (Exception e) {
+            log.error("Error saving structured SEB configuration for quiz {}: {}", request.getQuizId(), e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 
     /**
      * Gets all quizzes for the current course.
@@ -727,6 +761,12 @@ public class QuizController {
 
             if (sebSetting != null) {
                 response.put("browserExamKey", sebSetting.getBrowserExamKey());
+                response.put("canvasDomain", sebSetting.getCanvasDomain());
+                response.put("ssoDomains", sebSetting.getSsoDomains());
+                response.put("educationalToolDomains", sebSetting.getEducationalToolDomains());
+                response.put("customDomains", sebSetting.getCustomDomains());
+
+                // Legacy support
                 response.put("allowedSites", sebSetting.getAllowedSites());
             }
 

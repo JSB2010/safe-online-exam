@@ -200,78 +200,202 @@
 
 <!-- SEB Settings Modal -->
 <div class="modal fade" id="sebSettingsModal" tabindex="-1" aria-labelledby="sebSettingsModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-xl">
         <div class="modal-content">
-            <div class="modal-header">
+            <div class="modal-header bg-primary text-white">
                 <h5 class="modal-title" id="sebSettingsModalLabel">
                     <i class="fas fa-shield-alt me-2"></i>
-                    Advanced SEB Settings
+                    Safe Exam Browser Configuration
                 </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <form id="sebSettingsForm">
                     <input type="hidden" id="settingsQuizId" name="quizId">
 
-                    <!-- Allowed Sites Section -->
-                    <div class="mb-4">
-                        <label for="allowedSites" class="form-label">
-                            <i class="fas fa-globe me-1"></i>
-                            Additional Allowed Sites
-                        </label>
-                        <div class="form-text mb-2">
-                            Enter additional websites that students can access during the quiz (one per line).
-                            Canvas and common educational sites are automatically allowed.
-                        </div>
-                        <textarea class="form-control"
-                                  id="allowedSites"
-                                  name="allowedSites"
-                                  rows="5"
-                                  placeholder="docs.google.com&#10;calculator.net&#10;translate.google.com"></textarea>
-                        <div class="form-text">
-                            <strong>Examples:</strong> docs.google.com, calculator.net, translate.google.com
+                    <!-- Canvas Domain Info -->
+                    <div class="alert alert-light border mb-4">
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h6 class="mb-1"><i class="fas fa-university me-2"></i>Canvas Domain</h6>
+                                <p class="mb-0 text-muted">Students will have access to your Canvas instance and its required services.</p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                <span class="badge bg-success fs-6" id="canvasDomainDisplay">Auto-detected</span>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Quit Password Section -->
-                    <div class="mb-4">
-                        <label for="quitPassword" class="form-label">
-                            <i class="fas fa-key me-1"></i>
-                            SEB Quit Password
-                        </label>
-                        <div class="form-text mb-2">
-                            Password required to exit Safe Exam Browser. Leave blank to use default.
+                    <!-- SSO Authentication -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-sign-in-alt me-2"></i>Single Sign-On (SSO) Access</h6>
                         </div>
-                        <input type="password"
-                               class="form-control"
-                               id="quitPassword"
-                               name="quitPassword"
-                               placeholder="Enter custom quit password (optional)">
-                        <div class="form-text">
-                            <strong>Default:</strong> quit123
+                        <div class="card-body">
+                            <p class="text-muted mb-3">Select authentication services your students need to access:</p>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="ssoGoogle" value="accounts.google.com">
+                                        <label class="form-check-label" for="ssoGoogle">
+                                            <i class="fab fa-google me-2"></i>Google Accounts
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="ssoMicrosoft" value="login.microsoftonline.com">
+                                        <label class="form-check-label" for="ssoMicrosoft">
+                                            <i class="fab fa-microsoft me-2"></i>Microsoft 365
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="ssoOkta" value="*.okta.com">
+                                        <label class="form-check-label" for="ssoOkta">
+                                            <i class="fas fa-key me-2"></i>Okta
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="ssoCustom" value="custom">
+                                        <label class="form-check-label" for="ssoCustom">
+                                            <i class="fas fa-cog me-2"></i>Custom SSO Domain
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="customSsoContainer" class="mt-3" style="display: none;">
+                                <label for="customSsoDomain" class="form-label">Custom SSO Domain:</label>
+                                <input type="text" class="form-control" id="customSsoDomain" placeholder="e.g., login.myschool.edu">
+                                <div class="form-text">Enter the specific authentication domain for your institution.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Educational Tools -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-calculator me-2"></i>Educational Tools</h6>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted mb-3">Select educational tools students may need during the quiz:</p>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="toolDesmos" value="www.desmos.com/calculator">
+                                        <label class="form-check-label" for="toolDesmos">
+                                            <i class="fas fa-chart-line me-2"></i>Desmos Calculator
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="toolKhan" value="www.khanacademy.org">
+                                        <label class="form-check-label" for="toolKhan">
+                                            <i class="fas fa-graduation-cap me-2"></i>Khan Academy
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="toolGeogebra" value="www.geogebra.org">
+                                        <label class="form-check-label" for="toolGeogebra">
+                                            <i class="fas fa-shapes me-2"></i>GeoGebra
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="toolWolfram" value="www.wolframalpha.com">
+                                        <label class="form-check-label" for="toolWolfram">
+                                            <i class="fas fa-square-root-alt me-2"></i>Wolfram Alpha
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="toolCalculator" value="calculator.net">
+                                        <label class="form-check-label" for="toolCalculator">
+                                            <i class="fas fa-calculator me-2"></i>Calculator.net
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="toolTranslate" value="translate.google.com">
+                                        <label class="form-check-label" for="toolTranslate">
+                                            <i class="fas fa-language me-2"></i>Google Translate
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Custom Domains -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-globe me-2"></i>Additional Websites</h6>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted mb-3">Add specific websites not covered above (one per line):</p>
+                            <textarea class="form-control"
+                                      id="customDomains"
+                                      name="customDomains"
+                                      rows="4"
+                                      placeholder="https://docs.google.com&#10;https://www.example.edu/resources"></textarea>
+                            <div class="form-text">
+                                <strong>Format:</strong> Include full URLs starting with https://
+                                <br><strong>Security:</strong> Be specific to prevent access to unintended content
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Security Settings -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-lock me-2"></i>Security Settings</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label for="quitPassword" class="form-label">SEB Exit Password</label>
+                                    <input type="password"
+                                           class="form-control"
+                                           id="quitPassword"
+                                           name="quitPassword"
+                                           placeholder="Leave blank for default">
+                                    <div class="form-text">Password required to exit Safe Exam Browser</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="alert alert-warning mt-4">
+                                        <small><i class="fas fa-exclamation-triangle me-1"></i>
+                                        <strong>Default password:</strong> quit123<br>
+                                        Change this for enhanced security.</small>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Information Section -->
                     <div class="alert alert-info">
-                        <h6><i class="fas fa-info-circle me-1"></i>How SEB Enforcement Works:</h6>
-                        <ol class="mb-0">
-                            <li>Quiz is protected with a secure access code in Canvas</li>
-                            <li>Students download the SEB configuration file</li>
-                            <li>SEB launches and opens the quiz with the access code</li>
-                            <li>Students cannot access the quiz without SEB</li>
-                        </ol>
-                    </div>
+                        <h6><i class="fas fa-info-circle me-1"></i>How SEB Works:</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <ol class="mb-0">
+                                    <li>Quiz is secured with an access code</li>
+                                    <li>Students download the SEB configuration</li>
+                                </ol>
+                            </div>
+                            <div class="col-md-6">
+                                <ol start="3" class="mb-0">
+                                    <li>SEB opens the quiz automatically</li>
+                                    <li>Browser is locked to approved sites only</li>
+                                </ol>
+                            </div>
                         </div>
                     </div>
 
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    <i class="fas fa-times me-1"></i>Cancel
+                </button>
                 <button type="button" class="btn btn-primary" id="saveSebSettingsBtn">
-                    <i class="fas fa-save me-1"></i>
-                    Save Settings
+                    <i class="fas fa-save me-1"></i>Save Configuration
                 </button>
             </div>
         </div>
@@ -298,6 +422,20 @@
                 updateSebRequirement(quizId, required);
             });
         });
+
+        // Add event listener for custom SSO toggle
+        const customSsoCheckbox = document.getElementById('ssoCustom');
+        if (customSsoCheckbox) {
+            customSsoCheckbox.addEventListener('change', function() {
+                const customSsoContainer = document.getElementById('customSsoContainer');
+                if (this.checked) {
+                    customSsoContainer.style.display = 'block';
+                } else {
+                    customSsoContainer.style.display = 'none';
+                    document.getElementById('customSsoDomain').value = '';
+                }
+            });
+        }
 
         // Add event listeners to copy buttons
         const copyButtons = document.querySelectorAll('.copy-btn');
@@ -539,14 +677,65 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.authenticated) {
-                        // Populate form with existing settings
-                        document.getElementById('allowedSites').value = data.allowedSites || '';
-                        document.getElementById('quitPassword').value = ''; // Don't show password
+                        // Clear all form fields first
+                        clearSebSettingsForm();
+
+                        // Load Canvas domain (auto-detected)
+                        document.getElementById('canvasDomainDisplay').textContent = data.canvasDomain || 'Auto-detected';
+
+                        // Load SSO domains
+                        if (data.ssoDomains) {
+                            data.ssoDomains.forEach(domain => {
+                                const checkbox = document.querySelector(`input[value="${domain}"]`);
+                                if (checkbox) {
+                                    checkbox.checked = true;
+                                }
+                            });
+                        }
+
+                        // Load educational tool domains
+                        if (data.educationalToolDomains) {
+                            data.educationalToolDomains.forEach(domain => {
+                                const checkbox = document.querySelector(`input[value="${domain}"]`);
+                                if (checkbox) {
+                                    checkbox.checked = true;
+                                }
+                            });
+                        }
+
+                        // Load custom domains
+                        if (data.customDomains) {
+                            document.getElementById('customDomains').value = data.customDomains.join('\n');
+                        }
+
+                        // Legacy support for allowedSites
+                        if (data.allowedSites && !data.customDomains) {
+                            document.getElementById('customDomains').value = data.allowedSites;
+                        }
+
+                        // Don't populate password field for security
+                        document.getElementById('quitPassword').value = '';
                     }
                 })
                 .catch(error => {
                     console.error('Error loading SEB settings:', error);
                 });
+        }
+
+        /**
+         * Clears all form fields in the SEB settings modal.
+         */
+        function clearSebSettingsForm() {
+            // Clear checkboxes
+            document.querySelectorAll('#sebSettingsForm input[type="checkbox"]').forEach(cb => cb.checked = false);
+
+            // Clear text areas and inputs
+            document.getElementById('customDomains').value = '';
+            document.getElementById('quitPassword').value = '';
+            document.getElementById('customSsoDomain').value = '';
+
+            // Hide custom SSO container
+            document.getElementById('customSsoContainer').style.display = 'none';
         }
 
         /**
@@ -579,13 +768,44 @@
         function saveSebSettings() {
             const quizId = document.getElementById('settingsQuizId').value;
             const courseId = '[[${courseId}]]';
-            const allowedSites = document.getElementById('allowedSites').value;
             const quitPassword = document.getElementById('quitPassword').value;
 
             console.log('Saving SEB settings for quiz:', quizId);
 
+            // Collect SSO domains
+            const ssoDomains = [];
+            document.querySelectorAll('#sebSettingsForm input[type="checkbox"]:checked').forEach(cb => {
+                if (cb.id.startsWith('sso') && cb.value !== 'custom') {
+                    ssoDomains.push(cb.value);
+                }
+            });
+
+            // Add custom SSO domain if specified
+            const customSsoCheckbox = document.getElementById('ssoCustom');
+            if (customSsoCheckbox.checked) {
+                const customSsoDomain = document.getElementById('customSsoDomain').value.trim();
+                if (customSsoDomain) {
+                    ssoDomains.push(customSsoDomain);
+                }
+            }
+
+            // Collect educational tool domains
+            const educationalToolDomains = [];
+            document.querySelectorAll('#sebSettingsForm input[type="checkbox"]:checked').forEach(cb => {
+                if (cb.id.startsWith('tool')) {
+                    educationalToolDomains.push(cb.value);
+                }
+            });
+
+            // Collect custom domains
+            const customDomainsText = document.getElementById('customDomains').value;
+            const customDomains = customDomainsText ?
+                customDomainsText.split('\n').filter(url => url.trim()).map(url => url.trim()) : [];
+
             const customSettings = {
-                allowedUrls: allowedSites ? allowedSites.split('\n').filter(url => url.trim()) : [],
+                ssoDomains: ssoDomains,
+                educationalToolDomains: educationalToolDomains,
+                customDomains: customDomains,
                 quitPassword: quitPassword || 'quit123'
             };
 
@@ -595,28 +815,43 @@
             saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
             saveBtn.disabled = true;
 
-            // Re-enable SEB with new settings
-            fetch(`/api/quizzes/${courseId}/${quizId}/seb/enable`, {
+            // Save structured SEB configuration
+            fetch(`/api/quizzes/seb-config-structured?userId=${encodeURIComponent('user')}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ customSettings })
+                body: JSON.stringify({
+                    quizId: quizId,
+                    ssoDomains: customSettings.ssoDomains,
+                    educationalToolDomains: customSettings.educationalToolDomains,
+                    customDomains: customSettings.customDomains,
+                    quitPassword: customSettings.quitPassword
+                })
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 console.log('SEB settings saved successfully:', data);
 
-                if (data.success) {
-                    showNotification('SEB settings saved successfully!', 'success');
+                showNotification('SEB configuration saved successfully!', 'success');
 
-                    // Close the modal
-                    const modal = bootstrap.Modal.getInstance(document.getElementById('sebSettingsModal'));
-                    if (modal) {
-                        modal.hide();
-                    }
-                } else {
-                    throw new Error(data.message || 'Failed to save settings');
+                // Close the modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('sebSettingsModal'));
+                if (modal) {
+                    modal.hide();
+                }
+
+                // Update the quiz card to show SEB is enabled
+                const quizCard = document.querySelector(`.quiz-card .seb-toggle[data-quiz-id="${quizId}"]`);
+                if (quizCard && !quizCard.checked) {
+                    quizCard.checked = true;
+                    // Trigger the change event to update the UI
+                    quizCard.dispatchEvent(new Event('change'));
                 }
             })
             .catch(error => {

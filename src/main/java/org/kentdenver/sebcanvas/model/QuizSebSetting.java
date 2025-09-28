@@ -6,6 +6,9 @@ import com.google.cloud.firestore.annotation.ServerTimestamp;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Represents the Safe Exam Browser settings for a specific Canvas quiz.
  * This class has been migrated from JPA to Firestore.
@@ -70,7 +73,9 @@ public class QuizSebSetting {
      * JSON array of additional allowed sites for this quiz.
      * These sites will be included in the SEB URL filter configuration.
      * Example: ["docs.google.com", "calculator.net"]
+     * @deprecated Use structured domain fields instead
      */
+    @Deprecated
     private String allowedSites;
 
     /**
@@ -78,6 +83,30 @@ public class QuizSebSetting {
      * Format: https://our-service.com/quiz/{orgId}/{courseId}/{quizId}
      */
     private String externalToolUrl;
+
+    /**
+     * List of SSO domains that students need to access for authentication.
+     * Examples: accounts.google.com, login.microsoftonline.com
+     */
+    private List<String> ssoDomains = new ArrayList<>();
+
+    /**
+     * List of educational tool domains that are allowed for the quiz.
+     * Examples: www.desmos.com/calculator, www.khanacademy.org
+     */
+    private List<String> educationalToolDomains = new ArrayList<>();
+
+    /**
+     * List of custom domains specified by the teacher.
+     * These are additional domains beyond the standard SSO and educational tools.
+     */
+    private List<String> customDomains = new ArrayList<>();
+
+    /**
+     * The Canvas domain for this institution (auto-detected).
+     * Examples: kentdenver.instructure.com, myschool.instructure.com
+     */
+    private String canvasDomain;
 
     /**
      * Canvas assignment ID for API updates.
