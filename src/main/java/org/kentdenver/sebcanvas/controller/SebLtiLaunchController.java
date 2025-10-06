@@ -78,9 +78,10 @@ public class SebLtiLaunchController {
             // Validate LTI launch (if id_token is present)
             LtiService.LtiLaunchData launchData = null;
             if (idToken != null) {
-                launchData = ltiService.validateLtiLaunch(idToken);
-                if (launchData == null) {
-                    log.error("Invalid LTI launch token for content: {}", contentId);
+                try {
+                    launchData = ltiService.validateToken(idToken);
+                } catch (Exception e) {
+                    log.error("Invalid LTI launch token for content: {}", contentId, e);
                     model.addAttribute("error", "Invalid LTI launch. Please try again from Canvas.");
                     return "error";
                 }
@@ -89,7 +90,7 @@ public class SebLtiLaunchController {
                 session.setAttribute("launchData", launchData);
                 session.setAttribute("canvas_user_id", launchData.getUserId());
 
-                log.info("LTI launch validated for user: {} ({})", launchData.getUserName(), launchData.getUserId());
+                log.info("LTI launch validated for user: {} ({})", launchData.getFullName(), launchData.getUserId());
             } else {
                 // Try to get launch data from session (for GET requests or follow-up requests)
                 launchData = (LtiService.LtiLaunchData) session.getAttribute("launchData");
@@ -164,7 +165,7 @@ public class SebLtiLaunchController {
 
                 // Add user info if available
                 if (launchData != null) {
-                    model.addAttribute("userName", launchData.getUserName());
+                    model.addAttribute("userName", launchData.getFullName());
                 }
 
                 return "sebDownload";

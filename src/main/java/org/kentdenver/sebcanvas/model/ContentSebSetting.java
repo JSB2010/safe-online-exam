@@ -146,7 +146,7 @@ public class ContentSebSetting {
         setting.setCustomDomains(quizSetting.getCustomDomains());
         setting.setExternalToolUrl(quizSetting.getExternalToolUrl());
         setting.setDeepLinkUrl(quizSetting.getDeepLinkUrl());
-        setting.setQuitPassword(quizSetting.getQuitPassword());
+        // Note: quitPassword was removed from QuizSebSetting, not copying
         return setting;
     }
 
