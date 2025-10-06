@@ -7,6 +7,7 @@ import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.model.ModuleItemUpdate;
 import org.kentdenver.sebcanvas.service.CanvasApiService;
+import org.kentdenver.sebcanvas.service.DeepLinkModuleService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.kentdenver.sebcanvas.service.ModuleItemService;
@@ -35,6 +36,7 @@ public class QuizController {
     private final QuizService quizService;
     private final CanvasApiService canvasApiService;
     private final ModuleItemService moduleItemService;
+    private final DeepLinkModuleService deepLinkModuleService;
 
     /**
      * API endpoint to refresh quiz data for a course.
@@ -619,6 +621,22 @@ public class QuizController {
             boolean success = quizService.enableSebWithAccessCode(courseId, quizId, userId, customSettings);
 
             if (success) {
+                // Automatically update module items using Deep Linking approach
+                Quiz quiz = quizService.getQuiz(quizId);
+                if (quiz != null) {
+                    boolean moduleUpdated = deepLinkModuleService.createOrUpdateModuleItemForQuiz(
+                            courseId, quiz, userId, true);
+
+                    if (moduleUpdated) {
+                        log.info("Successfully updated module item to LTI link for quiz {}", quizId);
+                        response.put("moduleItemUpdated", true);
+                    } else {
+                        log.warn("Could not update module item for quiz {} - may not exist in modules yet", quizId);
+                        response.put("moduleItemUpdated", false);
+                        response.put("moduleItemNote", "Quiz must be added to a module first");
+                    }
+                }
+
                 response.put("success", true);
                 response.put("message", "SEB enabled successfully with access code enforcement");
                 log.info("SEB enabled for quiz {} in course {} by user {}", quizId, courseId, userId);
@@ -672,6 +690,21 @@ public class QuizController {
             boolean success = quizService.disableSebWithAccessCode(courseId, quizId, userId);
 
             if (success) {
+                // Restore module items to direct Canvas links
+                Quiz quiz = quizService.getQuiz(quizId);
+                if (quiz != null) {
+                    boolean moduleRestored = deepLinkModuleService.createOrUpdateModuleItemForQuiz(
+                            courseId, quiz, userId, false);
+
+                    if (moduleRestored) {
+                        log.info("Successfully restored module item to direct link for quiz {}", quizId);
+                        response.put("moduleItemRestored", true);
+                    } else {
+                        log.warn("Could not restore module item for quiz {}", quizId);
+                        response.put("moduleItemRestored", false);
+                    }
+                }
+
                 response.put("success", true);
                 response.put("message", "SEB disabled successfully");
                 log.info("SEB disabled for quiz {} in course {} by user {}", quizId, courseId, userId);

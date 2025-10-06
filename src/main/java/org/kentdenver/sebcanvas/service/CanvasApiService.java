@@ -71,6 +71,14 @@ public class CanvasApiService implements CanvasService {
     }
 
     /**
+     * Gets the Canvas API base URL.
+     * @return The base URL for Canvas API calls
+     */
+    public String getCanvasApiBaseUrl() {
+        return canvasApiConfig.getApiBaseUrl();
+    }
+
+    /**
      * Gets a list of quizzes for a specific course from Canvas.
      * This method fetches both Classic Quizzes and New Quizzes.
      * This method uses the OAuth2 access token to authorize the request.
