@@ -163,40 +163,15 @@ public class JwkService {
     }
 
     /**
-     * Validates that the LtiConfig is properly initialized with a valid tool URL.
-     * If not, waits or uses fallback strategies to ensure proper initialization.
+     * Validates that the LtiConfig is initialized with a usable tool URL before
+     * JWK bootstrap continues.
      */
     private void validateLtiConfig() {
-        // Check if the LtiConfig has a valid tool URL
+        ltiConfig.init();
         String toolUrl = ltiConfig.getSanitizedToolUrl();
 
-        if (toolUrl == null || toolUrl.isEmpty() || toolUrl.contains("localhost")) {
-            log.warn("LtiConfig doesn't have a valid tool URL yet: {}", toolUrl);
-
-            // Wait for LtiConfig to be properly initialized
-            int maxRetries = 3;
-            for (int i = 0; i < maxRetries; i++) {
-                try {
-                    log.info("Waiting for LtiConfig to complete initialization (attempt {}/{})", i+1, maxRetries);
-                    Thread.sleep(1000); // Wait 1 second before checking again
-
-                    // Trigger LtiConfig initialization if it hasn't happened yet
-                    ltiConfig.init();
-
-                    // Check if we have a valid URL now
-                    toolUrl = ltiConfig.getSanitizedToolUrl();
-                    if (toolUrl != null && !toolUrl.isEmpty() && !toolUrl.contains("localhost")) {
-                        log.info("LtiConfig now has a valid tool URL: {}", toolUrl);
-                        return;
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    log.warn("Interrupted while waiting for LtiConfig to initialize", e);
-                    break;
-                }
-            }
-
-            log.warn("Could not wait for LtiConfig to properly initialize. JWK initialization may use placeholder URLs.");
+        if (toolUrl.contains("localhost")) {
+            log.warn("LtiConfig is initialized but still using a localhost tool URL: {}", toolUrl);
         } else {
             log.info("LtiConfig is properly initialized with tool URL: {}", toolUrl);
         }

@@ -1,13 +1,12 @@
 package org.kentdenver.sebcanvas.config;
 
+import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.service.SecretManagerService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 
 /**
  * Configuration for LTI 1.3 integration with Canvas.
@@ -78,6 +77,7 @@ public class LtiConfig {
     private String projectId;
 
     private final SecretManagerService secretManagerService;
+    private volatile boolean initialized;
 
     /**
      * Constructor with dependency injection for SecretManagerService.
@@ -95,60 +95,68 @@ public class LtiConfig {
 
     /**
      * Initializes the LTI configuration by loading secrets from Secret Manager.
-     * This method is automatically called after application startup.
+     * This method is automatically called after dependency injection so startup
+     * bootstrap paths can safely read LTI settings.
      */
-    @EventListener(ApplicationReadyEvent.class)
+    @PostConstruct
     public void init() {
-        // Try to load secrets from Secret Manager
-        loadSecrets();
+        if (initialized) {
+            return;
+        }
 
-        applyConfiguredFallbacks();
-
-        // Log non-sensitive configuration values for debugging
-        log.info("Active profile: {}", activeProfile);
-        log.info("Project ID: {}", projectId);
-
-        // Ensure toolUrl uses HTTPS for non-localhost environments
-        if (toolUrl != null && !toolUrl.isEmpty()) {
-            // Always remove trailing slash for consistent URL handling
-            if (toolUrl.endsWith("/")) {
-                String oldUrl = toolUrl;
-                toolUrl = toolUrl.substring(0, toolUrl.length() - 1);
-                log.info("Removed trailing slash from toolUrl: {} -> {}", oldUrl, toolUrl);
+        synchronized (this) {
+            if (initialized) {
+                return;
             }
 
-            // Force HTTPS protocol for non-localhost environments
-            if (!toolUrl.startsWith("https://") && !toolUrl.contains("localhost")) {
-                String oldUrl = toolUrl;
-                toolUrl = "https://" + toolUrl.replaceFirst("^http://", "");
-                log.info("Changed toolUrl from '{}' to '{}'", oldUrl, toolUrl);
+            // Try to load secrets from Secret Manager
+            loadSecrets();
+
+            applyConfiguredFallbacks();
+
+            // Log non-sensitive configuration values for debugging
+            log.info("Active profile: {}", activeProfile);
+            log.info("Project ID: {}", projectId);
+
+            toolUrl = sanitizeToolUrl(toolUrl);
+            if (toolUrl == null || toolUrl.isBlank()) {
+                log.warn("No tool URL configured in secrets - LTI functionality may not work correctly");
+                log.warn("Please set the toolUrl in Secret Manager");
             }
-        } else {
-            // If toolUrl is still null or empty, log a warning
-            log.warn("No tool URL configured in secrets - LTI functionality may not work correctly");
-            log.warn("Please set the toolUrl in Secret Manager");
-        }
 
-        log.info("LTI configuration initialized:");
-        log.info("Issuer: {}", issuer);
-        log.info("Key Set URL: {}", keySetUrl);
-        log.info("Token URL: {}", tokenUrl);
-        log.info("Auth URL: {}", authUrl);
-        log.info("Tool URL: {}", toolUrl);
+            log.info("LTI configuration initialized:");
+            log.info("Issuer: {}", issuer);
+            log.info("Key Set URL: {}", keySetUrl);
+            log.info("Token URL: {}", tokenUrl);
+            log.info("Auth URL: {}", authUrl);
+            log.info("Tool URL: {}", toolUrl);
 
-        if (clientId == null || clientId.isBlank()) {
-            log.warn("No LTI client ID configured - LTI launches will not work correctly");
-        } else if ("lti-client-id-placeholder".equals(clientId)) {
-            log.warn("Using placeholder client ID - this is not suitable for production!");
-        } else {
-            log.info("Client ID: {}", clientId);
-        }
+            if (clientId == null || clientId.isBlank()) {
+                log.warn("No LTI client ID configured - LTI launches will not work correctly");
+            } else if ("lti-client-id-placeholder".equals(clientId)) {
+                log.warn("Using placeholder client ID - this is not suitable for production!");
+            } else {
+                log.info("Client ID: {}", clientId);
+            }
 
-        if (deploymentId != null && !deploymentId.isEmpty()) {
-            log.info("Deployment ID: {}", deploymentId);
-        } else {
-            log.info("No deployment ID configured - will use deployment ID from launch");
+            if (deploymentId != null && !deploymentId.isEmpty()) {
+                log.info("Deployment ID: {}", deploymentId);
+            } else {
+                log.info("No deployment ID configured - will use deployment ID from launch");
+            }
+
+            initialized = true;
         }
+    }
+
+    public String getClientId() {
+        init();
+        return clientId;
+    }
+
+    public String getToolUrl() {
+        init();
+        return toolUrl;
     }
 
     /**
@@ -271,22 +279,34 @@ public class LtiConfig {
      * @return Properly formatted tool URL
      */
     public String getSanitizedToolUrl() {
+        init();
+
         if (toolUrl == null || toolUrl.isEmpty()) {
             throw new IllegalStateException("Tool URL is not configured");
         }
 
-        String url = toolUrl;
+        return sanitizeToolUrl(toolUrl);
+    }
 
-        // Remove trailing slash if present
-        if (url.endsWith("/")) {
-            url = url.substring(0, url.length() - 1);
+    private String sanitizeToolUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return url;
         }
 
-        // Ensure HTTPS for non-localhost URLs
-        if (!url.startsWith("https://") && !url.contains("localhost")) {
-            url = "https://" + url.replaceFirst("^http://", "");
+        String sanitizedUrl = url;
+
+        if (sanitizedUrl.endsWith("/")) {
+            String oldUrl = sanitizedUrl;
+            sanitizedUrl = sanitizedUrl.substring(0, sanitizedUrl.length() - 1);
+            log.info("Removed trailing slash from toolUrl: {} -> {}", oldUrl, sanitizedUrl);
         }
 
-        return url;
+        if (!sanitizedUrl.startsWith("https://") && !sanitizedUrl.contains("localhost")) {
+            String oldUrl = sanitizedUrl;
+            sanitizedUrl = "https://" + sanitizedUrl.replaceFirst("^http://", "");
+            log.info("Changed toolUrl from '{}' to '{}'", oldUrl, sanitizedUrl);
+        }
+
+        return sanitizedUrl;
     }
 }
