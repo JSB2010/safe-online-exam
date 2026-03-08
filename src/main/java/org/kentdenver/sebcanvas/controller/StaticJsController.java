@@ -1,7 +1,7 @@
 package org.kentdenver.sebcanvas.controller;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.kentdenver.sebcanvas.service.ApiSecurityService;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -20,8 +20,11 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class StaticJsController {
 
-    @Value("${seb.api.key:SEB_DEFAULT_KEY_CHANGE_IN_PRODUCTION}")
-    private String apiKey;
+    private final ApiSecurityService apiSecurityService;
+
+    public StaticJsController(ApiSecurityService apiSecurityService) {
+        this.apiSecurityService = apiSecurityService;
+    }
 
     /**
      * Serves the Canvas SEB detector JavaScript file.
@@ -38,13 +41,15 @@ public class StaticJsController {
             String script = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
             // Embed the API key in the script for secure API calls
-            script = script.replace("${SEB_API_KEY}", apiKey);
+            script = script.replace("${SEB_API_KEY}", apiSecurityService.getApiKeyForJavaScript());
 
             log.info("Canvas SEB detector script served successfully, length: {} characters", script.length());
 
             return ResponseEntity.ok()
                     .header("Content-Type", "application/javascript; charset=utf-8")
-                    .header("Cache-Control", "public, max-age=300") // Cache for 5 minutes
+                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .header("Expires", "0")
                     .header("Access-Control-Allow-Origin", "*") // Allow CORS for Canvas
                     .header("Access-Control-Allow-Methods", "GET")
                     .header("Access-Control-Allow-Headers", "Content-Type")
