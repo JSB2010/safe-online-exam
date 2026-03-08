@@ -2,11 +2,15 @@ package org.kentdenver.sebcanvas.controller;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.dto.StructuredSebConfigRequest;
+import org.kentdenver.sebcanvas.model.ContentItem;
+import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.model.ModuleItemUpdate;
 import org.kentdenver.sebcanvas.service.CanvasApiService;
+import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.DeepLinkModuleService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
 import org.kentdenver.sebcanvas.service.QuizService;
@@ -18,6 +22,10 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpSession;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +42,9 @@ import java.util.stream.Collectors;
 public class QuizController {
 
     private final QuizService quizService;
+    private final CanvasApiConfig canvasApiConfig;
     private final CanvasApiService canvasApiService;
+    private final ContentService contentService;
     private final ModuleItemService moduleItemService;
     private final DeepLinkModuleService deepLinkModuleService;
 
@@ -52,37 +62,11 @@ public class QuizController {
         try {
             log.info("Refreshing quiz data for course: {}", courseId);
 
-            String userId = null;
-
-            // Try to get user ID from session first
-            userId = (String) session.getAttribute("canvas_user_id");
+            String userId = getUserIdFromSession(session);
             if (userId == null) {
-                userId = (String) session.getAttribute("userId");
-            }
-
-            // Try to get from LTI launch data
-            if (userId == null) {
-                LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
-                if (launchData != null) {
-                    userId = launchData.getUserId();
-                }
-            }
-
-            // Try to get from auth token as fallback
-            if (userId == null && authToken != null) {
-                log.debug("Attempting to extract user ID from auth token");
-                userId = extractUserIdFromToken(authToken);
-            }
-
-            // If still no user ID, try to extract from course context (fallback)
-            if (userId == null) {
-                log.warn("No user ID found in session or token. Session attributes: {}",
-                    session.getAttributeNames() != null ?
-                    java.util.Collections.list(session.getAttributeNames()) : "none");
-
-                // As a last resort, use a default user ID for this course (from logs we know it's f2bbc1e1-ad05-4ae8-a8b6-d49fa4fb9760)
-                userId = "f2bbc1e1-ad05-4ae8-a8b6-d49fa4fb9760";
-                log.info("Using fallback user ID for course {}: {}", courseId, userId);
+                log.warn("Rejecting quiz refresh without an authenticated session for course {}", courseId);
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "User not authenticated. Please refresh the page or re-launch from Canvas."));
             }
 
             log.info("Found user ID for refresh: {}", userId);
@@ -265,7 +249,18 @@ public class QuizController {
             @RequestParam String userId,
             HttpSession session) {
 
-        log.info("Saving SEB configuration for quiz {} by user {}", request.getQuizId(), userId);
+        String sessionUserId = getUserIdFromSession(session);
+        if (sessionUserId == null) {
+            log.warn("Rejecting SEB configuration save for quiz {} without an authenticated session", request.getQuizId());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (userId != null && !userId.isBlank() && !userId.equals(sessionUserId)) {
+            log.warn("Rejecting SEB configuration save for quiz {} due to user mismatch: request={}, session={}",
+                    request.getQuizId(), userId, sessionUserId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        log.info("Saving SEB configuration for quiz {} by user {}", request.getQuizId(), sessionUserId);
 
         try {
             // Update comprehensive SEB settings
@@ -296,14 +291,50 @@ public class QuizController {
      * @return Updated SEB setting
      */
     @PostMapping("/seb-config-structured")
-    public ResponseEntity<QuizSebSetting> saveSebConfigurationStructured(
+    public ResponseEntity<?> saveSebConfigurationStructured(
             @RequestBody StructuredSebConfigRequest request,
             @RequestParam String userId,
             HttpSession session) {
 
-        log.info("Saving structured SEB configuration for quiz {} by user {}", request.getQuizId(), userId);
+        String targetId = resolveStructuredRequestId(request);
+
+        String sessionUserId = getUserIdFromSession(session);
+        if (sessionUserId == null) {
+            log.warn("Rejecting structured SEB configuration save for {} without an authenticated session", targetId);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (userId != null && !userId.isBlank() && !userId.equals(sessionUserId)) {
+            log.warn("Rejecting structured SEB configuration save for {} due to user mismatch: request={}, session={}",
+                    targetId, userId, sessionUserId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        log.info("Saving structured SEB configuration for {} by user {}", targetId, sessionUserId);
 
         try {
+            if (isNewQuizContentId(targetId)) {
+                String[] parsedContentId = parseNewQuizContentId(targetId);
+                if (parsedContentId == null) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Invalid New Quiz content ID"));
+                }
+
+                ContentSebSetting setting = getOrCreateNewQuizSetting(targetId, parsedContentId[0], parsedContentId[1]);
+                setting.setSsoDomains(request.getSsoDomains() != null ? request.getSsoDomains() : List.of());
+                setting.setEducationalToolDomains(request.getEducationalToolDomains() != null ? request.getEducationalToolDomains() : List.of());
+                setting.setCustomDomains(request.getCustomDomains() != null ? request.getCustomDomains() : List.of());
+                setting.setExternalToolUrl(request.getExternalToolUrl());
+                setting.setQuitPassword(normalizeBlank(request.getQuitPassword()));
+                setting.setSebRequired(true);
+
+                if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isBlank()) {
+                    setting.setBrowserExamKey(generateBrowserExamKey());
+                }
+
+                ContentSebSetting updatedSetting = contentService.saveSebSetting(setting);
+                log.info("Successfully saved structured SEB configuration for {}", targetId);
+                return ResponseEntity.ok(updatedSetting);
+            }
+
             // Update structured SEB settings
             QuizSebSetting updatedSetting = quizService.updateSebConfigurationStructured(
                 request.getQuizId(),
@@ -318,7 +349,7 @@ public class QuizController {
             return ResponseEntity.ok(updatedSetting);
 
         } catch (Exception e) {
-            log.error("Error saving structured SEB configuration for quiz {}: {}", request.getQuizId(), e.getMessage(), e);
+            log.error("Error saving structured SEB configuration for {}: {}", targetId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
@@ -425,28 +456,6 @@ public class QuizController {
     }
 
     /**
-     * Test endpoint for hybrid authentication - gets quizzes without requiring LTI session.
-     * This is for testing the new hybrid authentication system.
-     */
-    @GetMapping("/test-hybrid")
-    @ResponseBody
-    public ResponseEntity<List<Quiz>> testHybridAuth(
-            @RequestParam String courseId,
-            @RequestParam String userId) {
-
-        log.info("Testing hybrid authentication for course: {}, user: {}", courseId, userId);
-
-        try {
-            List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
-            log.info("Successfully retrieved {} quizzes using hybrid authentication", quizzes.size());
-            return ResponseEntity.ok(quizzes);
-        } catch (Exception e) {
-            log.error("Error testing hybrid authentication", e);
-            return ResponseEntity.status(500).build();
-        }
-    }
-
-    /**
      * Validates the authentication token as a fallback for session issues.
      */
     private boolean validateAuthToken(String authToken, HttpSession session) {
@@ -511,7 +520,10 @@ public class QuizController {
      * Format: https://our-service.com/seb/redirect/{quizId}
      */
     private String generateSebRedirectUrl(String quizId) {
-        String baseUrl = "https://canvas-seb-dev-184075650720.us-central1.run.app";
+        String baseUrl = canvasApiConfig.getApplicationBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("Application base URL is not configured");
+        }
         return String.format("%s/seb/redirect/%s", baseUrl, quizId);
     }
 
@@ -549,6 +561,12 @@ public class QuizController {
             log.debug("Session ID: {}", session.getId());
             log.debug("Session creation time: {}", new java.util.Date(session.getCreationTime()));
             log.debug("Session last accessed: {}", new java.util.Date(session.getLastAccessedTime()));
+
+            LtiLaunchData launchData = (LtiLaunchData) session.getAttribute("launchData");
+            if (launchData != null && launchData.getUserId() != null) {
+                log.debug("Found user ID from launchData: {}", launchData.getUserId());
+                return launchData.getUserId();
+            }
 
             // Try to get user ID from LTI launch data in session
             LtiLaunchData ltiData = (LtiLaunchData) session.getAttribute("ltiLaunchData");
@@ -615,6 +633,48 @@ public class QuizController {
                 response.put("message", "User not authenticated. Please refresh the page or re-launch from Canvas.");
                 response.put("error_code", "NO_USER_SESSION");
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+            }
+
+            if (isNewQuizContentId(quizId)) {
+                String[] parsedContentId = parseNewQuizContentId(quizId);
+                if (parsedContentId == null) {
+                    response.put("success", false);
+                    response.put("message", "Invalid New Quiz content ID");
+                    return ResponseEntity.badRequest().body(response);
+                }
+
+                String effectiveCourseId = resolveCourseId(courseId, parsedContentId[0], quizId);
+                String assignmentId = parsedContentId[1];
+                String accessCode = generateSecureAccessCode();
+                boolean success = canvasApiService.setNewQuizAccessCode(effectiveCourseId, assignmentId, accessCode, userId);
+
+                if (success) {
+                    ContentSebSetting setting = getOrCreateNewQuizSetting(quizId, effectiveCourseId, assignmentId);
+                    setting.setSebRequired(true);
+                    setting.setEnabled(true);
+                    setting.setAccessCode(accessCode);
+                    if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isBlank()) {
+                        setting.setBrowserExamKey(generateBrowserExamKey());
+                    }
+                    contentService.saveSebSetting(setting);
+
+                    response.put("success", true);
+                    response.put("message", "SEB enabled successfully with access code enforcement");
+                    log.info("SEB enabled for New Quiz {} in course {} by user {}", quizId, effectiveCourseId, userId);
+                } else {
+                    String accessToken = canvasApiService.getAccessToken(userId);
+                    if (accessToken == null || accessToken.isEmpty()) {
+                        response.put("success", false);
+                        response.put("message", "Canvas authorization required. Please click 'Authorize Canvas Access' to re-authorize.");
+                        response.put("requiresAuth", true);
+                        response.put("authUrl", "/api/oauth2authorize?course_id=" + effectiveCourseId + "&user_id=" + userId);
+                    } else {
+                        response.put("success", false);
+                        response.put("message", "Failed to enable SEB");
+                    }
+                }
+
+                return ResponseEntity.ok(response);
             }
 
             // Enable SEB with access code
@@ -686,6 +746,47 @@ public class QuizController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
             }
 
+            if (isNewQuizContentId(quizId)) {
+                String[] parsedContentId = parseNewQuizContentId(quizId);
+                if (parsedContentId == null) {
+                    response.put("success", false);
+                    response.put("message", "Invalid New Quiz content ID");
+                    return ResponseEntity.badRequest().body(response);
+                }
+
+                String effectiveCourseId = resolveCourseId(courseId, parsedContentId[0], quizId);
+                String assignmentId = parsedContentId[1];
+                ContentSebSetting setting = contentService.getSebSetting(quizId);
+                boolean hasAccessCode = setting != null && setting.getAccessCode() != null && !setting.getAccessCode().isBlank();
+                boolean success = !hasAccessCode || canvasApiService.removeNewQuizAccessCode(effectiveCourseId, assignmentId, userId);
+
+                if (success) {
+                    if (setting != null) {
+                        setting.setSebRequired(false);
+                        setting.setEnabled(false);
+                        setting.setAccessCode(null);
+                        contentService.saveSebSetting(setting);
+                    }
+
+                    response.put("success", true);
+                    response.put("message", "SEB disabled successfully");
+                    log.info("SEB disabled for New Quiz {} in course {} by user {}", quizId, effectiveCourseId, userId);
+                } else {
+                    String accessToken = canvasApiService.getAccessToken(userId);
+                    if (accessToken == null || accessToken.isEmpty()) {
+                        response.put("success", false);
+                        response.put("message", "Canvas authorization required. Please click 'Authorize Canvas Access' to re-authorize.");
+                        response.put("requiresAuth", true);
+                        response.put("authUrl", "/api/oauth2authorize?course_id=" + effectiveCourseId + "&user_id=" + userId);
+                    } else {
+                        response.put("success", false);
+                        response.put("message", "Failed to disable SEB");
+                    }
+                }
+
+                return ResponseEntity.ok(response);
+            }
+
             // Disable SEB
             boolean success = quizService.disableSebWithAccessCode(courseId, quizId, userId);
 
@@ -736,7 +837,7 @@ public class QuizController {
      * API endpoint to download SEB configuration file for a quiz.
      */
     @GetMapping("/{courseId}/{quizId}/seb/config")
-    public ResponseEntity<byte[]> downloadSebConfig(
+    public ResponseEntity<?> downloadSebConfig(
             @PathVariable String courseId,
             @PathVariable String quizId,
             @RequestParam(required = false) Map<String, Object> customSettings,
@@ -747,6 +848,12 @@ public class QuizController {
             String userId = getUserIdFromSession(session);
             if (userId == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            }
+
+            if (isNewQuizContentId(quizId)) {
+                return ResponseEntity.status(HttpStatus.FOUND)
+                        .header("Location", "/seb/config/" + courseId + "/" + quizId + ".seb")
+                        .build();
             }
 
             // Generate SEB configuration file
@@ -784,6 +891,27 @@ public class QuizController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
             }
 
+            if (isNewQuizContentId(quizId)) {
+                ContentSebSetting sebSetting = contentService.getSebSetting(quizId);
+                response.put("authenticated", true);
+                response.put("canvasDomain", normalizeCanvasDomain());
+                response.put("sebEnabled", sebSetting != null && sebSetting.isSebRequired());
+                response.put("hasAccessCode", sebSetting != null && sebSetting.getAccessCode() != null && !sebSetting.getAccessCode().isBlank());
+                response.put("configValid", sebSetting != null
+                        && sebSetting.isSebRequired()
+                        && sebSetting.getAccessCode() != null
+                        && !sebSetting.getAccessCode().isBlank());
+
+                if (sebSetting != null) {
+                    response.put("browserExamKey", sebSetting.getBrowserExamKey());
+                    response.put("ssoDomains", sebSetting.getSsoDomains());
+                    response.put("educationalToolDomains", sebSetting.getEducationalToolDomains());
+                    response.put("customDomains", sebSetting.getCustomDomains());
+                }
+
+                return ResponseEntity.ok(response);
+            }
+
             // Get SEB setting for quiz
             QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
 
@@ -810,5 +938,120 @@ public class QuizController {
             response.put("error", "Error getting SEB status: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
+    }
+
+    private String resolveStructuredRequestId(StructuredSebConfigRequest request) {
+        if (request.getContentId() != null && !request.getContentId().isBlank()) {
+            return request.getContentId();
+        }
+        return request.getQuizId();
+    }
+
+    private boolean isNewQuizContentId(String identifier) {
+        return identifier != null && identifier.startsWith("newquiz:");
+    }
+
+    private String[] parseNewQuizContentId(String contentId) {
+        if (!isNewQuizContentId(contentId)) {
+            return null;
+        }
+
+        String[] parts = contentId.split(":", 3);
+        if (parts.length != 3 || parts[1].isBlank() || parts[2].isBlank()) {
+            return null;
+        }
+
+        return new String[]{parts[1], parts[2]};
+    }
+
+    private String resolveCourseId(String pathCourseId, String contentCourseId, String contentId) {
+        if (pathCourseId != null && contentCourseId != null && !pathCourseId.equals(contentCourseId)) {
+            log.warn("Course mismatch for {}: path={}, contentId={}", contentId, pathCourseId, contentCourseId);
+        }
+        return pathCourseId != null && !pathCourseId.isBlank() ? pathCourseId : contentCourseId;
+    }
+
+    private ContentSebSetting getOrCreateNewQuizSetting(String contentId, String courseId, String assignmentId) {
+        ContentSebSetting existingSetting = contentService.getSebSetting(contentId);
+        if (existingSetting != null) {
+            if (existingSetting.getId() == null || existingSetting.getId().isBlank()) {
+                existingSetting.setId(contentId);
+            }
+            if (existingSetting.getContentId() == null || existingSetting.getContentId().isBlank()) {
+                existingSetting.setContentId(contentId);
+            }
+            if (existingSetting.getCourseId() == null || existingSetting.getCourseId().isBlank()) {
+                existingSetting.setCourseId(courseId);
+            }
+            if (existingSetting.getAssignmentId() == null || existingSetting.getAssignmentId().isBlank()) {
+                existingSetting.setAssignmentId(assignmentId);
+            }
+            if (existingSetting.getCanvasId() == null || existingSetting.getCanvasId().isBlank()) {
+                existingSetting.setCanvasId(assignmentId);
+            }
+            if (existingSetting.getContentType() == null) {
+                existingSetting.setContentType(ContentItem.ContentType.NEW_QUIZ);
+            }
+            return existingSetting;
+        }
+
+        ContentItem contentItem = contentService.getContentItem(contentId);
+        if (contentItem != null) {
+            return ContentSebSetting.fromContentItem(contentItem);
+        }
+
+        ContentSebSetting setting = new ContentSebSetting();
+        setting.setId(contentId);
+        setting.setContentId(contentId);
+        setting.setCourseId(courseId);
+        setting.setCanvasId(assignmentId);
+        setting.setAssignmentId(assignmentId);
+        setting.setContentType(ContentItem.ContentType.NEW_QUIZ);
+        return setting;
+    }
+
+    private String normalizeBlank(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private String normalizeCanvasDomain() {
+        String canvasDomain = canvasApiConfig.getCanvasDomain();
+        if (canvasDomain == null || canvasDomain.isBlank()) {
+            return null;
+        }
+        return canvasDomain.replace("https://", "").replace("http://", "");
+    }
+
+    private String generateSecureAccessCode() {
+        SecureRandom random = new SecureRandom();
+        StringBuilder accessCode = new StringBuilder();
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        for (int i = 0; i < 8; i++) {
+            accessCode.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return accessCode.toString();
+    }
+
+    private String generateBrowserExamKey() {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            String randomStr = "SEB" + java.util.UUID.randomUUID() + System.currentTimeMillis();
+            byte[] encodedHash = digest.digest(randomStr.getBytes(StandardCharsets.UTF_8));
+            return bytesToHex(encodedHash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("Unable to generate Browser Exam Key", e);
+        }
+    }
+
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+        return hexString.toString();
     }
 }

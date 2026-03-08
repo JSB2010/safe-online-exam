@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
@@ -25,6 +26,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Base64;
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
@@ -39,15 +41,20 @@ import javax.crypto.spec.SecretKeySpec;
 @Slf4j
 public class CanvasOAuthController {
 
-    // Static encryption key for state parameter - same as LTI controller
-    private static final String STATE_ENCRYPTION_KEY = "SEB-Canvas-Integration-State-32B";
     private static final String ALGORITHM = "AES";
+    private static final String DEV_STATE_ENCRYPTION_FALLBACK = "seb-canvas-dev-state-key";
 
     private final CanvasApiConfig canvasApiConfig;
     private final ClientRegistrationRepository clientRegistrationRepository;
     private final OAuth2AuthorizedClientService clientService;
     private final CanvasApiService canvasApiService;
     private final RestTemplate restTemplate;
+
+    @Value("${app.security.state-encryption-key:${STATE_ENCRYPTION_KEY:}}")
+    private String stateEncryptionKey;
+
+    @Value("${spring.profiles.active:dev}")
+    private String activeProfile;
 
     // Session attribute keys
     private static final String SESSION_REDIRECT_URL = "canvas_oauth_redirect_url";
@@ -127,7 +134,12 @@ public class CanvasOAuthController {
 
         // Ensure redirect URL is absolute HTTPS URL
         if (redirectUrl.startsWith("/")) {
-            redirectUrl = "https://canvas-seb-dev-184075650720.us-central1.run.app" + redirectUrl;
+            String applicationBaseUrl = canvasApiConfig.getApplicationBaseUrl();
+            if (applicationBaseUrl == null || applicationBaseUrl.isBlank()) {
+                log.error("Cannot construct OAuth redirect URL because application base URL is not configured");
+                return new RedirectView("/error?message=OAuth2+redirect+base+URL+not+configured");
+            }
+            redirectUrl = applicationBaseUrl + redirectUrl;
         }
 
         stateData.put("redirect_url", redirectUrl);
@@ -340,8 +352,7 @@ public class CanvasOAuthController {
         String stateJson = new ObjectMapper().writeValueAsString(stateData);
 
         // Encrypt the JSON
-        SecretKeySpec secretKey = new SecretKeySpec(
-                STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8), ALGORITHM);
+        SecretKeySpec secretKey = buildStateSecretKey();
         Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.ENCRYPT_MODE, secretKey);
 
@@ -358,8 +369,7 @@ public class CanvasOAuthController {
         byte[] encryptedBytes = Base64.getUrlDecoder().decode(encryptedState);
 
         // Decrypt
-        SecretKeySpec secretKey = new SecretKeySpec(
-                STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8), ALGORITHM);
+        SecretKeySpec secretKey = buildStateSecretKey();
         Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.DECRYPT_MODE, secretKey);
 
@@ -369,5 +379,18 @@ public class CanvasOAuthController {
         // Parse back to Map
         return new ObjectMapper().readValue(decryptedJson,
                 new TypeReference<Map<String, String>>() {});
+    }
+
+    private SecretKeySpec buildStateSecretKey() throws Exception {
+        String rawKey = stateEncryptionKey;
+        if (rawKey == null || rawKey.isBlank()) {
+            if ("prod".equalsIgnoreCase(activeProfile)) {
+                throw new IllegalStateException("State encryption key is required in production");
+            }
+            rawKey = DEV_STATE_ENCRYPTION_FALLBACK;
+        }
+
+        byte[] keyBytes = MessageDigest.getInstance("SHA-256").digest(rawKey.getBytes(StandardCharsets.UTF_8));
+        return new SecretKeySpec(keyBytes, ALGORITHM);
     }
 }

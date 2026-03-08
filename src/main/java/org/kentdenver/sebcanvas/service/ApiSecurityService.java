@@ -2,6 +2,7 @@ package org.kentdenver.sebcanvas.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.ApiSecurityConfig;
+import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -51,7 +52,7 @@ public class ApiSecurityService {
         }
         
         // 3. Validate SEB user agent (additional security layer)
-        if (!sebDetector.isRequestFromSEB(request, null)) {
+        if (!sebDetector.isRequestFromSEB(request, (QuizSebSetting) null)) {
             log.warn("Request not from SEB browser, IP: {}", clientIp);
             return SecurityValidationResult.notFromSeb();
         }

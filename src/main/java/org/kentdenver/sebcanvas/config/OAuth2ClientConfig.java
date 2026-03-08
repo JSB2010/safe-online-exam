@@ -38,8 +38,9 @@ public class OAuth2ClientConfig {
         String clientId = canvasApiConfig.getClientId();
         String clientSecret = canvasApiConfig.getClientSecret();
         String redirectUri = canvasApiConfig.getRedirectUri();
+        String canvasDomain = canvasApiConfig.getCanvasDomain();
 
-        // Create Canvas API scopes - request scopes needed for quiz access and assignment modification
+        // Create Canvas API scopes needed for the classic-quiz runtime path.
         Set<String> scopes = new HashSet<>();
         // Use Canvas's URL-based scope format - these are the correct format for Canvas OAuth2
         // Based on Canvas API documentation: https://canvas.instructure.com/doc/api/file.oauth_endpoints.html
@@ -50,18 +51,17 @@ public class OAuth2ClientConfig {
         scopes.add("url:GET|/api/v1/courses/:course_id/quizzes/:id");
         scopes.add("url:GET|/api/v1/courses/:course_id/assignments");
         scopes.add("url:GET|/api/v1/courses/:course_id/assignments/:id");
+        scopes.add("url:GET|/api/quiz/v1/courses/:course_id/quizzes");
+        scopes.add("url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id");
 
         // Quiz write permissions (CRITICAL for SEB access code management)
         scopes.add("url:PUT|/api/v1/courses/:course_id/quizzes/:id");
+        scopes.add("url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id");
 
         // Module permissions (CRITICAL for SEB enforcement)
         scopes.add("url:GET|/api/v1/courses/:course_id/modules");
         scopes.add("url:GET|/api/v1/courses/:course_id/modules/:module_id/items");
         scopes.add("url:PUT|/api/v1/courses/:course_id/modules/:module_id/items/:id");
-
-        // New Quizzes API (different API path)
-        scopes.add("url:GET|/api/quiz/v1/courses/:course_id/quizzes");
-        scopes.add("url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id");
 
         // Write permissions for updating and creating assignments (needed for SEB enforcement)
         scopes.add("url:PUT|/api/v1/courses/:course_id/assignments/:id");
@@ -82,9 +82,9 @@ public class OAuth2ClientConfig {
                     .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                     .redirectUri(redirectUri)
                     .scope(scopes)
-                    .authorizationUri("https://kentdenver.instructure.com/login/oauth2/auth")
-                    .tokenUri("https://kentdenver.instructure.com/login/oauth2/token")
-                    .userInfoUri("https://kentdenver.instructure.com/api/v1/users/self")
+                    .authorizationUri(canvasDomain + "/login/oauth2/auth")
+                    .tokenUri(canvasDomain + "/login/oauth2/token")
+                    .userInfoUri(canvasDomain + "/api/v1/users/self")
                     .userNameAttributeName("id")
                     .build();
 

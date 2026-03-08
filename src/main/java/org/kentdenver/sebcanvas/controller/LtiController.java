@@ -4,11 +4,15 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.config.LtiConfig;
+import org.kentdenver.sebcanvas.model.ContentItem;
+import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.kentdenver.sebcanvas.service.CanvasService;
+import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.LtiService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
 import org.kentdenver.sebcanvas.service.QuizService;
@@ -16,6 +20,7 @@ import org.kentdenver.sebcanvas.service.SebService;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -48,10 +53,8 @@ import javax.crypto.spec.SecretKeySpec;
 @RequestMapping("/lti")
 @Slf4j
 public class LtiController {
-    // Static encryption key for state parameter - this should ideally be in a secure configuration
-    // Key must be exactly 32 bytes for AES-256
-    private static final String STATE_ENCRYPTION_KEY = "SEB-Canvas-Integration-State-32B";
     private static final String ALGORITHM = "AES";
+    private static final String DEV_STATE_ENCRYPTION_FALLBACK = "seb-canvas-dev-state-key";
 
     // Session attribute keys for storing LTI launch state
     private static final String SESSION_LAUNCH_DATA = "launchData";
@@ -59,11 +62,19 @@ public class LtiController {
     // Service dependencies
     private final LtiService ltiService;
     private final LtiConfig ltiConfig;
+    private final CanvasApiConfig canvasApiConfig;
     private final SebDetector sebDetector;
     private final CanvasService canvasService;
     private final QuizService quizService;
     private final SebService sebService;
     private final CanvasApiService canvasApiService;
+    private final ContentService contentService;
+
+    @Value("${app.security.state-encryption-key:${STATE_ENCRYPTION_KEY:}}")
+    private String stateEncryptionKey;
+
+    @Value("${spring.profiles.active:dev}")
+    private String activeProfile;
 
     /**
      * Constructor with dependency injection for all required services.
@@ -72,18 +83,22 @@ public class LtiController {
     public LtiController(
             LtiService ltiService,
             LtiConfig ltiConfig,
+            CanvasApiConfig canvasApiConfig,
             SebDetector sebDetector,
             @Qualifier("oauthCanvasService") CanvasService canvasService,
             QuizService quizService,
             SebService sebService,
-            CanvasApiService canvasApiService) {
+            CanvasApiService canvasApiService,
+            ContentService contentService) {
         this.ltiService = ltiService;
         this.ltiConfig = ltiConfig;
+        this.canvasApiConfig = canvasApiConfig;
         this.sebDetector = sebDetector;
         this.canvasService = canvasService;
         this.quizService = quizService;
         this.sebService = sebService;
         this.canvasApiService = canvasApiService;
+        this.contentService = contentService;
     }
 
     /**
@@ -131,7 +146,7 @@ public class LtiController {
 
         // Build the redirect URL to the OIDC authorization endpoint
         // IMPORTANT: redirect_uri must be the LTI launch endpoint, not the target_link_uri
-        String ltiLaunchUri = ltiConfig.getToolUrl() + "/lti/launch";
+        String ltiLaunchUri = ltiConfig.getSanitizedToolUrl() + "/lti/launch";
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(ltiConfig.getAuthUrl())
                 .queryParam("scope", "openid")
                 .queryParam("response_type", "id_token")
@@ -230,7 +245,7 @@ public class LtiController {
             log.debug("LTI message type: {}", messageType);
 
             // Check if the user is using SEB
-            boolean isUsingSeb = sebDetector.isRequestFromSEB(request, null);
+            boolean isUsingSeb = sebDetector.isRequestFromSEB(request, (QuizSebSetting) null);
             model.addAttribute("isUsingSeb", isUsingSeb);
 
             // Handle different message types
@@ -295,19 +310,13 @@ public class LtiController {
 
             // Try to get quizzes (this will attempt LTI AGS first, then OAuth fallback)
             List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
+            boolean hasApiAuthorization = canvasService.hasValidCredentials(userId);
 
             if (!quizzes.isEmpty()) {
                 // Successfully got quizzes (either via LTI AGS or OAuth)
                 log.info("Successfully retrieved {} quizzes for course {}", quizzes.size(), courseId);
-                model.addAttribute("quizzes", quizzes);
                 model.addAttribute("hasApiAuthorization", true);
-
-                // Get SEB settings for each quiz
-                Map<String, QuizSebSetting> quizSebSettings = quizzes.stream()
-                        .map(quiz -> quizService.getSebSettingForQuiz(quiz.getId()))
-                        .filter(setting -> setting != null)
-                        .collect(Collectors.toMap(QuizSebSetting::getQuizId, setting -> setting));
-                model.addAttribute("quizSebSettings", quizSebSettings);
+                populateTeacherViewModel(courseId, userId, quizzes, model, hasApiAuthorization);
 
                 // Generate a secure token for API requests (fallback for session issues)
                 String authToken = generateSecureToken(launchData);
@@ -322,7 +331,6 @@ public class LtiController {
                 return "teacherView";
             } else {
                 // No quizzes found - check if it's due to missing OAuth authorization
-                boolean hasApiAuthorization = canvasService.hasValidCredentials(userId);
                 model.addAttribute("hasApiAuthorization", hasApiAuthorization);
 
                 if (!hasApiAuthorization) {
@@ -341,8 +349,7 @@ public class LtiController {
                 } else {
                     // User has authorization but no quizzes found
                     log.info("User {} has API authorization but no quizzes found in course {}", userId, courseId);
-                    model.addAttribute("quizzes", quizzes); // Empty list
-                    model.addAttribute("quizSebSettings", new HashMap<>()); // Empty map for empty quiz list
+                    populateTeacherViewModel(courseId, userId, quizzes, model, true);
                     return "teacherView";
                 }
             }
@@ -408,8 +415,7 @@ public class LtiController {
         String stateJson = new ObjectMapper().writeValueAsString(stateData);
 
         // Encrypt the JSON
-        SecretKeySpec secretKey = new SecretKeySpec(
-                STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8), ALGORITHM);
+        SecretKeySpec secretKey = buildStateSecretKey();
         Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.ENCRYPT_MODE, secretKey);
 
@@ -426,8 +432,7 @@ public class LtiController {
         byte[] encryptedBytes = Base64.getUrlDecoder().decode(encryptedState);
 
         // Decrypt
-        SecretKeySpec secretKey = new SecretKeySpec(
-                STATE_ENCRYPTION_KEY.getBytes(StandardCharsets.UTF_8), ALGORITHM);
+        SecretKeySpec secretKey = buildStateSecretKey();
         Cipher cipher = Cipher.getInstance(ALGORITHM);
         cipher.init(Cipher.DECRYPT_MODE, secretKey);
 
@@ -461,17 +466,11 @@ public class LtiController {
                 try {
                     // Get quizzes for the course using OAuth
                     List<Quiz> quizzes = quizService.getQuizzesForCourse(courseId, userId);
-                    model.addAttribute("quizzes", quizzes);
                     model.addAttribute("courseId", courseId);
                     model.addAttribute("userId", userId);
                     model.addAttribute("hasOAuthAccess", true);
 
-                    // Get SEB settings for each quiz
-                    Map<String, QuizSebSetting> quizSebSettings = quizzes.stream()
-                            .map(quiz -> quizService.getSebSettingForQuiz(quiz.getId()))
-                            .filter(setting -> setting != null)
-                            .collect(Collectors.toMap(QuizSebSetting::getQuizId, setting -> setting));
-                    model.addAttribute("quizSebSettings", quizSebSettings);
+                    populateTeacherViewModel(courseId, userId, quizzes, model, true);
 
                     log.info("Successfully loaded {} quizzes for course {}", quizzes.size(), courseId);
                     return "teacherView";
@@ -559,6 +558,63 @@ public class LtiController {
         }
     }
 
+    private void populateTeacherViewModel(String courseId,
+                                          String userId,
+                                          List<Quiz> classicQuizzes,
+                                          Model model,
+                                          boolean includeNewQuizzes) {
+        List<Map<String, Object>> teacherQuizzes = new ArrayList<>();
+        Map<String, Object> quizSebSettings = new HashMap<>();
+
+        for (Quiz quiz : classicQuizzes) {
+            teacherQuizzes.add(toTeacherQuizView(quiz));
+            QuizSebSetting setting = quizService.getSebSettingForQuiz(quiz.getId());
+            if (setting != null) {
+                quizSebSettings.put(quiz.getId(), setting);
+            }
+        }
+
+        if (includeNewQuizzes) {
+            List<ContentItem> contentItems = contentService.getAllContentForCourse(courseId, userId);
+            List<ContentItem> newQuizzes = contentItems.stream()
+                    .filter(item -> item.getContentType() == ContentItem.ContentType.NEW_QUIZ)
+                    .toList();
+
+            for (ContentItem newQuiz : newQuizzes) {
+                teacherQuizzes.add(toTeacherQuizView(newQuiz));
+                ContentSebSetting setting = contentService.getSebSetting(newQuiz.getId());
+                if (setting != null) {
+                    quizSebSettings.put(newQuiz.getId(), setting);
+                }
+            }
+        }
+
+        model.addAttribute("quizzes", teacherQuizzes);
+        model.addAttribute("quizSebSettings", quizSebSettings);
+    }
+
+    private Map<String, Object> toTeacherQuizView(Quiz quiz) {
+        Map<String, Object> view = new HashMap<>();
+        view.put("id", quiz.getId());
+        view.put("title", quiz.getTitle());
+        view.put("description", quiz.getDescription());
+        view.put("htmlUrl", quiz.getHtmlUrl());
+        view.put("quizTypeDisplay", quiz.getQuizTypeDisplay());
+        view.put("contentType", ContentItem.ContentType.CLASSIC_QUIZ.name());
+        return view;
+    }
+
+    private Map<String, Object> toTeacherQuizView(ContentItem contentItem) {
+        Map<String, Object> view = new HashMap<>();
+        view.put("id", contentItem.getId());
+        view.put("title", contentItem.getTitle());
+        view.put("description", contentItem.getDescription());
+        view.put("htmlUrl", contentItem.getHtmlUrl());
+        view.put("quizTypeDisplay", contentItem.getContentType().getDisplayName());
+        view.put("contentType", contentItem.getContentType().name());
+        return view;
+    }
+
     /**
      * Extracts quiz ID from target link URI.
      * Expected format: /quiz/{org}/{courseId}/{quizId}
@@ -596,7 +652,7 @@ public class LtiController {
         quiz.setDescription("Canvas Quiz"); // Fallback description
 
         // Generate Canvas quiz URL
-        String canvasBaseUrl = "https://kentdenver.instructure.com";
+        String canvasBaseUrl = canvasApiConfig.getCanvasDomain();
         String htmlUrl = canvasBaseUrl + "/courses/" + courseId + "/quizzes/" + quizId;
         quiz.setHtmlUrl(htmlUrl);
 
@@ -606,5 +662,18 @@ public class LtiController {
 
         log.debug("Created minimal quiz object: ID={}, URL={}", quizId, htmlUrl);
         return quiz;
+    }
+
+    private SecretKeySpec buildStateSecretKey() throws Exception {
+        String rawKey = stateEncryptionKey;
+        if (rawKey == null || rawKey.isBlank()) {
+            if ("prod".equalsIgnoreCase(activeProfile)) {
+                throw new IllegalStateException("State encryption key is required in production");
+            }
+            rawKey = DEV_STATE_ENCRYPTION_FALLBACK;
+        }
+
+        byte[] keyBytes = MessageDigest.getInstance("SHA-256").digest(rawKey.getBytes(StandardCharsets.UTF_8));
+        return new SecretKeySpec(keyBytes, ALGORITHM);
     }
 }

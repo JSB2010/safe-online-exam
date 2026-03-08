@@ -1,6 +1,7 @@
 package org.kentdenver.sebcanvas.util;
 
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.springframework.stereotype.Component;
 
@@ -183,6 +184,33 @@ public class SebDetector {
 
         // If there's a SEB setting but no Browser Exam Key, just return true based on browser detection
         log.debug("SEB setting has no Browser Exam Key, accepting SEB browser based on detection alone");
+        return true;
+    }
+
+    /**
+     * Checks if a request is coming from Safe Exam Browser for content-scoped settings.
+     */
+    public boolean isRequestFromSEB(HttpServletRequest request, ContentSebSetting sebSetting) {
+        boolean isSebBrowser = isSebBrowser(request);
+
+        if (!isSebBrowser) {
+            log.debug("Request is not from SEB browser");
+            return false;
+        }
+
+        if (sebSetting == null) {
+            log.debug("No content SEB setting provided, accepting SEB browser based on detection alone");
+            return true;
+        }
+
+        String browserExamKey = sebSetting.getBrowserExamKey();
+        if (browserExamKey != null && !browserExamKey.isEmpty()) {
+            boolean isValid = validateBrowserExamKey(request, browserExamKey);
+            log.debug("Content Browser Exam Key validation result: {}", isValid);
+            return isValid;
+        }
+
+        log.debug("Content SEB setting has no Browser Exam Key, accepting SEB browser based on detection alone");
         return true;
     }
 

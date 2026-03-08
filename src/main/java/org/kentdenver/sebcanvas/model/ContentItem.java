@@ -7,15 +7,8 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * Unified model representing any Canvas content that can have SEB enforcement.
- * This abstraction allows SEB to work with:
- * - Classic Quizzes
- * - New Quizzes (LTI-based assignments)
- * - Regular Assignments
- * - External Tools
- * - Any other Canvas content type
- *
- * Replaces Quiz-specific models for a more flexible architecture.
+ * Content model retained for module-item and launch compatibility during the
+ * classic-quiz-only cleanup phase.
  */
 @Data
 @NoArgsConstructor
@@ -24,7 +17,7 @@ public class ContentItem {
     /**
      * Unique identifier for the content item.
      * In Firestore, this will be the document ID.
-     * Format: {contentType}_{canvasId} (e.g., "quiz_12345", "assignment_67890")
+     * Format: {contentType}_{canvasId} (e.g., "classicquiz_12345", "assignment_67890")
      */
     @DocumentId
     private String id;
@@ -38,6 +31,11 @@ public class ContentItem {
      * The Canvas ID for this content (quiz ID, assignment ID, etc.)
      */
     private String canvasId;
+
+    /**
+     * Assignment-backed identifier used for New Quizzes.
+     */
+    private String assignmentId;
 
     /**
      * The type of content this represents.
@@ -68,6 +66,21 @@ public class ContentItem {
     private String apiUrl;
 
     /**
+     * Original Canvas launch URL for New Quizzes when available.
+     */
+    private String canvasLaunchUrl;
+
+    /**
+     * Canvas resource-link identifier for New Quizzes when discoverable.
+     */
+    private String resourceLinkUuid;
+
+    /**
+     * Canvas lookup identifier for New Quizzes when discoverable.
+     */
+    private String lookupUuid;
+
+    /**
      * Points value for this content (if applicable).
      */
     private Double pointsPossible;
@@ -84,7 +97,7 @@ public class ContentItem {
     private String[] submissionTypes;
 
     /**
-     * For New Quizzes and External Tools, the LTI assignment ID.
+     * For external tool integrations, the LTI assignment ID.
      */
     private String ltiAssignmentId;
 
@@ -148,7 +161,6 @@ public class ContentItem {
                 case "classic_quiz":
                     return CLASSIC_QUIZ;
                 case "new_quiz":
-                case "quizzes.next":
                     return NEW_QUIZ;
                 case "assignment":
                     return ASSIGNMENT;
@@ -171,7 +183,7 @@ public class ContentItem {
      */
     public static ContentItem fromQuiz(Quiz quiz) {
         ContentItem item = new ContentItem();
-        item.setId("quiz_" + quiz.getCanvasQuizId());
+        item.setId(classicQuizContentId(quiz.getCanvasQuizId()));
         item.setCourseId(quiz.getCourseId());
         item.setCanvasId(quiz.getCanvasQuizId());
         item.setContentType(ContentType.CLASSIC_QUIZ);
@@ -186,17 +198,15 @@ public class ContentItem {
      * Checks if this content type supports SEB enforcement.
      */
     public boolean supportsSebEnforcement() {
-        switch (contentType) {
-            case CLASSIC_QUIZ:
-            case NEW_QUIZ:
-            case ASSIGNMENT:
-            case EXTERNAL_TOOL:
-                return true;
-            case DISCUSSION:
-            case PAGE:
-            default:
-                return false;
-        }
+        return contentType == ContentType.CLASSIC_QUIZ || contentType == ContentType.NEW_QUIZ;
+    }
+
+    public static String classicQuizContentId(String quizId) {
+        return "classicquiz_" + quizId;
+    }
+
+    public static String newQuizContentId(String courseId, String assignmentId) {
+        return "newquiz:" + courseId + ":" + assignmentId;
     }
 
     /**
@@ -211,7 +221,7 @@ public class ContentItem {
      * For backward compatibility with Quiz model.
      */
     public String getCanvasQuizId() {
-        if (contentType == ContentType.CLASSIC_QUIZ || contentType == ContentType.NEW_QUIZ) {
+        if (contentType == ContentType.CLASSIC_QUIZ) {
             return canvasId;
         }
         return null;

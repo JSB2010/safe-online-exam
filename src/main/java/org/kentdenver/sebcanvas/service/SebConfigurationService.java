@@ -40,10 +40,10 @@ import java.util.Base64;
 @Service
 public class SebConfigurationService {
 
-    @Value("${app.canvas.base-url:https://kentdenver.instructure.com}")
+    @Value("${app.canvas.base-url:}")
     private String canvasBaseUrl;
 
-    @Value("${app.seb.quit-password:}")
+    @Value("${app.seb.quit-password:${SEB_QUIT_PASSWORD:}}")
     private String quitPassword;
 
     @Value("${app.base-url:}")
@@ -61,19 +61,33 @@ public class SebConfigurationService {
             return configuredBaseUrl;
         }
 
-        // Try to get from Canvas API config redirect URI
         try {
-            String redirectUri = canvasApiConfig.getRedirectUri();
-            if (redirectUri != null && !redirectUri.isEmpty()) {
-                // Extract base URL from redirect URI (remove /api/oauth2callback)
-                return redirectUri.replace("/api/oauth2callback", "");
+            String baseUrl = canvasApiConfig.getApplicationBaseUrl();
+            if (baseUrl != null && !baseUrl.isBlank()) {
+                return baseUrl;
             }
         } catch (Exception e) {
             log.warn("Could not get base URL from Canvas API config: {}", e.getMessage());
         }
 
-        // Fallback to current deployment URL
-        return "https://canvas-seb-dev-184075650720.us-central1.run.app";
+        throw new IllegalStateException("Application base URL is not configured");
+    }
+
+    private String getCanvasDomain() {
+        if (canvasBaseUrl != null && !canvasBaseUrl.isBlank()) {
+            return canvasBaseUrl.replaceFirst("^https?://", "").replaceAll("/+$", "");
+        }
+
+        try {
+            String domain = canvasApiConfig.getCanvasDomain();
+            if (domain != null && !domain.isBlank()) {
+                return domain.replaceFirst("^https?://", "").replaceAll("/+$", "");
+            }
+        } catch (Exception e) {
+            log.warn("Could not get Canvas domain from config: {}", e.getMessage());
+        }
+
+        throw new IllegalStateException("Canvas domain is not configured");
     }
 
     /**
@@ -225,10 +239,14 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "URLFilterEnable", "true", null);
             log.info("URL filtering ENABLED - only authorized domains allowed");
             Element urlFilterRules = addKeyValue(doc, dict, "URLFilterRules", "array", null);
+            String canvasDomain = getCanvasDomain();
+            String insecureBaseUrl = baseUrl.startsWith("https://")
+                    ? "http://" + baseUrl.substring("https://".length())
+                    : baseUrl;
             
             // Allow Canvas domains (comprehensive list)
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructure.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://kentdenver.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://" + canvasDomain + "/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.canvaslms.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.edu/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.org/*");
@@ -333,11 +351,11 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-api.instructure.com/*"); // New Quizzes API
 
             // SEB-Canvas LTI Application (our own service)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-seb-dev-184075650720.us-central1.run.app/*"); // Our Cloud Run service
-            addUrlFilterRule(doc, urlFilterRules, true, "http://canvas-seb-dev-184075650720.us-central1.run.app/*"); // HTTP fallback
+            addUrlFilterRule(doc, urlFilterRules, true, baseUrl + "/*");
+            addUrlFilterRule(doc, urlFilterRules, true, insecureBaseUrl + "/*");
 
             // Allow HTTP versions of essential domains (for redirects and mixed content)
-            addUrlFilterRule(doc, urlFilterRules, true, "http://kentdenver.instructure.com/*"); // HTTP Canvas
+            addUrlFilterRule(doc, urlFilterRules, true, "http://" + canvasDomain + "/*"); // HTTP Canvas
             addUrlFilterRule(doc, urlFilterRules, true, "http://*.instructure.com/*"); // HTTP Instructure
 
             // Additional essential domains that might be missing
@@ -354,11 +372,9 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "examSessionClearCookiesOnStart", "false", null); // Don't clear cookies to preserve SSO session
             addKeyValue(doc, dict, "examSessionClearCookiesOnEnd", "true", null); // Clear cookies at end for security
 
-            // TEST QUIT PASSWORD - TODO: Remove in production
-            // This is a test password only for Jacob: 5845Alton625!@
-            // During production, this should be removed and only use quiz-specific passwords
-            String testQuitPassword = "5845Alton625!@";
-            addKeyValue(doc, dict, "hashedQuitPassword", "string", hashPassword(testQuitPassword));
+            if (quitPassword != null && !quitPassword.isBlank()) {
+                addKeyValue(doc, dict, "hashedQuitPassword", "string", hashPassword(quitPassword));
+            }
 
             // === ADDITIONAL SECURITY MEASURES ===
             

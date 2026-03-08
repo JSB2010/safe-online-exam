@@ -86,12 +86,12 @@ public class HybridCanvasAuthService {
             log.warn("LTI AGS failed: {}, falling back to Canvas API", e.getMessage());
         }
 
-        // Strategy 2: Try CanvasApiService with New Quizzes support
-        log.debug("Attempting CanvasApiService with New Quizzes support");
+        // Strategy 2: Try CanvasApiService for classic quiz retrieval
+        log.debug("Attempting CanvasApiService for classic quiz retrieval");
         try {
             List<Quiz> allQuizzes = canvasApiService.getQuizzesForCourse(courseId, userId);
             if (allQuizzes != null && !allQuizzes.isEmpty()) {
-                log.info("Successfully retrieved {} quizzes (Classic + New) using CanvasApiService", allQuizzes.size());
+                log.info("Successfully retrieved {} quizzes using CanvasApiService", allQuizzes.size());
                 // Convert Quiz objects to raw Map format for consistency
                 List<Map<String, Object>> rawQuizzes = allQuizzes.stream()
                         .map(this::convertQuizToMap)

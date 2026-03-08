@@ -52,6 +52,12 @@ public class LtiConfig {
     @Value("${lti.authUrl:https://sso.canvaslms.com/api/lti/authorize_redirect}")
     private String authUrl;
 
+    @Value("${lti.clientId:}")
+    private String configuredClientId;
+
+    @Value("${lti.toolUrl:}")
+    private String configuredToolUrl;
+
     /**
      * The base URL of this tool.
      * Loaded from Secret Manager or environment variable.
@@ -82,10 +88,9 @@ public class LtiConfig {
     @Autowired
     public LtiConfig(SecretManagerService secretManagerService) {
         this.secretManagerService = secretManagerService;
-        // Set default values
-        this.clientId = "lti-client-id-placeholder";
-        this.toolUrl = "http://localhost:8080";
-        log.info("LtiConfig initialized with default values");
+        this.clientId = "";
+        this.toolUrl = "";
+        log.info("LtiConfig initialized");
     }
 
     /**
@@ -96,6 +101,8 @@ public class LtiConfig {
     public void init() {
         // Try to load secrets from Secret Manager
         loadSecrets();
+
+        applyConfiguredFallbacks();
 
         // Log non-sensitive configuration values for debugging
         log.info("Active profile: {}", activeProfile);
@@ -129,7 +136,9 @@ public class LtiConfig {
         log.info("Auth URL: {}", authUrl);
         log.info("Tool URL: {}", toolUrl);
 
-        if ("lti-client-id-placeholder".equals(clientId)) {
+        if (clientId == null || clientId.isBlank()) {
+            log.warn("No LTI client ID configured - LTI launches will not work correctly");
+        } else if ("lti-client-id-placeholder".equals(clientId)) {
             log.warn("Using placeholder client ID - this is not suitable for production!");
         } else {
             log.info("Client ID: {}", clientId);
@@ -186,6 +195,22 @@ public class LtiConfig {
     private void loadFromEnvironment() {
         loadClientIdFromEnvironment();
         loadToolUrlFromEnvironment();
+    }
+
+    private void applyConfiguredFallbacks() {
+        if ((clientId == null || clientId.isBlank())
+                && configuredClientId != null
+                && !configuredClientId.isBlank()) {
+            this.clientId = configuredClientId;
+            log.info("Loaded LTI Client ID from application properties");
+        }
+
+        if ((toolUrl == null || toolUrl.isBlank())
+                && configuredToolUrl != null
+                && !configuredToolUrl.isBlank()) {
+            this.toolUrl = configuredToolUrl;
+            log.info("Loaded tool URL from application properties");
+        }
     }
 
     /**
@@ -247,8 +272,7 @@ public class LtiConfig {
      */
     public String getSanitizedToolUrl() {
         if (toolUrl == null || toolUrl.isEmpty()) {
-            log.warn("Tool URL is not set - using default localhost URL");
-            return "http://localhost:8080";
+            throw new IllegalStateException("Tool URL is not configured");
         }
 
         String url = toolUrl;

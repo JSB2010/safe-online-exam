@@ -98,46 +98,22 @@ public class CanvasApiConfig {
     private void ensureRedirectUri() {
         // If redirect URI is already set in properties, use it
         if (redirectUri != null && !redirectUri.isEmpty()) {
+            redirectUri = sanitizeUrl(redirectUri);
             log.info("Using redirect URI from properties: {}", redirectUri);
             return;
         }
 
         log.warn("Redirect URI is not set in properties. Attempting to derive it...");
 
-        // Try to get tool URL from Secret Manager
-        try {
-            String toolUrl = secretManagerService.getSecret(
-                    activeProfile.equals("prod") ? "prod_tool_url" : "dev_tool_url", "latest");
-            if (toolUrl != null && !toolUrl.isEmpty()) {
-                // Sanitize tool URL (remove trailing slash)
-                if (toolUrl.endsWith("/")) {
-                    toolUrl = toolUrl.substring(0, toolUrl.length() - 1);
-                }
-
-                // Ensure HTTPS for non-localhost URLs
-                if (!toolUrl.startsWith("https://") && !toolUrl.contains("localhost")) {
-                    toolUrl = "https://" + toolUrl.replaceFirst("^http://", "");
-                }
-
-                this.redirectUri = toolUrl + "/api/oauth2callback";
-                log.info("Derived redirect URI from tool URL: {}", this.redirectUri);
-                return;
-            }
-        } catch (Exception e) {
-            log.error("Error accessing tool URL from Secret Manager", e);
+        String toolUrl = resolveToolUrl();
+        if (toolUrl != null && !toolUrl.isBlank()) {
+            this.redirectUri = toolUrl + "/api/oauth2callback";
+            log.info("Derived redirect URI from tool URL: {}", this.redirectUri);
+            return;
         }
 
-        // Last resort: Fall back to a default based on API URL domain
-        try {
-            String domain = getCanvasDomain();
-            this.redirectUri = domain + "/oauth2callback";
-            log.warn("Using fallback redirect URI based on Canvas domain: {}", this.redirectUri);
-        } catch (Exception e) {
-            log.error("Failed to create a fallback redirect URI", e);
-            // Set an absolute minimum fallback to prevent null values
-            this.redirectUri = "https://localhost:8080/api/oauth2callback";
-            log.warn("Using localhost fallback redirect URI as last resort: {}", this.redirectUri);
-        }
+        log.error("Canvas OAuth redirect URI is not configured and could not be derived from tool URL settings");
+        this.redirectUri = "";
     }
 
     /**
@@ -255,5 +231,55 @@ public class CanvasApiConfig {
         }
 
         return domain;
+    }
+
+    public String getApplicationBaseUrl() {
+        if (redirectUri == null || redirectUri.isBlank()) {
+            return "";
+        }
+
+        if (redirectUri.endsWith("/api/oauth2callback")) {
+            return redirectUri.substring(0, redirectUri.length() - "/api/oauth2callback".length());
+        }
+
+        return sanitizeUrl(redirectUri);
+    }
+
+    private String resolveToolUrl() {
+        try {
+            String toolUrl = secretManagerService.getSecret(
+                    activeProfile.equals("prod") ? "prod_tool_url" : "dev_tool_url", "latest");
+            if (toolUrl != null && !toolUrl.isBlank()) {
+                return sanitizeUrl(toolUrl);
+            }
+        } catch (Exception e) {
+            log.error("Error accessing tool URL from Secret Manager", e);
+        }
+
+        String[] envNames = {
+                "TOOL_URL",
+                activeProfile.equals("prod") ? "PROD_TOOL_URL" : "DEV_TOOL_URL",
+                "SERVICE_URL"
+        };
+
+        for (String envName : envNames) {
+            String value = System.getenv(envName);
+            if (value != null && !value.isBlank()) {
+                return sanitizeUrl(value);
+            }
+        }
+
+        return "";
+    }
+
+    private String sanitizeUrl(String url) {
+        String sanitized = url.trim();
+        if (sanitized.endsWith("/")) {
+            sanitized = sanitized.substring(0, sanitized.length() - 1);
+        }
+        if (!sanitized.startsWith("https://") && !sanitized.contains("localhost")) {
+            sanitized = "https://" + sanitized.replaceFirst("^http://", "");
+        }
+        return sanitized;
     }
 }

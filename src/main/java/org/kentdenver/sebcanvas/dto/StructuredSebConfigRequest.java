@@ -18,6 +18,11 @@ public class StructuredSebConfigRequest {
      * The quiz ID for which SEB configuration is being set.
      */
     private String quizId;
+
+    /**
+     * Content-scoped ID for non-classic instructor flows (for example New Quizzes).
+     */
+    private String contentId;
     
     /**
      * List of SSO domains that students need to access for authentication.

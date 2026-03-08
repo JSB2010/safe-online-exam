@@ -104,14 +104,14 @@
                 Toggle the switch to require Safe Exam Browser for a quiz.
             </div>
 
-            <div class="card quiz-card" th:each="quiz : ${quizzes}" th:classappend="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired ? 'seb-required' : 'seb-not-required'}">
+            <div class="card quiz-card" th:each="quiz : ${quizzes}" th:data-quiz-id="${quiz.id}" th:data-content-type="${quiz.contentType}" th:classappend="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired ? 'seb-required' : 'seb-not-required'}">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <div>
                         <span th:text="${quiz.title}">Quiz Title</span>
                         <small class="text-muted ms-2" th:if="${quiz.quizTypeDisplay}" th:text="'(' + ${quiz.quizTypeDisplay} + ')'">Quiz Type</small>
                     </div>
                     <label class="toggle-switch">
-                        <input type="checkbox" class="seb-toggle" th:data-quiz-id="${quiz.id}" th:checked="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}">
+                        <input type="checkbox" class="seb-toggle" th:data-quiz-id="${quiz.id}" th:data-content-type="${quiz.contentType}" th:checked="${quizSebSettings.get(quiz.id) != null && quizSebSettings.get(quiz.id).sebRequired}">
                         <span class="slider"></span>
                     </label>
                 </div>
@@ -146,6 +146,7 @@
                             <button type="button"
                                     class="btn btn-sm btn-primary download-seb-config-btn"
                                     th:data-quiz-id="${quiz.id}"
+                                    th:data-content-type="${quiz.contentType}"
                                     th:data-course-id="${courseId}">
                                 <i class="fas fa-download me-1"></i>
                                 Download SEB Config
@@ -154,6 +155,7 @@
                             <button type="button"
                                     class="btn btn-sm btn-outline-secondary seb-settings-btn"
                                     th:data-quiz-id="${quiz.id}"
+                                    th:data-content-type="${quiz.contentType}"
                                     data-bs-toggle="modal"
                                     data-bs-target="#sebSettingsModal">
                                 <i class="fas fa-cog me-1"></i>
@@ -355,14 +357,14 @@
                                            class="form-control"
                                            id="quitPassword"
                                            name="quitPassword"
-                                           placeholder="Leave blank for default">
-                                    <div class="form-text">Password required to exit Safe Exam Browser</div>
+                                           placeholder="Optional: enter a quiz-specific exit password">
+                                    <div class="form-text">Optional. If provided, students must enter it to exit Safe Exam Browser.</div>
                                 </div>
                                 <div class="col-md-6">
                                     <div class="alert alert-warning mt-4">
                                         <small><i class="fas fa-exclamation-triangle me-1"></i>
-                                        <strong>Default password:</strong> quit123<br>
-                                        Change this for enhanced security.</small>
+                                        No default exit password is shown or injected by this page.<br>
+                                        Configure one explicitly if you want quit protection.</small>
                                     </div>
                                 </div>
                             </div>
@@ -413,13 +415,26 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        const pageCourseId = '[[${courseId}]]';
+        const pageUserId = '[[${userId}]]';
+
+        function redirectToCanvasReauthorization() {
+            const params = new URLSearchParams({
+                course_id: pageCourseId,
+                user_id: pageUserId,
+                redirect_url: window.location.href
+            });
+            window.location.href = `/api/oauth2reauthorize?${params.toString()}`;
+        }
+
         // Add event listeners to all toggle switches
         const toggles = document.querySelectorAll('.seb-toggle');
         toggles.forEach(toggle => {
             toggle.addEventListener('change', function() {
                 const quizId = this.getAttribute('data-quiz-id');
+                const contentType = this.getAttribute('data-content-type');
                 const required = this.checked;
-                updateSebRequirement(quizId, required);
+                updateSebRequirement(quizId, required, contentType);
             });
         });
 
@@ -522,39 +537,36 @@
         // Clear OAuth Token button
         document.getElementById('clearOAuthBtn').addEventListener('click', function() {
             if (confirm('This will clear your OAuth token and require re-authentication. Continue?')) {
-                window.location.href = '/api/debug/clear-oauth-token?redirect=' + encodeURIComponent(window.location.href);
+                redirectToCanvasReauthorization();
             }
         });
 
         // Function to send AJAX request to update SEB requirement
-        function updateSebRequirement(quizId, required) {
-            const courseId = '[[${courseId}]]'; // Get course ID from Thymeleaf
+        function updateSebRequirement(quizId, required, contentType) {
             const headers = {
                 'Content-Type': 'application/json',
             };
 
             // Determine the endpoint based on whether we're enabling or disabling SEB
             const endpoint = required
-                ? `/api/quizzes/${courseId}/${quizId}/seb/enable`
-                : `/api/quizzes/${courseId}/${quizId}/seb/disable`;
+                ? `/api/quizzes/${pageCourseId}/${quizId}/seb/enable`
+                : `/api/quizzes/${pageCourseId}/${quizId}/seb/disable`;
 
-            console.log(`${required ? 'Enabling' : 'Disabling'} SEB for quiz ${quizId} in course ${courseId}`);
+            console.log(`${required ? 'Enabling' : 'Disabling'} SEB for ${contentType === 'NEW_QUIZ' ? 'New Quiz' : 'quiz'} ${quizId} in course ${pageCourseId}`);
 
             fetch(endpoint, {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify({
                     customSettings: {
-                        allowedUrls: [], // Can be customized later
-                        quitPassword: 'quit123' // Default quit password
+                        allowedUrls: [] // Can be customized later
                     }
                 })
             })
                 .then(response => {
                     if (response.status === 401) {
-                        // Authentication issue - redirect to clear token and re-authenticate
-                        console.log('Authentication expired, clearing token and redirecting...');
-                        window.location.href = '/api/debug/clear-oauth-token?user_id=&redirect=' + encodeURIComponent(window.location.href);
+                        console.log('Authentication expired, redirecting for reauthorization...');
+                        redirectToCanvasReauthorization();
                         return;
                     }
                     if (!response.ok) {
@@ -645,7 +657,7 @@
             // Create a temporary link element and trigger download
             const link = document.createElement('a');
             link.href = downloadUrl;
-            link.download = `quiz_${quizId}_seb_config.seb`;
+            link.download = `quiz_${quizId.replace(/[^A-Za-z0-9._-]/g, '_')}_seb_config.seb`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -671,9 +683,7 @@
          * Loads existing SEB settings for a quiz.
          */
         function loadSebSettings(quizId) {
-            const courseId = '[[${courseId}]]';
-
-            fetch(`/api/quizzes/${courseId}/${quizId}/seb/status`)
+            fetch(`/api/quizzes/${pageCourseId}/${quizId}/seb/status`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.authenticated) {
@@ -767,7 +777,6 @@
          */
         function saveSebSettings() {
             const quizId = document.getElementById('settingsQuizId').value;
-            const courseId = '[[${courseId}]]';
             const quitPassword = document.getElementById('quitPassword').value;
 
             console.log('Saving SEB settings for quiz:', quizId);
@@ -806,7 +815,7 @@
                 ssoDomains: ssoDomains,
                 educationalToolDomains: educationalToolDomains,
                 customDomains: customDomains,
-                quitPassword: quitPassword || 'quit123'
+                quitPassword: quitPassword
             };
 
             // Show loading state
@@ -816,13 +825,13 @@
             saveBtn.disabled = true;
 
             // Save structured SEB configuration
-            fetch(`/api/quizzes/seb-config-structured?userId=${encodeURIComponent('user')}`, {
+            fetch(`/api/quizzes/seb-config-structured?userId=${encodeURIComponent(pageUserId)}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    quizId: quizId,
+                    ...(quizId.startsWith('newquiz:') ? { contentId: quizId } : { quizId: quizId }),
                     ssoDomains: customSettings.ssoDomains,
                     educationalToolDomains: customSettings.educationalToolDomains,
                     customDomains: customSettings.customDomains,
@@ -830,12 +839,17 @@
                 })
             })
             .then(response => {
+                if (response.status === 401) {
+                    redirectToCanvasReauthorization();
+                    return;
+                }
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 return response.json();
             })
             .then(data => {
+                if (!data) return;
                 console.log('SEB settings saved successfully:', data);
 
                 showNotification('SEB configuration saved successfully!', 'success');
@@ -874,15 +888,14 @@
             const originalText = btn.innerHTML;
 
             // Get course ID from the page data
-            const courseId = '[[${launchData?.courseId}]]' || '[[${courseId}]]';
-            console.log('Using course ID for refresh:', courseId);
+            console.log('Using course ID for refresh:', pageCourseId);
 
             // Show loading state
             btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Refreshing...';
             btn.disabled = true;
 
             // Make refresh request
-            fetch(`/api/quizzes/course/${courseId}/refresh`, {
+            fetch(`/api/quizzes/course/${pageCourseId}/refresh`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -890,9 +903,8 @@
             })
             .then(response => {
                 if (response.status === 401) {
-                    // Authentication issue - redirect to clear token and re-authenticate
-                    console.log('Authentication expired, clearing token and redirecting...');
-                    window.location.href = '/api/debug/clear-oauth-token?user_id=&redirect=' + encodeURIComponent(window.location.href);
+                    console.log('Authentication expired, redirecting for reauthorization...');
+                    redirectToCanvasReauthorization();
                     return;
                 }
                 return response.json();

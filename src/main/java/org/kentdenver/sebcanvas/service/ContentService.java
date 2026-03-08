@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.ContentItem;
+import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.repository.FirestoreContentRepository;
+import org.kentdenver.sebcanvas.repository.FirestoreContentSebSettingRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -15,17 +17,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Service for managing all types of Canvas content (quizzes, assignments, etc.)
- * that can have SEB enforcement.
- *
- * This is the unified service that replaces quiz-specific services for Phase 2.
+ * Classic-quiz content cache used by the launch/module flow during Wave 1 cleanup.
  */
 @Service
 @Slf4j
 public class ContentService {
 
+    private static final String CANVAS_API_SUFFIX = "/api/v1";
+
     private final CanvasApiService canvasApiService;
     private final FirestoreContentRepository contentRepository;
+    private final FirestoreContentSebSettingRepository contentSebSettingRepository;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
@@ -33,42 +35,42 @@ public class ContentService {
     public ContentService(
             CanvasApiService canvasApiService,
             FirestoreContentRepository contentRepository,
+            FirestoreContentSebSettingRepository contentSebSettingRepository,
             RestTemplate restTemplate,
             ObjectMapper objectMapper) {
         this.canvasApiService = canvasApiService;
         this.contentRepository = contentRepository;
+        this.contentSebSettingRepository = contentSebSettingRepository;
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
     }
 
     /**
-     * Fetches all SEB-compatible content from a Canvas course.
-     * This includes:
-     * - Classic Quizzes
-     * - New Quizzes (as assignments)
-     * - Regular Assignments
-     * - External Tools (that can be locked down)
+     * Fetches classic quizzes from a Canvas course for launch/cache compatibility.
      *
      * @param courseId The Canvas course ID
      * @param userId The user ID for Canvas API authentication
-     * @return List of all content items that support SEB
+     * @return List of classic quiz content items
      */
     public List<ContentItem> getAllContentForCourse(String courseId, String userId) {
-        log.info("Fetching all SEB-compatible content for course: {}", courseId);
-
-        List<ContentItem> allContent = new ArrayList<>();
+        log.info("Fetching content for course: {}", courseId);
 
         try {
-            // Fetch Classic Quizzes
-            allContent.addAll(getClassicQuizzes(courseId, userId));
+            List<ContentItem> allContent = new ArrayList<>();
+            List<ContentItem> classicQuizzes = getClassicQuizzes(courseId, userId);
+            List<ContentItem> newQuizzes = getNewQuizzes(courseId, userId);
 
-            // Fetch Assignments (includes New Quizzes)
-            allContent.addAll(getAssignments(courseId, userId));
+            allContent.addAll(classicQuizzes);
+            allContent.addAll(newQuizzes);
 
-            log.info("Found {} total content items for course {}", allContent.size(), courseId);
+            log.info("Found {} classic and {} New Quiz content items for course {}",
+                    classicQuizzes.size(), newQuizzes.size(), courseId);
 
             // Save to Firestore for caching
             contentRepository.saveAll(allContent);
+            if (!newQuizzes.isEmpty()) {
+                contentSebSettingRepository.saveAll(seedNewQuizSettings(newQuizzes));
+            }
 
             return allContent;
 
@@ -113,7 +115,7 @@ public class ContentService {
                     item.setContentType(ContentItem.ContentType.CLASSIC_QUIZ);
                     item.setCourseId(courseId);
                     item.setCanvasId(quizJson.get("id").asText());
-                    item.setId("classicquiz_" + item.getCanvasId());
+                    item.setId(ContentItem.classicQuizContentId(item.getCanvasId()));
                     item.setTitle(quizJson.get("title").asText());
                     item.setDescription(quizJson.has("description") ?
                             quizJson.get("description").asText() : "");
@@ -136,104 +138,120 @@ public class ContentService {
         return quizzes;
     }
 
-    /**
-     * Fetches assignments from Canvas (includes New Quizzes and regular assignments).
-     */
-    private List<ContentItem> getAssignments(String courseId, String userId) {
-        List<ContentItem> assignments = new ArrayList<>();
+    private List<ContentItem> getNewQuizzes(String courseId, String userId) {
+        List<ContentItem> newQuizzes = new ArrayList<>();
 
         try {
             String accessToken = canvasApiService.getAccessToken(userId);
             if (accessToken == null) {
-                log.warn("No access token for user {}, skipping assignments", userId);
-                return assignments;
+                log.warn("No access token for user {}, skipping New Quizzes", userId);
+                return newQuizzes;
             }
 
-            String url = String.format("%s/courses/%s/assignments?per_page=100",
+            String url = String.format("%s/courses/%s/assignments?per_page=100&new_quizzes=true",
                     canvasApiService.getCanvasApiBaseUrl(), courseId);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setBearerAuth(accessToken);
-            HttpEntity<?> request = new HttpEntity<>(headers);
-
             ResponseEntity<String> response = restTemplate.exchange(
-                    url, HttpMethod.GET, request, String.class);
+                    url, HttpMethod.GET, buildAuthenticatedRequest(accessToken), String.class);
 
             if (response.getStatusCode().is2xxSuccessful()) {
                 JsonNode assignmentsJson = objectMapper.readTree(response.getBody());
 
                 for (JsonNode assignmentJson : assignmentsJson) {
-                    ContentItem item = new ContentItem();
-                    item.setCourseId(courseId);
-                    item.setCanvasId(assignmentJson.get("id").asText());
-
-                    // Determine if this is a New Quiz or regular assignment
-                    boolean isNewQuiz = false;
-                    if (assignmentJson.has("is_quiz_assignment") &&
-                        assignmentJson.get("is_quiz_assignment").asBoolean()) {
-                        isNewQuiz = true;
-                        item.setContentType(ContentItem.ContentType.NEW_QUIZ);
-                        item.setId("newquiz_" + item.getCanvasId());
-                    } else if (assignmentJson.has("external_tool_tag_attributes")) {
-                        // External tool assignment (could be New Quiz or other LTI tool)
-                        JsonNode toolAttrs = assignmentJson.get("external_tool_tag_attributes");
-                        if (toolAttrs.has("url")) {
-                            String toolUrl = toolAttrs.get("url").asText();
-                            if (toolUrl.contains("quiz-lti")) {
-                                item.setContentType(ContentItem.ContentType.NEW_QUIZ);
-                                item.setId("newquiz_" + item.getCanvasId());
-                                isNewQuiz = true;
-                            } else {
-                                item.setContentType(ContentItem.ContentType.EXTERNAL_TOOL);
-                                item.setId("externaltool_" + item.getCanvasId());
-                                item.setExternalToolUrl(toolUrl);
-                            }
-                        }
-                    } else {
-                        item.setContentType(ContentItem.ContentType.ASSIGNMENT);
-                        item.setId("assignment_" + item.getCanvasId());
-                    }
-
-                    item.setTitle(assignmentJson.get("name").asText());
-                    item.setDescription(assignmentJson.has("description") ?
-                            assignmentJson.get("description").asText() : "");
-                    item.setHtmlUrl(assignmentJson.get("html_url").asText());
-                    item.setPointsPossible(assignmentJson.has("points_possible") ?
-                            assignmentJson.get("points_possible").asDouble() : null);
-                    item.setPublished(assignmentJson.has("published") &&
-                            assignmentJson.get("published").asBoolean());
-
-                    // Get submission types
-                    if (assignmentJson.has("submission_types")) {
-                        JsonNode submissionTypes = assignmentJson.get("submission_types");
-                        List<String> types = new ArrayList<>();
-                        for (JsonNode type : submissionTypes) {
-                            types.add(type.asText());
-                        }
-                        item.setSubmissionTypes(types.toArray(new String[0]));
-                    }
-
-                    // Get due date
-                    if (assignmentJson.has("due_at") && !assignmentJson.get("due_at").isNull()) {
-                        // Parse due date if needed
-                        // item.setDueAt(...);
-                    }
-
-                    assignments.add(item);
+                    ContentItem item = createNewQuizItem(courseId, assignmentJson);
+                    hydrateNewQuizItem(item, accessToken);
+                    newQuizzes.add(item);
                 }
 
-                log.info("Fetched {} assignments for course {} ({} New Quizzes)",
-                        assignments.size(), courseId,
-                        assignments.stream()
-                                .filter(a -> a.getContentType() == ContentItem.ContentType.NEW_QUIZ)
-                                .count());
+                log.info("Fetched {} New Quizzes for course {}", newQuizzes.size(), courseId);
             }
 
         } catch (Exception e) {
-            log.error("Error fetching assignments: {}", e.getMessage(), e);
+            log.error("Error fetching New Quizzes: {}", e.getMessage(), e);
         }
 
-        return assignments;
+        return newQuizzes;
+    }
+
+    private ContentItem createNewQuizItem(String courseId, JsonNode assignmentJson) {
+        String assignmentId = assignmentJson.get("id").asText();
+
+        ContentItem item = new ContentItem();
+        item.setId(ContentItem.newQuizContentId(courseId, assignmentId));
+        item.setCourseId(courseId);
+        item.setCanvasId(assignmentId);
+        item.setAssignmentId(assignmentId);
+        item.setContentType(ContentItem.ContentType.NEW_QUIZ);
+        item.setTitle(getTextValue(assignmentJson, "name"));
+        item.setDescription(getTextValue(assignmentJson, "description"));
+        item.setHtmlUrl(getTextValue(assignmentJson, "html_url"));
+        item.setPointsPossible(assignmentJson.has("points_possible") && !assignmentJson.get("points_possible").isNull()
+                ? assignmentJson.get("points_possible").asDouble()
+                : null);
+        item.setPublished(assignmentJson.has("published") && assignmentJson.get("published").asBoolean());
+        return item;
+    }
+
+    private void hydrateNewQuizItem(ContentItem item, String accessToken) {
+        try {
+            String url = String.format("%s/courses/%s/quizzes/%s",
+                    getNewQuizApiBaseUrl(), item.getCourseId(), item.getAssignmentId());
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.GET, buildAuthenticatedRequest(accessToken), String.class);
+
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                return;
+            }
+
+            JsonNode newQuizJson = objectMapper.readTree(response.getBody());
+            String assignmentId = getTextValue(newQuizJson, "assignment_id");
+            if (assignmentId != null && !assignmentId.isBlank()) {
+                item.setAssignmentId(assignmentId);
+                item.setCanvasId(assignmentId);
+                item.setId(ContentItem.newQuizContentId(item.getCourseId(), assignmentId));
+            }
+
+            String title = getTextValue(newQuizJson, "title");
+            if (title != null) {
+                item.setTitle(title);
+            }
+
+            String instructions = getTextValue(newQuizJson, "instructions");
+            if (instructions != null) {
+                item.setDescription(instructions);
+            }
+
+            item.setCanvasLaunchUrl(getTextValue(newQuizJson, "canvas_launch_url"));
+            item.setResourceLinkUuid(getTextValue(newQuizJson, "resource_link_uuid"));
+            item.setLookupUuid(getTextValue(newQuizJson, "lookup_uuid"));
+            item.setApiUrl(url);
+
+        } catch (Exception e) {
+            log.warn("Error hydrating New Quiz {} for course {}: {}",
+                    item.getAssignmentId(), item.getCourseId(), e.getMessage());
+        }
+    }
+
+    private HttpEntity<?> buildAuthenticatedRequest(String accessToken) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(accessToken);
+        return new HttpEntity<>(headers);
+    }
+
+    private String getNewQuizApiBaseUrl() {
+        String apiBaseUrl = canvasApiService.getCanvasApiBaseUrl();
+        if (apiBaseUrl.endsWith(CANVAS_API_SUFFIX)) {
+            return apiBaseUrl.substring(0, apiBaseUrl.length() - CANVAS_API_SUFFIX.length()) + "/api/quiz/v1";
+        }
+        return apiBaseUrl + "/api/quiz/v1";
+    }
+
+    private String getTextValue(JsonNode node, String fieldName) {
+        if (!node.has(fieldName) || node.get(fieldName).isNull()) {
+            return null;
+        }
+        return node.get(fieldName).asText();
     }
 
     /**
@@ -241,6 +259,17 @@ public class ContentService {
      */
     public ContentItem getContentItem(String contentId) {
         return contentRepository.findById(contentId);
+    }
+
+    /**
+     * Gets the SEB setting for a content item by content-scoped ID.
+     */
+    public ContentSebSetting getSebSetting(String contentId) {
+        return contentSebSettingRepository.findByContentId(contentId);
+    }
+
+    public ContentSebSetting saveSebSetting(ContentSebSetting setting) {
+        return contentSebSettingRepository.save(setting);
     }
 
     /**
@@ -275,5 +304,32 @@ public class ContentService {
 
         // Fetch fresh data
         return getAllContentForCourse(courseId, userId);
+    }
+
+    private List<ContentSebSetting> seedNewQuizSettings(List<ContentItem> newQuizzes) {
+        List<ContentSebSetting> newQuizSettings = new ArrayList<>();
+        for (ContentItem newQuiz : newQuizzes) {
+            ContentSebSetting existingSetting = contentSebSettingRepository.findByContentId(newQuiz.getId());
+            ContentSebSetting settingToSave = existingSetting != null
+                    ? refreshContentMetadata(existingSetting, newQuiz)
+                    : ContentSebSetting.fromContentItem(newQuiz);
+            newQuizSettings.add(settingToSave);
+        }
+        return newQuizSettings;
+    }
+
+    private ContentSebSetting refreshContentMetadata(ContentSebSetting setting, ContentItem contentItem) {
+        setting.setId(contentItem.getId());
+        setting.setContentId(contentItem.getId());
+        setting.setCanvasId(contentItem.getCanvasId());
+        setting.setAssignmentId(contentItem.getAssignmentId());
+        setting.setContentType(contentItem.getContentType());
+        setting.setCourseId(contentItem.getCourseId());
+        setting.setHtmlUrl(contentItem.getHtmlUrl());
+        setting.setCanvasLaunchUrl(contentItem.getCanvasLaunchUrl());
+        setting.setResourceLinkUuid(contentItem.getResourceLinkUuid());
+        setting.setLookupUuid(contentItem.getLookupUuid());
+        setting.setMetadata(contentItem.getMetadata());
+        return setting;
     }
 }

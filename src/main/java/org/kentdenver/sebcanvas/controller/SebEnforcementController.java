@@ -1,6 +1,8 @@
 package org.kentdenver.sebcanvas.controller;
 
+import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.kentdenver.sebcanvas.service.SebConfigService;
 import org.kentdenver.sebcanvas.service.SebConfigurationService;
@@ -43,6 +45,9 @@ public class SebEnforcementController {
 
     @Autowired
     private SebConfigurationService sebConfigurationService;
+
+    @Autowired
+    private ContentService contentService;
 
     // SEB header names (official SEB integration specification)
     private static final String SEB_CONFIG_KEY_HEADER = "X-SafeExamBrowser-ConfigKeyHash";
@@ -221,16 +226,20 @@ public class SebEnforcementController {
     @GetMapping("/config/{courseId}/{quizId}.seb")
     public ResponseEntity<byte[]> downloadSebConfig(
             @PathVariable String courseId,
-            @PathVariable String quizId,
+            @PathVariable("quizId") String contentId,
             @RequestParam(required = false) String canvas_url,
             @RequestParam(required = false) String user_id,
             HttpServletRequest request) {
 
-        log.info("Generating SEB configuration for course: {}, quiz: {}", courseId, quizId);
+        log.info("Generating SEB configuration for course: {}, quiz/content: {}", courseId, contentId);
 
         try {
+            if (isContentScopedLaunchId(contentId)) {
+                return downloadContentScopedSebConfig(courseId, contentId, request);
+            }
+
             // Get quiz settings to determine access code
-            QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(quizId);
+            QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(contentId);
             String accessCode = (quizSetting != null) ? quizSetting.getAccessCode() : null;
 
             // Construct the quiz URL
@@ -238,7 +247,7 @@ public class SebEnforcementController {
             if (canvas_url != null && !canvas_url.trim().isEmpty()) {
                 quizUrl = URLDecoder.decode(canvas_url, StandardCharsets.UTF_8);
             } else {
-                quizUrl = String.format("https://kentdenver.instructure.com/courses/%s/quizzes/%s", courseId, quizId);
+                quizUrl = String.format("https://kentdenver.instructure.com/courses/%s/quizzes/%s", courseId, contentId);
             }
 
             log.debug("Quiz URL for SEB config: {}", quizUrl);
@@ -246,30 +255,94 @@ public class SebEnforcementController {
 
             // Generate comprehensive SEB configuration
             byte[] sebConfig = sebConfigurationService.generateSebConfiguration(
-                courseId, quizId, quizUrl, accessCode);
+                courseId, contentId, quizUrl, accessCode);
 
             // Set appropriate headers for file download
             HttpHeaders headers = new HttpHeaders();
             // Use application/octet-stream to force download instead of display
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             headers.setContentDispositionFormData("attachment",
-                String.format("quiz_%s_%s.seb", courseId, quizId));
+                String.format("quiz_%s_%s.seb", courseId, contentId));
             headers.add("Content-Description", "Safe Exam Browser Configuration");
             headers.add("X-Content-Type-Options", "nosniff");
             headers.add("Content-Transfer-Encoding", "binary");
             headers.add("Accept-Ranges", "bytes");
 
             log.info("Successfully generated SEB configuration file ({} bytes) for quiz: {}",
-                    sebConfig.length, quizId);
+                    sebConfig.length, contentId);
 
             return ResponseEntity.ok()
                     .headers(headers)
                     .body(sebConfig);
 
         } catch (Exception e) {
-            log.error("Failed to generate SEB configuration for quiz: {}", quizId, e);
+            log.error("Failed to generate SEB configuration for quiz/content: {}", contentId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(("Error generating SEB configuration: " + e.getMessage()).getBytes());
         }
+    }
+
+    private boolean isContentScopedLaunchId(String contentId) {
+        return contentId != null && (contentId.startsWith("classicquiz_") || contentId.startsWith("newquiz:"));
+    }
+
+    private ResponseEntity<byte[]> downloadContentScopedSebConfig(String courseId,
+                                                                  String contentId,
+                                                                  HttpServletRequest request) {
+        String accessCode;
+
+        if (contentId.startsWith("newquiz:")) {
+            ContentSebSetting setting = contentService.getSebSetting(contentId);
+            if (setting == null || !setting.isSebRequired() || setting.getAccessCode() == null || setting.getAccessCode().isBlank()) {
+                log.warn("SEB not enabled or access code missing for content {}", contentId);
+                return ResponseEntity.badRequest().build();
+            }
+            accessCode = setting.getAccessCode();
+        } else {
+            String quizId = contentId.substring("classicquiz_".length());
+            QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(quizId);
+            if (quizSetting == null || !quizSetting.isSebRequired() || quizSetting.getAccessCode() == null || quizSetting.getAccessCode().isBlank()) {
+                log.warn("SEB not enabled or access code missing for classic quiz content {}", contentId);
+                return ResponseEntity.badRequest().build();
+            }
+            accessCode = quizSetting.getAccessCode();
+        }
+
+        String launchUrl = buildLaunchUrl(request, contentId);
+        byte[] sebConfig = sebConfigurationService.generateSebConfiguration(courseId, contentId, launchUrl, accessCode);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment",
+                String.format("quiz_%s_%s.seb", courseId, sanitizeFileToken(contentId)));
+        headers.add("Content-Description", "Safe Exam Browser Configuration");
+        headers.add("X-Content-Type-Options", "nosniff");
+        headers.add("Content-Transfer-Encoding", "binary");
+        headers.add("Accept-Ranges", "bytes");
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(sebConfig);
+    }
+
+    private String buildLaunchUrl(HttpServletRequest request, String contentId) {
+        StringBuilder baseUrl = new StringBuilder()
+                .append(request.getScheme())
+                .append("://")
+                .append(request.getServerName());
+
+        if (request.getServerPort() != 80 && request.getServerPort() != 443) {
+            baseUrl.append(":").append(request.getServerPort());
+        }
+
+        return baseUrl
+                .append(request.getContextPath() == null ? "" : request.getContextPath())
+                .append("/seb/launch/")
+                .append(contentId)
+                .toString();
+    }
+
+    private String sanitizeFileToken(String value) {
+        return value.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 }

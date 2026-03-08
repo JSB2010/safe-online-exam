@@ -3,7 +3,6 @@ package org.kentdenver.sebcanvas.controller;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.service.QuizService;
-import org.kentdenver.sebcanvas.service.SebConfigService;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -28,7 +27,6 @@ import jakarta.servlet.http.HttpServletResponse;
 public class SebExitController {
 
     private final QuizService quizService;
-    private final SebConfigService sebConfigService;
 
     /**
      * Main SEB exit page - shown after quiz completion.
@@ -60,7 +58,6 @@ public class SebExitController {
             
             model.addAttribute("quitUrl", quitUrl);
             model.addAttribute("manualQuitUrl", manualQuitUrl);
-            model.addAttribute("externalUrl", "https://jacobbarkin.com");
             
             // Determine exit mode
             String exitMode = determineExitMode(mode, sebSetting);
@@ -104,7 +101,6 @@ public class SebExitController {
         model.addAttribute("quizId", quizId);
         model.addAttribute("userId", userId);
         model.addAttribute("quitType", "automatic");
-        model.addAttribute("externalUrl", "https://jacobbarkin.com");
         
         // Return a page that confirms SEB should quit
         return "sebQuit";
@@ -132,58 +128,9 @@ public class SebExitController {
         model.addAttribute("quizId", quizId);
         model.addAttribute("userId", userId);
         model.addAttribute("quitType", "manual");
-        model.addAttribute("externalUrl", "https://jacobbarkin.com");
         
         // Return a page that provides manual quit instructions
         return "sebQuit";
-    }
-
-    /**
-     * External redirect - redirects to an external URL (jacobbarkin.com).
-     * This can be used as an alternative exit method.
-     */
-    @GetMapping("/external/{courseId}/{quizId}")
-    public String externalRedirect(@PathVariable String courseId,
-                                  @PathVariable String quizId,
-                                  @RequestParam(required = false) String userId,
-                                  HttpServletRequest request) {
-        
-        log.info("SEB external redirect requested for course: {}, quiz: {}, user: {}", courseId, quizId, userId);
-        
-        // Redirect to external URL
-        return "redirect:https://jacobbarkin.com";
-    }
-
-    /**
-     * Test endpoint to verify SEB config contains the correct quit URLs.
-     * This endpoint shows the XML content of the SEB configuration for debugging.
-     */
-    @GetMapping("/test/{courseId}/{quizId}/config")
-    @ResponseBody
-    public ResponseEntity<String> testSebConfig(@PathVariable String courseId,
-                                               @PathVariable String quizId,
-                                               HttpServletRequest request) {
-
-        log.info("Testing SEB config for course: {}, quiz: {}", courseId, quizId);
-
-        try {
-            QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
-
-            // Generate SEB config to test quit URLs
-            byte[] configData = sebConfigService.generateSebConfig(courseId, quizId,
-                sebSetting != null ? sebSetting.getAccessCode() : null, sebSetting, null);
-
-            String configXml = new String(configData, java.nio.charset.StandardCharsets.UTF_8);
-
-            return ResponseEntity.ok()
-                    .header("Content-Type", "text/plain")
-                    .body(configXml);
-
-        } catch (Exception e) {
-            log.error("Error testing SEB config for course: {}, quiz: {}", courseId, quizId, e);
-            return ResponseEntity.status(500)
-                    .body("Error generating SEB config: " + e.getMessage());
-        }
     }
 
     /**
@@ -205,7 +152,6 @@ public class SebExitController {
             response.setExitPageUrl(generateExitPageUrl(courseId, quizId));
             response.setQuitUrl(generateQuitUrl(courseId, quizId));
             response.setManualQuitUrl(generateManualQuitUrl(courseId, quizId));
-            response.setExternalUrl("https://jacobbarkin.com");
             response.setSebRequired(sebSetting != null && sebSetting.isSebRequired());
             
             return response;

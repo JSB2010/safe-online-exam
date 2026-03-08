@@ -19,10 +19,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 
 /**
- * Controller for handling student-facing LTI launches with SEB enforcement.
- * This replaces the need for custom HTML modifications in Canvas.
- *
- * Phase 2: Now supports ALL content types (quizzes, assignments, New Quizzes, etc.)
+ * Controller for handling student-facing LTI launches with SEB enforcement for
+ * the supported classic-quiz module-item flow.
  *
  * Flow:
  * 1. Student clicks module item (LTI link) in Canvas
@@ -54,10 +52,10 @@ public class SebLtiLaunchController {
     }
 
     /**
-     * Handles LTI launches for SEB-enforced content (quizzes, assignments, etc.)
+     * Handles LTI launches for SEB-enforced classic quizzes.
      * This is the endpoint that Canvas will POST to when a student clicks the module item.
      *
-     * @param contentId The content ID (from URL path) - format: "classicquiz_123", "assignment_456", etc.
+     * @param contentId The content ID (from URL path) - format: "classicquiz_123".
      * @param idToken The LTI 1.3 id_token from Canvas
      * @param request The HTTP request (for SEB detection)
      * @param session The HTTP session
@@ -97,32 +95,21 @@ public class SebLtiLaunchController {
                 log.debug("Using existing launch data from session");
             }
 
-            // Get the content item
-            ContentItem content = contentService.getContentItem(contentId);
-
-            // Backward compatibility: Try as quiz ID if contentId doesn't have prefix
-            if (content == null && !contentId.contains("_")) {
-                log.debug("Content not found with ID {}, trying as legacy quiz ID", contentId);
-                Quiz quiz = quizService.getQuiz(contentId);
-                if (quiz != null) {
-                    content = ContentItem.fromQuiz(quiz);
-                }
-            }
+            ContentItem content = resolveContent(contentId);
 
             if (content == null) {
-                log.error("Content not found: {}", contentId);
-                model.addAttribute("error", "Content not found");
+                log.error("Unsupported or missing launch content: {}", contentId);
+                model.addAttribute("error", "Launch content not found");
                 return "error";
             }
 
-            // Get SEB settings (need to create service for this - for now use QuizService for backward compat)
-            boolean sebRequired = false;
-            ContentSebSetting sebSetting = null;
+            boolean sebRequired = isSebRequired(content);
+            String launchTarget = resolveLaunchTarget(content);
 
-            // TODO: Replace with ContentSebSettingService
-            if (content.getContentType() == ContentItem.ContentType.CLASSIC_QUIZ) {
-                QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(content.getCanvasId());
-                sebRequired = quizSetting != null && quizSetting.isSebRequired();
+            if (launchTarget == null || launchTarget.isBlank()) {
+                log.error("No launch target available for content: {}", contentId);
+                model.addAttribute("error", "Launch target not found");
+                return "error";
             }
 
             log.info("Content: {} ({}) - SEB Required: {}", content.getTitle(), content.getContentType(), sebRequired);
@@ -130,22 +117,18 @@ public class SebLtiLaunchController {
             // If SEB is not required, redirect directly to Canvas content
             if (!sebRequired) {
                 log.info("SEB not required, redirecting directly to content");
-                return new RedirectView(content.getHtmlUrl());
+                return new RedirectView(launchTarget);
             }
 
             // Check if student is using SEB
-            boolean isUsingSeb = false;
-            if (content.getContentType() == ContentItem.ContentType.CLASSIC_QUIZ) {
-                QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(content.getCanvasId());
-                isUsingSeb = sebDetector.isRequestFromSEB(request, quizSetting);
-            }
+            boolean isUsingSeb = isRequestFromSeb(request, content);
 
             log.info("SEB detection result: {}", isUsingSeb ? "SEB DETECTED" : "NOT SEB");
 
             if (isUsingSeb) {
                 // Student is using SEB - allow access
                 log.info("Student is using SEB, allowing access to content");
-                return new RedirectView(content.getHtmlUrl());
+                return new RedirectView(launchTarget);
             } else {
                 // Student is NOT using SEB - show download page
                 log.info("Student is NOT using SEB, showing download page");
@@ -155,13 +138,15 @@ public class SebLtiLaunchController {
                 model.addAttribute("contentTitle", content.getTitle());
                 model.addAttribute("contentType", content.getContentType().getDisplayName());
                 model.addAttribute("courseId", content.getCourseId());
-                model.addAttribute("contentId", contentId);
-                model.addAttribute("configDownloadUrl", "/seb/config/" + content.getCourseId() + "/" + contentId + ".seb");
+                model.addAttribute("contentId", content.getId());
+                String configDownloadUrl = "/seb/config/" + content.getCourseId() + "/" + content.getId() + ".seb";
+                model.addAttribute("configDownloadUrl", configDownloadUrl);
+                model.addAttribute("sebConfigUrl", configDownloadUrl);
 
                 // Backward compatibility attributes
                 model.addAttribute("quiz", content);
                 model.addAttribute("quizTitle", content.getTitle());
-                model.addAttribute("quizId", contentId);
+                model.addAttribute("quizId", content.getCanvasId());
 
                 // Add user info if available
                 if (launchData != null) {
@@ -224,5 +209,99 @@ public class SebLtiLaunchController {
                 (ltiMessageHint != null ? "&lti_message_hint=" + ltiMessageHint : "");
 
         return new RedirectView(redirectUrl);
+    }
+
+    private ContentItem resolveContent(String contentId) {
+        ContentItem classicQuizContent = resolveClassicQuizContent(contentId);
+        if (classicQuizContent != null) {
+            return classicQuizContent;
+        }
+
+        return resolveNewQuizContent(contentId);
+    }
+
+    private ContentItem resolveClassicQuizContent(String contentId) {
+        String quizId = extractClassicQuizId(contentId);
+        if (quizId == null) {
+            return null;
+        }
+
+        Quiz quiz = quizService.getQuiz(quizId);
+        if (quiz == null) {
+            log.warn("Classic quiz not found for launch content ID: {}", contentId);
+            return null;
+        }
+
+        return ContentItem.fromQuiz(quiz);
+    }
+
+    private ContentItem resolveNewQuizContent(String contentId) {
+        if (contentId == null || !contentId.startsWith("newquiz:")) {
+            return null;
+        }
+
+        ContentItem cachedContent = contentService.getContentItem(contentId);
+        if (cachedContent != null) {
+            return cachedContent;
+        }
+
+        ContentSebSetting setting = contentService.getSebSetting(contentId);
+        if (setting == null) {
+            return null;
+        }
+
+        ContentItem fallback = new ContentItem();
+        fallback.setId(contentId);
+        fallback.setCourseId(setting.getCourseId());
+        fallback.setCanvasId(setting.getCanvasId());
+        fallback.setAssignmentId(setting.getAssignmentId());
+        fallback.setContentType(setting.getContentType() != null ? setting.getContentType() : ContentItem.ContentType.NEW_QUIZ);
+        fallback.setTitle("New Quiz");
+        fallback.setHtmlUrl(setting.getHtmlUrl());
+        fallback.setCanvasLaunchUrl(setting.getCanvasLaunchUrl());
+        return fallback;
+    }
+
+    private boolean isSebRequired(ContentItem content) {
+        if (content.getContentType() == ContentItem.ContentType.NEW_QUIZ) {
+            ContentSebSetting setting = contentService.getSebSetting(content.getId());
+            return setting != null && setting.isSebRequired();
+        }
+
+        QuizSebSetting quizSetting = quizService.getSebSettingForQuiz(content.getCanvasId());
+        return quizSetting != null && quizSetting.isSebRequired();
+    }
+
+    private boolean isRequestFromSeb(HttpServletRequest request, ContentItem content) {
+        if (content.getContentType() == ContentItem.ContentType.NEW_QUIZ) {
+            return sebDetector.isRequestFromSEB(request, contentService.getSebSetting(content.getId()));
+        }
+
+        return sebDetector.isRequestFromSEB(request, quizService.getSebSettingForQuiz(content.getCanvasId()));
+    }
+
+    private String resolveLaunchTarget(ContentItem content) {
+        if (content.getContentType() == ContentItem.ContentType.NEW_QUIZ
+                && content.getCanvasLaunchUrl() != null
+                && !content.getCanvasLaunchUrl().isBlank()) {
+            return content.getCanvasLaunchUrl();
+        }
+        return content.getHtmlUrl();
+    }
+
+    private String extractClassicQuizId(String contentId) {
+        if (contentId == null || contentId.isBlank()) {
+            return null;
+        }
+
+        if (contentId.startsWith("classicquiz_")) {
+            return contentId.substring("classicquiz_".length());
+        }
+
+        if (!contentId.contains("_")) {
+            return contentId;
+        }
+
+        return null;
     }
 }

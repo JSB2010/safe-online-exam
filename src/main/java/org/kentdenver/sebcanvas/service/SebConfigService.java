@@ -36,6 +36,9 @@ public class SebConfigService {
     @Value("${app.base-url:}")
     private String configuredBaseUrl;
 
+    @Value("${app.seb.quit-password:${SEB_QUIT_PASSWORD:}}")
+    private String configuredQuitPassword;
+
     @Autowired
     private CanvasApiConfig canvasApiConfig;
 
@@ -48,19 +51,16 @@ public class SebConfigService {
             return configuredBaseUrl;
         }
 
-        // Try to get from Canvas API config redirect URI
         try {
-            String redirectUri = canvasApiConfig.getRedirectUri();
-            if (redirectUri != null && !redirectUri.isEmpty()) {
-                // Extract base URL from redirect URI (remove /api/oauth2callback)
-                return redirectUri.replace("/api/oauth2callback", "");
+            String baseUrl = canvasApiConfig.getApplicationBaseUrl();
+            if (baseUrl != null && !baseUrl.isBlank()) {
+                return baseUrl;
             }
         } catch (Exception e) {
             log.warn("Could not get base URL from Canvas API config: {}", e.getMessage());
         }
 
-        // Fallback to current deployment URL
-        return "https://canvas-seb-dev-184075650720.us-central1.run.app";
+        throw new IllegalStateException("Application base URL is not configured");
     }
 
     /**
@@ -77,9 +77,7 @@ public class SebConfigService {
             log.warn("Could not get Canvas domain from config: {}", e.getMessage());
         }
 
-        // Fallback to a default (this should rarely be used)
-        log.warn("Using fallback Canvas domain - this should be configured properly");
-        return "kentdenver.instructure.com";
+        throw new IllegalStateException("Canvas domain is not configured");
     }
 
     /**
@@ -130,7 +128,6 @@ public class SebConfigService {
         // SEB version and configuration
         addKeyValue(doc, root, "sebConfigPurpose", 1); // 1 = starting exam
         addKeyValue(doc, root, "sebServicePolicy", 1); // 1 = use SEB service
-        addKeyValue(doc, root, "hashedQuitPassword", generateHashedPassword("quit123")); // Default quit password
 
         // Browser Exam Key (BEK) - unique identifier for this configuration
         String browserExamKey = generateBrowserExamKey(courseId, quizId, accessCode);
@@ -264,26 +261,17 @@ public class SebConfigService {
      * Adds exam-specific settings.
      */
     private void addExamSettings(Document doc, Element root, QuizSebSetting sebSetting, Map<String, Object> customSettings, String courseId, String quizId) {
-        // === ENHANCED PASSWORD PROTECTION SETTINGS ===
-        // Use the test quit password (should be removed in production)
-        String quitPassword = "5845Alton625!@"; // Test password - remove in production
+        String quitPassword = resolveQuitPassword(customSettings);
+        boolean hasQuitPassword = quitPassword != null && !quitPassword.isBlank();
 
-        // Set both quit password and admin password for proper security
-        String hashedPassword = generateHashedPassword(quitPassword);
-        addKeyValue(doc, root, "hashedQuitPassword", hashedPassword);
-        addKeyValue(doc, root, "hashedAdminPassword", hashedPassword); // Same password for admin access
-
-        // Override with custom password if provided
-        if (customSettings != null && customSettings.containsKey("quitPassword")) {
-            String customQuitPassword = (String) customSettings.get("quitPassword");
-            String customHashedPassword = generateHashedPassword(customQuitPassword);
-            addKeyValue(doc, root, "hashedQuitPassword", customHashedPassword);
-            addKeyValue(doc, root, "hashedAdminPassword", customHashedPassword);
+        if (hasQuitPassword) {
+            String hashedPassword = generateHashedPassword(quitPassword);
+            addKeyValue(doc, root, "hashedQuitPassword", hashedPassword);
+            addKeyValue(doc, root, "hashedAdminPassword", hashedPassword);
         }
 
-        // Require password for accessing SEB settings and quitting
-        addKeyValue(doc, root, "allowQuit", true); // Allow quit but require password
-        addKeyValue(doc, root, "ignoreQuitPassword", false); // Don't ignore quit password
+        addKeyValue(doc, root, "allowQuit", hasQuitPassword);
+        addKeyValue(doc, root, "ignoreQuitPassword", !hasQuitPassword);
         addKeyValue(doc, root, "showMenuBar", false); // Hide menu bar to prevent easy access
         addKeyValue(doc, root, "enableTouchExit", false); // Disable touch exit on tablets
         addKeyValue(doc, root, "allowPreferencesWindow", false); // Block access to preferences without password
@@ -318,6 +306,21 @@ public class SebConfigService {
         addKeyValue(doc, root, "showTaskBar", false);
         addKeyValue(doc, root, "hideTaskBarOnFullscreen", true);
         addKeyValue(doc, root, "taskBarHeight", 40);
+    }
+
+    private String resolveQuitPassword(Map<String, Object> customSettings) {
+        if (customSettings != null) {
+            Object customQuitPassword = customSettings.get("quitPassword");
+            if (customQuitPassword instanceof String password && !password.isBlank()) {
+                return password;
+            }
+        }
+
+        if (configuredQuitPassword != null && !configuredQuitPassword.isBlank()) {
+            return configuredQuitPassword;
+        }
+
+        return null;
     }
 
     /**

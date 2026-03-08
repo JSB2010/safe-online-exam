@@ -125,7 +125,6 @@ public class DeepLinkModuleService {
                             }
                             break;
 
-                        case NEW_QUIZ:
                         case ASSIGNMENT:
                             if ("Assignment".equalsIgnoreCase(type) && contentId.equals(content.getCanvasId())) {
                                 isMatchingContent = true;
@@ -256,7 +255,6 @@ public class DeepLinkModuleService {
                     moduleItem.put("content_id", content.getCanvasId());
                     break;
 
-                case NEW_QUIZ:
                 case ASSIGNMENT:
                     moduleItem.put("type", "Assignment");
                     moduleItem.put("content_id", content.getCanvasId());

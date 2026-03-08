@@ -25,7 +25,7 @@ public class ContentSebSetting {
 
     /**
      * Unique identifier for the SEB setting.
-     * Format: matches content item ID (e.g., "quiz_12345", "assignment_67890")
+     * Format: matches content item ID (e.g., "classicquiz_12345", "assignment_67890")
      */
     @DocumentId
     private String id;
@@ -42,6 +42,11 @@ public class ContentSebSetting {
     private String canvasId;
 
     /**
+     * Assignment-backed identifier used for New Quizzes.
+     */
+    private String assignmentId;
+
+    /**
      * The type of content this applies to.
      */
     private ContentItem.ContentType contentType;
@@ -50,6 +55,26 @@ public class ContentSebSetting {
      * The Canvas course ID.
      */
     private String courseId;
+
+    /**
+     * Canvas HTML URL for the content.
+     */
+    private String htmlUrl;
+
+    /**
+     * Original Canvas launch URL for New Quizzes when available.
+     */
+    private String canvasLaunchUrl;
+
+    /**
+     * Canvas resource-link identifier for New Quizzes when discoverable.
+     */
+    private String resourceLinkUuid;
+
+    /**
+     * Canvas lookup identifier for New Quizzes when discoverable.
+     */
+    private String lookupUuid;
 
     /**
      * Flag to indicate whether SEB is required for this content.
@@ -131,8 +156,8 @@ public class ContentSebSetting {
      */
     public static ContentSebSetting fromQuizSebSetting(QuizSebSetting quizSetting) {
         ContentSebSetting setting = new ContentSebSetting();
-        setting.setId("classicquiz_" + quizSetting.getQuizId());
-        setting.setContentId("classicquiz_" + quizSetting.getQuizId());
+        setting.setId(ContentItem.classicQuizContentId(quizSetting.getQuizId()));
+        setting.setContentId(ContentItem.classicQuizContentId(quizSetting.getQuizId()));
         setting.setCanvasId(quizSetting.getQuizId());
         setting.setContentType(ContentItem.ContentType.CLASSIC_QUIZ);
         setting.setCourseId(quizSetting.getCourseId());
@@ -150,12 +175,27 @@ public class ContentSebSetting {
         return setting;
     }
 
+    public static ContentSebSetting fromContentItem(ContentItem contentItem) {
+        ContentSebSetting setting = new ContentSebSetting();
+        setting.setId(contentItem.getId());
+        setting.setContentId(contentItem.getId());
+        setting.setCanvasId(contentItem.getCanvasId());
+        setting.setAssignmentId(contentItem.getAssignmentId());
+        setting.setContentType(contentItem.getContentType());
+        setting.setCourseId(contentItem.getCourseId());
+        setting.setHtmlUrl(contentItem.getHtmlUrl());
+        setting.setCanvasLaunchUrl(contentItem.getCanvasLaunchUrl());
+        setting.setResourceLinkUuid(contentItem.getResourceLinkUuid());
+        setting.setLookupUuid(contentItem.getLookupUuid());
+        setting.setMetadata(contentItem.getMetadata());
+        return setting;
+    }
+
     /**
      * For backward compatibility with QuizSebSetting APIs.
      */
     public String getQuizId() {
-        if (contentType == ContentItem.ContentType.CLASSIC_QUIZ ||
-            contentType == ContentItem.ContentType.NEW_QUIZ) {
+        if (contentType == ContentItem.ContentType.CLASSIC_QUIZ) {
             return canvasId;
         }
         return null;
@@ -183,16 +223,7 @@ public class ContentSebSetting {
      * Checks if this content supports access code enforcement.
      */
     public boolean supportsAccessCode() {
-        switch (contentType) {
-            case CLASSIC_QUIZ:
-            case NEW_QUIZ:
-                return true;
-            case ASSIGNMENT:
-            case EXTERNAL_TOOL:
-            default:
-                // Assignments don't have native access code support in Canvas
-                // but we can still enforce via LTI launch
-                return false;
-        }
+        return contentType == ContentItem.ContentType.CLASSIC_QUIZ
+                || contentType == ContentItem.ContentType.NEW_QUIZ;
     }
 }
