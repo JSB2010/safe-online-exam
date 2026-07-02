@@ -180,7 +180,7 @@ public class SebConfigurationService {
             // Start URL - Use direct quiz URL (Canvas will redirect to SSO if needed)
             log.info("Setting SEB startURL to quiz URL: {}", quizUrl);
             addKeyValue(doc, dict, "startURL", "string", quizUrl);
-            addKeyValue(doc, dict, "sendBrowserExamKey", "true", null); // Send browser exam key
+            addKeyValue(doc, dict, "sendBrowserExamKey", "false", null); // WKWebView exposes keys via SEB JavaScript API, not HTTP headers
             addKeyValue(doc, dict, "browserExamKey", "string", generateBrowserExamKey(courseId, quizId, accessCode));
             addKeyValue(doc, dict, "configKey", "string", generateConfigKey(courseId, quizId, accessCode));
 
@@ -421,8 +421,8 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "hideBrowserWindowToolbar", "true", null); // Hide toolbar
 
             // Modern WebView Configuration (fix classic WebView deprecation)
-            addKeyValue(doc, dict, "browserEngine", "integer", "1"); // Use WebKit engine
-            addKeyValue(doc, dict, "browserWindowWebView", "integer", "1"); // Use modern WebView (not classic)
+            addKeyValue(doc, dict, "browserWindowWebView", "integer", "3"); // Force Modern WKWebView
+            addKeyValue(doc, dict, "browserWindowWebViewClassicHideDeprecationNote", "false", null);
             addKeyValue(doc, dict, "newBrowserWindowByLinkBlockForeign", "true", null); // Block foreign links
             addKeyValue(doc, dict, "newBrowserWindowByScriptBlockForeign", "true", null); // Block foreign scripts
             addKeyValue(doc, dict, "browserWindowAllowAddressBar", "false", null); // Hide address bar

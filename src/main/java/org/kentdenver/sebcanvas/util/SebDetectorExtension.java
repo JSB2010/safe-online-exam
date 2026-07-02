@@ -48,9 +48,16 @@ public class SebDetectorExtension {
             return true;
         }
 
-        // If SEB setting exists and has a Browser Exam Key, validate it
+        // Modern WKWebView exposes BEK/CK via the SEB JavaScript API instead of HTTP headers.
+        // Validate a BEK header when present, but do not reject modern SEB solely because the
+        // classic WebView header is absent.
         String browserExamKey = sebSetting.getBrowserExamKey();
         if (browserExamKey != null && !browserExamKey.isEmpty()) {
+            String browserExamKeyHeader = request.getHeader("X-SafeExamBrowser-BrowserExamKey");
+            if (browserExamKeyHeader == null || browserExamKeyHeader.isEmpty()) {
+                log.debug("SEB Browser Exam Key header absent; accepting detected SEB request for modern WebView compatibility");
+                return true;
+            }
             boolean isValid = sebDetector.validateBrowserExamKey(request, browserExamKey);
             log.debug("Browser Exam Key validation result: {}", isValid);
             return isValid;

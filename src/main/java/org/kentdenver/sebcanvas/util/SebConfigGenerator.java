@@ -168,6 +168,9 @@ public class SebConfigGenerator {
             appendPlistProperty(xml, "sendBrowserExamKey", config.isSendBrowserExamKey());
         }
 
+        appendPlistProperty(xml, "browserWindowWebView", 3);
+        appendPlistProperty(xml, "browserWindowWebViewClassicHideDeprecationNote", false);
+
         // Start URL - where SEB will navigate on launch
         appendPlistProperty(xml, "startURL", config.getStartURL());
 

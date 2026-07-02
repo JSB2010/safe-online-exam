@@ -91,7 +91,7 @@ public class SebService {
 
         // Add the Browser Exam Key to the configuration
         config.setBrowserExamKey(browserExamKey);
-        config.setSendBrowserExamKey(true); // Enable sending BEK in HTTP headers
+        config.setSendBrowserExamKey(false); // WKWebView exposes BEK/CK via the SEB JavaScript API, not HTTP headers
 
         // Generate the .seb file using our config generator
         byte[] sebFileContent = sebConfigGenerator.generateSebFile(config, browserExamKey);

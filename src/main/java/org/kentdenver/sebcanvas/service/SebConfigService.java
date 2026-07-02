@@ -247,10 +247,11 @@ public class SebConfigService {
         addKeyValue(doc, root, "browserUserAgent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 SEB/3.5");
 
-        // === MODERN WEBVIEW CONFIGURATION (Fix Classic WebView Deprecation Warning) ===
-        addKeyValue(doc, root, "browserEngine", 1); // 1 = WebKit engine (modern)
-        addKeyValue(doc, root, "browserWindowWebView", 1); // 1 = modern WebView (not classic UIWebView)
-        addKeyValue(doc, root, "hideClassicWebViewDeprecationMessage", true); // Hide deprecation warning if available
+        // Force WKWebView. In SEB macOS, browserWindowWebView values are:
+        // 0=Automatic, 1=Force Classic, 2=Force Modern for foreign new tabs, 3=Force Modern.
+        addKeyValue(doc, root, "browserWindowWebView", 3);
+        addKeyValue(doc, root, "browserWindowWebViewClassicHideDeprecationNote", false);
+        addKeyValue(doc, root, "sendBrowserExamKey", false);
 
         // Additional modern browser settings
         addKeyValue(doc, root, "newBrowserWindowByLinkBlockForeign", true); // Block foreign links in new windows
