@@ -316,27 +316,37 @@
      * Checks if this is a Canvas quiz page that requires SEB
      */
     function isCanvasQuizPage() {
-        // Check URL patterns for Canvas quizzes
+        // Check URL patterns for Canvas quizzes and assignment-backed New Quizzes.
         const url = window.location.href;
         const quizPatterns = [
             '/courses/\\d+/quizzes/\\d+',
-            '/courses/\\d+/assignments/\\d+.*quiz',
+            '/courses/\\d+/assignments/\\d+',
             '/courses/\\d+/quizzes/\\d+/take'
         ];
-        
+
         for (const pattern of quizPatterns) {
             if (new RegExp(pattern).test(url)) {
                 return true;
             }
         }
-        
+
+        const env = window.ENV || {};
+        if ((env.COURSE_ID || env.course_id) && (env.ASSIGNMENT_ID || env.assignment_id)) {
+            const pageText = (document.body && document.body.textContent || '').toLowerCase();
+            if (pageText.includes('quiz') || pageText.includes('access code')) {
+                return true;
+            }
+        }
+
         // Check for quiz-specific DOM elements
         const quizElements = [
             '#quiz_title',
             '.quiz-header',
             '#quiz-instructions',
             '.take_quiz_button',
-            '#submit_quiz_button'
+            '#submit_quiz_button',
+            '[data-testid*="quiz"]',
+            '[class*="quiz"]'
         ];
         
         for (const selector of quizElements) {
@@ -353,15 +363,38 @@
      */
     function extractQuizInfo() {
         const url = window.location.href;
-        const match = url.match(/\/courses\/(\d+)\/quizzes\/(\d+)/);
-        
-        if (match) {
+        const classicMatch = url.match(/\/courses\/(\d+)\/quizzes\/(\d+)/);
+
+        if (classicMatch) {
             return {
-                courseId: match[1],
-                quizId: match[2]
+                courseId: classicMatch[1],
+                quizId: classicMatch[2],
+                contentType: 'CLASSIC_QUIZ'
             };
         }
-        
+
+        const assignmentMatch = url.match(/\/courses\/(\d+)\/assignments\/(\d+)/);
+        if (assignmentMatch) {
+            return {
+                courseId: assignmentMatch[1],
+                assignmentId: assignmentMatch[2],
+                quizId: `newquiz:${assignmentMatch[1]}:${assignmentMatch[2]}`,
+                contentType: 'NEW_QUIZ'
+            };
+        }
+
+        const env = window.ENV || {};
+        const envCourseId = env.COURSE_ID || env.course_id;
+        const envAssignmentId = env.ASSIGNMENT_ID || env.assignment_id;
+        if (envCourseId && envAssignmentId) {
+            return {
+                courseId: String(envCourseId),
+                assignmentId: String(envAssignmentId),
+                quizId: `newquiz:${envCourseId}:${envAssignmentId}`,
+                contentType: 'NEW_QUIZ'
+            };
+        }
+
         return null;
     }
     
@@ -414,7 +447,10 @@
     function redirectToSebDownload(courseId, quizId) {
         // Include the current Canvas URL so our app can redirect back after SEB setup
         const currentUrl = encodeURIComponent(window.location.href);
-        const downloadUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/quiz/${courseId}/${quizId}?canvas_url=${currentUrl}`;
+        const isNewQuiz = String(quizId).startsWith('newquiz:');
+        const downloadUrl = isNewQuiz
+            ? `${SEB_DOWNLOAD_BASE_URL}/seb/launch/${encodeURIComponent(quizId)}?canvas_url=${currentUrl}`
+            : `${SEB_DOWNLOAD_BASE_URL}/seb/quiz/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}?canvas_url=${currentUrl}`;
 
         // Show a brief message before redirecting
         const message = document.createElement('div');
@@ -556,7 +592,7 @@
      */
     async function fetchAccessCodeForQuiz(courseId, quizId) {
         try {
-            const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/access-code/${courseId}/${quizId}`;
+            const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/access-code/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}`;
             debugLog('Fetching from URL: ' + url);
             debugLog('Using API key: ' + SEB_API_KEY.substring(0, 8) + '...');
 

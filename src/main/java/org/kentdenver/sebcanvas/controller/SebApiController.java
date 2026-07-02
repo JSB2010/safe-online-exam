@@ -1,8 +1,11 @@
 package org.kentdenver.sebcanvas.controller;
 
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.model.ContentItem;
+import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.ApiSecurityService;
+import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
@@ -26,11 +29,13 @@ import java.util.Map;
 public class SebApiController {
 
     private final QuizService quizService;
+    private final ContentService contentService;
     private final ApiSecurityService apiSecurityService;
 
     @Autowired
-    public SebApiController(QuizService quizService, ApiSecurityService apiSecurityService) {
+    public SebApiController(QuizService quizService, ContentService contentService, ApiSecurityService apiSecurityService) {
         this.quizService = quizService;
+        this.contentService = contentService;
         this.apiSecurityService = apiSecurityService;
         log.info("SebApiController initialized with basic security");
     }
@@ -58,9 +63,13 @@ public class SebApiController {
                 return ResponseEntity.status(validation.getHttpStatus()).body(response);
             }
 
-            // Get SEB setting for this quiz
-            QuizSebSetting setting = quizService.getSebSettingForQuiz(quizId);
+            ContentSebSetting contentSetting = resolveNewQuizSetting(courseId, quizId);
+            if (contentSetting != null) {
+                return buildContentAccessCodeResponse(courseId, quizId, contentSetting, response);
+            }
 
+            // Get SEB setting for this classic quiz
+            QuizSebSetting setting = quizService.getSebSettingForQuiz(quizId);
             if (setting == null) {
                 log.info("No SEB setting found for quiz {}", quizId);
                 response.put("success", false);
@@ -103,6 +112,58 @@ public class SebApiController {
             response.put("message", "Error retrieving access code: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
+    }
+
+    private ContentSebSetting resolveNewQuizSetting(String courseId, String quizId) {
+        if (quizId == null) {
+            return null;
+        }
+
+        if (quizId.startsWith("newquiz:")) {
+            return contentService.getSebSetting(quizId);
+        }
+
+        String contentId = ContentItem.newQuizContentId(courseId, quizId);
+        ContentSebSetting setting = contentService.getSebSetting(contentId);
+        if (setting != null && setting.getContentType() == ContentItem.ContentType.NEW_QUIZ) {
+            return setting;
+        }
+
+        return null;
+    }
+
+    private ResponseEntity<Map<String, Object>> buildContentAccessCodeResponse(String courseId,
+                                                                               String quizId,
+                                                                               ContentSebSetting setting,
+                                                                               Map<String, Object> response) {
+        if (setting.getCourseId() != null && !courseId.equals(setting.getCourseId())) {
+            log.warn("Rejecting access-code request for content {}: requested course {} does not match setting course {}",
+                    quizId, courseId, setting.getCourseId());
+            response.put("success", false);
+            response.put("message", "No SEB setting found for this quiz");
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+        }
+
+        if (!setting.isSebRequired() || !setting.isEnabled()) {
+            log.info("SEB not required or not enabled for content {}: sebRequired={}, enabled={}",
+                    quizId, setting.isSebRequired(), setting.isEnabled());
+            response.put("success", false);
+            response.put("message", "SEB not required for this quiz");
+            return ResponseEntity.ok(response);
+        }
+
+        String accessCode = setting.getAccessCode();
+        if (accessCode == null || accessCode.trim().isEmpty()) {
+            log.info("No access code set for content {}", quizId);
+            response.put("success", false);
+            response.put("message", "No access code configured for this quiz");
+            return ResponseEntity.ok(response);
+        }
+
+        log.info("SECURITY PASSED: Returning access code for content {} (length: {})", quizId, accessCode.length());
+        response.put("success", true);
+        response.put("accessCode", accessCode);
+        return ResponseEntity.ok(response);
     }
 
     /**

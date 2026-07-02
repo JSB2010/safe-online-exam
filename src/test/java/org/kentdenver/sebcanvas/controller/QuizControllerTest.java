@@ -158,15 +158,21 @@ class QuizControllerTest {
         existing.setCustomDomains(List.of("example.com"));
         when(contentService.getSebSetting("newquiz:course-7:99")).thenReturn(existing);
         when(contentService.saveSebSetting(any(ContentSebSetting.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(canvasApiConfig.getApplicationBaseUrl()).thenReturn("https://app.example.com");
         when(canvasApiService.setNewQuizAccessCode(eq("course-7"), eq("99"), anyString(), eq("user-1"))).thenReturn(true);
+        when(deepLinkModuleService.createOrUpdateModuleItemForContent(
+                eq("course-7"), any(ContentItem.class), eq("user-1"), eq(true))).thenReturn(true);
 
         var response = controller.enableSebWithAccessCode("course-7", "newquiz:course-7:99", null, session);
 
         assertEquals(200, response.getStatusCode().value());
         assertEquals(true, response.getBody().get("success"));
+        assertEquals(true, response.getBody().get("moduleItemUpdated"));
         verify(canvasApiService).setNewQuizAccessCode(eq("course-7"), eq("99"), anyString(), eq("user-1"));
         verify(contentService).saveSebSetting(any(ContentSebSetting.class));
-        verifyNoInteractions(quizService, deepLinkModuleService);
+        verify(deepLinkModuleService).createOrUpdateModuleItemForContent(
+                eq("course-7"), any(ContentItem.class), eq("user-1"), eq(true));
+        verifyNoInteractions(quizService);
     }
 
     @Test
@@ -181,14 +187,19 @@ class QuizControllerTest {
         when(contentService.getSebSetting("newquiz:course-7:99")).thenReturn(existing);
         when(contentService.saveSebSetting(any(ContentSebSetting.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(canvasApiService.removeNewQuizAccessCode("course-7", "99", "user-1")).thenReturn(true);
+        when(deepLinkModuleService.createOrUpdateModuleItemForContent(
+                eq("course-7"), any(ContentItem.class), eq("user-1"), eq(false))).thenReturn(true);
 
         var response = controller.disableSebWithAccessCode("course-7", "newquiz:course-7:99", session);
 
         assertEquals(200, response.getStatusCode().value());
         assertEquals(true, response.getBody().get("success"));
+        assertEquals(true, response.getBody().get("moduleItemRestored"));
         verify(canvasApiService).removeNewQuizAccessCode("course-7", "99", "user-1");
         verify(contentService).saveSebSetting(any(ContentSebSetting.class));
-        verifyNoInteractions(quizService, deepLinkModuleService);
+        verify(deepLinkModuleService).createOrUpdateModuleItemForContent(
+                eq("course-7"), any(ContentItem.class), eq("user-1"), eq(false));
+        verifyNoInteractions(quizService);
     }
 
     @Test

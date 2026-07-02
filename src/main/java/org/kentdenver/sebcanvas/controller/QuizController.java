@@ -527,6 +527,14 @@ public class QuizController {
         return String.format("%s/seb/redirect/%s", baseUrl, quizId);
     }
 
+    private String generateSebLaunchUrl(String contentId) {
+        String baseUrl = canvasApiConfig.getApplicationBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("Application base URL is not configured");
+        }
+        return String.format("%s/seb/launch/%s", baseUrl, contentId);
+    }
+
     /**
      * Extracts user ID from auth token.
      */
@@ -645,6 +653,7 @@ public class QuizController {
 
                 String effectiveCourseId = resolveCourseId(courseId, parsedContentId[0], quizId);
                 String assignmentId = parsedContentId[1];
+                String sebLaunchUrl = generateSebLaunchUrl(quizId);
                 String accessCode = generateSecureAccessCode();
                 boolean success = canvasApiService.setNewQuizAccessCode(effectiveCourseId, assignmentId, accessCode, userId);
 
@@ -653,13 +662,23 @@ public class QuizController {
                     setting.setSebRequired(true);
                     setting.setEnabled(true);
                     setting.setAccessCode(accessCode);
+                    setting.setExternalToolUrl(sebLaunchUrl);
                     if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isBlank()) {
                         setting.setBrowserExamKey(generateBrowserExamKey());
                     }
-                    contentService.saveSebSetting(setting);
+                    ContentSebSetting savedSetting = contentService.saveSebSetting(setting);
+                    boolean moduleUpdated = deepLinkModuleService.createOrUpdateModuleItemForContent(
+                            effectiveCourseId,
+                            buildNewQuizContentItem(quizId, effectiveCourseId, assignmentId, savedSetting),
+                            userId,
+                            true);
 
                     response.put("success", true);
                     response.put("message", "SEB enabled successfully with access code enforcement");
+                    response.put("moduleItemUpdated", moduleUpdated);
+                    if (!moduleUpdated) {
+                        response.put("moduleItemNote", "New Quiz must be added to a module first");
+                    }
                     log.info("SEB enabled for New Quiz {} in course {} by user {}", quizId, effectiveCourseId, userId);
                 } else {
                     String accessToken = canvasApiService.getAccessToken(userId);
@@ -765,7 +784,14 @@ public class QuizController {
                         setting.setSebRequired(false);
                         setting.setEnabled(false);
                         setting.setAccessCode(null);
-                        contentService.saveSebSetting(setting);
+                        setting.setExternalToolUrl(null);
+                        ContentSebSetting savedSetting = contentService.saveSebSetting(setting);
+                        boolean moduleRestored = deepLinkModuleService.createOrUpdateModuleItemForContent(
+                                effectiveCourseId,
+                                buildNewQuizContentItem(quizId, effectiveCourseId, assignmentId, savedSetting),
+                                userId,
+                                false);
+                        response.put("moduleItemRestored", moduleRestored);
                     }
 
                     response.put("success", true);
@@ -992,6 +1018,9 @@ public class QuizController {
             if (existingSetting.getContentType() == null) {
                 existingSetting.setContentType(ContentItem.ContentType.NEW_QUIZ);
             }
+            if (existingSetting.getHtmlUrl() == null || existingSetting.getHtmlUrl().isBlank()) {
+                existingSetting.setHtmlUrl(buildCanvasAssignmentUrl(courseId, assignmentId));
+            }
             return existingSetting;
         }
 
@@ -1007,7 +1036,61 @@ public class QuizController {
         setting.setCanvasId(assignmentId);
         setting.setAssignmentId(assignmentId);
         setting.setContentType(ContentItem.ContentType.NEW_QUIZ);
+        setting.setHtmlUrl(buildCanvasAssignmentUrl(courseId, assignmentId));
         return setting;
+    }
+
+    private ContentItem buildNewQuizContentItem(String contentId,
+                                                String courseId,
+                                                String assignmentId,
+                                                ContentSebSetting setting) {
+        ContentItem contentItem = contentService.getContentItem(contentId);
+        if (contentItem != null) {
+            if (contentItem.getCanvasId() == null || contentItem.getCanvasId().isBlank()) {
+                contentItem.setCanvasId(assignmentId);
+            }
+            if (contentItem.getAssignmentId() == null || contentItem.getAssignmentId().isBlank()) {
+                contentItem.setAssignmentId(assignmentId);
+            }
+            if (contentItem.getCourseId() == null || contentItem.getCourseId().isBlank()) {
+                contentItem.setCourseId(courseId);
+            }
+            return contentItem;
+        }
+
+        ContentItem fallback = new ContentItem();
+        fallback.setId(contentId);
+        fallback.setCourseId(courseId);
+        fallback.setCanvasId(assignmentId);
+        fallback.setAssignmentId(assignmentId);
+        fallback.setContentType(ContentItem.ContentType.NEW_QUIZ);
+        fallback.setTitle("New Quiz");
+        if (setting != null) {
+            fallback.setHtmlUrl(setting.getHtmlUrl());
+            fallback.setCanvasLaunchUrl(setting.getCanvasLaunchUrl());
+            fallback.setExternalToolUrl(setting.getExternalToolUrl());
+        }
+        return fallback;
+    }
+
+    private String buildCanvasAssignmentUrl(String courseId, String assignmentId) {
+        try {
+            String canvasDomain = canvasApiConfig.getCanvasDomain();
+            if (canvasDomain == null || canvasDomain.isBlank()) {
+                return null;
+            }
+
+            String canvasBaseUrl = canvasDomain.replaceAll("/+$", "");
+            if (!canvasBaseUrl.startsWith("http://") && !canvasBaseUrl.startsWith("https://")) {
+                canvasBaseUrl = "https://" + canvasBaseUrl;
+            }
+
+            return String.format("%s/courses/%s/assignments/%s", canvasBaseUrl, courseId, assignmentId);
+        } catch (Exception e) {
+            log.warn("Could not build Canvas assignment URL for course {} assignment {}: {}",
+                    courseId, assignmentId, e.getMessage());
+            return null;
+        }
     }
 
     private String normalizeBlank(String value) {
