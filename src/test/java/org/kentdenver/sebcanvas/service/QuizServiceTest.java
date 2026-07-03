@@ -6,15 +6,16 @@ import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.repository.FirestoreQuizRepository;
 import org.kentdenver.sebcanvas.repository.FirestoreSebSettingRepository;
-import org.kentdenver.sebcanvas.util.SebConfigGenerator;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -36,11 +37,7 @@ class QuizServiceTest {
     @Mock
     private HybridCanvasAuthService hybridAuthService;
     @Mock
-    private SebConfigGenerator sebConfigGenerator;
-    @Mock
     private CanvasApiService canvasApiService;
-    @Mock
-    private SebConfigService sebConfigService;
     @Mock
     private CanvasApiConfig canvasApiConfig;
 
@@ -65,6 +62,7 @@ class QuizServiceTest {
         assertTrue(savedSetting.isSebRequired());
         assertTrue(savedSetting.isEnabled());
         assertNotNull(savedSetting.getAccessCode());
+        assertEquals(16, savedSetting.getAccessCode().length());
     }
 
     @Test
@@ -91,5 +89,27 @@ class QuizServiceTest {
         assertFalse(savedSetting.isSebRequired());
         assertFalse(savedSetting.isEnabled());
         assertNull(savedSetting.getAccessCode());
+    }
+
+    @Test
+    void updateSebConfigurationStructuredPersistsQuitPassword() {
+        when(sebSettingRepository.findByQuizId("quiz-1")).thenReturn(Optional.empty());
+        when(sebSettingRepository.save(any(QuizSebSetting.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(canvasApiConfig.getCanvasDomain()).thenReturn("https://canvas.example.com");
+
+        QuizSebSetting saved = quizService.updateSebConfigurationStructured(
+                "quiz-1",
+                List.of("accounts.google.com"),
+                List.of("www.desmos.com"),
+                List.of("example.com"),
+                "https://app.example.com/seb/launch/classicquiz_1",
+                true,
+                "classic-exit");
+
+        assertEquals("classic-exit", saved.getQuitPassword());
+
+        ArgumentCaptor<QuizSebSetting> settingCaptor = ArgumentCaptor.forClass(QuizSebSetting.class);
+        verify(sebSettingRepository).save(settingCaptor.capture());
+        assertEquals("classic-exit", settingCaptor.getValue().getQuitPassword());
     }
 }

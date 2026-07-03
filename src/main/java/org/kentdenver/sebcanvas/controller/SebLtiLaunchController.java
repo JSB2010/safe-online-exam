@@ -7,6 +7,7 @@ import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.LtiService;
+import org.kentdenver.sebcanvas.service.LtiStateService;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,17 +39,20 @@ public class SebLtiLaunchController {
     private final QuizService quizService;
     private final ContentService contentService;
     private final SebDetector sebDetector;
+    private final LtiStateService ltiStateService;
 
     @Autowired
     public SebLtiLaunchController(
             LtiService ltiService,
             QuizService quizService,
             ContentService contentService,
-            SebDetector sebDetector) {
+            SebDetector sebDetector,
+            LtiStateService ltiStateService) {
         this.ltiService = ltiService;
         this.quizService = quizService;
         this.contentService = contentService;
         this.sebDetector = sebDetector;
+        this.ltiStateService = ltiStateService;
     }
 
     /**
@@ -66,6 +70,7 @@ public class SebLtiLaunchController {
     public Object handleLtiLaunch(
             @PathVariable String contentId,
             @RequestParam(value = "id_token", required = false) String idToken,
+            @RequestParam(value = "state", required = false) String state,
             HttpServletRequest request,
             HttpSession session,
             Model model) {
@@ -75,9 +80,13 @@ public class SebLtiLaunchController {
         try {
             // Validate LTI launch (if id_token is present)
             LtiService.LtiLaunchData launchData = null;
-            if (idToken != null) {
+            if (idToken != null && !idToken.isBlank()) {
                 try {
-                    launchData = ltiService.validateToken(idToken);
+                    String nonce = ltiStateService.consumeState(state).get("nonce");
+                    if (nonce == null || nonce.isBlank()) {
+                        throw new IllegalArgumentException("Missing nonce in LTI state");
+                    }
+                    launchData = ltiService.validateToken(idToken, nonce);
                 } catch (Exception e) {
                     log.error("Invalid LTI launch token for content: {}", contentId, e);
                     model.addAttribute("error", "Invalid LTI launch. Please try again from Canvas.");
@@ -90,9 +99,14 @@ public class SebLtiLaunchController {
 
                 log.info("LTI launch validated for user: {} ({})", launchData.getFullName(), launchData.getUserId());
             } else {
-                // Try to get launch data from session (for GET requests or follow-up requests)
+                // Follow-up GET requests are allowed only after a validated LTI launch created the session.
                 launchData = (LtiService.LtiLaunchData) session.getAttribute("launchData");
-                log.debug("Using existing launch data from session");
+                if (launchData == null) {
+                    log.warn("Rejecting SEB launch for content {} without id_token or validated session", contentId);
+                    model.addAttribute("error", "Please launch this assessment from Canvas before opening it in Safe Exam Browser.");
+                    return "error";
+                }
+                log.debug("Using existing validated launch data from session");
             }
 
             ContentItem content = resolveContent(contentId);
@@ -142,6 +156,7 @@ public class SebLtiLaunchController {
                 String configDownloadUrl = "/seb/config/" + content.getCourseId() + "/" + content.getId() + ".seb";
                 model.addAttribute("configDownloadUrl", configDownloadUrl);
                 model.addAttribute("sebConfigUrl", configDownloadUrl);
+                model.addAttribute("sebLaunchUrl", toSebSchemeUrl(request, configDownloadUrl));
 
                 // Backward compatibility attributes
                 model.addAttribute("quiz", content);
@@ -178,7 +193,7 @@ public class SebLtiLaunchController {
 
         // For GET requests, we don't have an id_token, so we check session for existing launch data
         // Then delegate to the POST handler
-        return handleLtiLaunch(contentId, null, request, session, model);
+        return handleLtiLaunch(contentId, null, null, request, session, model);
     }
 
     /**
@@ -281,10 +296,13 @@ public class SebLtiLaunchController {
     }
 
     private String resolveLaunchTarget(ContentItem content) {
-        if (content.getContentType() == ContentItem.ContentType.NEW_QUIZ
-                && content.getCanvasLaunchUrl() != null
-                && !content.getCanvasLaunchUrl().isBlank()) {
-            return content.getCanvasLaunchUrl();
+        if (content.getContentType() == ContentItem.ContentType.NEW_QUIZ) {
+            if (content.getHtmlUrl() != null && !content.getHtmlUrl().isBlank()) {
+                return content.getHtmlUrl();
+            }
+            if (content.getCanvasLaunchUrl() != null && !content.getCanvasLaunchUrl().isBlank()) {
+                return content.getCanvasLaunchUrl();
+            }
         }
         return content.getHtmlUrl();
     }
@@ -303,5 +321,18 @@ public class SebLtiLaunchController {
         }
 
         return null;
+    }
+
+    private String toSebSchemeUrl(HttpServletRequest request, String relativeConfigUrl) {
+        StringBuilder url = new StringBuilder("sebs://")
+                .append(request.getServerName());
+        if (request.getServerPort() != 80 && request.getServerPort() != 443) {
+            url.append(":").append(request.getServerPort());
+        }
+        if (request.getContextPath() != null && !request.getContextPath().isBlank()) {
+            url.append(request.getContextPath());
+        }
+        url.append(relativeConfigUrl);
+        return url.toString();
     }
 }

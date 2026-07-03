@@ -12,8 +12,8 @@ import org.kentdenver.sebcanvas.service.CanvasApiService;
 import org.kentdenver.sebcanvas.service.CanvasService;
 import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.LtiService;
+import org.kentdenver.sebcanvas.service.LtiStateService;
 import org.kentdenver.sebcanvas.service.QuizService;
-import org.kentdenver.sebcanvas.service.SebService;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -36,9 +36,9 @@ class LtiControllerTest {
     @Mock private SebDetector sebDetector;
     @Mock private CanvasService canvasService;
     @Mock private QuizService quizService;
-    @Mock private SebService sebService;
     @Mock private CanvasApiService canvasApiService;
     @Mock private ContentService contentService;
+    @Mock private LtiStateService ltiStateService;
 
     @Test
     void handleOAuthRedirectIncludesNewQuizContentAlongsideClassicQuizzes() {
@@ -79,9 +79,9 @@ class LtiControllerTest {
                 sebDetector,
                 canvasService,
                 quizService,
-                sebService,
                 canvasApiService,
-                contentService);
+                contentService,
+                ltiStateService);
 
         ExtendedModelMap model = new ExtendedModelMap();
         String view = controller.handleOAuthRedirect("course-7", "user-1", model, new MockHttpSession());

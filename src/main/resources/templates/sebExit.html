@@ -217,6 +217,33 @@
             font-size: 0.875rem;
             margin-bottom: 1rem;
         }
+
+        .manual-exit-actions {
+            margin-top: 1.5rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .quit-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 3rem;
+            padding: 0.75rem 1.25rem;
+            border-radius: var(--radius-md);
+            background: var(--primary-color);
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .quit-button:hover,
+        .quit-button:focus {
+            background: var(--primary-dark);
+            color: white;
+            text-decoration: none;
+        }
     </style>
 </head>
 <body>
@@ -228,7 +255,7 @@
                     ✅
                 </div>
                 <h1>Quiz Completed Successfully!</h1>
-                <p class="subtitle">Your exam has been submitted and Safe Exam Browser will now close automatically.</p>
+                <p class="subtitle">Your exam has been submitted. Use the button below to close Safe Exam Browser.</p>
             </div>
         </div>
 
@@ -265,12 +292,20 @@
                 <p style="margin: 0; font-size: 0.75rem; color: #78716c;">
                     <strong>Note:</strong> Your exam submission is complete regardless of how you exit the browser.
                 </p>
+                <div class="manual-exit-actions">
+                    <a id="sebQuitLink"
+                       class="quit-button"
+                       th:href="${quitUrl}"
+                       href="/seb/exit">
+                        Quit Safe Exam Browser
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        // Automatic countdown and redirect to trigger SEB quit
+        // Keep a short visual delay, then point the student at the exact SEB quit link.
         let countdown = 5;
         const countdownElement = document.getElementById('countdown');
         const progressElement = document.getElementById('progress');
@@ -282,9 +317,9 @@
 
             if (countdown <= 0) {
                 clearInterval(timer);
-                // Trigger SEB quit by navigating to the quit URL
-                // This URL should be configured in SEB as a quit link
-                window.location.href = '/seb/exit/quit/' + '[[${courseId}]]' + '/' + '[[${quizId}]]';
+                countdownElement.textContent = '0';
+                document.querySelector('.countdown-text').textContent = 'closing Safe Exam Browser';
+                window.location.assign(document.getElementById('sebQuitLink').href);
             }
         }, 1000);
 

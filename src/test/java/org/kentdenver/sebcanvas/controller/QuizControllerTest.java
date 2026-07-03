@@ -92,6 +92,7 @@ class QuizControllerTest {
         request.setSsoDomains(List.of("accounts.google.com"));
         request.setEducationalToolDomains(List.of("www.desmos.com"));
         request.setCustomDomains(List.of("example.com"));
+        request.setQuitPassword("classic-exit");
 
         QuizSebSetting expected = new QuizSebSetting();
         when(quizService.updateSebConfigurationStructured(
@@ -100,7 +101,8 @@ class QuizControllerTest {
                 request.getEducationalToolDomains(),
                 request.getCustomDomains(),
                 request.getExternalToolUrl(),
-                true)).thenReturn(expected);
+                true,
+                "classic-exit")).thenReturn(expected);
 
         var response = controller.saveSebConfigurationStructured(request, "session-user", session);
 
@@ -112,7 +114,8 @@ class QuizControllerTest {
                 request.getEducationalToolDomains(),
                 request.getCustomDomains(),
                 request.getExternalToolUrl(),
-                true);
+                true,
+                "classic-exit");
     }
 
     @Test

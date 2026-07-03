@@ -9,6 +9,7 @@ import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.LtiService;
+import org.kentdenver.sebcanvas.service.LtiStateService;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.mockito.Mock;
@@ -37,6 +38,8 @@ class SebLtiLaunchControllerTest {
     @Mock
     private SebDetector sebDetector;
     @Mock
+    private LtiStateService ltiStateService;
+    @Mock
     private HttpServletRequest request;
 
     @Test
@@ -51,12 +54,13 @@ class SebLtiLaunchControllerTest {
         when(quizService.getQuiz("42")).thenReturn(quiz);
         when(quizService.getSebSettingForQuiz("42")).thenReturn(null);
 
-        SebLtiLaunchController controller = new SebLtiLaunchController(ltiService, quizService, contentService, sebDetector);
+        SebLtiLaunchController controller = newController();
         Object result = controller.handleLtiLaunch(
                 "classicquiz_42",
                 null,
+                null,
                 request,
-                new MockHttpSession(),
+                sessionWithLaunchData(),
                 new ExtendedModelMap());
 
         RedirectView redirectView = assertInstanceOf(RedirectView.class, result);
@@ -66,14 +70,15 @@ class SebLtiLaunchControllerTest {
 
     @Test
     void handleLtiLaunchRejectsUnknownContentIds() {
-        SebLtiLaunchController controller = new SebLtiLaunchController(ltiService, quizService, contentService, sebDetector);
+        SebLtiLaunchController controller = newController();
         ExtendedModelMap model = new ExtendedModelMap();
 
         Object result = controller.handleLtiLaunch(
                 "assignment_42",
                 null,
+                null,
                 request,
-                new MockHttpSession(),
+                sessionWithLaunchData(),
                 model);
 
         assertEquals("error", result);
@@ -81,7 +86,7 @@ class SebLtiLaunchControllerTest {
     }
 
     @Test
-    void handleLtiLaunchRedirectsNewQuizToCanvasLaunchUrlWhenSebNotRequired() {
+    void handleLtiLaunchRedirectsNewQuizToNativeCanvasUrlWhenSebNotRequired() {
         ContentItem content = new ContentItem();
         content.setId("newquiz:course-7:99");
         content.setCourseId("course-7");
@@ -99,16 +104,17 @@ class SebLtiLaunchControllerTest {
         when(contentService.getContentItem("newquiz:course-7:99")).thenReturn(content);
         when(contentService.getSebSetting("newquiz:course-7:99")).thenReturn(setting);
 
-        SebLtiLaunchController controller = new SebLtiLaunchController(ltiService, quizService, contentService, sebDetector);
+        SebLtiLaunchController controller = newController();
         Object result = controller.handleLtiLaunch(
                 "newquiz:course-7:99",
                 null,
+                null,
                 request,
-                new MockHttpSession(),
+                sessionWithLaunchData(),
                 new ExtendedModelMap());
 
         RedirectView redirectView = assertInstanceOf(RedirectView.class, result);
-        assertEquals("https://canvas.example.com/courses/7/external_tools/sessionless_launch?id=777", redirectView.getUrl());
+        assertEquals("https://canvas.example.com/courses/7/assignments/99", redirectView.getUrl());
         verify(sebDetector, never()).isRequestFromSEB(eq(request), any(ContentSebSetting.class));
     }
 
@@ -131,19 +137,32 @@ class SebLtiLaunchControllerTest {
         when(contentService.getSebSetting("newquiz:course-7:99")).thenReturn(setting);
         when(sebDetector.isRequestFromSEB(eq(request), any(ContentSebSetting.class))).thenReturn(false);
 
-        SebLtiLaunchController controller = new SebLtiLaunchController(ltiService, quizService, contentService, sebDetector);
+        SebLtiLaunchController controller = newController();
         ExtendedModelMap model = new ExtendedModelMap();
 
         Object result = controller.handleLtiLaunch(
                 "newquiz:course-7:99",
                 null,
+                null,
                 request,
-                new MockHttpSession(),
+                sessionWithLaunchData(),
                 model);
 
         assertEquals("sebDownload", result);
         assertEquals("/seb/config/course-7/newquiz:course-7:99.seb", model.get("sebConfigUrl"));
         assertEquals("/seb/config/course-7/newquiz:course-7:99.seb", model.get("configDownloadUrl"));
         assertEquals("Checkpoint Quiz", model.get("contentTitle"));
+    }
+
+    private SebLtiLaunchController newController() {
+        return new SebLtiLaunchController(ltiService, quizService, contentService, sebDetector, ltiStateService);
+    }
+
+    private MockHttpSession sessionWithLaunchData() {
+        LtiService.LtiLaunchData launchData = new LtiService.LtiLaunchData();
+        launchData.setUserId("user-1");
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("launchData", launchData);
+        return session;
     }
 }

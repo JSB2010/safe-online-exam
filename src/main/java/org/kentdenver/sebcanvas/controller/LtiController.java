@@ -1,7 +1,5 @@
 package org.kentdenver.sebcanvas.controller;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.config.CanvasApiConfig;
@@ -15,8 +13,8 @@ import org.kentdenver.sebcanvas.service.CanvasService;
 import org.kentdenver.sebcanvas.service.ContentService;
 import org.kentdenver.sebcanvas.service.LtiService;
 import org.kentdenver.sebcanvas.service.LtiService.LtiLaunchData;
+import org.kentdenver.sebcanvas.service.LtiStateService;
 import org.kentdenver.sebcanvas.service.QuizService;
-import org.kentdenver.sebcanvas.service.SebService;
 import org.kentdenver.sebcanvas.util.SebDetector;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,7 +23,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.view.RedirectView;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
@@ -39,11 +36,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.text.ParseException;
 import java.util.*;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.Base64;
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Controller that handles the LTI 1.3 launch flow according to the Canvas LTI specification.
@@ -53,9 +45,6 @@ import javax.crypto.spec.SecretKeySpec;
 @RequestMapping("/lti")
 @Slf4j
 public class LtiController {
-    private static final String ALGORITHM = "AES";
-    private static final String DEV_STATE_ENCRYPTION_FALLBACK = "seb-canvas-dev-state-key";
-
     // Session attribute keys for storing LTI launch state
     private static final String SESSION_LAUNCH_DATA = "launchData";
 
@@ -66,15 +55,9 @@ public class LtiController {
     private final SebDetector sebDetector;
     private final CanvasService canvasService;
     private final QuizService quizService;
-    private final SebService sebService;
     private final CanvasApiService canvasApiService;
     private final ContentService contentService;
-
-    @Value("${app.security.state-encryption-key:${STATE_ENCRYPTION_KEY:}}")
-    private String stateEncryptionKey;
-
-    @Value("${spring.profiles.active:dev}")
-    private String activeProfile;
+    private final LtiStateService ltiStateService;
 
     /**
      * Constructor with dependency injection for all required services.
@@ -87,18 +70,18 @@ public class LtiController {
             SebDetector sebDetector,
             @Qualifier("oauthCanvasService") CanvasService canvasService,
             QuizService quizService,
-            SebService sebService,
             CanvasApiService canvasApiService,
-            ContentService contentService) {
+            ContentService contentService,
+            LtiStateService ltiStateService) {
         this.ltiService = ltiService;
         this.ltiConfig = ltiConfig;
         this.canvasApiConfig = canvasApiConfig;
         this.sebDetector = sebDetector;
         this.canvasService = canvasService;
         this.quizService = quizService;
-        this.sebService = sebService;
         this.canvasApiService = canvasApiService;
         this.contentService = contentService;
+        this.ltiStateService = ltiStateService;
     }
 
     /**
@@ -119,7 +102,7 @@ public class LtiController {
 
         // Generate a nonce for additional security (stored in state, not session)
         String nonce = UUID.randomUUID().toString();
-        log.info("Generated nonce: {}, Session ID: {}", nonce, session.getId());
+        log.debug("Generated LTI nonce for session {}", session.getId());
 
         // If client ID is not provided, use the one from the config
         if (clientId == null || clientId.isEmpty()) {
@@ -136,13 +119,7 @@ public class LtiController {
         stateData.put("target_link_uri", targetLinkUri);
 
         // Encrypt the state for security
-        String state;
-        try {
-            state = encryptState(stateData);
-        } catch (Exception e) {
-            log.error("Error encrypting state", e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error initiating LTI login");
-        }
+        String state = ltiStateService.createState(stateData);
 
         // Build the redirect URL to the OIDC authorization endpoint
         // IMPORTANT: redirect_uri must be the LTI launch endpoint, not the target_link_uri
@@ -211,11 +188,11 @@ public class LtiController {
 
         try {
             // Decrypt the state parameter
-            Map<String, String> stateData = decryptState(state);
+            Map<String, String> stateData = ltiStateService.consumeState(state);
             String nonce = stateData.get("nonce");
 
             // Validate the nonce from the JWT token against the one in the state
-            log.info("Validating nonce from state: {}, Session ID: {}", nonce, session.getId());
+            log.debug("Validating LTI nonce from state for session {}", session.getId());
 
             if (nonce == null || nonce.trim().isEmpty()) {
                 log.error("Missing nonce in state parameter");
@@ -405,43 +382,6 @@ public class LtiController {
             // Show the quiz to the student
             return "studentView";
         }
-    }
-
-    /**
-     * Encrypts state data into a string for use as the OIDC state parameter.
-     */
-    private String encryptState(Map<String, String> stateData) throws Exception {
-        // Convert state data to JSON
-        String stateJson = new ObjectMapper().writeValueAsString(stateData);
-
-        // Encrypt the JSON
-        SecretKeySpec secretKey = buildStateSecretKey();
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-
-        // Encrypt and encode
-        byte[] encryptedBytes = cipher.doFinal(stateJson.getBytes(StandardCharsets.UTF_8));
-        return Base64.getUrlEncoder().encodeToString(encryptedBytes);
-    }
-
-    /**
-     * Decrypts the state parameter back into the original data.
-     */
-    private Map<String, String> decryptState(String encryptedState) throws Exception {
-        // Decode the encrypted state
-        byte[] encryptedBytes = Base64.getUrlDecoder().decode(encryptedState);
-
-        // Decrypt
-        SecretKeySpec secretKey = buildStateSecretKey();
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(Cipher.DECRYPT_MODE, secretKey);
-
-        byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
-        String decryptedJson = new String(decryptedBytes, StandardCharsets.UTF_8);
-
-        // Parse back to Map
-        return new ObjectMapper().readValue(decryptedJson,
-                new TypeReference<Map<String, String>>() {});
     }
 
     /**
@@ -664,16 +604,4 @@ public class LtiController {
         return quiz;
     }
 
-    private SecretKeySpec buildStateSecretKey() throws Exception {
-        String rawKey = stateEncryptionKey;
-        if (rawKey == null || rawKey.isBlank()) {
-            if ("prod".equalsIgnoreCase(activeProfile)) {
-                throw new IllegalStateException("State encryption key is required in production");
-            }
-            rawKey = DEV_STATE_ENCRYPTION_FALLBACK;
-        }
-
-        byte[] keyBytes = MessageDigest.getInstance("SHA-256").digest(rawKey.getBytes(StandardCharsets.UTF_8));
-        return new SecretKeySpec(keyBytes, ALGORITHM);
-    }
 }

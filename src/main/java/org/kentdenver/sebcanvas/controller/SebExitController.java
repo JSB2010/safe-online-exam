@@ -2,8 +2,10 @@ package org.kentdenver.sebcanvas.controller;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.kentdenver.sebcanvas.config.CanvasApiConfig;
 import org.kentdenver.sebcanvas.service.QuizService;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -27,6 +29,10 @@ import jakarta.servlet.http.HttpServletResponse;
 public class SebExitController {
 
     private final QuizService quizService;
+    private final CanvasApiConfig canvasApiConfig;
+
+    @Value("${app.base-url:}")
+    private String configuredBaseUrl;
 
     /**
      * Main SEB exit page - shown after quiz completion.
@@ -44,7 +50,7 @@ public class SebExitController {
 
         try {
             // Get quiz information
-            QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
+            QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizSettingId(quizId));
             
             // Add model attributes for the exit page
             model.addAttribute("courseId", courseId);
@@ -53,10 +59,13 @@ public class SebExitController {
             model.addAttribute("sebRequired", sebSetting != null && sebSetting.isSebRequired());
             
             // Generate quit URLs
-            String quitUrl = generateQuitUrl(courseId, quizId);
-            String manualQuitUrl = generateManualQuitUrl(courseId, quizId);
+            String exitPageUrl = absoluteUrl(request, generateExitPageUrl(courseId, quizId));
+            String quitUrl = absoluteUrl(request, generateQuitUrl(courseId, quizId));
+            String manualQuitUrl = absoluteUrl(request, generateManualQuitUrl(courseId, quizId));
             
+            model.addAttribute("exitPageUrl", exitPageUrl);
             model.addAttribute("quitUrl", quitUrl);
+            model.addAttribute("legacyQuitUrl", quitUrl);
             model.addAttribute("manualQuitUrl", manualQuitUrl);
             
             // Determine exit mode
@@ -101,6 +110,9 @@ public class SebExitController {
         model.addAttribute("quizId", quizId);
         model.addAttribute("userId", userId);
         model.addAttribute("quitType", "automatic");
+        String quitUrl = absoluteUrl(request, generateQuitUrl(courseId, quizId));
+        model.addAttribute("quitUrl", quitUrl);
+        model.addAttribute("legacyQuitUrl", quitUrl);
         
         // Return a page that confirms SEB should quit
         return "sebQuit";
@@ -128,6 +140,9 @@ public class SebExitController {
         model.addAttribute("quizId", quizId);
         model.addAttribute("userId", userId);
         model.addAttribute("quitType", "manual");
+        String quitUrl = absoluteUrl(request, generateQuitUrl(courseId, quizId));
+        model.addAttribute("quitUrl", quitUrl);
+        model.addAttribute("legacyQuitUrl", quitUrl);
         
         // Return a page that provides manual quit instructions
         return "sebQuit";
@@ -149,9 +164,9 @@ public class SebExitController {
             QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
             
             ExitUrlResponse response = new ExitUrlResponse();
-            response.setExitPageUrl(generateExitPageUrl(courseId, quizId));
-            response.setQuitUrl(generateQuitUrl(courseId, quizId));
-            response.setManualQuitUrl(generateManualQuitUrl(courseId, quizId));
+            response.setExitPageUrl(absoluteUrl(request, generateExitPageUrl(courseId, quizId)));
+            response.setQuitUrl(absoluteUrl(request, generateQuitUrl(courseId, quizId)));
+            response.setManualQuitUrl(absoluteUrl(request, generateManualQuitUrl(courseId, quizId)));
             response.setSebRequired(sebSetting != null && sebSetting.isSebRequired());
             
             return response;
@@ -171,11 +186,53 @@ public class SebExitController {
     }
 
     private String generateQuitUrl(String courseId, String quizId) {
-        return String.format("/seb/exit/quit/%s/%s", courseId, quizId);
+        return String.format("/seb/exit/quit/%s/%s", courseId, quitPathId(quizId));
     }
 
     private String generateManualQuitUrl(String courseId, String quizId) {
-        return String.format("/seb/exit/manual/%s/%s", courseId, quizId);
+        return String.format("/seb/exit/manual/%s/%s", courseId, quitPathId(quizId));
+    }
+
+    private String quizSettingId(String quizId) {
+        return quitPathId(quizId);
+    }
+
+    private String quitPathId(String quizId) {
+        if (quizId != null && quizId.startsWith("classicquiz_")) {
+            return quizId.substring("classicquiz_".length());
+        }
+        return quizId;
+    }
+
+    private String absoluteUrl(HttpServletRequest request, String path) {
+        String normalizedPath = path.startsWith("/") ? path : "/" + path;
+        String baseUrl = configuredBaseUrl;
+
+        if (baseUrl == null || baseUrl.isBlank()) {
+            baseUrl = canvasApiConfig.getApplicationBaseUrl();
+        }
+
+        if (baseUrl == null || baseUrl.isBlank()) {
+            String forwardedProto = firstHeaderValue(request.getHeader("X-Forwarded-Proto"));
+            String forwardedHost = firstHeaderValue(request.getHeader("X-Forwarded-Host"));
+            String scheme = forwardedProto != null ? forwardedProto : request.getScheme();
+            String host = forwardedHost != null ? forwardedHost : request.getServerName();
+            int port = request.getServerPort();
+            boolean includePort = forwardedHost == null
+                    && port > 0
+                    && !("http".equalsIgnoreCase(scheme) && port == 80)
+                    && !("https".equalsIgnoreCase(scheme) && port == 443);
+            baseUrl = scheme + "://" + host + (includePort ? ":" + port : "");
+        }
+
+        return baseUrl.replaceAll("/+$", "") + normalizedPath;
+    }
+
+    private String firstHeaderValue(String headerValue) {
+        if (headerValue == null || headerValue.isBlank()) {
+            return null;
+        }
+        return headerValue.split(",", 2)[0].trim();
     }
 
     private String determineExitMode(String requestedMode, QuizSebSetting sebSetting) {

@@ -160,6 +160,33 @@
             font-size: 0.875rem;
             margin: 0;
         }
+
+        .manual-exit-actions {
+            margin-top: 1.5rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .quit-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 3rem;
+            padding: 0.75rem 1.25rem;
+            border-radius: var(--radius-md);
+            background: var(--primary-color);
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .quit-button:hover,
+        .quit-button:focus {
+            background: var(--primary-dark);
+            color: white;
+            text-decoration: none;
+        }
     </style>
 </head>
 <body>
@@ -189,6 +216,15 @@
                     📋 Quiz Submission Complete
                 </h3>
                 <p>Your exam has been successfully submitted and recorded. The exit process does not affect your quiz results in any way.</p>
+            </div>
+
+            <div class="manual-exit-actions">
+                <a id="sebLegacyQuitLink"
+                   class="quit-button"
+                   th:href="${legacyQuitUrl}"
+                   href="/seb/exit/quit">
+                    Quit Safe Exam Browser
+                </a>
             </div>
         </div>
     </div>

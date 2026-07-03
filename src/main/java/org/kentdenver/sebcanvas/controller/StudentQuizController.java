@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.service.QuizService;
+import org.kentdenver.sebcanvas.util.SebDetector;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -25,6 +26,7 @@ import jakarta.servlet.http.HttpServletRequest;
 public class StudentQuizController {
 
     private final QuizService quizService;
+    private final SebDetector sebDetector;
 
     /**
      * Main student quiz access endpoint.
@@ -61,7 +63,7 @@ public class StudentQuizController {
             }
 
             // Check if request is coming from SEB
-            boolean isSebRequest = detectSebBrowser(request, sebSetting);
+            boolean isSebRequest = sebDetector.isRequestFromSEB(request, sebSetting);
             
             if (isSebRequest) {
                 log.info("SEB detected for quiz {}, proceeding to LTI launch", quizId);
@@ -100,7 +102,7 @@ public class StudentQuizController {
             // Verify SEB is still present
             QuizSebSetting sebSetting = quizService.getSebSettingForQuiz(quizId);
             if (sebSetting != null && sebSetting.isSebRequired()) {
-                boolean isSebRequest = detectSebBrowser(request, sebSetting);
+                boolean isSebRequest = sebDetector.isRequestFromSEB(request, sebSetting);
                 if (!isSebRequest) {
                     log.warn("SEB not detected during launch for quiz {}", quizId);
                     return showSebRequiredPage(orgId, courseId, quizId, userId, assignmentId, sebSetting, model);
@@ -118,41 +120,6 @@ public class StudentQuizController {
             model.addAttribute("error", "Unable to launch quiz. Please contact your instructor.");
             return "error";
         }
-    }
-
-    /**
-     * Detects if the request is coming from Safe Exam Browser.
-     */
-    private boolean detectSebBrowser(HttpServletRequest request, QuizSebSetting sebSetting) {
-        // Method 1: Check for SEB-specific headers (most secure)
-        String configKeyHash = request.getHeader("X-SafeExamBrowser-ConfigKeyHash");
-        String requestHash = request.getHeader("X-SafeExamBrowser-RequestHash");
-        
-        if (configKeyHash != null && requestHash != null) {
-            log.debug("SEB headers detected - ConfigKey: {}, RequestHash: {}", 
-                     configKeyHash.substring(0, Math.min(8, configKeyHash.length())) + "...",
-                     requestHash.substring(0, Math.min(8, requestHash.length())) + "...");
-            
-            // Verify the config key hash matches our expected value
-            if (sebSetting.getBrowserExamKey() != null && 
-                sebSetting.getBrowserExamKey().equals(configKeyHash)) {
-                log.info("SEB config key hash verified successfully");
-                return true;
-            } else {
-                log.warn("SEB config key hash mismatch. Expected: {}, Got: {}", 
-                        sebSetting.getBrowserExamKey(), configKeyHash);
-            }
-        }
-
-        // Method 2: Check User-Agent for SEB (less secure, fallback)
-        String userAgent = request.getHeader("User-Agent");
-        if (userAgent != null && userAgent.contains("SEB")) {
-            log.debug("SEB detected in User-Agent: {}", userAgent);
-            return true;
-        }
-
-        log.debug("No SEB indicators found in request");
-        return false;
     }
 
     /**

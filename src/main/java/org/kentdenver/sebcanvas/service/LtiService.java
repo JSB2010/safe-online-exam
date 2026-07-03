@@ -261,8 +261,7 @@ public class LtiService {
      * Legacy method without nonce validation - for backward compatibility
      */
     public LtiLaunchData validateToken(String token) throws ParseException, JOSEException {
-        log.warn("Using deprecated validateToken method without nonce validation");
-        return validateToken(token, null);
+        throw new JOSEException("Nonce validation is required for LTI launches");
     }
 
     /**
@@ -300,12 +299,12 @@ public class LtiService {
         // Verify nonce if provided
         if (expectedNonce != null) {
             String tokenNonce = (String) claims.get("nonce");
-            log.info("Nonce validation - Expected: {}, Token: {}", expectedNonce, tokenNonce);
+            log.debug("Validating LTI nonce");
             if (tokenNonce == null || !tokenNonce.equals(expectedNonce)) {
-                log.error("Nonce mismatch - Expected: {}, Token: {}", expectedNonce, tokenNonce);
-                throw new JOSEException("Invalid nonce - expected: " + expectedNonce + ", got: " + tokenNonce);
+                log.warn("LTI nonce mismatch");
+                throw new JOSEException("Invalid nonce");
             }
-            log.info("Nonce validation successful");
+            log.debug("LTI nonce validation successful");
         }
 
         // Verify not expired

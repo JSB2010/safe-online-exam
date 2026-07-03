@@ -6,13 +6,11 @@ import org.kentdenver.sebcanvas.model.Quiz;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
 import org.kentdenver.sebcanvas.repository.FirestoreQuizRepository;
 import org.kentdenver.sebcanvas.repository.FirestoreSebSettingRepository;
-import org.kentdenver.sebcanvas.util.SebConfigGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 
-import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -36,9 +34,7 @@ public class QuizService {
     private final FirestoreQuizRepository quizRepository;
     private final FirestoreSebSettingRepository sebSettingRepository;
     private final HybridCanvasAuthService hybridAuthService;
-    private final SebConfigGenerator sebConfigGenerator;
     private final CanvasApiService canvasApiService;
-    private final SebConfigService sebConfigService;
     private final CanvasApiConfig canvasApiConfig;
 
     /**
@@ -47,25 +43,19 @@ public class QuizService {
      * @param quizRepository Repository for quiz data
      * @param sebSettingRepository Repository for SEB settings
      * @param hybridAuthService Service for hybrid Canvas authentication
-     * @param sebConfigGenerator Utility for generating SEB config files
      * @param canvasApiService Service for Canvas API interactions
-     * @param sebConfigService Service for SEB configuration file generation
      */
     @Autowired
     public QuizService(
             FirestoreQuizRepository quizRepository,
             FirestoreSebSettingRepository sebSettingRepository,
             HybridCanvasAuthService hybridAuthService,
-            SebConfigGenerator sebConfigGenerator,
             CanvasApiService canvasApiService,
-            SebConfigService sebConfigService,
             CanvasApiConfig canvasApiConfig) {
         this.quizRepository = quizRepository;
         this.sebSettingRepository = sebSettingRepository;
         this.hybridAuthService = hybridAuthService;
-        this.sebConfigGenerator = sebConfigGenerator;
         this.canvasApiService = canvasApiService;
-        this.sebConfigService = sebConfigService;
         this.canvasApiConfig = canvasApiConfig;
         log.info("Initialized QuizService with enhanced SEB support");
     }
@@ -351,6 +341,22 @@ public class QuizService {
                                                           List<String> educationalToolDomains,
                                                           List<String> customDomains,
                                                           String externalToolUrl, boolean sebRequired) {
+        return updateSebConfigurationStructured(
+                quizId,
+                ssoDomains,
+                educationalToolDomains,
+                customDomains,
+                externalToolUrl,
+                sebRequired,
+                null);
+    }
+
+    public QuizSebSetting updateSebConfigurationStructured(String quizId, List<String> ssoDomains,
+                                                          List<String> educationalToolDomains,
+                                                          List<String> customDomains,
+                                                          String externalToolUrl,
+                                                          boolean sebRequired,
+                                                          String quitPassword) {
         log.debug("Updating structured SEB configuration for quiz: {}", quizId);
 
         QuizSebSetting setting = sebSettingRepository.findByQuizId(quizId)
@@ -366,6 +372,7 @@ public class QuizService {
         setting.setCustomDomains(customDomains != null ? customDomains : new ArrayList<>());
         setting.setExternalToolUrl(externalToolUrl);
         setting.setSebRequired(sebRequired);
+        setting.setQuitPassword(normalizeOptionalPassword(quitPassword));
 
         // Set Canvas domain from configuration
         try {
@@ -392,6 +399,10 @@ public class QuizService {
         QuizSebSetting savedSetting = sebSettingRepository.save(setting);
         log.info("Updated structured SEB configuration for quiz: {}", quizId);
         return savedSetting;
+    }
+
+    private String normalizeOptionalPassword(String password) {
+        return password != null && !password.isBlank() ? password.trim() : null;
     }
 
     /**
@@ -436,68 +447,6 @@ public class QuizService {
     }
 
     /**
-     * Generates a SEB configuration file for a quiz.
-     *
-     * @param quizId The quiz ID
-     * @param quizUrl The quiz URL
-     * @return The SEB configuration file as a byte array
-     * @throws IOException If there's an error generating the file
-     * @throws NoSuchAlgorithmException If there's an error generating cryptographic keys
-     */
-    public byte[] generateSebConfig(String quizId, String quizUrl) throws IOException, NoSuchAlgorithmException {
-        log.debug("Generating SEB config for quiz: {} with URL: {}", quizId, quizUrl);
-
-        // Check if there's an existing Browser Exam Key for this quiz
-        String browserExamKey = null;
-        Optional<QuizSebSetting> setting = sebSettingRepository.findByQuizId(quizId);
-
-        if (setting.isPresent() && setting.get().getBrowserExamKey() != null) {
-            browserExamKey = setting.get().getBrowserExamKey();
-            log.debug("Using existing Browser Exam Key for quiz: {}", quizId);
-        } else {
-            // Generate a new Browser Exam Key
-            browserExamKey = generateBrowserExamKey();
-
-            // Save the new key
-            if (setting.isPresent()) {
-                QuizSebSetting sebSetting = setting.get();
-                sebSetting.setBrowserExamKey(browserExamKey);
-                sebSettingRepository.save(sebSetting);
-                log.debug("Saved new Browser Exam Key for quiz: {}", quizId);
-            } else {
-                // Create a new setting with the Browser Exam Key
-                QuizSebSetting newSetting = new QuizSebSetting();
-                newSetting.setQuizId(quizId);
-                newSetting.setSebRequired(true);
-                newSetting.setBrowserExamKey(browserExamKey);
-                sebSettingRepository.save(newSetting);
-                log.debug("Created new SEB setting with Browser Exam Key for quiz: {}", quizId);
-            }
-        }
-
-        // Create a SEB configuration
-        org.kentdenver.sebcanvas.model.SebConfig config = new org.kentdenver.sebcanvas.model.SebConfig();
-        config.setName("Quiz " + quizId);
-        config.setDescription("SEB Config for Canvas Quiz");
-        config.setAllowQuit(true);
-        config.setBlockExplorer(true);
-        config.setDisableScreenCapture(true);
-        config.setDisablePrinting(true);
-        config.setStartURL(quizUrl);
-
-        // For Canvas quizzes, we want to quit SEB after submission
-        // The quiz submission confirmation page URL can be used as the quit URL
-        // This is a simplification - in reality, you would need a more robust approach
-        config.setQuitURL(quizUrl + "/submitted");
-
-        // Generate the SEB file with the Browser Exam Key
-        byte[] sebFileContent = sebConfigGenerator.generateSebFile(config, browserExamKey);
-        log.debug("Generated SEB config file for quiz: {} ({} bytes)", quizId, sebFileContent.length);
-
-        return sebFileContent;
-    }
-
-    /**
      * Gets a specific quiz by ID.
      *
      * @param quizId The quiz ID
@@ -517,6 +466,10 @@ public class QuizService {
     public QuizSebSetting getSebSettingForQuiz(String quizId) {
         log.debug("Getting SEB setting for quiz: {}", quizId);
         return sebSettingRepository.findByQuizId(quizId).orElse(null);
+    }
+
+    public QuizSebSetting saveSebSetting(QuizSebSetting setting) {
+        return sebSettingRepository.save(setting);
     }
 
     /**
@@ -595,7 +548,7 @@ public class QuizService {
 
             // Generate secure access code
             String accessCode = generateSecureAccessCode();
-            log.info("Generated access code for quiz {}: {}", quizId, accessCode);
+            log.info("Generated new SEB access code for quiz {}", quizId);
 
             log.info("Setting access code for Classic Quiz {} using Classic Quizzes API", quizId);
             boolean accessCodeSet = canvasApiService.setQuizAccessCode(courseId, quizId, accessCode, userId);
@@ -620,6 +573,7 @@ public class QuizService {
             sebSetting.setSebRequired(true);
             sebSetting.setAccessCode(accessCode);
             sebSetting.setEnabled(true);
+            sebSetting.setConfigKey(null);
 
             // Save SEB settings
             sebSettingRepository.save(sebSetting);
@@ -673,6 +627,7 @@ public class QuizService {
                 sebSetting.setSebRequired(false);
                 sebSetting.setAccessCode(null);
                 sebSetting.setEnabled(false);
+                sebSetting.setConfigKey(null);
                 sebSettingRepository.save(sebSetting);
                 log.info("SEB database setting updated for quiz {}", quizId);
             } else {
@@ -684,6 +639,7 @@ public class QuizService {
                 sebSetting.setSebRequired(false);
                 sebSetting.setEnabled(false);
                 sebSetting.setAccessCode(null);
+                sebSetting.setConfigKey(null);
                 sebSettingRepository.save(sebSetting);
             }
 
@@ -697,38 +653,15 @@ public class QuizService {
     }
 
     /**
-     * Generates a SEB configuration file for a quiz.
-     */
-    public byte[] generateSebConfigFile(String courseId, String quizId, Map<String, Object> customSettings) {
-        try {
-            QuizSebSetting sebSetting = getSebSettingForQuiz(quizId);
-            if (sebSetting == null || !sebSetting.isSebRequired()) {
-                throw new IllegalStateException("SEB is not enabled for quiz " + quizId);
-            }
-
-            String accessCode = sebSetting.getAccessCode();
-            if (accessCode == null || accessCode.isEmpty()) {
-                throw new IllegalStateException("No access code found for quiz " + quizId);
-            }
-
-            return sebConfigService.generateSebConfig(courseId, quizId, accessCode, sebSetting, customSettings);
-
-        } catch (Exception e) {
-            log.error("Error generating SEB config file for quiz {}: {}", quizId, e.getMessage(), e);
-            throw new RuntimeException("Failed to generate SEB configuration file", e);
-        }
-    }
-
-    /**
      * Generates a secure random access code.
      */
     private String generateSecureAccessCode() {
         SecureRandom random = new SecureRandom();
         StringBuilder accessCode = new StringBuilder();
 
-        // Generate 8-character alphanumeric code
+        // Generate 16-character alphanumeric code
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 16; i++) {
             accessCode.append(chars.charAt(random.nextInt(chars.length())));
         }
 

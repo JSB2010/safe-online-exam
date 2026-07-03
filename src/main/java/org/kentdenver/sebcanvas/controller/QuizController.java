@@ -342,7 +342,8 @@ public class QuizController {
                 request.getEducationalToolDomains(),
                 request.getCustomDomains(),
                 request.getExternalToolUrl(),
-                true
+                true,
+                request.getQuitPassword()
             );
 
             log.info("Successfully saved structured SEB configuration for quiz {}", request.getQuizId());
@@ -662,6 +663,7 @@ public class QuizController {
                     setting.setSebRequired(true);
                     setting.setEnabled(true);
                     setting.setAccessCode(accessCode);
+                    setting.setConfigKey(null);
                     setting.setExternalToolUrl(sebLaunchUrl);
                     if (setting.getBrowserExamKey() == null || setting.getBrowserExamKey().isBlank()) {
                         setting.setBrowserExamKey(generateBrowserExamKey());
@@ -784,6 +786,7 @@ public class QuizController {
                         setting.setSebRequired(false);
                         setting.setEnabled(false);
                         setting.setAccessCode(null);
+                        setting.setConfigKey(null);
                         setting.setExternalToolUrl(null);
                         ContentSebSetting savedSetting = contentService.saveSebSetting(setting);
                         boolean moduleRestored = deepLinkModuleService.createOrUpdateModuleItemForContent(
@@ -876,24 +879,90 @@ public class QuizController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
             }
 
-            if (isNewQuizContentId(quizId)) {
-                return ResponseEntity.status(HttpStatus.FOUND)
-                        .header("Location", "/seb/config/" + courseId + "/" + quizId + ".seb")
-                        .build();
-            }
-
-            // Generate SEB configuration file
-            byte[] configFile = quizService.generateSebConfigFile(courseId, quizId, customSettings);
-
-            // Set response headers for file download
-            return ResponseEntity.ok()
-                    .header("Content-Disposition", "attachment; filename=quiz_" + quizId + "_seb_config.seb")
-                    .header("Content-Type", "application/octet-stream")
-                    .body(configFile);
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .header("Location", "/seb/config/" + courseId + "/" + quizId + ".seb")
+                    .build();
 
         } catch (Exception e) {
             log.error("Error generating SEB config file for quiz {}: {}", quizId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * Rotates the Canvas access code and invalidates the previously downloaded SEB configuration.
+     */
+    @PostMapping("/{courseId}/{quizId}/seb/regenerate-code")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> regenerateSebAccessCode(
+            @PathVariable String courseId,
+            @PathVariable String quizId,
+            HttpSession session) {
+
+        Map<String, Object> response = new HashMap<>();
+        String userId = getUserIdFromSession(session);
+        if (userId == null) {
+            response.put("success", false);
+            response.put("message", "User not authenticated. Please refresh the page or re-launch from Canvas.");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+        }
+
+        try {
+            String accessCode = generateSecureAccessCode();
+
+            if (isNewQuizContentId(quizId)) {
+                String[] parsedContentId = parseNewQuizContentId(quizId);
+                if (parsedContentId == null) {
+                    response.put("success", false);
+                    response.put("message", "Invalid New Quiz content ID");
+                    return ResponseEntity.badRequest().body(response);
+                }
+
+                String effectiveCourseId = resolveCourseId(courseId, parsedContentId[0], quizId);
+                String assignmentId = parsedContentId[1];
+                ContentSebSetting setting = contentService.getSebSetting(quizId);
+                if (setting == null || !setting.isSebRequired()) {
+                    response.put("success", false);
+                    response.put("message", "SEB is not enabled for this quiz");
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                }
+
+                if (!canvasApiService.setNewQuizAccessCode(effectiveCourseId, assignmentId, accessCode, userId)) {
+                    response.put("success", false);
+                    response.put("message", "Failed to update Canvas access code");
+                    return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(response);
+                }
+
+                setting.setAccessCode(accessCode);
+                setting.setConfigKey(null);
+                contentService.saveSebSetting(setting);
+            } else {
+                QuizSebSetting setting = quizService.getSebSettingForQuiz(quizId);
+                if (setting == null || !setting.isSebRequired()) {
+                    response.put("success", false);
+                    response.put("message", "SEB is not enabled for this quiz");
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                }
+
+                if (!canvasApiService.setQuizAccessCode(courseId, quizId, accessCode, userId)) {
+                    response.put("success", false);
+                    response.put("message", "Failed to update Canvas access code");
+                    return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(response);
+                }
+
+                setting.setAccessCode(accessCode);
+                setting.setConfigKey(null);
+                quizService.saveSebSetting(setting);
+            }
+
+            response.put("success", true);
+            response.put("message", "SEB access code regenerated. Students must download a fresh configuration file.");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error regenerating SEB access code for quiz {}: {}", quizId, e.getMessage(), e);
+            response.put("success", false);
+            response.put("message", "Error regenerating access code: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
 
@@ -929,7 +998,6 @@ public class QuizController {
                         && !sebSetting.getAccessCode().isBlank());
 
                 if (sebSetting != null) {
-                    response.put("browserExamKey", sebSetting.getBrowserExamKey());
                     response.put("ssoDomains", sebSetting.getSsoDomains());
                     response.put("educationalToolDomains", sebSetting.getEducationalToolDomains());
                     response.put("customDomains", sebSetting.getCustomDomains());
@@ -947,7 +1015,6 @@ public class QuizController {
             response.put("configValid", quizService.validateSebConfiguration(quizId));
 
             if (sebSetting != null) {
-                response.put("browserExamKey", sebSetting.getBrowserExamKey());
                 response.put("canvasDomain", sebSetting.getCanvasDomain());
                 response.put("ssoDomains", sebSetting.getSsoDomains());
                 response.put("educationalToolDomains", sebSetting.getEducationalToolDomains());
@@ -1109,7 +1176,7 @@ public class QuizController {
         SecureRandom random = new SecureRandom();
         StringBuilder accessCode = new StringBuilder();
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 16; i++) {
             accessCode.append(chars.charAt(random.nextInt(chars.length())));
         }
         return accessCode.toString();

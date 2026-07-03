@@ -33,10 +33,7 @@ public class ApiSecurityService {
     public SecurityValidationResult validateSebApiRequest(HttpServletRequest request) {
         String clientIp = getClientIpAddress(request);
         
-        log.info("=== SEB API Security Validation ===");
-        log.info("Client IP: {}", clientIp);
-        log.info("User Agent: {}", request.getHeader("User-Agent"));
-        log.info("Request URI: {}", request.getRequestURI());
+        log.debug("SEB API security validation for URI {} from client IP {}", request.getRequestURI(), clientIp);
         
         // 1. Check rate limiting first (fastest check)
         if (!apiSecurityConfig.isWithinRateLimit(clientIp)) {
@@ -57,7 +54,7 @@ public class ApiSecurityService {
             return SecurityValidationResult.notFromSeb();
         }
         
-        log.info("Security validation passed for IP: {}", clientIp);
+        log.debug("SEB API security validation passed");
         return SecurityValidationResult.success();
     }
     
@@ -68,8 +65,7 @@ public class ApiSecurityService {
     public SecurityValidationResult validateAdminRequest(HttpServletRequest request) {
         String clientIp = getClientIpAddress(request);
         
-        log.info("=== Admin API Security Validation ===");
-        log.info("Client IP: {}", clientIp);
+        log.debug("Admin API security validation for client IP {}", clientIp);
         
         // For admin endpoints, we need stronger validation
         // In production, this should check for admin authentication
@@ -90,7 +86,7 @@ public class ApiSecurityService {
         // TODO: Add additional admin authentication here
         // For now, we'll allow if API key is valid
         
-        log.info("Admin security validation passed for IP: {}", clientIp);
+        log.debug("Admin security validation passed");
         return SecurityValidationResult.success();
     }
     

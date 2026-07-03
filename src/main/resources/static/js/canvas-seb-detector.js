@@ -12,16 +12,27 @@
     'use strict';
 
     // Configuration
-    const SEB_DOWNLOAD_BASE_URL = 'https://canvas-seb-dev-184075650720.us-central1.run.app';
-    const SEB_API_KEY = '${SEB_API_KEY}'; // This will be replaced by the server with the actual API key
+    const SEB_DOWNLOAD_BASE_URL = '${SEB_BASE_URL}';
 
     // Debug mode - will be set by fetching from server
     let debugMode = false;
+
+    function isSebDebugOverrideEnabled() {
+        const href = window.location.href;
+        return href.includes('seb_debug=1')
+            || href.includes('debug=true');
+    }
 
     /**
      * Fetches debug status from server to determine if debug UI should be shown
      */
     async function fetchDebugStatus() {
+        if (isSebDebugOverrideEnabled()) {
+            debugMode = true;
+            console.log('Canvas SEB Detector: Debug mode forced on by URL parameter');
+            return true;
+        }
+
         try {
             const response = await fetch(`${SEB_DOWNLOAD_BASE_URL}/api/debug/debug-status`);
             if (response.ok) {
@@ -60,6 +71,8 @@
 
     // Redirect management
     const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
+    let finalSubmitClickHandlerInstalled = false;
+    let finalSubmitClickQuizInfo = null;
 
     function markPendingRedirect(quizInfo) {
         const payload = {
@@ -169,82 +182,24 @@
         }
     }
 
-    // Debug panel for SEB (since we can't see console)
-    let debugPanel = null;
-    let debugMessages = [];
-
-    function createDebugPanel() {
-        if (debugPanel) return;
-
-        debugPanel = document.createElement('div');
-        debugPanel.id = 'seb-debug-panel';
-        debugPanel.style.cssText = `
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            width: 300px;
-            max-height: 400px;
-            background: rgba(0, 0, 0, 0.9);
-            color: #00ff00;
-            font-family: monospace;
-            font-size: 12px;
-            padding: 10px;
-            border: 2px solid #00ff00;
-            border-radius: 5px;
-            z-index: 999999;
-            overflow-y: auto;
-        `;
-
-        const title = document.createElement('div');
-        title.textContent = 'SEB Debug Panel';
-        title.style.cssText = 'color: #ffff00; font-weight: bold; margin-bottom: 10px; text-align: center;';
-        debugPanel.appendChild(title);
-
-        const closeBtn = document.createElement('button');
-        closeBtn.textContent = '×';
-        closeBtn.style.cssText = `
-            position: absolute;
-            top: 5px;
-            right: 5px;
-            background: red;
-            color: white;
-            border: none;
-            width: 20px;
-            height: 20px;
-            cursor: pointer;
-        `;
-        closeBtn.onclick = () => debugPanel.style.display = 'none';
-        debugPanel.appendChild(closeBtn);
-
-        const content = document.createElement('div');
-        content.id = 'debug-content';
-        debugPanel.appendChild(content);
-
-        document.body.appendChild(debugPanel);
+    function schedulePostSubmitChecks() {
+        [300, 1000, 2000, 4000, 8000, 12000].forEach(delay => {
+            setTimeout(maybeRedirectAfterSubmission, delay);
+        });
     }
 
     function debugLog(message, type = 'info') {
         console.log('Canvas SEB Detector:', message);
+    }
 
-        // Only show visual debug if debug mode is enabled
-        if (!debugMode) return;
-
-        // Also show visually in SEB
-        if (!debugPanel) createDebugPanel();
-
-        const timestamp = new Date().toLocaleTimeString();
-        const color = type === 'error' ? '#ff0000' : type === 'success' ? '#00ff00' : '#ffffff';
-
-        debugMessages.push(`[${timestamp}] ${message}`);
-        if (debugMessages.length > 20) debugMessages.shift(); // Keep only last 20 messages
-
-        const content = document.getElementById('debug-content');
-        if (content) {
-            content.innerHTML = debugMessages.map(msg =>
-                `<div style="color: ${color}; margin-bottom: 5px;">${msg}</div>`
-            ).join('');
-            content.scrollTop = content.scrollHeight;
+    function fingerprintValue(value) {
+        if (typeof value !== 'string' || value.length === 0) {
+            return 'missing';
         }
+        if (value.length <= 16) {
+            return 'len=' + value.length + ', fp=' + value;
+        }
+        return 'len=' + value.length + ', fp=' + value.substring(0, 8) + '...' + value.substring(value.length - 8);
     }
     
     /**
@@ -449,7 +404,7 @@
         const currentUrl = encodeURIComponent(window.location.href);
         const isNewQuiz = String(quizId).startsWith('newquiz:');
         const downloadUrl = isNewQuiz
-            ? `${SEB_DOWNLOAD_BASE_URL}/seb/launch/${encodeURIComponent(quizId)}?canvas_url=${currentUrl}`
+            ? `${SEB_DOWNLOAD_BASE_URL}/seb/config/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}.seb?canvas_url=${currentUrl}`
             : `${SEB_DOWNLOAD_BASE_URL}/seb/quiz/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}?canvas_url=${currentUrl}`;
 
         // Show a brief message before redirecting
@@ -546,9 +501,16 @@
 
         debugLog('Quiz info extracted: Course ' + quizInfo.courseId + ', Quiz ' + quizInfo.quizId);
 
-        // Try to get the access code from our backend
-        debugLog('Fetching access code from backend...');
-        fetchAccessCodeForQuiz(quizInfo.courseId, quizInfo.quizId)
+        debugLog('Requesting SEB access proof...');
+        requestAccessProofToken(quizInfo.courseId, quizInfo.quizId)
+            .then(proofToken => {
+                if (!proofToken) {
+                    debugLog('No SEB access proof available', 'error');
+                    return null;
+                }
+                debugLog('Fetching access code from backend...');
+                return fetchAccessCodeForQuiz(quizInfo.courseId, quizInfo.quizId, proofToken);
+            })
             .then(accessCode => {
                 if (accessCode) {
                     debugLog('Access code retrieved: ' + accessCode.substring(0, 3) + '***', 'success');
@@ -560,6 +522,92 @@
             .catch(error => {
                 debugLog('Error fetching access code: ' + error.message, 'error');
             });
+    }
+
+    async function getSebConfigKeyHash() {
+        const seb = window.SafeExamBrowser;
+        if (!seb || !seb.security) {
+            debugLog('SEB JavaScript security API not available', 'error');
+            return null;
+        }
+
+        if (typeof window.SafeExamBrowser.security.updateKeys === 'function') {
+            await new Promise(resolve => {
+                let resolved = false;
+                const finish = () => {
+                    if (!resolved) {
+                        resolved = true;
+                        resolve();
+                    }
+                };
+
+                try {
+                    window.SafeExamBrowser.security.updateKeys(finish);
+                    setTimeout(finish, 1500);
+                } catch (error) {
+                    debugLog('Could not refresh SEB security keys: ' + error.message, 'error');
+                    finish();
+                }
+            });
+        }
+
+        return readSebConfigKeyHash(seb.security.configKey);
+    }
+
+    function readSebConfigKeyHash(configKey) {
+        if (typeof configKey === 'string' && configKey.length > 0) {
+            return configKey;
+        }
+
+        if (typeof configKey === 'function') {
+            try {
+                const value = configKey();
+                return typeof value === 'string' && value.length > 0 ? value : null;
+            } catch (error) {
+                debugLog('Could not read SEB config key: ' + error.message, 'error');
+            }
+        }
+
+        return null;
+    }
+
+    async function requestAccessProofToken(courseId, quizId) {
+        const configKeyHash = await getSebConfigKeyHash();
+        if (!configKeyHash) {
+            debugLog('No SEB Config Key hash available from SEB security API', 'error');
+            return null;
+        }
+
+        try {
+            const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/access-proof/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}`;
+            const proofPageUrl = window.location.href.split('#')[0];
+            debugLog('SEB Config Key hash available: ' + fingerprintValue(configKeyHash), 'success');
+            debugLog('Sending access proof for page URL: ' + proofPageUrl);
+            const response = await fetch(url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    configKeyHash,
+                    url: proofPageUrl
+                })
+            });
+
+            debugLog('Proof response status: ' + response.status);
+            if (!response.ok) {
+                debugLog('Failed to create access proof: ' + await response.text(), 'error');
+                return null;
+            }
+
+            const data = await response.json();
+            return data.success ? data.proofToken : null;
+        } catch (error) {
+            debugLog('Error creating access proof: ' + error.message, 'error');
+            return null;
+        }
     }
 
     /**
@@ -590,18 +638,17 @@
     /**
      * Fetches the access code for a specific quiz from our backend
      */
-    async function fetchAccessCodeForQuiz(courseId, quizId) {
+    async function fetchAccessCodeForQuiz(courseId, quizId, proofToken) {
         try {
             const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/access-code/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}`;
             debugLog('Fetching from URL: ' + url);
-            debugLog('Using API key: ' + SEB_API_KEY.substring(0, 8) + '...');
 
             const response = await fetch(url, {
                 method: 'GET',
                 credentials: 'include',
                 headers: {
                     'Accept': 'application/json',
-                    'X-SEB-API-Key': SEB_API_KEY
+                    'X-SEB-Proof-Token': proofToken
                 }
             });
 
@@ -817,6 +864,13 @@
      */
     function interceptQuizSubmission(quizInfo) {
         debugLog('Setting up quiz submission interceptor');
+        finalSubmitClickQuizInfo = quizInfo;
+
+        if (!finalSubmitClickHandlerInstalled) {
+            document.addEventListener('click', handlePotentialFinalSubmitClick, true);
+            finalSubmitClickHandlerInstalled = true;
+            debugLog('Installed verified final submit click handler');
+        }
 
         // Enhanced form detection - look for ANY form on quiz pages
         const allForms = document.querySelectorAll('form');
@@ -830,146 +884,188 @@
                 debugLog('Form action: ' + (this.action || 'no action'));
                 debugLog('Form method: ' + (this.method || 'no method'));
 
-                // Check if this is a final submission (not just save)
                 const submitButton = event.submitter || document.activeElement;
-                debugLog('Submit button: ' + (submitButton ? submitButton.textContent || submitButton.value || submitButton.id : 'none'));
+                debugLog('Submit button: ' + describeElement(submitButton));
 
-                // Enhanced detection for Canvas quiz submission buttons
-                const isSubmitQuiz = submitButton && (
-                    // Text content checks
-                    (submitButton.textContent && (
-                        submitButton.textContent.toLowerCase().includes('submit quiz') ||
-                        submitButton.textContent.toLowerCase().includes('submit assignment') ||
-                        submitButton.textContent.toLowerCase().includes('turn in') ||
-                        submitButton.textContent.toLowerCase().includes('finish') ||
-                        submitButton.textContent.toLowerCase().includes('complete') ||
-                        (submitButton.textContent.toLowerCase().includes('submit') &&
-                         !submitButton.textContent.toLowerCase().includes('save'))
-                    )) ||
-                    // Value attribute checks
-                    (submitButton.value && (
-                        submitButton.value.toLowerCase().includes('submit quiz') ||
-                        submitButton.value.toLowerCase().includes('submit assignment') ||
-                        submitButton.value.toLowerCase().includes('turn in') ||
-                        (submitButton.value.toLowerCase().includes('submit') &&
-                         !submitButton.value.toLowerCase().includes('save'))
-                    )) ||
-                    // ID and name attribute checks
-                    (submitButton.id && (
-                        submitButton.id.toLowerCase().includes('submit_quiz') ||
-                        submitButton.id.toLowerCase().includes('submit-quiz') ||
-                        submitButton.id.toLowerCase().includes('quiz_submit') ||
-                        submitButton.id.toLowerCase().includes('quiz-submit')
-                    )) ||
-                    (submitButton.name && (
-                        submitButton.name.toLowerCase().includes('submit_quiz') ||
-                        submitButton.name.toLowerCase().includes('submit-quiz') ||
-                        submitButton.name.toLowerCase().includes('quiz_submit') ||
-                        submitButton.name.toLowerCase().includes('quiz-submit')
-                    )) ||
-                    // Class name checks for Canvas-specific classes
-                    (submitButton.className && (
-                        submitButton.className.includes('submit_quiz_button') ||
-                        submitButton.className.includes('btn-primary') ||
-                        submitButton.className.includes('quiz-submit')
-                    ))
-                );
+                if (isAccessCodeForm(this)) {
+                    debugLog('Ignoring access code form submission for completion redirect');
+                    return;
+                }
 
-                // Additional check: exclude save/draft buttons explicitly
-                const isSaveButton = submitButton && (
-                    (submitButton.textContent && (
-                        submitButton.textContent.toLowerCase().includes('save') ||
-                        submitButton.textContent.toLowerCase().includes('draft') ||
-                        submitButton.textContent.toLowerCase().includes('continue')
-                    )) ||
-                    (submitButton.value && (
-                        submitButton.value.toLowerCase().includes('save') ||
-                        submitButton.value.toLowerCase().includes('draft')
-                    )) ||
-                    (submitButton.id && (
-                        submitButton.id.toLowerCase().includes('save') ||
-                        submitButton.id.toLowerCase().includes('draft')
-                    ))
-                );
+                if (isLikelyFinalQuizSubmit(submitButton, this)) {
+                    debugLog('FINAL QUIZ SUBMISSION DETECTED! Marking pending redirect...', 'success');
+                    debugLog('Button details: ' + describeElement(submitButton));
 
-                debugLog('Is submit quiz: ' + isSubmitQuiz + ', Is save button: ' + isSaveButton);
-
-                if (isSubmitQuiz && !isSaveButton) {
-                    debugLog('🎯 FINAL QUIZ SUBMISSION DETECTED! Marking pending redirect...', 'success');
-                    debugLog('Button details: text="' + (submitButton.textContent || '') + '", value="' + (submitButton.value || '') + '", id="' + (submitButton.id || '') + '"');
-
-                    // DO NOT preventDefault. DO NOT redirect here. Just mark the intent.
                     markPendingRedirect(quizInfo);
+                    schedulePostSubmitChecks();
                 } else {
-                    debugLog('Form submission detected but not a final quiz submit (save/draft button or other action)', 'info');
+                    debugLog('Form submission detected but not a verified final quiz submit');
                 }
             });
         });
+    }
 
-        // Enhanced button detection - look for ALL buttons and inputs
-        const allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
-        debugLog('Found ' + allButtons.length + ' total buttons/inputs on page');
+    function handlePotentialFinalSubmitClick(event) {
+        const target = event.target;
+        if (!target || typeof target.closest !== 'function') {
+            return;
+        }
 
-        allButtons.forEach((button, index) => {
-            const buttonText = button.textContent || button.value || button.id || button.name || 'no text';
-            debugLog('Button ' + index + ': "' + buttonText + '" (type: ' + button.type + ')');
+        const control = target.closest('button, input[type="submit"], input[type="button"], input[type="image"], [role="button"]');
+        if (!control) {
+            return;
+        }
 
-            button.addEventListener('click', function(event) {
-                const clickedText = (this.textContent || this.value || this.id || this.name || '').toLowerCase();
-                debugLog('BUTTON CLICKED: "' + clickedText + '"', 'success');
+        const form = control.form || (typeof control.closest === 'function' ? control.closest('form') : null);
+        if (form && isAccessCodeForm(form)) {
+            debugLog('Ignoring access code submit click for completion redirect');
+            return;
+        }
 
-                if (clickedText.includes('submit') && !clickedText.includes('save')) {
-                    debugLog('SUBMIT BUTTON CLICKED! Preparing redirect...', 'success');
+        if (!isLikelyFinalQuizSubmit(control, form)) {
+            return;
+        }
 
-                    // Redirect after allowing the submission to process
-                    setTimeout(() => {
-                        debugLog('Executing redirect to SEB exit page from button click', 'success');
-                        redirectToSebExit(quizInfo);
-                    }, 3000); // 3 second delay for submit processing
-                } else {
-                    debugLog('Button clicked but not a submit button: "' + clickedText + '"');
-                }
-            });
-        });
+        const quizInfo = finalSubmitClickQuizInfo || extractQuizInfo();
+        if (!quizInfo) {
+            debugLog('Verified final submit click but quiz info is unavailable');
+            return;
+        }
 
-        // Additional: Watch for ANY click that might be a submit action
-        document.addEventListener('click', function(event) {
-            const target = event.target;
-            const targetText = (target.textContent || target.value || target.id || target.className || '').toLowerCase();
-            debugLog('CLICK DETECTED: "' + targetText + '"');
+        debugLog('Verified final quiz submit click detected; marking pending redirect', 'success');
+        debugLog('Clicked control: ' + describeElement(control));
+        markPendingRedirect(quizInfo);
+        schedulePostSubmitChecks();
+    }
 
-            if (targetText.includes('submit') || targetText.includes('finish') || targetText.includes('complete')) {
-                debugLog('🎯 POTENTIAL SUBMIT CLICK DETECTED: "' + targetText + '"', 'success');
-                debugLog('Marking pending redirect from click handler...');
-                markPendingRedirect(quizInfo);
+    function isAccessCodeForm(form) {
+        if (!form) return false;
 
-                // Also set up aggressive polling to check for completion
-                let pollCount = 0;
-                const pollInterval = setInterval(() => {
-                    pollCount++;
-                    debugLog('Polling for completion... attempt ' + pollCount);
-                    debugLog('Current URL: ' + window.location.href);
-                    debugLog('On take page: ' + isOnTakePage());
-                    debugLog('Looks like post-submit: ' + looksLikePostSubmitPage());
+        const accessCodeSelectors = [
+            'input[name="access_code"]',
+            'input[id*="access_code"]',
+            'input[id*="access-code"]',
+            'input[name*="access_code"]',
+            'input[name*="access-code"]',
+            'input[placeholder*="access code"]',
+            'input[placeholder*="Access Code"]',
+            'input[aria-label*="access code"]',
+            'input[aria-label*="Access Code"]',
+            '#quiz_access_code',
+            '#access_code'
+        ];
 
-                    maybeRedirectAfterSubmission();
+        if (form.querySelector(accessCodeSelectors.join(','))) {
+            return true;
+        }
 
-                    if (pollCount >= 20) { // Stop after 20 attempts (10 seconds)
-                        clearInterval(pollInterval);
-                        debugLog('Polling stopped after 20 attempts');
+        const formSummary = normalizeElementText(form) + ' ' + (form.action || '').toLowerCase();
+        return formSummary.includes('access code')
+            || formSummary.includes('access_code')
+            || formSummary.includes('access-code')
+            || formSummary.includes('quiz_access_code');
+    }
 
-                        // FALLBACK: If we still have a pending redirect after 10 seconds, force it
-                        const stillPending = getPendingRedirect();
-                        if (stillPending) {
-                            debugLog('⚠️ FALLBACK: Forcing redirect after timeout...', 'success');
-                            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${stillPending.courseId}/${stillPending.quizId}`;
-                            clearPendingRedirect();
-                            window.location.assign(exitUrl);
-                        }
-                    }
-                }, 500); // Poll every 500ms
-            }
-        });
+    function isLikelyFinalQuizSubmit(submitButton, form) {
+        const buttonSummary = normalizeElementText(submitButton);
+
+        const nonFinalSignals = [
+            'access code',
+            'access_code',
+            'access-code',
+            'save',
+            'draft',
+            'continue',
+            'next',
+            'previous',
+            'back',
+            'cancel',
+            'close',
+            'global navigation'
+        ];
+
+        if (buttonSummary && nonFinalSignals.some(signal => buttonSummary.includes(signal))) {
+            return false;
+        }
+
+        const strongFinalSignals = [
+            'submit quiz',
+            'submit assignment',
+            'submit assessment',
+            'turn in',
+            'finish attempt',
+            'finish quiz',
+            'complete quiz',
+            'complete attempt',
+            'submit_quiz',
+            'submit-quiz',
+            'quiz_submit',
+            'quiz-submit',
+            'submit_quiz_button',
+            'submit_assignment',
+            'submit-assignment'
+        ];
+
+        if (buttonSummary && strongFinalSignals.some(signal => buttonSummary.includes(signal))) {
+            return true;
+        }
+
+        const formIdentity = normalizeFormIdentity(form);
+        return strongFinalSignals.some(signal => formIdentity.includes(signal));
+    }
+
+    function normalizeFormIdentity(form) {
+        if (!form) return '';
+
+        const className = typeof form.className === 'string' ? form.className : '';
+        const parts = [
+            form.id,
+            form.name,
+            form.action,
+            className,
+            typeof form.getAttribute === 'function' ? form.getAttribute('aria-label') : null,
+            typeof form.getAttribute === 'function' ? form.getAttribute('data-testid') : null,
+            typeof form.getAttribute === 'function' ? form.getAttribute('title') : null
+        ];
+
+        return parts
+            .filter(part => typeof part === 'string' && part.trim().length > 0)
+            .join(' ')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function normalizeElementText(element) {
+        if (!element) return '';
+
+        const className = typeof element.className === 'string' ? element.className : '';
+        const parts = [
+            element.textContent,
+            element.value,
+            element.id,
+            element.name,
+            className,
+            typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') : null,
+            typeof element.getAttribute === 'function' ? element.getAttribute('data-testid') : null,
+            typeof element.getAttribute === 'function' ? element.getAttribute('title') : null
+        ];
+
+        return parts
+            .filter(part => typeof part === 'string' && part.trim().length > 0)
+            .join(' ')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function describeElement(element) {
+        if (!element) return 'none';
+
+        const text = normalizeElementText(element);
+        const tagName = element.tagName || 'element';
+        const type = element.type ? ', type=' + element.type : '';
+        return tagName.toLowerCase() + type + ', text="' + text + '"';
     }
 
     /**
@@ -1005,10 +1101,7 @@
 
                             // General success indicators
                             'submission confirmed',
-                            'thank you for your submission',
-                            'your work has been saved',
-                            'submission timestamp',
-                            'submitted at'
+                            'thank you for your submission'
                         ];
 
                         for (const indicator of completionIndicators) {
@@ -1260,86 +1353,6 @@
             debugLog('Found SEB property: ' + prop + ' = ' + typeof window[prop]);
         }
     });
-
-    // Add global test functions for debugging (only available when debug mode is enabled)
-    window.testSebRedirect = function() {
-        debugLog('=== MANUAL TEST TRIGGERED ===', 'success');
-        const quizInfo = extractQuizInfo();
-        if (quizInfo) {
-            debugLog('Quiz info: ' + JSON.stringify(quizInfo));
-            markPendingRedirect(quizInfo);
-            debugLog('Pending redirect marked, checking conditions...');
-            setTimeout(() => {
-                debugLog('Testing redirect conditions...');
-                maybeRedirectAfterSubmission();
-            }, 1000);
-        } else {
-            debugLog('No quiz info available for test', 'error');
-        }
-    };
-
-    window.forceRedirect = function() {
-        debugLog('=== FORCE REDIRECT TRIGGERED ===', 'success');
-        const quizInfo = extractQuizInfo();
-        if (quizInfo) {
-            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${quizInfo.courseId}/${quizInfo.quizId}`;
-            debugLog('Force redirecting to: ' + exitUrl);
-            window.location.href = exitUrl;
-        } else {
-            debugLog('No quiz info available for force redirect', 'error');
-        }
-    };
-
-    debugLog('=== TEST FUNCTIONS AVAILABLE ===');
-    debugLog('Call testSebRedirect() to test the redirect logic');
-    debugLog('Call forceRedirect() to force an immediate redirect');
-
-    // Add manual test button for debugging (only in SEB and when debug mode is enabled)
-    if (isSafeBrowser()) {
-        setTimeout(() => {
-            try {
-                // Only show test button if debug mode is enabled
-                if (!debugMode) return;
-
-                const testButton = document.createElement('button');
-                testButton.textContent = 'TEST EXIT';
-                testButton.style.cssText = `
-                    position: fixed;
-                    top: 50px;
-                    right: 10px;
-                    background: #ff4444;
-                    color: white;
-                    border: none;
-                    padding: 8px;
-                    border-radius: 3px;
-                    z-index: 999998;
-                    cursor: pointer;
-                    font-size: 12px;
-                `;
-                testButton.onclick = () => {
-                    try {
-                        const quizInfo = extractQuizInfo();
-                        if (quizInfo) {
-                            debugLog('Manual test triggered!', 'success');
-                            const exitUrl = `${SEB_DOWNLOAD_BASE_URL}/seb/exit/${quizInfo.courseId}/${quizInfo.quizId}`;
-                            debugLog('Redirecting to: ' + exitUrl, 'success');
-                            window.location.href = exitUrl;
-                        } else {
-                            debugLog('Cannot test - no quiz info available', 'error');
-                            alert('No quiz info available for testing');
-                        }
-                    } catch (error) {
-                        debugLog('Test button error: ' + error.message, 'error');
-                        alert('Test failed: ' + error.message);
-                    }
-                };
-                document.body.appendChild(testButton);
-                debugLog('Manual test button added', 'success');
-            } catch (error) {
-                debugLog('Failed to create test button: ' + error.message, 'error');
-            }
-        }, 3000);
-    }
 
     // Run when DOM is ready
     if (document.readyState === 'loading') {

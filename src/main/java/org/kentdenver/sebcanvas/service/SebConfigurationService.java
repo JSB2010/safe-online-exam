@@ -16,10 +16,11 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.ByteArrayOutputStream;
-import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
 
 /**
  * Service for generating Safe Exam Browser (SEB) configuration files.
@@ -48,6 +49,9 @@ public class SebConfigurationService {
 
     @Value("${app.base-url:}")
     private String configuredBaseUrl;
+
+    @Value("${app.seb.required-url-filter-domains:}")
+    private String requiredUrlFilterDomains;
 
     @Autowired
     private CanvasApiConfig canvasApiConfig;
@@ -100,7 +104,25 @@ public class SebConfigurationService {
      * @return Byte array containing the SEB configuration XML
      */
     public byte[] generateSebConfiguration(String courseId, String quizId, String quizUrl, String accessCode) {
+        return generateSebConfiguration(courseId, quizId, quizUrl, accessCode, List.of(), null);
+    }
+
+    public byte[] generateSebConfiguration(String courseId,
+                                           String quizId,
+                                           String quizUrl,
+                                           String accessCode,
+                                           List<String> additionalAllowedDomains) {
+        return generateSebConfiguration(courseId, quizId, quizUrl, accessCode, additionalAllowedDomains, null);
+    }
+
+    public byte[] generateSebConfiguration(String courseId,
+                                           String quizId,
+                                           String quizUrl,
+                                           String accessCode,
+                                           List<String> additionalAllowedDomains,
+                                           String quizQuitPassword) {
         try {
+            String effectiveQuitPassword = resolveQuitPassword(quizQuitPassword);
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             DocumentBuilder builder = factory.newDocumentBuilder();
             Document doc = builder.newDocument();
@@ -114,14 +136,14 @@ public class SebConfigurationService {
             plist.appendChild(dict);
 
             // === BASIC CONFIGURATION ===
-            addKeyValue(doc, dict, "sebConfigPurpose", "integer", "1"); // Starting exam
+            addKeyValue(doc, dict, "sebConfigPurpose", "integer", "0"); // Starting exam
             addKeyValue(doc, dict, "originatorVersion", "string", "3.7.0");
             addKeyValue(doc, dict, "sebServerURL", "string", "");
             
             // === SECURITY SETTINGS - MAXIMUM LOCKDOWN (CROSS-PLATFORM) ===
 
             // Browser and Application Control (Universal)
-            addKeyValue(doc, dict, "allowQuit", "false", null); // Prevent quitting SEB
+            addKeyValue(doc, dict, "allowQuit", effectiveQuitPassword.isBlank() ? "false" : "true", null); // Manual quit only when password-protected
             addKeyValue(doc, dict, "ignoreExitKeys", "true", null); // Ignore exit key combinations
             addKeyValue(doc, dict, "allowSwitchToApplications", "false", null); // Block app switching
             addKeyValue(doc, dict, "enableEsc", "false", null); // Disable Escape key
@@ -149,7 +171,7 @@ public class SebConfigurationService {
 
             // Mac-Specific Settings (ignored on Windows)
             addKeyValue(doc, dict, "enableCmdTab", "false", null); // Disable Cmd+Tab on Mac
-            addKeyValue(doc, dict, "enableCmdQ", "false", null); // Disable Cmd+Q on Mac
+            addKeyValue(doc, dict, "enableCmdQ", effectiveQuitPassword.isBlank() ? "false" : "true", null); // Allow emergency quit shortcut only with password
             addKeyValue(doc, dict, "enableCmdW", "false", null); // Disable Cmd+W on Mac
             addKeyValue(doc, dict, "enableCmdM", "false", null); // Disable Cmd+M (minimize) on Mac
             addKeyValue(doc, dict, "enableCmdH", "false", null); // Disable Cmd+H (hide) on Mac
@@ -182,7 +204,6 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "startURL", "string", quizUrl);
             addKeyValue(doc, dict, "sendBrowserExamKey", "false", null); // WKWebView exposes keys via SEB JavaScript API, not HTTP headers
             addKeyValue(doc, dict, "browserExamKey", "string", generateBrowserExamKey(courseId, quizId, accessCode));
-            addKeyValue(doc, dict, "configKey", "string", generateConfigKey(courseId, quizId, accessCode));
 
             // Browser Security (allow reload to fix blank page issues)
             addKeyValue(doc, dict, "allowBrowsingBackForward", "false", null); // No back/forward
@@ -219,11 +240,12 @@ public class SebConfigurationService {
 
             // Set proper quit URLs for SEB exit functionality
             String baseUrl = getBaseUrl();
-            String quitUrl = String.format("%s/seb/exit/quit/%s/%s", baseUrl, courseId, quizId);
-            String exitPageUrl = String.format("%s/seb/exit/%s/%s", baseUrl, courseId, quizId);
+            String quitPathId = quitPathId(quizId);
+            String quitUrl = String.format("%s/seb/exit/quit/%s/%s", baseUrl, courseId, quitPathId);
 
-            addKeyValue(doc, dict, "restartExamURL", "string", exitPageUrl); // Exit page URL
-            addKeyValue(doc, dict, "quitURL", "string", quitUrl); // Quit URL for automatic SEB exit
+            addKeyValue(doc, dict, "restartExamURL", "string", quizUrl); // Restart/back should return to the assessment, not the SEB exit page
+            addKeyValue(doc, dict, "quitURL", "string", quitUrl); // Dedicated quit link students click from the summary page
+            addKeyValue(doc, dict, "quitURLConfirm", "false", null); // Quit immediately when the SEB quit URL is detected
             addKeyValue(doc, dict, "startResource", "string", ""); // No start resource
             addKeyValue(doc, dict, "additionalResources", "array", null); // No additional resources
 
@@ -244,111 +266,43 @@ public class SebConfigurationService {
                     ? "http://" + baseUrl.substring("https://".length())
                     : baseUrl;
             
-            // Allow Canvas domains (comprehensive list)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructure.com/*");
+            // Canvas application and native New Quizzes rendering.
             addUrlFilterRule(doc, urlFilterRules, true, "https://" + canvasDomain + "/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructure.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.canvaslms.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.edu/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.org/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas.*.com/*");
 
-            // Canvas authentication and login domains
-            addUrlFilterRule(doc, urlFilterRules, true, "https://sso.canvaslms.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://login.instructure.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://auth.instructure.com/*");
-
-            // Canvas CDN and static content domains
+            // Canvas-owned media, uploads, and APIs. Avoid broad shared-cloud/CDN allowlists.
             addUrlFilterRule(doc, urlFilterRules, true, "https://*.instructuremedia.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.cloudfront.net/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-files-prod.s3.amazonaws.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.amazonaws.com/*"); // AWS S3 for Canvas files
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.s3.amazonaws.com/*"); // S3 direct access
-
-            // Canvas API and service domains
+            addUrlFilterRule(doc, urlFilterRules, true, "https://media.instructuremedia.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-media.instructure.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://api.instructure.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-api.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-rce-api.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-rce.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-files-prod.s3.amazonaws.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-network.s3.amazonaws.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-static.s3.amazonaws.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-user-content.s3.amazonaws.com/*");
             addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads.s3.amazonaws.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads-prod.s3.amazonaws.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.canvas-user-content.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://*.inscloudgate.net/*");
 
-            // Canvas static assets and resources
-            addUrlFilterRule(doc, urlFilterRules, true, "https://du11hjcvx0uqb.cloudfront.net/*"); // Canvas CDN
-            addUrlFilterRule(doc, urlFilterRules, true, "https://d2l3jyjp24noqc.cloudfront.net/*"); // Canvas assets
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-static.s3.amazonaws.com/*"); // Static files
+            for (String requiredDomain : getRequiredUrlFilterDomains()) {
+                addConfiguredAllowedDomain(doc, urlFilterRules, requiredDomain);
+            }
 
-            // Additional Canvas media and content domains
-            addUrlFilterRule(doc, urlFilterRules, true, "https://media.instructuremedia.com/*"); // Canvas media
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-media.instructure.com/*"); // Canvas media
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-user-content.s3.amazonaws.com/*"); // User content
-            addUrlFilterRule(doc, urlFilterRules, true, "https://instructure-uploads-prod.s3.amazonaws.com/*"); // Uploads
+            // Legacy New Quizzes LTI hosts remain for schools not yet fully native.
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-api.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-iad-prod.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-pdx-prod.instructure.com/*");
+            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-dub-prod.instructure.com/*");
 
-            // Canvas quiz and assessment specific domains
-            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-iad-prod.instructure.com/*"); // Quiz LTI
-            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-pdx-prod.instructure.com/*"); // Quiz LTI
-            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti-dub-prod.instructure.com/*"); // Quiz LTI
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.quiz-lti-*.instructure.com/*"); // Quiz LTI wildcard
-
-            // Google SSO and Services (for schools using Google Workspace)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://accounts.google.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://login.google.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://oauth.google.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://googleapis.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.googleapis.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://ssl.gstatic.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://www.gstatic.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://fonts.googleapis.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://fonts.gstatic.com/*");
-
-            // Additional Google authentication endpoints (for comprehensive SSO support)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://myaccount.google.com/*"); // Google account management
-            addUrlFilterRule(doc, urlFilterRules, true, "https://security.google.com/*"); // Google security
-            addUrlFilterRule(doc, urlFilterRules, true, "https://www.google.com/accounts/*"); // Google accounts
-            addUrlFilterRule(doc, urlFilterRules, true, "https://google.com/accounts/*"); // Google accounts (no www)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://ogs.google.com/*"); // Google OAuth Gateway Service
-
-            // Microsoft SSO and Services (for schools using Microsoft 365)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://login.microsoftonline.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://login.live.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://outlook.office365.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://graph.microsoft.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.office.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.office365.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.microsoftonline.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.live.com/*");
-
-            // Other Common SSO Providers
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.okta.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.auth0.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.shibboleth.net/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://shibboleth.*.edu/*");
-
-            // Essential web infrastructure (Canvas dependencies)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.jquery.com/*"); // jQuery CDN
-            addUrlFilterRule(doc, urlFilterRules, true, "https://cdnjs.cloudflare.com/*"); // Common JS libraries
-            addUrlFilterRule(doc, urlFilterRules, true, "https://ajax.googleapis.com/*"); // Google AJAX APIs
-            addUrlFilterRule(doc, urlFilterRules, true, "https://code.jquery.com/*"); // jQuery official CDN
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.bootstrapcdn.com/*"); // Bootstrap CDN
-            addUrlFilterRule(doc, urlFilterRules, true, "https://maxcdn.bootstrapcdn.com/*"); // MaxCDN Bootstrap
-
-            // Canvas may use these for analytics and functionality
-            addUrlFilterRule(doc, urlFilterRules, true, "https://www.google-analytics.com/*"); // Analytics
-            addUrlFilterRule(doc, urlFilterRules, true, "https://analytics.google.com/*"); // Google Analytics
-            addUrlFilterRule(doc, urlFilterRules, true, "https://googletagmanager.com/*"); // Tag Manager
-            addUrlFilterRule(doc, urlFilterRules, true, "https://www.googletagmanager.com/*"); // Tag Manager
-
-            // Essential CDNs and services
-            addUrlFilterRule(doc, urlFilterRules, true, "https://cdn.jsdelivr.net/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://cdnjs.cloudflare.com/*");
-            addUrlFilterRule(doc, urlFilterRules, true, "https://ajax.googleapis.com/*");
-
-            // Additional Canvas-specific domains that may be needed
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-rce-api.instructure.com/*"); // Rich Content Editor
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-rce.instructure.com/*"); // Rich Content Editor
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-commons.s3.amazonaws.com/*"); // Canvas Commons
-            addUrlFilterRule(doc, urlFilterRules, true, "https://canvas-catalog.s3.amazonaws.com/*"); // Canvas Catalog
-
-            // Canvas New Quizzes domains (if using New Quizzes engine)
-            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-lti.instructure.com/*"); // New Quizzes
-            addUrlFilterRule(doc, urlFilterRules, true, "https://quiz-api.instructure.com/*"); // New Quizzes API
+            List<String> configuredAllowedDomains = additionalAllowedDomains != null ? additionalAllowedDomains : List.of();
+            for (String allowedDomain : configuredAllowedDomains) {
+                addConfiguredAllowedDomain(doc, urlFilterRules, allowedDomain);
+            }
 
             // SEB-Canvas LTI Application (our own service)
             addUrlFilterRule(doc, urlFilterRules, true, baseUrl + "/*");
@@ -358,12 +312,6 @@ public class SebConfigurationService {
             addUrlFilterRule(doc, urlFilterRules, true, "http://" + canvasDomain + "/*"); // HTTP Canvas
             addUrlFilterRule(doc, urlFilterRules, true, "http://*.instructure.com/*"); // HTTP Instructure
 
-            // Additional essential domains that might be missing
-            addUrlFilterRule(doc, urlFilterRules, true, "https://www.google.com/*"); // Google main domain
-            addUrlFilterRule(doc, urlFilterRules, true, "https://google.com/*"); // Google without www
-            addUrlFilterRule(doc, urlFilterRules, true, "https://gstatic.com/*"); // Google static content
-            addUrlFilterRule(doc, urlFilterRules, true, "https://*.gstatic.com/*"); // Google static subdomains
-
             // Note: No "block all" rule needed - SEB automatically blocks anything not explicitly allowed when URL filtering is enabled
 
             // === QUIZ ACCESS CONFIGURATION ===
@@ -372,8 +320,9 @@ public class SebConfigurationService {
             addKeyValue(doc, dict, "examSessionClearCookiesOnStart", "false", null); // Don't clear cookies to preserve SSO session
             addKeyValue(doc, dict, "examSessionClearCookiesOnEnd", "true", null); // Clear cookies at end for security
 
-            if (quitPassword != null && !quitPassword.isBlank()) {
-                addKeyValue(doc, dict, "hashedQuitPassword", "string", hashPassword(quitPassword));
+            if (!effectiveQuitPassword.isBlank()) {
+                addKeyValue(doc, dict, "hashedQuitPassword", "string", hashPassword(effectiveQuitPassword));
+                addKeyValue(doc, dict, "ignoreQuitPassword", "false", null);
             }
 
             // === ADDITIONAL SECURITY MEASURES ===
@@ -494,61 +443,72 @@ public class SebConfigurationService {
         addKeyValue(doc, ruleDict, "expression", "string", pattern);
     }
 
+    private void addConfiguredAllowedDomain(Document doc, Element urlFilterRules, String domainOrPattern) {
+        if (domainOrPattern == null || domainOrPattern.isBlank()) {
+            return;
+        }
+
+        String normalized = domainOrPattern.trim();
+        if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+            normalized = "https://" + normalized;
+        }
+        if (!normalized.endsWith("/*")) {
+            normalized = normalized.endsWith("/") ? normalized + "*" : normalized + "/*";
+        }
+
+        if (isUnsafeAllowPattern(normalized)) {
+            log.warn("Skipping overly broad SEB URL allowlist entry: {}", domainOrPattern);
+            return;
+        }
+
+        addUrlFilterRule(doc, urlFilterRules, true, normalized);
+    }
+
+    private List<String> getRequiredUrlFilterDomains() {
+        if (requiredUrlFilterDomains == null || requiredUrlFilterDomains.isBlank()) {
+            return List.of();
+        }
+
+        return Arrays.stream(requiredUrlFilterDomains.split("[,\\n]"))
+                .map(String::trim)
+                .filter(domain -> !domain.isBlank())
+                .toList();
+    }
+
+    private boolean isUnsafeAllowPattern(String pattern) {
+        String lower = pattern.toLowerCase();
+        return lower.equals("https://*/*")
+                || lower.equals("http://*/*")
+                || lower.equals("https://*.amazonaws.com/*")
+                || lower.equals("https://*.s3.amazonaws.com/*")
+                || lower.equals("https://*.com/*")
+                || lower.equals("https://*.org/*")
+                || lower.equals("https://*.edu/*");
+    }
+
     /**
      * Generates a browser exam key for Canvas integration.
-     * This key includes the access code for automatic Canvas authentication.
      */
     private String generateBrowserExamKey(String courseId, String quizId, String accessCode) {
-        try {
-            StringBuilder input = new StringBuilder();
-            input.append("SEB_BROWSER_EXAM_KEY_");
-            input.append("course_").append(courseId);
-            input.append("_quiz_").append(quizId);
-
-            // Include access code in the key generation for Canvas integration
-            if (accessCode != null && !accessCode.trim().isEmpty()) {
-                input.append("_access_").append(accessCode);
-            }
-
-            input.append("_timestamp_").append(System.currentTimeMillis());
-
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(input.toString().getBytes("UTF-8"));
-            return Base64.getEncoder().encodeToString(hash);
-        } catch (Exception e) {
-            return "DEFAULT_BROWSER_EXAM_KEY_" + courseId + "_" + quizId;
-        }
+        return sha256Base64("SEB_BROWSER_EXAM_KEY|" + courseId + "|" + quizId + "|" + nullToEmpty(accessCode));
     }
 
-    /**
-     * Generates a configuration key for SEB.
-     * This key is used to verify the integrity of the SEB configuration.
-     */
-    private String generateConfigKey(String courseId, String quizId, String accessCode) {
-        try {
-            StringBuilder input = new StringBuilder();
-            input.append("SEB_CONFIG_KEY_");
-            input.append("course_").append(courseId);
-            input.append("_quiz_").append(quizId);
-
-            // Include access code for configuration verification
-            if (accessCode != null && !accessCode.trim().isEmpty()) {
-                input.append("_access_").append(accessCode);
-            }
-
-            input.append("_timestamp_").append(System.currentTimeMillis());
-
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(input.toString().getBytes("UTF-8"));
-            return Base64.getEncoder().encodeToString(hash);
-        } catch (Exception e) {
-            return "DEFAULT_CONFIG_KEY_" + courseId + "_" + quizId;
+    private String resolveQuitPassword(String quizQuitPassword) {
+        if (quizQuitPassword != null && !quizQuitPassword.isBlank()) {
+            return quizQuitPassword.trim();
         }
+        if (quitPassword != null && !quitPassword.isBlank()) {
+            return quitPassword.trim();
+        }
+        return "";
     }
 
-
-
-
+    private String quitPathId(String quizId) {
+        if (quizId != null && quizId.startsWith("classicquiz_")) {
+            return quizId.substring("classicquiz_".length());
+        }
+        return quizId;
+    }
 
     /**
      * Hashes a password for SEB quit password functionality.
@@ -556,10 +516,28 @@ public class SebConfigurationService {
     private String hashPassword(String password) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(password.getBytes("UTF-8"));
-            return Base64.getEncoder().encodeToString(hash);
+            byte[] hash = md.digest(password.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
         } catch (Exception e) {
             return "";
         }
+    }
+
+    private String sha256Base64(String value) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(value.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(hash);
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to compute SHA-256 hash", e);
+        }
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

@@ -387,6 +387,9 @@
 
             <!-- Download Section -->
             <div class="download-section">
+                <a th:if="${sebLaunchUrl}" th:href="${sebLaunchUrl}" class="download-btn">
+                    🚀 Open in Safe Exam Browser
+                </a>
                 <a th:href="${configUrl}" class="download-btn">
                     📥 Download Exam Configuration
                 </a>
@@ -412,5 +415,4 @@
     </div>
 </body>
 </html>
-
 

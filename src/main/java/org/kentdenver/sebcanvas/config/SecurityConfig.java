@@ -16,8 +16,6 @@ import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizedCli
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.cors.CorsConfigurationSource;
 
-import java.util.Arrays;
-
 /**
  * Security configuration for the Canvas SEB Integration application.
  *
@@ -90,7 +88,9 @@ public class SecurityConfig {
                             "/api/quizzes/*/*/seb/enable",
                             "/api/quizzes/*/*/seb/disable",
                             "/api/quizzes/*/*/seb/config",
+                            "/api/quizzes/*/*/seb/regenerate-code",
                             "/api/quizzes/*/*/seb/status",
+                            "/api/seb/access-proof/*/*",
                             "/api/seb/access-code/*/*",
                             "/api/seb/canvas-detector.js",
                             "/api/oauth2authorize",
@@ -114,7 +114,7 @@ public class SecurityConfig {
     }
 
     private boolean isDebugAccessEnabled() {
-        return debugEnabled || Arrays.asList(environment.getActiveProfiles()).contains("dev");
+        return debugEnabled;
     }
 
     /**

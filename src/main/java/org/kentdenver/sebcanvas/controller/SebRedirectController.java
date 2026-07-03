@@ -107,8 +107,9 @@ public class SebRedirectController {
             log.info("User not using SEB for quiz: {}, showing SEB requirement page", quizId);
 
             // Generate the download URL for the config file
-            String configUrl = "/seb/config/" + quizId;
+            String configUrl = "/seb/config/" + quiz.getCourseId() + "/" + quizId + ".seb";
             model.addAttribute("configUrl", configUrl);
+            model.addAttribute("sebConfigUrl", configUrl);
 
             return "sebRequired";
         }
@@ -129,15 +130,14 @@ public class SebRedirectController {
                 return ResponseEntity.notFound().build();
             }
 
-            // Generate the SEB config file
-            byte[] configFile = quizService.generateSebConfig(quizId, quiz.getHtmlUrl());
+            if (quiz.getCourseId() == null || quiz.getCourseId().isBlank()) {
+                log.error("Quiz {} has no course ID for canonical SEB config redirect", quizId);
+                return ResponseEntity.badRequest().build();
+            }
 
-            // Create the response with the config file
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Content-Type", "application/seb");
-            headers.set("Content-Disposition", "attachment; filename=quiz_" + quizId + ".seb");
-
-            return new ResponseEntity<>(configFile, headers, HttpStatus.OK);
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .header(HttpHeaders.LOCATION, "/seb/config/" + quiz.getCourseId() + "/" + quizId + ".seb")
+                    .build();
         } catch (Exception e) {
             log.error("Error generating SEB config file for quiz: {}", quizId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();

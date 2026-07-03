@@ -3,12 +3,11 @@ package org.kentdenver.sebcanvas.util;
 import lombok.extern.slf4j.Slf4j;
 import org.kentdenver.sebcanvas.model.ContentSebSetting;
 import org.kentdenver.sebcanvas.model.QuizSebSetting;
+import org.kentdenver.sebcanvas.service.SebConfigKeyService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import jakarta.servlet.http.HttpServletRequest;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Enumeration;
 
 /**
@@ -18,6 +17,17 @@ import java.util.Enumeration;
 @Component
 @Slf4j
 public class SebDetector {
+
+    private final SebConfigKeyService sebConfigKeyService;
+
+    public SebDetector() {
+        this(new SebConfigKeyService());
+    }
+
+    @Autowired
+    public SebDetector(SebConfigKeyService sebConfigKeyService) {
+        this.sebConfigKeyService = sebConfigKeyService;
+    }
 
     /**
      * Header names used by Safe Exam Browser.
@@ -69,13 +79,13 @@ public class SebDetector {
             // Check against all SEB patterns
             for (String pattern : SEB_USER_AGENT_PATTERNS) {
                 if (userAgent.contains(pattern)) {
-                    log.debug("SEB detected through User-Agent pattern '{}': {}", pattern, userAgent);
+                    log.debug("SEB detected through User-Agent pattern '{}'", pattern);
                     return true;
                 }
             }
             // Fallback to original pattern
             if (userAgent.contains(SEB_UA_PATTERN)) {
-                log.debug("SEB detected through fallback User-Agent: {}", userAgent);
+                log.debug("SEB detected through fallback User-Agent pattern");
                 return true;
             }
         }
@@ -84,7 +94,7 @@ public class SebDetector {
         for (String headerName : SEB_HEADERS) {
             String headerValue = request.getHeader(headerName);
             if (headerValue != null && !headerValue.isEmpty()) {
-                log.debug("SEB detected through header '{}': {}", headerName, headerValue);
+                log.debug("SEB detected through header '{}'", headerName);
                 return true;
             }
         }
@@ -92,19 +102,19 @@ public class SebDetector {
         // Legacy header checks for backward compatibility
         String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
         if (configKeyHash != null && !configKeyHash.isEmpty()) {
-            log.debug("SEB detected through Config Key Hash header: {}", configKeyHash);
+            log.debug("SEB detected through Config Key Hash header");
             return true;
         }
 
         String browserExamKey = request.getHeader(BROWSER_EXAM_KEY_HEADER);
         if (browserExamKey != null && !browserExamKey.isEmpty()) {
-            log.debug("SEB detected through Browser Exam Key header: {}", browserExamKey);
+            log.debug("SEB detected through Browser Exam Key header");
             return true;
         }
 
         String requestHash = request.getHeader(REQUEST_HASH_HEADER);
         if (requestHash != null && !requestHash.isEmpty()) {
-            log.debug("SEB detected through Request Hash header: {}", requestHash);
+            log.debug("SEB detected through Request Hash header");
             return true;
         }
 
@@ -175,6 +185,14 @@ public class SebDetector {
         }
 
         // Modern WKWebView exposes BEK/CK via the SEB JavaScript API instead of HTTP headers.
+        String configKey = sebSetting.getConfigKey();
+        String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
+        if (configKey != null && !configKey.isEmpty() && configKeyHash != null && !configKeyHash.isEmpty()) {
+            boolean isValid = sebConfigKeyService.validateConfigKeyHash(request, configKey);
+            log.debug("Config Key Hash validation result: {}", isValid);
+            return isValid;
+        }
+
         // Validate a BEK header when classic WebView sends one, but do not reject modern SEB
         // solely because that header is absent.
         String browserExamKey = sebSetting.getBrowserExamKey();
@@ -209,6 +227,14 @@ public class SebDetector {
             return true;
         }
 
+        String configKey = sebSetting.getConfigKey();
+        String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
+        if (configKey != null && !configKey.isEmpty() && configKeyHash != null && !configKeyHash.isEmpty()) {
+            boolean isValid = sebConfigKeyService.validateConfigKeyHash(request, configKey);
+            log.debug("Content Config Key Hash validation result: {}", isValid);
+            return isValid;
+        }
+
         String browserExamKey = sebSetting.getBrowserExamKey();
         if (browserExamKey != null && !browserExamKey.isEmpty()) {
             if (request.getHeader(BROWSER_EXAM_KEY_HEADER) == null || request.getHeader(BROWSER_EXAM_KEY_HEADER).isEmpty()) {
@@ -228,87 +254,7 @@ public class SebDetector {
      * Validates a Config Key Hash from SEB.
      */
     public boolean validateConfigKeyHash(HttpServletRequest request, String configKey) {
-        if (request == null || configKey == null || configKey.isEmpty()) {
-            log.debug("Request or config key is null/empty, cannot validate Config Key Hash");
-            return false;
-        }
-
-        String configKeyHash = request.getHeader(CONFIG_KEY_HASH_HEADER);
-        if (configKeyHash == null || configKeyHash.isEmpty()) {
-            log.debug("No Config Key Hash header found in request");
-            return false;
-        }
-
-        try {
-            // Get the request URL (without fragment)
-            String requestUrl = getRequestUrlWithoutFragment(request);
-
-            // Concatenate URL and Config Key
-            String urlWithKey = requestUrl + configKey;
-
-            // Calculate SHA-256 hash
-            String calculatedHash = calculateSha256Hash(urlWithKey);
-
-            // Compare with the received hash
-            boolean isValid = calculatedHash.equalsIgnoreCase(configKeyHash);
-            log.debug("Config Key Hash validation result: {}", isValid);
-
-            return isValid;
-        } catch (NoSuchAlgorithmException e) {
-            log.error("Error validating Config Key Hash", e);
-            return false;
-        }
-    }
-
-    /**
-     * Gets the full request URL without the fragment part.
-     */
-    private String getRequestUrlWithoutFragment(HttpServletRequest request) {
-        StringBuilder url = new StringBuilder();
-
-        // Build the URL
-        url.append(request.getScheme()).append("://")
-                .append(request.getServerName());
-
-        // Add port if non-standard
-        if (request.getServerPort() != 80 && request.getServerPort() != 443) {
-            url.append(":").append(request.getServerPort());
-        }
-
-        url.append(request.getRequestURI());
-
-        // Add query string if present
-        if (request.getQueryString() != null) {
-            url.append("?").append(request.getQueryString());
-        }
-
-        // Note: Fragment is not included as it's not sent to the server
-
-        return url.toString();
-    }
-
-    /**
-     * Calculates a SHA-256 hash of a string.
-     */
-    private String calculateSha256Hash(String input) throws NoSuchAlgorithmException {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-        return bytesToHex(hash);
-    }
-
-    /**
-     * Converts a byte array to a hexadecimal string.
-     */
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : bytes) {
-            String hex = Integer.toHexString(0xff & b);
-            if (hex.length() == 1) {
-                hexString.append('0');
-            }
-            hexString.append(hex);
-        }
-        return hexString.toString();
+        return sebConfigKeyService.validateConfigKeyHash(request, configKey);
     }
 
     /**
@@ -320,7 +266,7 @@ public class SebDetector {
             Enumeration<String> headerNames = request.getHeaderNames();
             while (headerNames.hasMoreElements()) {
                 String headerName = headerNames.nextElement();
-                log.trace("{}: {}", headerName, request.getHeader(headerName));
+                log.trace("{}: <present>", headerName);
             }
             log.trace("-------------------");
         }

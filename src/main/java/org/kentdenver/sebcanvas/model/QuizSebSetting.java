@@ -70,6 +70,11 @@ public class QuizSebSetting {
     private String configKey;
 
     /**
+     * Optional password required for emergency/manual SEB quit.
+     */
+    private String quitPassword;
+
+    /**
      * JSON array of additional allowed sites for this quiz.
      * These sites will be included in the SEB URL filter configuration.
      * Example: ["docs.google.com", "calculator.net"]
