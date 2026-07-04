@@ -1,394 +1,238 @@
-# Canvas Safe Exam Browser Integration
+# Canvas Safe Exam Browser LTI
 
-## Overview
+A TypeScript rewrite of the Canvas Safe Exam Browser integration. The app is a NestJS service with a React/Vite UI that runs on the existing Google Cloud Run services and uses the existing Firestore databases.
 
-The Canvas SEB Integration is a Spring Boot application that integrates Canvas Learning Management System (LMS) with Safe Exam Browser (SEB) using the Learning Tools Interoperability (LTI) v1.3 standard. This tool allows instructors to enforce the use of SEB for specific quizzes, providing a secure testing environment for students.
+The tool supports Canvas LTI 1.3 launches, Canvas OAuth for instructor API actions, Classic Quiz and New Quiz SEB enforcement, generated `.seb` configuration downloads, SEB Config Key proof, access-code injection, module item rewriting, and SEB exit pages.
 
-## Project Goals
+## Current Stack
 
-- Enable instructors to designate which Canvas quizzes require SEB
-- Enforce SEB usage for secure quiz taking
-- Dynamically generate SEB configurations for quizzes
-- Seamlessly integrate with Canvas via LTI 1.3
-- Deploy as a scalable service on Google Cloud Platform
+- Node.js 22
+- TypeScript
+- NestJS 11 on Express
+- React 19 and Vite
+- Vitest, Testing Library, Supertest, and Playwright
+- Google Cloud Firestore
+- Google Cloud Run Gen2
+- Canvas LTI 1.3, Canvas OAuth2, Canvas REST APIs, and New Quiz APIs
 
-## Project Structure
+## Project Layout
 
-```
+```text
 src/
-├── main/
-│   ├── java/
-│   │   └── org/
-│   │       └── kentdenver/
-│   │           └── sebcanvas/
-│   │               ├── CanvasSebApplication.java
-│   │               ├── config/
-│   │               │   ├── AppConfig.java
-│   │               │   ├── CloudSqlConfig.java
-│   │               │   ├── LtiConfig.java
-│   │               │   └── SecurityConfig.java
-│   │               ├── controller/
-│   │               │   ├── LtiController.java
-│   │               │   ├── QuizController.java
-│   │               │   └── SebController.java
-│   │               ├── model/
-│   │               │   ├── Quiz.java
-│   │               │   ├── SebConfig.java
-│   │               │   └── QuizSebSetting.java
-│   │               ├── repository/
-│   │               │   ├── QuizRepository.java
-│   │               │   └── SebSettingRepository.java
-│   │               ├── service/
-│   │               │   ├── CanvasService.java
-│   │               │   ├── LtiService.java
-│   │               │   ├── QuizService.java
-│   │               │   └── SebService.java
-│   │               └── util/
-│   │                   ├── SebConfigGenerator.java
-│   │                   └── SebDetector.java
-│   └── resources/
-│       ├── application.properties
-│       ├── application-dev.properties
-│       ├── application-prod.properties
-│       ├── static/
-│       │   ├── css/
-│       │   │   └── main.css
-│       │   ├── js/
-│       │   │   └── app.js
-│       │   └── images/
-│       │       └── logo.png
-│       └── templates/
-│           ├── teacherView.html
-│           └── sebRequired.html
-└── test/
-    └── java/
-        └── org/
-            └── kentdenver/
-                └── sebcanvas/
-                    ├── CanvasSebApplicationTests.java
-                    ├── controller/
-                    │   ├── LtiControllerTest.java
-                    │   ├── QuizControllerTest.java
-                    │   └── SebControllerTest.java
-                    ├── service/
-                    │   ├── CanvasServiceTest.java
-                    │   ├── LtiServiceTest.java
-                    │   └── SebServiceTest.java
-                    └── util/
-                        └── SebConfigGeneratorTest.java
+  client/              React UI and styles
+  server/
+    controllers/       LTI, OAuth, quiz, SEB, debug, static JS endpoints
+    services/          Canvas API, LTI, SEB config, quiz/content logic
+    data/              Firestore and in-memory repositories
+    http/              app shell, CORS, request URL, API error helpers
+    config/            environment-backed application config
+    assets/            Canvas SEB detector script
+  shared/              shared TypeScript domain models
+test/
+  e2e/                 Playwright browser smoke tests
+  server/              unit and service regression tests
+docs/
+  architecture.md      system behavior and route inventory
+  deployment.md        Cloud Run, Firestore, and secrets
+  testing.md           verification strategy and commands
+  tooling.md           package manager, CI, formatting, and repo hygiene decisions
 ```
 
-## Technology Stack
+## Local Development
 
-- **Java 11**: Core programming language
-- **Spring Boot 2.7.5**: Application framework
-- **Spring Security**: Authentication and authorization
-- **Spring Data JPA**: Data access layer
-- **Thymeleaf**: Server-side Java template engine
-- **Nimbus JOSE + JWT**: JSON Web Token implementation
-- **PostgreSQL**: Production database (Google Cloud SQL)
-- **H2 Database**: Development/testing database
-- **Google Cloud Platform**:
-    - Cloud Run: Container hosting
-    - Cloud SQL: Managed database
-    - Secret Manager: Secure credential storage
-- **Bootstrap 5**: Frontend styling
-- **JUnit 5**: Testing framework
-- **Mockito**: Mocking framework for testing
-
-## Prerequisites
-
-- Java Development Kit (JDK) 11 or later
-- Maven 3.6.0 or later
-- Google Cloud SDK
-- IntelliJ IDEA (recommended)
-- Google Cloud Platform account
-- Canvas LMS administrator access
-
-## Local Development Setup
-
-### 1. Clone the Repository
+Install dependencies:
 
 ```bash
-git clone https://github.com/kentdenver/canvas-seb-integration.git
-cd canvas-seb-integration
+npm ci
 ```
 
-### 2. Configure Development Properties
-
-Edit `src/main/resources/application-dev.properties`:
-
-```properties
-# LTI Configuration
-lti.issuer=https://canvas.instructure.com
-lti.clientId=your_dev_client_id_here
-lti.keySetUrl=https://sso.canvaslms.com/api/lti/security/jwks
-lti.tokenUrl=https://sso.canvaslms.com/login/oauth2/token
-lti.authUrl=https://sso.canvaslms.com/api/lti/authorize_redirect
-
-# Canvas API
-canvas.api.baseUrl=https://canvas.instructure.com/api/v1
-```
-
-### 3. Build the Project
+Run the full local quality gate:
 
 ```bash
-mvn clean install
+npm run typecheck
+npm run lint
+npm run format:check
+npm run test:coverage
+npm run build
 ```
 
-### 4. Run Locally
+Or run the combined non-browser gate:
 
 ```bash
-mvn spring-boot:run -Dspring.profiles.active=dev
+npm run verify
 ```
 
-The application will be available at `http://localhost:8080`
+Run the app locally with the in-memory repository:
+
+```bash
+HOST=127.0.0.1 \
+USE_IN_MEMORY_STORE=true \
+TOOL_URL=http://localhost:8080 \
+LTI_CLIENT_ID=test-client \
+CANVAS_API_CLIENT_ID=test \
+CANVAS_API_CLIENT_SECRET=test \
+npm start
+```
+
+Open `http://127.0.0.1:8080/health` for a health check. React app-shell routes, such as `/seb/exit/course-1/classicquiz_quiz-1`, are served by Nest and hydrate from `/assets/index.js`.
+
+For iterative backend development:
+
+```bash
+npm run dev
+```
+
+For frontend-only Vite development:
+
+```bash
+npm run dev:client
+```
+
+## Environment Variables
+
+The app reads plain environment variables. Cloud Run injects secret values as environment variables through `--set-secrets`.
+
+For local development, use `.env.example` as the reference template. Real `.env` files are ignored and should not be committed.
+
+Required in Cloud Run:
+
+- `NODE_ENV=production`
+- `APP_ENV=dev` or `APP_ENV=prod`
+- `GCP_PROJECT_ID`
+- `FIRESTORE_DATABASE_ID`
+- `TOOL_URL`
+- `LTI_CLIENT_ID`
+- `LTI_PRIVATE_KEY`
+- `ADMIN_PASSWORD` or `SESSION_SECRET`
+- `CANVAS_API_CLIENT_ID`
+- `CANVAS_API_CLIENT_SECRET`
+- `STATE_ENCRYPTION_KEY` in production
+
+Useful optional variables:
+
+- `CANVAS_DOMAIN`, default `https://kentdenver.instructure.com`
+- `CANVAS_API_BASE_URL`, default `${CANVAS_DOMAIN}/api/v1`
+- `CANVAS_REDIRECT_URI`, default `${TOOL_URL}/api/oauth2callback`
+- `LTI_DEPLOYMENT_ID`
+- `APP_DEBUG_ENABLED`
+- `SEB_QUIT_PASSWORD`
+- `SEB_REQUIRED_DOMAINS`
+- Firestore collection overrides: `FIRESTORE_QUIZZES_COLLECTION`, `FIRESTORE_SEB_SETTINGS_COLLECTION`, `FIRESTORE_CONTENT_ITEMS_COLLECTION`, `FIRESTORE_CONTENT_SEB_SETTINGS_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_MODULE_ITEM_UPDATES_COLLECTION`
+
+Production refuses to start without `LTI_PRIVATE_KEY` and `STATE_ENCRYPTION_KEY`.
+
+## Firestore
+
+The deployment keeps the existing Firestore database IDs:
+
+- Dev: `seb-canvaslti-dev`
+- Prod: `seb-canvaslti-prod`
+
+Default collections:
+
+- `quizzes`
+- `sebSettings`
+- `contentItems`
+- `contentSebSettings`
+- `oauthTokens`
+- `module_item_updates`
+
+The rewrite does not require Java model compatibility. The repository layer writes TypeScript-shaped documents with stable IDs and timestamps.
 
 ## Canvas LTI Configuration
 
-### 1. Register the LTI Tool in Canvas
+The Canvas developer key should continue pointing at the Cloud Run service URL.
 
-1. Navigate to your Canvas account settings
-2. Click on "Developer Keys"
-3. Click "+ Developer Key" and select "+LTI Key"
-4. Configure with these settings:
+Important URLs:
 
-```json
-{
-  "title": "Canvas SEB Integration",
-  "description": "Integrate Safe Exam Browser with Canvas quizzes",
-  "target_link_uri": "https://your-app-url.com/lti/launch",
-  "oidc_initiation_url": "https://your-app-url.com/lti/login",
-  "scopes": [
-    "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly",
-    "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
-    "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
-  ],
-  "extensions": [
-    {
-      "domain": "your-app-url.com",
-      "tool_id": "canvas-seb-integration",
-      "platform": "canvas.instructure.com",
-      "settings": {
-        "text": "SEB Quiz Settings",
-        "icon_url": "https://your-app-url.com/images/logo.png",
-        "placements": [
-          {
-            "text": "SEB Quiz Settings",
-            "placement": "course_navigation",
-            "message_type": "LtiResourceLinkRequest",
-            "target_link_uri": "https://your-app-url.com/lti/launch"
-          }
-        ]
-      }
-    }
-  ],
-  "public_jwk": {
-    "kty": "RSA",
-    "alg": "RS256",
-    "e": "AQAB",
-    "kid": "your-generated-key-id",
-    "n": "your-generated-public-key-n-value",
-    "use": "sig"
-  }
-}
-```
+- OIDC login URL: `${TOOL_URL}/lti/login`
+- Target link URI: `${TOOL_URL}/lti/launch`
+- Redirect URIs: `${TOOL_URL}/lti/launch` and `${TOOL_URL}/api/oauth2callback`
+- Public JWKS URL: `${TOOL_URL}/.well-known/jwks.json`
+- Deep link select URL: `${TOOL_URL}/lti/deeplink/select`
+- Detector script: `${TOOL_URL}/js/canvas-seb-detector.js`
 
-5. Generate a secure public/private key pair for the "public_jwk" section (see Generating Keys section below)
-6. Enable the developer key and copy the client ID to use in your application
+Required Canvas API OAuth scopes depend on the account configuration, but the tool needs enough access to read course content, read quizzes/assignments/modules, update quiz access codes, and create or update module items.
 
-### 2. Generating Keys for LTI Authentication
+## Core Routes
 
-Use the following command to generate a RSA key pair:
+Operational routes:
+
+- `GET /health`
+- `GET /.well-known/jwks.json`
+- `GET /js/canvas-seb-detector.js`
+- `GET /api/seb/canvas-detector.js`
+
+LTI and OAuth:
+
+- `GET|POST /lti/login`
+- `GET|POST /lti/launch`
+- `GET /lti/config`
+- `GET /lti/deeplink/select`
+- `POST /lti/deeplink/process`
+- `POST /lti/deeplink/update-seb`
+- `GET /api/oauth2authorize`
+- `GET /api/oauth2reauthorize`
+- `GET /api/oauth2callback`
+- `GET /api/oauth2status`
+
+Instructor quiz APIs:
+
+- `GET /api/quizzes`
+- `POST /api/quizzes/course/:courseId/refresh`
+- `PUT /api/quizzes/:quizId/seb`
+- `POST /api/quizzes/:courseId/:quizId/seb/enable`
+- `POST /api/quizzes/:courseId/:quizId/seb/disable`
+- `POST /api/quizzes/:courseId/:quizId/seb/regenerate-code`
+- `GET /api/quizzes/:courseId/:quizId/seb/status`
+- `POST /api/quizzes/seb-config-structured`
+
+SEB/student flows:
+
+- `GET /seb/quiz/:courseId/:quizId`
+- `GET /seb/config/:courseId/:contentId.seb`
+- `GET /seb/launch/:contentId`
+- `POST /seb/launch/:contentId`
+- `GET /seb/redirect/:quizId`
+- `POST /seb/validate`
+- `GET /seb/check`
+- `POST /api/seb/access-proof/:courseId/:quizId`
+- `GET /api/seb/access-code/:courseId/:quizId`
+- `GET /seb/exit/:courseId/:quizId`
+- `GET /seb/exit/quit/:courseId/:quizId`
+- `GET /seb/exit/manual/:courseId/:quizId`
+
+Classic quiz IDs use the raw Canvas quiz ID internally and `classicquiz_{quizId}` when represented as LTI content. New Quiz content IDs use `newquiz:{courseId}:{assignmentId}`.
+
+## Cloud Run Deployment
+
+The repo includes Cloud Build configs for the existing services:
 
 ```bash
-# Install OpenSSL if not already available
-# Generate private key
-openssl genrsa -out private-key.pem 2048
-
-# Extract public key
-openssl rsa -in private-key.pem -pubout -out public-key.pem
-
-# Format for use in Canvas Developer Key
-# You'll need to format the output to match the JSON format required by Canvas
+gcloud builds submit --config=cloudbuild-dev.yaml
+gcloud builds submit --config=cloudbuild-prod.yaml
 ```
 
-## Google Cloud Platform Setup
+These configs:
 
-### 1. Set Up Google Cloud SQL
+- pull the previous image as a Docker build cache source
+- build a Node 22 Docker image whose stages run install, typecheck, lint, formatting check, coverage tests, build, and production dependency pruning
+- deploy `canvas-seb-dev` or `canvas-seb-prod`
+- keep Firestore database IDs on `seb-canvaslti-dev` and `seb-canvaslti-prod`
+- inject secrets through Secret Manager
 
-1. Go to the Google Cloud Console
-2. Navigate to SQL > Create Instance
-3. Select PostgreSQL
-4. Configure your instance:
-    - Name: `canvas-seb-db`
-    - Password: Set a strong password
-    - Region: Choose appropriate region
-    - Database version: PostgreSQL 12 or later
-    - Machine type: Lightweight tier for development, adjust for production
-5. Under Connections, select "Private IP" (recommended for production)
-6. Click "Create Instance"
+See [docs/deployment.md](docs/deployment.md) for required secrets and deployment checks.
 
-After the instance is created:
-1. Go to Databases and create a new database named `sebdb`
-2. Go to Users and create a user for your application
+## Testing
 
-### 2. Create Secrets in Secret Manager
+`npm test` runs fast unit and service regression tests. `npm run test:coverage` enforces the current coverage floor. The suite covers shared model parsing, config loading, LTI state, JWK generation, Canvas API behavior, repositories, SEB configuration generation, SEB Config Key proof, detector behavior, content and quiz services, module item rewrites, static detector serving, and HTTP helpers.
 
-1. Go to Google Cloud Console
-2. Navigate to Security > Secret Manager
-3. Create these secrets:
-    - `DB_USER` - Your database username
-    - `DB_PASS` - Your database password
-    - `DB_NAME` - Your database name (sebdb)
-    - `CLOUD_SQL_CONNECTION_NAME` - Connection name (project:region:instance)
-    - `LTI_CLIENT_ID` - Your Canvas LTI client ID
+Browser verification uses Playwright against a built local server for the React app shell and responsive UI checks. See [docs/testing.md](docs/testing.md).
 
-### 3. Configure GCP Environment Variables
+Tooling decisions, including why the repo currently stays on npm rather than pnpm or Bun, are documented in [docs/tooling.md](docs/tooling.md).
 
-Ensure your production properties are correctly set in `application-prod.properties`:
+## Safe Exam Browser Behavior
 
-```properties
-spring.application.name=canvas-seb-integration
+The generated `.seb` files are binary plist payloads with Canvas start URLs, access codes, quit URLs, Config Key metadata, and allowed domains. Config downloads persist a Config Key hash. The Canvas detector script then requests a one-time proof token from `/api/seb/access-proof/:courseId/:quizId`, exchanges it at `/api/seb/access-code/:courseId/:quizId`, and fills the Canvas access-code field only after SEB proves it is using the downloaded config.
 
-# Server configuration
-server.port=8080
-
-# JPA/Hibernate
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
-
-# LTI Configuration
-lti.issuer=https://canvas.instructure.com
-lti.clientId=${LTI_CLIENT_ID}
-lti.keySetUrl=https://sso.canvaslms.com/api/lti/security/jwks
-lti.tokenUrl=https://sso.canvaslms.com/login/oauth2/token
-lti.authUrl=https://sso.canvaslms.com/api/lti/authorize_redirect
-
-# Canvas API
-canvas.api.baseUrl=https://canvas.instructure.com/api/v1
-
-# SEB Configuration
-seb.browserExamKeyRequired=true
-seb.configKeyRequired=false
-```
-
-## Deploying to Google Cloud Platform
-
-### 1. Install Cloud Code Plugin in IntelliJ
-
-1. Open IntelliJ IDEA
-2. Go to File > Settings > Plugins
-3. Search for "Google Cloud Code"
-4. Install the plugin and restart IntelliJ
-
-### 2. Create Cloud Run Deployment Configuration
-
-1. Click **Run** > **Edit Configurations**
-2. Click the **+** button and select **Cloud Run: Deploy**
-3. Configure as follows:
-
-**Cloud Run Settings:**
-- **Name**: CanvasSeb Cloud Deploy
-- **GCP Project**: [Select your project]
-- **Service Name**: canvas-seb
-- **Region**: us-central1 (or your preferred region)
-- **Deploy Revision from Source**: Select this option
-- **Source Location**: Select your project directory
-- **Platform**: 1st gen
-- **Memory**: 512 MiB (or as needed)
-- **CPU**: 1 (or as needed)
-- **Timeout**: 300 seconds
-- **Maximum Instances**: As needed
-- **Minimum Instances**: 0
-- **Environment Variables**:
-    - SPRING_PROFILES_ACTIVE=prod
-    - Add other variables or use secrets as needed
-
-**Additional Settings:**
-- **Connect to Cloud SQL**: Check and select your instance
-- **Allow unauthenticated invocations**: Check if public access is needed
-
-### 3. Deploy to Cloud Run
-
-1. Select the "CanvasSeb Cloud Deploy" configuration
-2. Click the "Run" button (green triangle)
-3. Wait for the deployment to complete
-4. Note the deployed service URL (e.g., `https://canvas-seb-abc123-uc.a.run.app`)
-
-### 4. Update Canvas Configuration
-
-Update your Canvas LTI Developer Key with your new Cloud Run URLs:
-- `target_link_uri`: `https://your-cloud-run-url.a.run.app/lti/launch`
-- `oidc_initiation_url`: `https://your-cloud-run-url.a.run.app/lti/login`
-
-## User Workflow
-
-### Teacher Workflow
-
-1. Instructor navigates to a course in Canvas
-2. Clicks on the "SEB Quiz Settings" in the course navigation
-3. Views a list of all quizzes in the course
-4. Toggles which quizzes require SEB
-5. Changes are automatically saved
-
-### Student Workflow
-
-1. Student clicks on a quiz in Canvas
-2. If SEB is required for the quiz:
-    - Student is shown a page indicating SEB is required
-    - Student downloads the SEB configuration file
-    - Opening the file launches SEB and navigates to the quiz
-3. If SEB is not required:
-    - Student is taken directly to the quiz
-4. After completing the quiz in SEB, student can exit the browser
-
-## Troubleshooting
-
-### LTI Launch Issues
-
-- **Problem**: "Invalid token signature" error during launch
-    - **Solution**: Verify your public/private key pair matches what's registered in Canvas
-
-- **Problem**: "Invalid client ID" error
-    - **Solution**: Ensure the client ID in your application matches the one in Canvas
-
-### SEB Configuration Issues
-
-- **Problem**: SEB doesn't launch correctly
-    - **Solution**: Check that the generated SEB file is properly formatted and contains the correct Canvas URL
-
-- **Problem**: SEB detects student but quiz doesn't load
-    - **Solution**: Verify the browser exam key validation process and URL filter settings
-
-### Cloud SQL Connection Issues
-
-- **Problem**: Application can't connect to database
-    - **Solution**: Check network permissions, connection name, and credentials
-
-### Cloud Run Deployment Issues
-
-- **Problem**: Deployment fails
-    - **Solution**: Check logs for detailed error information, verify GCP permissions
-
-## Security Considerations
-
-- All communication uses HTTPS
-- LTI 1.3 security standards are implemented
-- Credentials are stored in GCP Secret Manager
-- Spring Security controls access to endpoints
-- SEB browser detection validates secure environment
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- [Safe Exam Browser](https://safeexambrowser.org) for providing the secure browser environment
-- [IMS Global](https://www.imsglobal.org) for the LTI specification
-- [Canvas LMS](https://www.instructure.com/canvas) for their LTI implementation
-
----
-
-Developed by Kent Denver School, 2023
+This preserves the legacy security model while removing the Java/Spring/Thymeleaf implementation.

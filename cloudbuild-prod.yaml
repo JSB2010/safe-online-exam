@@ -1,34 +1,57 @@
+substitutions:
+  _LOCATION: us-central1
+  _REPOSITORY: canvas-seb-repo
+  _IMAGE: canvas-seb-prod
+  _CACHE_TAG: latest
+
 steps:
-  # Build the application
-  - name: 'maven:3.8.6-openjdk-23'
-    entrypoint: 'mvn'
-    args: ['clean', 'package', '-DskipTests']
-
-  # Build the Docker image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-prod:$COMMIT_SHA', '.']
-
-  # Push the Docker image to Artifact Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-prod:$COMMIT_SHA']
-
-  # Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'gcloud'
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
     args:
-      - 'run'
-      - 'deploy'
-      - 'canvas-seb-prod'
-      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-prod:$COMMIT_SHA'
-      - '--region=us-central1'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--set-env-vars=SPRING_PROFILES_ACTIVE=prod,GCP_PROJECT_ID=$PROJECT_ID'
-      - '--set-secrets=LTI_CLIENT_ID=prod_lti_client_id:latest,TOOL_URL=prod_tool_url:latest,ADMIN_PASSWORD=prod_admin_password:latest'
-      - '--memory=2Gi'
-      - '--cpu=2'
-      - '--min-instances=1'
-      - '--max-instances=10'
+      - "-c"
+      - "docker pull ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG} || exit 0"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
+      - "--cache-from"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "canvas-seb-prod"
+      - "--image=${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+      - "--region=${_LOCATION}"
+      - "--execution-environment=gen2"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=prod,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-prod"
+      - "--set-secrets=LTI_CLIENT_ID=prod_lti_client_id:latest,TOOL_URL=prod_tool_url:latest,LTI_PRIVATE_KEY=prod_lti_private_key:latest,ADMIN_PASSWORD=prod_admin_password:latest,STATE_ENCRYPTION_KEY=prod_state_encryption_key:latest,CANVAS_API_CLIENT_ID=prod_api_client_id:latest,CANVAS_API_CLIENT_SECRET=prod_api_client_secret:latest"
+      - "--memory=2Gi"
+      - "--cpu=2"
+      - "--min-instances=1"
+      - "--max-instances=10"
+      - "--timeout=600s"
+      - "--service-account=seb-canvas@$PROJECT_ID.iam.gserviceaccount.com"
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-prod:$COMMIT_SHA'
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"

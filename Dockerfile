@@ -1,29 +1,37 @@
-# Use Java 21 as specified in pom.xml
-FROM eclipse-temurin:21-jre-jammy
+FROM node:22-bookworm-slim AS deps
 
-# Set working directory
 WORKDIR /app
 
-# Add a timestamp argument to break cache when needed
-ARG BUILD_DATE=unknown
-RUN echo "Build timestamp: $BUILD_DATE" > build_timestamp.txt
+COPY package*.json .npmrc ./
+RUN npm ci
 
-# Add the application JAR
-ADD target/sebcanvas-0.0.1-SNAPSHOT.jar app.jar
+FROM deps AS verify
 
-# Set environment variables
-ENV SPRING_PROFILES_ACTIVE=dev
-ENV JAVA_OPTS="-Xmx512m -Xms256m"
+COPY . .
+RUN npm run typecheck
+RUN npm run lint
+RUN npm run format:check
+RUN npm run test:coverage
+RUN npm run build
 
-# Set GCP debugging options to help troubleshoot classpath issues
-ENV JAVA_TOOL_OPTIONS="-Dspring.profiles.active=dev"
+FROM verify AS production-deps
 
-# Make the port more explicit - should match the port in the application
+RUN npm prune --omit=dev
+
+FROM node:22-bookworm-slim AS runtime
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=8080
+
+COPY --from=production-deps /app/package*.json ./
+COPY --from=production-deps /app/node_modules ./node_modules
+COPY --from=production-deps /app/dist ./dist
+
 EXPOSE 8080
 
-# Health check to verify the app is running (adjust timeout as needed)
-HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 8080) + '/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-# Run the application with more detailed debugging if needed
-ENTRYPOINT ["java", "-jar", "app.jar"]
+CMD ["node", "dist/server/server/main.js"]

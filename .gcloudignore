@@ -1,0 +1,16 @@
+.git
+.github/java-upgrade
+.idea
+.vscode
+.claude
+node_modules
+dist
+coverage
+test-results
+playwright-report
+target
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example

@@ -1,0 +1,61 @@
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+import { fileURLToPath, URL } from "node:url";
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      "@shared": fileURLToPath(new URL("./src/shared", import.meta.url)),
+      "@server": fileURLToPath(new URL("./src/server", import.meta.url)),
+      "@client": fileURLToPath(new URL("./src/client", import.meta.url))
+    }
+  },
+  build: {
+    outDir: "dist/client",
+    emptyOutDir: true,
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/index.js",
+        chunkFileNames: "assets/[name].js",
+        assetFileNames: "assets/[name][extname]"
+      }
+    }
+  },
+  server: {
+    port: 5173,
+    host: "127.0.0.1"
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: ["test/setup.ts"],
+    exclude: ["test/e2e/**", "node_modules/**", "dist/**"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      thresholds: {
+        lines: 70,
+        functions: 70,
+        branches: 65,
+        statements: 70
+      },
+      include: [
+        "src/shared/**/*.ts",
+        "src/server/config/**/*.ts",
+        "src/server/data/**/*.ts",
+        "src/server/http/**/*.ts",
+        "src/server/services/**/*.ts"
+      ],
+      exclude: [
+        "dist/**",
+        "src/client/**",
+        "src/server/assets/**",
+        "src/server/controllers/**",
+        "src/server/app.module.ts",
+        "test/**",
+        "src/server/main.ts"
+      ]
+    }
+  }
+});

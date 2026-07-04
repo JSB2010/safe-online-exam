@@ -1,44 +1,49 @@
+substitutions:
+  _LOCATION: us-central1
+  _REPOSITORY: canvas-seb-repo
+  _IMAGE: canvas-seb-dev
+  _TAG: latest
+
 steps:
-  # Build the application with explicit dependency verification
-  - name: 'maven:3.9.6-eclipse-temurin-21'
-    entrypoint: 'mvn'
-    args: ['clean', 'dependency:tree', 'package', '-DskipTests']
-
-  # Print the resolved dependencies to help diagnose issues
-  - name: 'maven:3.9.6-eclipse-temurin-21'
-    entrypoint: 'mvn'
-    args: ['dependency:resolve', '-DincludeGroupIds=com.google.auth,com.google.cloud']
-
-  # Build the Docker image with additional memory for Maven
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest', '.']
-    env:
-      - 'MAVEN_OPTS=-Xmx1g'
-
-  # Push the Docker image to Artifact Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest']
-
-  # Deploy to Cloud Run with longer startup timeout
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'gcloud'
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
     args:
-      - 'run'
-      - 'deploy'
-      - 'canvas-seb-dev'
-      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest'
-      - '--region=us-central1'
-      - '--execution-environment=gen2'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--set-env-vars=SPRING_PROFILES_ACTIVE=dev,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev'
-      - '--set-secrets=LTI_CLIENT_ID=dev_lti_client_id:latest,TOOL_URL=dev_tool_url:latest,ADMIN_PASSWORD=dev_admin_password:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest'
-      - '--memory=2Gi'
-      - '--cpu=2'
-      - '--min-instances=0'
-      - '--max-instances=2'
-      - '--timeout=600s'  # Increased timeout for startup
-      - '--service-account=seb-canvas@$PROJECT_ID.iam.gserviceaccount.com'
+      - "-c"
+      - "docker pull ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG} || exit 0"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "--cache-from"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "canvas-seb-dev"
+      - "--image=${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "--region=${_LOCATION}"
+      - "--execution-environment=gen2"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev"
+      - "--set-secrets=LTI_CLIENT_ID=dev_lti_client_id:latest,TOOL_URL=dev_tool_url:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest,ADMIN_PASSWORD=dev_admin_password:latest,CANVAS_API_CLIENT_ID=dev_api_client_id:latest,CANVAS_API_CLIENT_SECRET=dev_api_client_secret:latest"
+      - "--memory=2Gi"
+      - "--cpu=2"
+      - "--min-instances=0"
+      - "--max-instances=2"
+      - "--timeout=600s"
+      - "--service-account=seb-canvas@$PROJECT_ID.iam.gserviceaccount.com"
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/canvas-seb-dev:latest'
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"

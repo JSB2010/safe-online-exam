@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+test-results
+playwright-report
+package-lock.json
+src/server/assets/canvas-seb-detector.js
+.git
+.github/java-upgrade
+.idea
+.vscode
+.claude
+.DS_Store
