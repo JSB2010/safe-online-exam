@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type { ContentItem, ContentSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
-import { defaultContentSebSetting, parseNewQuizContentId } from "../../shared/models.js";
+import { defaultContentSebSetting, normalizeExternalTools, parseNewQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { verifyActionToken } from "../http/action-token.js";
 import { apiError, noUserSession } from "../http/api-error.js";
@@ -106,6 +106,7 @@ export class QuizController {
         ssoDomains: body.ssoDomains || [],
         educationalToolDomains: body.educationalToolDomains || [],
         customDomains: body.customDomains || [],
+        externalTools: normalizeExternalTools(body.externalTools),
         externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
         quitPassword: normalizeBlank(body.quitPassword),
         sebRequired: true,
@@ -291,7 +292,8 @@ export class QuizController {
         configValid: !!(setting?.sebRequired && setting.accessCode),
         ssoDomains: setting?.ssoDomains || [],
         educationalToolDomains: setting?.educationalToolDomains || [],
-        customDomains: setting?.customDomains || []
+        customDomains: setting?.customDomains || [],
+        externalTools: normalizeExternalTools(setting?.externalTools)
       };
     }
     const setting = await this.quizService.getSebSettingForQuiz(quizId);
@@ -304,6 +306,7 @@ export class QuizController {
       ssoDomains: setting?.ssoDomains || [],
       educationalToolDomains: setting?.educationalToolDomains || [],
       customDomains: setting?.customDomains || [],
+      externalTools: normalizeExternalTools(setting?.externalTools),
       allowedSites: setting?.allowedSites
     };
   }
@@ -379,7 +382,8 @@ export class QuizController {
         contentType: existing.contentType || "NEW_QUIZ",
         ssoDomains: existing.ssoDomains || [],
         educationalToolDomains: existing.educationalToolDomains || [],
-        customDomains: existing.customDomains || []
+        customDomains: existing.customDomains || [],
+        externalTools: normalizeExternalTools(existing.externalTools)
       };
     }
     return {

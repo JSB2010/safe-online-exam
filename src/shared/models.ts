@@ -47,6 +47,7 @@ export interface QuizSebSetting {
   ssoDomains: string[];
   educationalToolDomains: string[];
   customDomains: string[];
+  externalTools: ExternalToolConfig[];
   canvasDomain?: string | null;
   canvasAssignmentId?: string | null;
   deepLinkUrl?: string | null;
@@ -76,6 +77,7 @@ export interface ContentSebSetting {
   ssoDomains: string[];
   educationalToolDomains: string[];
   customDomains: string[];
+  externalTools: ExternalToolConfig[];
   quitPassword?: string | null;
   metadata?: Record<string, unknown>;
   createdAt?: string | null;
@@ -133,9 +135,34 @@ export interface StructuredSebConfigRequest {
   ssoDomains?: string[] | null;
   educationalToolDomains?: string[] | null;
   customDomains?: string[] | null;
+  externalTools?: ExternalToolConfig[] | null;
   externalToolUrl?: string | null;
   quitPassword?: string | null;
 }
+
+export interface ExternalToolConfig {
+  id: string;
+  label: string;
+  url: string;
+  enabled: boolean;
+  preset?: string | null;
+  allowedDomains?: string[] | null;
+}
+
+export const EXTERNAL_TOOL_PRESETS: ExternalToolConfig[] = [
+  {
+    id: "desmos-calculator",
+    label: "Desmos",
+    url: "https://www.desmos.com/calculator",
+    enabled: false,
+    preset: "desmos-calculator",
+    allowedDomains: [
+      "https://www.desmos.com/assets/build/*",
+      "https://www.desmos.com/assets/img/apps/graphing/*",
+      "https://www.desmos.com/assets/pwa/*"
+    ]
+  }
+];
 
 export function classicQuizContentId(quizId: string): string {
   return `classicquiz_${quizId}`;
@@ -195,7 +222,8 @@ export function defaultQuizSebSetting(quizId: string, courseId?: string | null):
     enabled: false,
     ssoDomains: [],
     educationalToolDomains: [],
-    customDomains: []
+    customDomains: [],
+    externalTools: []
   };
 }
 
@@ -212,8 +240,85 @@ export function defaultContentSebSetting(contentId: string, courseId?: string | 
     enabled: false,
     ssoDomains: [],
     educationalToolDomains: [],
-    customDomains: []
+    customDomains: [],
+    externalTools: []
   };
+}
+
+export function normalizeExternalTools(input?: ExternalToolConfig[] | null): ExternalToolConfig[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  return input.flatMap((tool, index) => {
+    const label = tool.label?.trim();
+    const url = normalizeToolUrl(tool.url);
+    if (!label || !url) {
+      return [];
+    }
+    const id = sanitizeToolId(tool.id || tool.preset || label || `tool-${index + 1}`);
+    const uniqueId = seen.has(id) ? `${id}-${index + 1}` : id;
+    const preset = EXTERNAL_TOOL_PRESETS.find((entry) => entry.id === id || entry.preset === tool.preset);
+    seen.add(uniqueId);
+    return [
+      {
+        id: uniqueId,
+        label,
+        url,
+        enabled: !!tool.enabled,
+        preset: tool.preset?.trim() || null,
+        allowedDomains: normalizeToolDomains(preset ? preset.allowedDomains : tool.allowedDomains)
+      }
+    ];
+  });
+}
+
+export function enabledExternalTools(input?: ExternalToolConfig[] | null): ExternalToolConfig[] {
+  return normalizeExternalTools(input).filter((tool) => tool.enabled);
+}
+
+export function allowlistEntriesForExternalTools(input?: ExternalToolConfig[] | null): string[] {
+  const entries = new Set<string>();
+  for (const tool of enabledExternalTools(input)) {
+    entries.add(tool.url);
+    for (const domain of tool.allowedDomains || []) {
+      entries.add(domain);
+    }
+  }
+  return Array.from(entries);
+}
+
+function normalizeToolUrl(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const candidate = /^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeToolDomains(value?: string[] | null): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(new Set(value.map((entry) => entry.trim()).filter(Boolean)));
+}
+
+function sanitizeToolId(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+  return normalized || "external-tool";
 }
 
 export function isInstructor(launchData?: Pick<LtiLaunchData, "roles"> | null): boolean {

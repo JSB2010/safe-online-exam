@@ -2,10 +2,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Controller, Get, Header, Req } from "@nestjs/common";
 import type { Request } from "express";
+import { AppConfig } from "../config/app-config.js";
 import { requestBaseUrl } from "../http/request-url.js";
 
 @Controller()
 export class StaticJsController {
+  constructor(private readonly config?: AppConfig) {}
+
   @Get(["/js/canvas-seb-detector.js", "/api/seb/canvas-detector.js"])
   @Header("content-type", "application/javascript; charset=utf-8")
   @Header("cache-control", "no-cache, no-store, must-revalidate")
@@ -16,7 +19,8 @@ export class StaticJsController {
     const devPath = join(process.cwd(), "src/server/assets/canvas-seb-detector.js");
     const paths = process.env.NODE_ENV === "production" ? [assetPath, devPath] : [devPath, assetPath];
     const script = await readFirstAvailable(paths);
-    return script.replaceAll("${SEB_BASE_URL}", requestBaseUrl(request)).replaceAll("${SEB_API_KEY}", "");
+    const baseUrl = this.config?.getApplicationBaseUrl() || requestBaseUrl(request);
+    return script.replaceAll("${SEB_BASE_URL}", baseUrl).replaceAll("${SEB_API_KEY}", "");
   }
 
   @Get("/js/health")

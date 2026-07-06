@@ -192,17 +192,19 @@
         console.log('Canvas SEB Detector:', message);
     }
 
-    function fingerprintValue(value) {
-        if (typeof value !== 'string' || value.length === 0) {
-            return 'missing';
-        }
-        if (value.length <= 16) {
-            return 'len=' + value.length + ', fp=' + value;
-        }
-        return 'len=' + value.length + ', fp=' + value.substring(0, 8) + '...' + value.substring(value.length - 8);
-    }
-
     const ACCESS_CODE_PROGRESS_OVERLAY_ID = 'seb-access-code-progress-overlay';
+    const ACCESS_CODE_FIELD_SELECTORS = [
+        'input[name="access_code"]',
+        'input[id*="access_code"]',
+        'input[placeholder*="access code"]',
+        'input[placeholder*="Access Code"]',
+        'input[aria-label*="access code"]',
+        'input[aria-label*="Access Code"]',
+        '.quiz-access-code input',
+        '#quiz_access_code',
+        'input[type="password"][name*="access"]',
+        'input[type="text"][name*="access"]'
+    ];
     let accessCodeProgressHideTimer = null;
 
     function showAccessCodeProgressOverlay() {
@@ -214,6 +216,7 @@
         }
 
         if (document.getElementById(ACCESS_CODE_PROGRESS_OVERLAY_ID)) {
+            renderAccessCodeOverlayContent('loading');
             return;
         }
 
@@ -232,19 +235,7 @@
             color: #172033;
             font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         `;
-        overlay.innerHTML = `
-            <div style="width: min(420px, 100%); background: #ffffff; border: 1px solid #dfe3ea; border-radius: 8px; box-shadow: 0 18px 48px rgba(24,36,56,0.22); padding: 28px; text-align: left;">
-                <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: #0f766e; background: #e6f4f1; border-radius: 8px;">
-                    <div style="width: 18px; height: 18px; border: 2px solid #98d2c9; border-top-color: #0f766e; border-radius: 999px; animation: sebProgressSpin 0.8s linear infinite;"></div>
-                </div>
-                <h2 style="margin: 0 0 10px; color: #172033; font-size: 28px; line-height: 1.15; font-weight: 800;">
-                    Getting your quiz ready
-                </h2>
-                <p style="margin: 0; color: #475467; font-size: 16px; line-height: 1.45;">
-                    This should only take a moment.
-                </p>
-            </div>
-        `;
+        overlay.innerHTML = '<div id="seb-access-code-progress-card"></div>';
 
         if (!document.getElementById('seb-access-code-progress-style')) {
             const style = document.createElement('style');
@@ -254,6 +245,48 @@
         }
 
         document.body.appendChild(overlay);
+        renderAccessCodeOverlayContent('loading');
+    }
+
+    function showAccessCodeErrorOverlay(message) {
+        showAccessCodeProgressOverlay();
+        renderAccessCodeOverlayContent('error', message);
+    }
+
+    function renderAccessCodeOverlayContent(state, message) {
+        const card = document.getElementById('seb-access-code-progress-card');
+        if (!card) return;
+
+        const isError = state === 'error';
+        card.style.cssText = 'width: min(420px, 100%); background: #ffffff; border: 1px solid #dfe3ea; border-radius: 8px; box-shadow: 0 18px 48px rgba(24,36,56,0.22); padding: 28px; text-align: left;';
+        card.innerHTML = `
+            <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: ${isError ? '#b42318' : '#0f766e'}; background: ${isError ? '#fee4e2' : '#e6f4f1'}; border-radius: 8px;">
+                ${
+                    isError
+                        ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; border: 2px solid #b42318; border-radius: 999px; font-size: 15px; font-weight: 900; line-height: 1;">!</div>'
+                        : '<div style="width: 18px; height: 18px; border: 2px solid #98d2c9; border-top-color: #0f766e; border-radius: 999px; animation: sebProgressSpin 0.8s linear infinite;"></div>'
+                }
+            </div>
+            <h2 style="margin: 0 0 10px; color: #172033; font-size: 28px; line-height: 1.15; font-weight: 800;">
+                ${isError ? 'Something went wrong' : 'Getting your quiz ready'}
+            </h2>
+            <p style="margin: 0; color: #475467; font-size: 16px; line-height: 1.45;">
+                ${isError ? escapeHtml(message || 'The access code could not be entered automatically. Reload the quiz in Safe Exam Browser, or ask your instructor for help.') : 'This should only take a moment.'}
+            </p>
+            ${
+                isError
+                    ? '<button type="button" id="seb-access-code-retry-button" style="margin-top: 18px; min-height: 38px; padding: 0 14px; border: 1px solid #0f766e; border-radius: 8px; background: #0f766e; color: #ffffff; font-weight: 800; cursor: pointer;">Try again</button>'
+                    : ''
+            }
+        `;
+
+        const retryButton = document.getElementById('seb-access-code-retry-button');
+        if (retryButton) {
+            retryButton.addEventListener('click', () => {
+                hideAccessCodeProgressOverlay();
+                autoFillAccessCode();
+            });
+        }
     }
 
     function hideAccessCodeProgressOverlay(delay = 0) {
@@ -274,6 +307,15 @@
         } else {
             removeOverlay();
         }
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
     
     /**
@@ -434,10 +476,7 @@
     function checkForAccessCodeRequirement() {
         // Look for Canvas access code input fields or prompts
         const accessCodeElements = [
-            'input[name="access_code"]',
-            'input[id*="access_code"]',
-            'input[placeholder*="access code"]',
-            'input[placeholder*="Access Code"]',
+            ...ACCESS_CODE_FIELD_SELECTORS,
             '.access_code',
             '#access_code_form',
             'form[action*="access_code"]'
@@ -468,6 +507,59 @@
         }
 
         return false;
+    }
+
+    function findAccessCodeField() {
+        for (const selector of ACCESS_CODE_FIELD_SELECTORS) {
+            const field = document.querySelector(selector);
+            debugLog('Trying selector: ' + selector + ' - Found: ' + (field ? 'YES' : 'NO'));
+
+            if (field && isAccessCodeField(field)) {
+                debugLog('Found valid access code field with selector: ' + selector, 'success');
+                return field;
+            }
+        }
+
+        return null;
+    }
+
+    function isAccessCodeChallengePage() {
+        if (findAccessCodeField()) {
+            return true;
+        }
+
+        if (document.querySelector('#access_code_form, form[action*="access_code"], .access_code')) {
+            return true;
+        }
+
+        const bodyText = (document.body && document.body.textContent || '').toLowerCase();
+        const hasAccessCodePrompt = [
+            'enter the access code',
+            'quiz access code',
+            'this quiz requires an access code'
+        ].some(indicator => bodyText.includes(indicator));
+
+        if (!hasAccessCodePrompt) {
+            return false;
+        }
+
+        return Boolean(document.querySelector('form, input, button[type="submit"], input[type="submit"]'));
+    }
+
+    function shouldAttemptAccessCodeAutofill() {
+        if (!isSafeBrowser()) {
+            return false;
+        }
+
+        if (!isCanvasQuizPage()) {
+            return false;
+        }
+
+        if (looksLikePostSubmitPage()) {
+            return false;
+        }
+
+        return isAccessCodeChallengePage();
     }
     
     /**
@@ -526,6 +618,391 @@
 
         document.body.appendChild(message);
     }
+
+    const EXAM_TOOLS_SIDEBAR_ID = 'seb-exam-tools-sidebar';
+    const EXAM_TOOLS_STYLE_ID = 'seb-exam-tools-style';
+    const examToolWindows = new Map();
+
+    async function setupExamToolsSidebar(quizInfo) {
+        if (!quizInfo || document.getElementById(EXAM_TOOLS_SIDEBAR_ID)) {
+            return;
+        }
+
+        const tools = await fetchExamTools(quizInfo.courseId, quizInfo.quizId);
+        if (!tools.length) {
+            debugLog('No external exam tools configured for this quiz');
+            return;
+        }
+
+        renderExamToolsSidebar(quizInfo, tools);
+    }
+
+    function removeExamToolsSidebar() {
+        const sidebar = document.getElementById(EXAM_TOOLS_SIDEBAR_ID);
+        if (sidebar) {
+            sidebar.remove();
+        }
+    }
+
+    async function fetchExamTools(courseId, quizId) {
+        try {
+            const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/tools/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}`;
+            const response = await fetch(url, {
+                method: 'GET',
+                credentials: 'include',
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) {
+                debugLog('Failed to fetch exam tools: ' + response.status, 'error');
+                return [];
+            }
+            const data = await response.json();
+            return Array.isArray(data.tools) ? data.tools.filter(isUsableExamTool) : [];
+        } catch (error) {
+            debugLog('Error fetching exam tools: ' + error.message, 'error');
+            return [];
+        }
+    }
+
+    function isUsableExamTool(tool) {
+        if (!tool || typeof tool.label !== 'string' || typeof tool.url !== 'string') {
+            return false;
+        }
+        try {
+            const parsed = new URL(tool.url);
+            return parsed.protocol === 'https:' && tool.label.trim().length > 0;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function renderExamToolsSidebar(quizInfo, tools) {
+        if (!document.body) {
+            return;
+        }
+        injectExamToolsStyles();
+
+        const storageKey = `seb_exam_tools_${quizInfo.courseId}_${quizInfo.quizId}`;
+        const savedState = readExamToolsState(storageKey);
+        const sidebar = document.createElement('aside');
+        sidebar.id = EXAM_TOOLS_SIDEBAR_ID;
+        sidebar.setAttribute('aria-label', 'Exam tools');
+        if (savedState.collapsed) {
+            sidebar.classList.add('is-collapsed');
+        }
+        if (savedState.left !== null && savedState.top !== null) {
+            sidebar.style.left = savedState.left + 'px';
+            sidebar.style.top = savedState.top + 'px';
+            sidebar.style.right = 'auto';
+        }
+
+        const header = document.createElement('div');
+        header.className = 'seb-tools-header';
+
+        const title = document.createElement('div');
+        title.className = 'seb-tools-title';
+        const titleStrong = document.createElement('strong');
+        titleStrong.textContent = 'Exam tools';
+        const titleSmall = document.createElement('small');
+        titleSmall.textContent = `${tools.length} available`;
+        title.append(titleStrong, titleSmall);
+
+        const controls = document.createElement('div');
+        controls.className = 'seb-tools-controls';
+        const collapseButton = document.createElement('button');
+        collapseButton.type = 'button';
+        collapseButton.className = 'seb-tools-icon-button';
+        collapseButton.title = 'Collapse tools';
+        collapseButton.setAttribute('aria-label', 'Collapse exam tools');
+        collapseButton.textContent = '-';
+        collapseButton.addEventListener('click', () => {
+            sidebar.classList.toggle('is-collapsed');
+            collapseButton.textContent = sidebar.classList.contains('is-collapsed') ? '+' : '-';
+            persistExamToolsState(storageKey, sidebar);
+        });
+        controls.append(collapseButton);
+        header.append(title, controls);
+
+        const body = document.createElement('div');
+        body.className = 'seb-tools-body';
+        tools.forEach((tool) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'seb-tool-button';
+            button.title = `Open ${tool.label}`;
+            button.addEventListener('click', (event) => openExamTool(event, tool), true);
+
+            const mark = document.createElement('span');
+            mark.className = 'seb-tool-mark';
+            mark.textContent = tool.label.trim().slice(0, 1).toUpperCase();
+            const text = document.createElement('span');
+            text.className = 'seb-tool-text';
+            const name = document.createElement('strong');
+            name.textContent = tool.label;
+            const host = document.createElement('small');
+            host.textContent = new URL(tool.url).hostname;
+            text.append(name, host);
+            button.append(mark, text);
+            body.append(button);
+        });
+
+        sidebar.append(header, body);
+        document.body.appendChild(sidebar);
+        collapseButton.textContent = sidebar.classList.contains('is-collapsed') ? '+' : '-';
+        makeExamToolsDraggable(sidebar, header, storageKey);
+    }
+
+    function openExamTool(event, tool) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === 'function') {
+                event.stopImmediatePropagation();
+            }
+        }
+
+        const windowName = getExamToolWindowName(tool);
+        const existingWindow = examToolWindows.get(windowName);
+        if (focusExamToolWindow(existingWindow)) {
+            debugLog('Focused existing exam tool window: ' + tool.label, 'success');
+            return;
+        }
+
+        const openedWindow = window.open(tool.url, windowName);
+        if (!openedWindow) {
+            debugLog('Exam tool window could not be opened: ' + tool.label, 'error');
+            return;
+        }
+
+        examToolWindows.set(windowName, openedWindow);
+        try {
+            openedWindow.opener = null;
+        } catch (error) {
+            // Some embedded browser engines do not allow mutating opener across windows.
+        }
+        focusExamToolWindow(openedWindow);
+    }
+
+    function focusExamToolWindow(toolWindow) {
+        if (!toolWindow) {
+            return false;
+        }
+        try {
+            if (toolWindow.closed) {
+                return false;
+            }
+            toolWindow.focus();
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function getExamToolWindowName(tool) {
+        let hash = 0;
+        const source = tool.url || tool.label || 'tool';
+        for (let index = 0; index < source.length; index += 1) {
+            hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
+        }
+        return 'seb_exam_tool_' + Math.abs(hash).toString(36);
+    }
+
+    function injectExamToolsStyles() {
+        if (document.getElementById(EXAM_TOOLS_STYLE_ID)) {
+            return;
+        }
+        const style = document.createElement('style');
+        style.id = EXAM_TOOLS_STYLE_ID;
+        style.textContent = `
+            #${EXAM_TOOLS_SIDEBAR_ID} {
+                position: fixed;
+                top: 112px;
+                right: 18px;
+                z-index: 2147483000;
+                width: min(260px, calc(100vw - 32px));
+                color: #172033;
+                background: #ffffff;
+                border: 1px solid #d0d5dd;
+                border-radius: 8px;
+                box-shadow: 0 18px 44px rgba(24, 36, 56, 0.22);
+                font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                overflow: hidden;
+            }
+            #${EXAM_TOOLS_SIDEBAR_ID}.is-collapsed {
+                width: 148px;
+            }
+            #${EXAM_TOOLS_SIDEBAR_ID}.is-collapsed .seb-tools-body,
+            #${EXAM_TOOLS_SIDEBAR_ID}.is-collapsed .seb-tools-title small {
+                display: none;
+            }
+            .seb-tools-header {
+                min-height: 48px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+                padding: 10px 10px 10px 12px;
+                background: #f8fafc;
+                border-bottom: 1px solid #eaecf0;
+                cursor: move;
+                user-select: none;
+            }
+            .seb-tools-title strong,
+            .seb-tool-text strong {
+                display: block;
+                color: #172033;
+                font-size: 14px;
+                line-height: 1.2;
+                font-weight: 800;
+            }
+            .seb-tools-title small,
+            .seb-tool-text small {
+                display: block;
+                margin-top: 2px;
+                color: #667085;
+                font-size: 12px;
+                line-height: 1.2;
+                font-weight: 700;
+            }
+            .seb-tools-controls {
+                display: flex;
+                gap: 6px;
+            }
+            .seb-tools-icon-button {
+                width: 30px;
+                height: 30px;
+                border: 1px solid #d0d5dd;
+                border-radius: 8px;
+                background: #ffffff;
+                color: #344054;
+                font-size: 18px;
+                font-weight: 800;
+                line-height: 1;
+                cursor: pointer;
+            }
+            .seb-tools-body {
+                display: grid;
+                gap: 8px;
+                padding: 10px;
+            }
+            .seb-tool-button {
+                width: 100%;
+                min-height: 48px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 8px 10px;
+                border: 1px solid #dfe3ea;
+                border-radius: 8px;
+                background: #ffffff;
+                color: #172033;
+                text-align: left;
+                cursor: pointer;
+            }
+            .seb-tool-button:hover {
+                border-color: #0f766e;
+                background: #f0fdfa;
+            }
+            .seb-tool-mark {
+                width: 30px;
+                height: 30px;
+                display: grid;
+                place-items: center;
+                flex: 0 0 auto;
+                color: #0f766e;
+                background: #e6f4f1;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 900;
+            }
+            @media (max-width: 640px) {
+                #${EXAM_TOOLS_SIDEBAR_ID} {
+                    top: auto;
+                    right: 12px;
+                    bottom: 12px;
+                    width: min(240px, calc(100vw - 24px));
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function makeExamToolsDraggable(sidebar, handle, storageKey) {
+        let drag = null;
+        handle.addEventListener('pointerdown', (event) => {
+            if (event.target.closest('button')) {
+                return;
+            }
+            const rect = sidebar.getBoundingClientRect();
+            drag = {
+                offsetX: event.clientX - rect.left,
+                offsetY: event.clientY - rect.top
+            };
+            sidebar.style.left = rect.left + 'px';
+            sidebar.style.top = rect.top + 'px';
+            sidebar.style.right = 'auto';
+            sidebar.style.bottom = 'auto';
+            handle.setPointerCapture(event.pointerId);
+        });
+        handle.addEventListener('pointermove', (event) => {
+            if (!drag) {
+                return;
+            }
+            const maxLeft = Math.max(8, window.innerWidth - sidebar.offsetWidth - 8);
+            const maxTop = Math.max(8, window.innerHeight - sidebar.offsetHeight - 8);
+            const left = Math.min(Math.max(8, event.clientX - drag.offsetX), maxLeft);
+            const top = Math.min(Math.max(8, event.clientY - drag.offsetY), maxTop);
+            sidebar.style.left = left + 'px';
+            sidebar.style.top = top + 'px';
+        });
+        const finish = (event) => {
+            if (!drag) {
+                return;
+            }
+            drag = null;
+            try {
+                handle.releasePointerCapture(event.pointerId);
+            } catch (error) {
+                // Pointer capture may already be released.
+            }
+            persistExamToolsState(storageKey, sidebar);
+        };
+        handle.addEventListener('pointerup', finish);
+        handle.addEventListener('pointercancel', finish);
+    }
+
+    function readExamToolsState(storageKey) {
+        try {
+            const raw = localStorage.getItem(storageKey);
+            if (!raw) {
+                return { collapsed: false, left: null, top: null };
+            }
+            const parsed = JSON.parse(raw);
+            return {
+                collapsed: !!parsed.collapsed,
+                left: Number.isFinite(parsed.left) ? parsed.left : null,
+                top: Number.isFinite(parsed.top) ? parsed.top : null
+            };
+        } catch (error) {
+            return { collapsed: false, left: null, top: null };
+        }
+    }
+
+    function persistExamToolsState(storageKey, sidebar) {
+        try {
+            const rect = sidebar.getBoundingClientRect();
+            localStorage.setItem(
+                storageKey,
+                JSON.stringify({
+                    collapsed: sidebar.classList.contains('is-collapsed'),
+                    left: Math.round(rect.left),
+                    top: Math.round(rect.top)
+                })
+            );
+        } catch (error) {
+            // Storage can be disabled in hardened browser contexts.
+        }
+    }
     
     /**
      * Automatically fills the quiz access code when using SEB
@@ -545,12 +1022,14 @@
         const quizInfo = extractQuizInfo();
         if (!quizInfo) {
             debugLog('Could not extract quiz info for auto-fill', 'error');
+            showAccessCodeErrorOverlay('The quiz page could not be identified. Reload the quiz in Safe Exam Browser, or ask your instructor for help.');
             return;
         }
 
         debugLog('Quiz info extracted: Course ' + quizInfo.courseId + ', Quiz ' + quizInfo.quizId);
 
-        if (checkForAccessCodeRequirement()) {
+        const shouldShowAccessCodeErrors = checkForAccessCodeRequirement() || isAccessCodeChallengePage();
+        if (shouldShowAccessCodeErrors) {
             showAccessCodeProgressOverlay();
         }
 
@@ -559,25 +1038,45 @@
             .then(proofToken => {
                 if (!proofToken) {
                     debugLog('No SEB access proof available', 'error');
-                    hideAccessCodeProgressOverlay(600);
-                    return null;
+                    showAutoFillError(
+                        'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.',
+                        shouldShowAccessCodeErrors
+                    );
+                    return undefined;
                 }
                 debugLog('Fetching access code from backend...');
                 return fetchAccessCodeForQuiz(quizInfo.courseId, quizInfo.quizId, proofToken);
             })
             .then(accessCode => {
+                if (accessCode === undefined) {
+                    return;
+                }
                 if (accessCode) {
                     debugLog('Access code retrieved: ' + accessCode.substring(0, 3) + '***', 'success');
-                    attemptAutoFillWithRetry(accessCode, 0);
+                    attemptAutoFillWithRetry(accessCode, 0, shouldShowAccessCodeErrors);
                 } else {
                     debugLog('No access code available for auto-fill', 'error');
-                    hideAccessCodeProgressOverlay(600);
+                    showAutoFillError(
+                        'The quiz access code could not be retrieved. Reload the quiz in SEB, or ask your instructor for help.',
+                        shouldShowAccessCodeErrors
+                    );
                 }
             })
             .catch(error => {
                 debugLog('Error fetching access code: ' + error.message, 'error');
-                hideAccessCodeProgressOverlay(600);
+                showAutoFillError(
+                    'The quiz access code could not be retrieved. Check your connection, reload the quiz in SEB, or ask your instructor for help.',
+                    shouldShowAccessCodeErrors
+                );
             });
+    }
+
+    function showAutoFillError(message, shouldShowError) {
+        if (shouldShowError) {
+            showAccessCodeErrorOverlay(message);
+        } else {
+            hideAccessCodeProgressOverlay();
+        }
     }
 
     async function getSebConfigKeyHash() {
@@ -637,7 +1136,6 @@
         try {
             const url = `${SEB_DOWNLOAD_BASE_URL}/api/seb/access-proof/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}`;
             const proofPageUrl = window.location.href.split('#')[0];
-            debugLog('SEB Config Key hash available: ' + fingerprintValue(configKeyHash), 'success');
             debugLog('Sending access proof for page URL: ' + proofPageUrl);
             const response = await fetch(url, {
                 method: 'POST',
@@ -669,7 +1167,7 @@
     /**
      * Attempts to auto-fill the access code with retry logic
      */
-    function attemptAutoFillWithRetry(accessCode, attempt) {
+    function attemptAutoFillWithRetry(accessCode, attempt, shouldShowMissingFieldError) {
         const maxAttempts = 10;
         const retryDelay = 1000; // 1 second
 
@@ -683,11 +1181,11 @@
         if (attempt < maxAttempts - 1) {
             console.log(`Canvas SEB Detector: Access code field not found, retrying in ${retryDelay}ms`);
             setTimeout(() => {
-                attemptAutoFillWithRetry(accessCode, attempt + 1);
+                attemptAutoFillWithRetry(accessCode, attempt + 1, shouldShowMissingFieldError);
             }, retryDelay);
         } else {
             console.warn('Canvas SEB Detector: Failed to auto-fill access code after all attempts, setting up mutation observer');
-            setupAccessCodeObserver(accessCode);
+            setupAccessCodeObserver(accessCode, shouldShowMissingFieldError);
         }
     }
 
@@ -731,51 +1229,30 @@
      */
     function fillAccessCodeField(accessCode) {
         debugLog('Attempting to fill access code field');
+        debugLog('Searching for access code field with ' + ACCESS_CODE_FIELD_SELECTORS.length + ' selectors');
 
-        // Common selectors for Canvas quiz access code fields
-        const accessCodeSelectors = [
-            'input[name="access_code"]',
-            'input[id*="access_code"]',
-            'input[placeholder*="access code"]',
-            'input[placeholder*="Access Code"]',
-            'input[aria-label*="access code"]',
-            'input[aria-label*="Access Code"]',
-            '.quiz-access-code input',
-            '#quiz_access_code',
-            'input[type="password"][name*="access"]',
-            'input[type="text"][name*="access"]'
-        ];
+        const field = findAccessCodeField();
+        if (field) {
+            showAccessCodeProgressOverlay();
 
-        debugLog('Searching for access code field with ' + accessCodeSelectors.length + ' selectors');
+            // Fill the field
+            field.value = accessCode;
+            debugLog('Field value set to: ' + accessCode.substring(0, 3) + '***');
 
-        // Try each selector to find the access code field
-        for (const selector of accessCodeSelectors) {
-            const field = document.querySelector(selector);
-            debugLog('Trying selector: ' + selector + ' - Found: ' + (field ? 'YES' : 'NO'));
+            // Trigger events to ensure Canvas recognizes the input
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            field.dispatchEvent(new Event('blur', { bubbles: true }));
 
-            if (field && isAccessCodeField(field)) {
-                debugLog('Found valid access code field with selector: ' + selector, 'success');
-                showAccessCodeProgressOverlay();
+            debugLog('Access code auto-filled successfully!', 'success');
 
-                // Fill the field
-                field.value = accessCode;
-                debugLog('Field value set to: ' + accessCode.substring(0, 3) + '***');
-
-                // Trigger events to ensure Canvas recognizes the input
-                field.dispatchEvent(new Event('input', { bubbles: true }));
-                field.dispatchEvent(new Event('change', { bubbles: true }));
-                field.dispatchEvent(new Event('blur', { bubbles: true }));
-
-                debugLog('Access code auto-filled successfully!', 'success');
-
-                // Optionally auto-submit if there's a submit button nearby
-                if (autoSubmitAccessCode(field)) {
-                    hideAccessCodeProgressOverlay(8000);
-                } else {
-                    hideAccessCodeProgressOverlay(700);
-                }
-                return true;
+            // Optionally auto-submit if there's a submit button nearby
+            if (autoSubmitAccessCode(field)) {
+                hideAccessCodeProgressOverlay(8000);
+            } else {
+                hideAccessCodeProgressOverlay(700);
             }
+            return true;
         }
 
         debugLog('Could not find access code field - checking all inputs on page', 'error');
@@ -1305,6 +1782,8 @@
 
         // Check for debug mode (for testing)
         const isDebugMode = window.location.href.includes('debug=true') || window.location.href.includes('seb_debug=1');
+        const hasAccessCodeRequirement = checkForAccessCodeRequirement();
+        const hasAccessCodeChallenge = isAccessCodeChallengePage();
 
         // Check if using SEB first
         const sebDetected = isSafeBrowser();
@@ -1315,11 +1794,21 @@
                 debugLog('DEBUG MODE ENABLED! Running completion handler in non-SEB browser', 'success');
             }
 
+            if (hasAccessCodeChallenge) {
+                debugLog('Access code screen detected, delaying exam tools sidebar');
+                removeExamToolsSidebar();
+            } else {
+                setupExamToolsSidebar(quizInfo);
+            }
+
             // Auto-fill access code if needed (only in actual SEB)
             if (sebDetected) {
-                if (checkForAccessCodeRequirement()) {
+                if (hasAccessCodeChallenge) {
                     showAccessCodeProgressOverlay();
+                } else {
+                    debugLog('Access code challenge not visible yet, scheduling delayed auto-fill check');
                 }
+
                 setTimeout(() => {
                     autoFillAccessCode();
                 }, 2000); // Wait 2 seconds for page to fully load
@@ -1336,8 +1825,6 @@
         debugLog('Non-SEB browser detected, checking for access code requirement');
 
         // Check if this quiz has an access code requirement (indicating SEB enforcement)
-        const hasAccessCodeRequirement = checkForAccessCodeRequirement();
-
         if (hasAccessCodeRequirement) {
             debugLog('Access code requirement detected, redirecting to SEB download');
             redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
@@ -1349,8 +1836,9 @@
     /**
      * Sets up a mutation observer to watch for dynamically added access code fields
      */
-    function setupAccessCodeObserver(accessCode) {
+    function setupAccessCodeObserver(accessCode, shouldShowMissingFieldError) {
         console.log('Canvas SEB Detector: Setting up mutation observer for access code field');
+        let completed = false;
 
         const observer = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
@@ -1358,12 +1846,15 @@
                     mutation.addedNodes.forEach((node) => {
                         if (node.nodeType === Node.ELEMENT_NODE) {
                             // Check if the added node contains an access code field
-                            const accessCodeField = node.querySelector ?
-                                node.querySelector('input[name="access_code"], input[id*="access_code"], input[placeholder*="access code"]') :
-                                null;
+                            const selectorList = ACCESS_CODE_FIELD_SELECTORS.join(', ');
+                            const nodeMatches = typeof node.matches === 'function' && node.matches(selectorList);
+                            const accessCodeField = nodeMatches
+                                ? node
+                                : (node.querySelector ? node.querySelector(selectorList) : null);
 
                             if (accessCodeField && isAccessCodeField(accessCodeField)) {
                                 console.log('Canvas SEB Detector: Access code field detected via mutation observer');
+                                completed = true;
                                 fillAccessCodeField(accessCode);
                                 observer.disconnect(); // Stop observing once we've filled the field
                             }
@@ -1382,7 +1873,11 @@
         // Stop observing after 30 seconds to prevent memory leaks
         setTimeout(() => {
             observer.disconnect();
-            hideAccessCodeProgressOverlay(600);
+            if (!completed && (shouldShowMissingFieldError || shouldAttemptAccessCodeAutofill())) {
+                showAccessCodeErrorOverlay('The Canvas access-code field could not be found. Reload the quiz in SEB, or ask your instructor for help.');
+            } else {
+                hideAccessCodeProgressOverlay();
+            }
             console.log('Canvas SEB Detector: Mutation observer stopped after timeout');
         }, 30000);
     }
@@ -1435,7 +1930,7 @@
 
     // Also run when the page becomes visible (in case of tab switching)
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && isSafeBrowser()) {
+        if (!document.hidden && shouldAttemptAccessCodeAutofill()) {
             console.log('Canvas SEB Detector: Page became visible, checking for auto-fill');
             autoFillAccessCode();
         }

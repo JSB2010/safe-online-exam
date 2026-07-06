@@ -9,6 +9,8 @@ export function renderAppShell(options: AppShellOptions): string {
     view: options.view,
     data: options.initialData || {}
   }).replace(/</gu, "\\u003c");
+  const appScriptPath = versionedAssetPath("/assets/index.js");
+  const appStylesheetPath = versionedAssetPath("/assets/index.css");
 
   return `<!doctype html>
 <html lang="en">
@@ -17,8 +19,8 @@ export function renderAppShell(options: AppShellOptions): string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(options.title)}</title>
     <script>window.__SEB_BOOTSTRAP__=${payload};</script>
-    <script type="module" src="/assets/index.js"></script>
-    <link rel="stylesheet" href="/assets/index.css">
+    <script type="module" src="${appScriptPath}"></script>
+    <link rel="stylesheet" href="${appStylesheetPath}">
   </head>
   <body>
     <div id="root"></div>
@@ -47,4 +49,9 @@ export function renderFallbackHtml(title: string, body: string): string {
 
 function escapeHtml(value: string): string {
   return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
+}
+
+function versionedAssetPath(path: string): string {
+  const version = process.env.APP_ASSET_VERSION || process.env.K_REVISION;
+  return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }

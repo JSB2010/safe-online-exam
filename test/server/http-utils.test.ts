@@ -38,6 +38,24 @@ describe("HTTP helpers", () => {
     expect(renderFallbackHtml("A < B", "<p>Body</p>")).toContain("A &lt; B");
   });
 
+  it("versions app shell assets by Cloud Run revision when available", () => {
+    const previousRevision = process.env.K_REVISION;
+    try {
+      process.env.K_REVISION = "canvas-seb-dev-00307-lsm";
+
+      const appShell = renderAppShell({ title: "SEB", view: "test" });
+
+      expect(appShell).toContain('<script type="module" src="/assets/index.js?v=canvas-seb-dev-00307-lsm"></script>');
+      expect(appShell).toContain('<link rel="stylesheet" href="/assets/index.css?v=canvas-seb-dev-00307-lsm">');
+    } finally {
+      if (previousRevision === undefined) {
+        delete process.env.K_REVISION;
+      } else {
+        process.env.K_REVISION = previousRevision;
+      }
+    }
+  });
+
   it("allows Canvas, configured tool, and dev localhost CORS origins", () => {
     const config = {
       profile: "dev",

@@ -1,6 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import type { ContentItem, ContentSebSetting } from "../../shared/models.js";
-import { defaultContentSebSetting, newQuizContentId, quizToContentItem } from "../../shared/models.js";
+import {
+  defaultContentSebSetting,
+  newQuizContentId,
+  normalizeExternalTools,
+  quizToContentItem
+} from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
 
@@ -42,7 +47,11 @@ export class ContentService {
     return this.repositories.value.contentSebSettings.save(setting.id || setting.contentId, {
       ...setting,
       id: setting.id || setting.contentId,
-      contentId: setting.contentId
+      contentId: setting.contentId,
+      ssoDomains: setting.ssoDomains || [],
+      educationalToolDomains: setting.educationalToolDomains || [],
+      customDomains: setting.customDomains || [],
+      externalTools: normalizeExternalTools(setting.externalTools)
     });
   }
 
@@ -63,7 +72,8 @@ export class ContentService {
       lookupUuid: item.lookupUuid,
       ssoDomains: existing?.ssoDomains || [],
       educationalToolDomains: existing?.educationalToolDomains || [],
-      customDomains: existing?.customDomains || []
+      customDomains: existing?.customDomains || [],
+      externalTools: normalizeExternalTools(existing?.externalTools)
     };
     await this.saveSebSetting(setting);
   }

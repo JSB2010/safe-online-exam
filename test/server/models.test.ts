@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  allowlistEntriesForExternalTools,
   classicQuizContentId,
+  enabledExternalTools,
   extractClassicQuizId,
+  normalizeExternalTools,
   newQuizContentId,
   parseNewQuizContentId,
   quizToContentItem
@@ -32,5 +35,41 @@ describe("content id helpers", () => {
       contentType: "CLASSIC_QUIZ",
       quizTypeDisplay: "Classic Quiz"
     });
+  });
+
+  it("normalizes enabled external exam tools and derives allowlist domains", () => {
+    const tools = normalizeExternalTools([
+      {
+        id: "Desmos Calculator",
+        label: "Desmos",
+        url: "www.desmos.com/calculator",
+        enabled: true,
+        preset: "desmos-calculator",
+        allowedDomains: ["www.desmos.com", "desmos.com", "*.desmos.com", "www.desmos.com"]
+      },
+      { id: "bad", label: "Bad", url: "http://example.com", enabled: true }
+    ]);
+
+    expect(tools).toEqual([
+      {
+        id: "desmos-calculator",
+        label: "Desmos",
+        url: "https://www.desmos.com/calculator",
+        enabled: true,
+        preset: "desmos-calculator",
+        allowedDomains: [
+          "https://www.desmos.com/assets/build/*",
+          "https://www.desmos.com/assets/img/apps/graphing/*",
+          "https://www.desmos.com/assets/pwa/*"
+        ]
+      }
+    ]);
+    expect(enabledExternalTools(tools)).toHaveLength(1);
+    expect(allowlistEntriesForExternalTools(tools)).toEqual([
+      "https://www.desmos.com/calculator",
+      "https://www.desmos.com/assets/build/*",
+      "https://www.desmos.com/assets/img/apps/graphing/*",
+      "https://www.desmos.com/assets/pwa/*"
+    ]);
   });
 });

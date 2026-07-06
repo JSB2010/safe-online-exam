@@ -82,6 +82,12 @@ h2 {
   line-height: 1.25;
 }
 
+h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
 .subtle,
 .content-main p {
   color: #667085;
@@ -122,6 +128,12 @@ h2 {
 .button {
   padding: 0 14px;
   font-weight: 700;
+}
+
+.button.compact {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 14px;
 }
 
 .icon-button {
@@ -212,10 +224,22 @@ h2 {
   gap: 8px;
   margin-bottom: 14px;
   padding: 12px 14px;
+  color: #344054;
+  background: #f8fafc;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+}
+
+.notice.error {
   color: #7a2e0e;
   background: #fff4e5;
   border: 1px solid #ffd6a8;
-  border-radius: 8px;
+}
+
+.notice.success {
+  color: #05603a;
+  background: #ecfdf3;
+  border-color: #abefc6;
 }
 
 .work-surface {
@@ -300,6 +324,80 @@ h2 {
   margin: 18px 0;
 }
 
+.tool-settings {
+  display: grid;
+  gap: 12px;
+  margin: 4px 0 18px;
+  padding-top: 18px;
+  border-top: 1px solid #eaecf0;
+}
+
+.section-title-row,
+.tool-toggle,
+.custom-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-title-row {
+  justify-content: space-between;
+}
+
+.preset-tools,
+.custom-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-toggle {
+  justify-content: flex-start;
+  padding: 12px;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.tool-toggle input,
+.inline-check input {
+  width: 16px;
+  min-width: 16px;
+}
+
+.tool-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: #0f766e;
+  background: #e6f4f1;
+  border-radius: 8px;
+}
+
+.tool-toggle strong,
+.tool-toggle small {
+  display: block;
+}
+
+.tool-toggle small {
+  margin-top: 2px;
+  color: #667085;
+  font-weight: 600;
+}
+
+.custom-tool-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.2fr) auto auto;
+  padding: 12px;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+}
+
+.custom-tool-enabled {
+  align-self: end;
+  min-height: 40px;
+}
+
 label {
   display: grid;
   gap: 7px;
@@ -380,8 +478,14 @@ textarea {
   }
 
   .summary-grid,
-  .field-grid {
+  .field-grid,
+  .custom-tool-row {
     grid-template-columns: 1fr;
+  }
+
+  .section-title-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .row-actions,

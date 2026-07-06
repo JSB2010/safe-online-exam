@@ -1,22 +1,27 @@
 import {
   AlertCircle,
+  Calculator,
   Check,
   Download,
   ExternalLink,
   KeyRound,
   Lock,
   LogOut,
+  Plus,
   RefreshCw,
   Save,
   Search,
   Settings,
   Shield,
+  Trash2,
   Unlock,
   X
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
+import type { ExternalToolConfig } from "../shared/models.js";
+import { EXTERNAL_TOOL_PRESETS, normalizeExternalTools } from "../shared/models.js";
 
 interface BootstrapPayload {
   view: string;
@@ -31,6 +36,11 @@ interface QuizView {
   contentType?: string | null;
   quizTypeDisplay?: string | null;
 }
+
+type Notice = {
+  tone: "success" | "error";
+  message: string;
+};
 
 declare global {
   interface Window {
@@ -82,7 +92,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   const [query, setQuery] = useState("");
   const [activeItem, setActiveItem] = useState<QuizView | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return items;
@@ -93,50 +103,67 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     const enabled = !!settings[item.id]?.sebRequired;
     setBusyId(item.id);
     setNotice(null);
-    const response = await fetch(
-      `/api/quizzes/${encodeURIComponent(data.courseId)}/${encodeURIComponent(item.id)}/seb/${enabled ? "disable" : "enable"}`,
-      { method: "POST", headers: actionHeaders(data.authToken) }
-    );
-    const body = await response.json();
-    if (redirectForAuth(body)) return;
-    if (!body.success) {
-      setNotice(body.message || "The SEB setting could not be updated.");
-    } else {
-      setSettings((current) => ({
-        ...current,
-        [item.id]: body.setting || { ...current[item.id], sebRequired: !enabled }
-      }));
-      setNotice(body.message || "SEB setting updated.");
+    try {
+      const body = await requestJson(
+        `/api/quizzes/${encodeURIComponent(data.courseId)}/${encodeURIComponent(item.id)}/seb/${enabled ? "disable" : "enable"}`,
+        { method: "POST", headers: actionHeaders(data.authToken) }
+      );
+      if (redirectForAuth(body)) return;
+      if (!body.success) {
+        setNotice({ tone: "error", message: body.message || "The SEB setting could not be updated." });
+      } else {
+        setSettings((current) => ({
+          ...current,
+          [item.id]: body.setting || { ...current[item.id], sebRequired: !enabled }
+        }));
+        setNotice({ tone: "success", message: body.message || "SEB setting updated." });
+      }
+    } catch (error) {
+      setNotice({ tone: "error", message: errorMessage(error, "The SEB setting could not be updated.") });
+    } finally {
+      setBusyId(null);
     }
-    setBusyId(null);
   }
 
   async function refresh() {
     setBusyId("refresh");
-    const response = await fetch(`/api/quizzes/course/${encodeURIComponent(data.courseId)}/refresh`, {
-      method: "POST",
-      headers: actionHeaders(data.authToken)
-    });
-    const body = await response.json();
-    if (redirectForAuth(body)) return;
-    if (body.success) {
-      window.location.reload();
-    } else {
-      setNotice(body.message || "Could not refresh Canvas content.");
+    setNotice(null);
+    try {
+      const body = await requestJson(`/api/quizzes/course/${encodeURIComponent(data.courseId)}/refresh`, {
+        method: "POST",
+        headers: actionHeaders(data.authToken)
+      });
+      if (redirectForAuth(body)) return;
+      if (body.success) {
+        window.location.reload();
+      } else {
+        setNotice({ tone: "error", message: body.message || "Could not refresh Canvas content." });
+      }
+    } catch (error) {
+      setNotice({ tone: "error", message: errorMessage(error, "Could not refresh Canvas content.") });
+    } finally {
+      setBusyId(null);
     }
-    setBusyId(null);
   }
 
   async function regenerate(item: QuizView) {
     setBusyId(item.id);
-    const response = await fetch(
-      `/api/quizzes/${encodeURIComponent(data.courseId)}/${encodeURIComponent(item.id)}/seb/regenerate-code`,
-      { method: "POST", headers: actionHeaders(data.authToken) }
-    );
-    const body = await response.json();
-    if (redirectForAuth(body)) return;
-    setNotice(body.message || (body.success ? "Access code regenerated." : "Access code regeneration failed."));
-    setBusyId(null);
+    setNotice(null);
+    try {
+      const body = await requestJson(
+        `/api/quizzes/${encodeURIComponent(data.courseId)}/${encodeURIComponent(item.id)}/seb/regenerate-code`,
+        { method: "POST", headers: actionHeaders(data.authToken) }
+      );
+      if (redirectForAuth(body)) return;
+      setNotice({
+        tone: body.success ? "success" : "error",
+        message: body.message || (body.success ? "Access code regenerated." : "Access code regeneration failed.")
+      });
+    } catch (error) {
+      setNotice({ tone: "error", message: errorMessage(error, "Access code regeneration failed.") });
+    } finally {
+      setBusyId(null);
+    }
   }
 
   return (
@@ -175,8 +202,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       </section>
 
       {notice && (
-        <div className="notice">
-          <AlertCircle size={17} /> {notice}
+        <div className={clsx("notice", notice.tone)}>
+          <AlertCircle size={17} /> {notice.message}
         </div>
       )}
 
@@ -260,7 +287,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           onSaved={(saved) => {
             setSettings((current) => ({ ...current, [activeItem.id]: saved.setting || saved }));
             setActiveItem(null);
-            setNotice("SEB configuration saved.");
+            setNotice({ tone: "success", message: "SEB configuration saved." });
           }}
         />
       )}
@@ -278,6 +305,20 @@ function redirectForAuth(body: Record<string, any>): boolean {
 
 function actionHeaders(authToken?: string): HeadersInit {
   return authToken ? { "x-auth-token": authToken } : {};
+}
+
+async function requestJson(url: string, init?: RequestInit): Promise<Record<string, any>> {
+  const response = await fetch(url, init);
+  const contentType = response.headers.get("content-type") || "";
+  const body = contentType.includes("application/json") ? await response.json() : {};
+  if (!response.ok) {
+    throw new Error(body.message || body.error || `Request failed with status ${response.status}.`);
+  }
+  return body;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function SettingsDialog({
@@ -300,26 +341,42 @@ function SettingsDialog({
     (setting.educationalToolDomains || []).join("\n")
   );
   const [customDomains, setCustomDomains] = useState((setting.customDomains || []).join("\n"));
+  const [externalTools, setExternalTools] = useState<ExternalToolConfig[]>(() =>
+    mergeToolPresets(setting.externalTools || [])
+  );
   const [quitPassword, setQuitPassword] = useState(setting.quitPassword || "");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function save() {
     setSaving(true);
-    const body = {
-      quizId: item.id,
-      contentId: item.id.startsWith("newquiz:") ? item.id : undefined,
-      ssoDomains: lines(ssoDomains),
-      educationalToolDomains: lines(educationalToolDomains),
-      customDomains: lines(customDomains),
-      quitPassword: quitPassword || null
-    };
-    const response = await fetch(`/api/quizzes/seb-config-structured?userId=${encodeURIComponent(userId)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...actionHeaders(authToken) },
-      body: JSON.stringify(body)
-    });
-    onSaved(await response.json());
-    setSaving(false);
+    setError(null);
+    try {
+      const body = {
+        quizId: item.id,
+        contentId: item.id.startsWith("newquiz:") ? item.id : undefined,
+        ssoDomains: lines(ssoDomains),
+        educationalToolDomains: lines(educationalToolDomains),
+        customDomains: lines(customDomains),
+        externalTools: normalizeExternalTools(externalTools),
+        quitPassword: quitPassword || null
+      };
+      const saved = await requestJson(`/api/quizzes/seb-config-structured?userId=${encodeURIComponent(userId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...actionHeaders(authToken) },
+        body: JSON.stringify(body)
+      });
+      if (redirectForAuth(saved)) return;
+      if (!saved.success && !saved.setting) {
+        setError(saved.message || "SEB configuration could not be saved.");
+        return;
+      }
+      onSaved(saved);
+    } catch (saveError) {
+      setError(errorMessage(saveError, "SEB configuration could not be saved."));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -365,6 +422,84 @@ function SettingsDialog({
             />
           </label>
         </div>
+        <section className="tool-settings" aria-labelledby="exam-tools-title">
+          <div className="section-title-row">
+            <div>
+              <p className="eyebrow">Exam tools</p>
+              <h3 id="exam-tools-title">Student sidebar</h3>
+            </div>
+            <button
+              className="button secondary compact"
+              onClick={() => setExternalTools((current) => [...current, newCustomTool()])}
+            >
+              <Plus size={15} /> Add tool
+            </button>
+          </div>
+          <div className="preset-tools">
+            {externalTools
+              .filter((tool) => tool.preset)
+              .map((tool) => (
+                <label className="tool-toggle" key={tool.id}>
+                  <input
+                    type="checkbox"
+                    checked={tool.enabled}
+                    onChange={(event) => updateTool(tool.id, { enabled: event.target.checked }, setExternalTools)}
+                  />
+                  <span className="tool-icon">
+                    <Calculator size={16} />
+                  </span>
+                  <span>
+                    <strong>{tool.label}</strong>
+                    <small>{tool.url.replace(/^https:\/\//u, "")}</small>
+                  </span>
+                </label>
+              ))}
+          </div>
+          <div className="custom-tools">
+            {externalTools
+              .filter((tool) => !tool.preset)
+              .map((tool) => (
+                <div className="custom-tool-row" key={tool.id}>
+                  <label>
+                    Name
+                    <input
+                      value={tool.label}
+                      onChange={(event) => updateTool(tool.id, { label: event.target.value }, setExternalTools)}
+                      placeholder="Calculator"
+                    />
+                  </label>
+                  <label>
+                    URL
+                    <input
+                      value={tool.url}
+                      onChange={(event) => updateTool(tool.id, { url: event.target.value }, setExternalTools)}
+                      placeholder="https://example.edu/tool"
+                    />
+                  </label>
+                  <label className="inline-check custom-tool-enabled">
+                    <input
+                      type="checkbox"
+                      checked={tool.enabled}
+                      onChange={(event) => updateTool(tool.id, { enabled: event.target.checked }, setExternalTools)}
+                    />
+                    Enabled
+                  </label>
+                  <button
+                    className="icon-button"
+                    onClick={() => setExternalTools((current) => current.filter((entry) => entry.id !== tool.id))}
+                    title="Remove tool"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+          </div>
+        </section>
+        {error && (
+          <div className="notice error">
+            <AlertCircle size={17} /> {error}
+          </div>
+        )}
         <footer className="dialog-actions">
           <button className="button secondary" onClick={onClose}>
             Cancel
@@ -513,6 +648,45 @@ function Metric({ label, value }: { label: string; value: string | number }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function mergeToolPresets(value: ExternalToolConfig[]): ExternalToolConfig[] {
+  const normalized = normalizeExternalTools(value);
+  const presetTools = EXTERNAL_TOOL_PRESETS.map((preset) => {
+    const existing = normalized.find((tool) => tool.preset === preset.preset || tool.id === preset.id);
+    return {
+      ...preset,
+      ...existing,
+      id: preset.id,
+      label: existing?.label || preset.label,
+      url: existing?.url || preset.url,
+      preset: preset.preset
+    };
+  });
+  const presetIds = new Set(EXTERNAL_TOOL_PRESETS.map((preset) => preset.id));
+  const presetNames = new Set(EXTERNAL_TOOL_PRESETS.map((preset) => preset.preset));
+  return [
+    ...presetTools,
+    ...normalized.filter((tool) => !presetIds.has(tool.id) && (!tool.preset || !presetNames.has(tool.preset)))
+  ];
+}
+
+function updateTool(
+  id: string,
+  patch: Partial<ExternalToolConfig>,
+  setExternalTools: Dispatch<SetStateAction<ExternalToolConfig[]>>
+) {
+  setExternalTools((current) => current.map((tool) => (tool.id === id ? { ...tool, ...patch } : tool)));
+}
+
+function newCustomTool(): ExternalToolConfig {
+  return {
+    id: `custom-${Date.now()}`,
+    label: "",
+    url: "",
+    enabled: true,
+    allowedDomains: []
+  };
 }
 
 function lines(value: string): string[] {

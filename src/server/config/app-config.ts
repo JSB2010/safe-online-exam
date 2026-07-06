@@ -151,7 +151,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       requiredDomains: splitList(
         firstPresent(
           env.SEB_REQUIRED_DOMAINS,
-          "accounts.google.com,*.googleusercontent.com,*.gstatic.com,ssl.gstatic.com,*.google.com,*.canvas-user-content.com,*.instructuremedia.com,*.canvaslms.com,*.inscloudgate.net"
+          "accounts.google.com,*.googleusercontent.com,*.gstatic.com,ssl.gstatic.com,*.canvas-user-content.com,*.instructuremedia.com,*.inscloudgate.net"
         )
       )
     }

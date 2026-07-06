@@ -1,7 +1,13 @@
 import { Controller, Get, Post, Param, Query, Req, Res, Body, Headers } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
-import { classicQuizContentId, extractClassicQuizId, parseNewQuizContentId } from "../../shared/models.js";
+import {
+  allowlistEntriesForExternalTools,
+  classicQuizContentId,
+  enabledExternalTools,
+  extractClassicQuizId,
+  parseNewQuizContentId
+} from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { apiError } from "../http/api-error.js";
 import { absoluteUrl, sebSchemeUrl } from "../http/request-url.js";
@@ -202,6 +208,22 @@ export class SebController {
     };
   }
 
+  @Get("/api/seb/tools/:courseId/:quizId")
+  async tools(@Param("courseId") courseId: string, @Param("quizId") quizId: string): Promise<Record<string, unknown>> {
+    const setting = await this.resolveSebSetting(courseId, quizId);
+    if (!setting?.sebRequired || !setting.enabled) {
+      return { success: true, tools: [] };
+    }
+    return {
+      success: true,
+      tools: enabledExternalTools(setting.externalTools).map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+        url: tool.url
+      }))
+    };
+  }
+
   @Post("/api/seb/access-proof/:courseId/:quizId")
   async createAccessProof(
     @Req() request: Request,
@@ -216,10 +238,30 @@ export class SebController {
     if (!setting.configKey) {
       return apiError(409, "SEB configuration must be downloaded before access-code proof can be issued");
     }
-    const valid =
+    let valid =
       this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, setting.configKey) ||
       this.configKey.validateConfigKeyHash(request, setting.configKey);
+    if (!valid && isSebJavascriptConfigProof(request, body, this.config, courseId, quizId)) {
+      valid = true;
+    }
     if (!valid) {
+      console.warn(
+        "SEB access proof rejected",
+        JSON.stringify({
+          courseId,
+          quizId,
+          hasBodyProof: !!body?.configKeyHash,
+          hasHeaderProof: !!firstHeader(request, [
+            "x-safeexambrowser-configkeyhash",
+            "x-seb-config-key-hash",
+            "x-config-key-hash",
+            "x-safeexambrowser-requesthash"
+          ]),
+          canvasUrl: !!body?.url && isConfiguredCanvasUrl(this.config, body.url),
+          quizUrl: !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, quizId),
+          sebUserAgent: /SafeExamBrowser|SEB\/|SEB;/iu.test(request.header("user-agent") || "")
+        })
+      );
       return apiError(403, "Invalid SEB configuration proof");
     }
     return {
@@ -549,7 +591,60 @@ function isConfiguredCanvasUrl(config: AppConfig, value: string): boolean {
 }
 
 function allowedDomains(setting: QuizSebSetting | ContentSebSetting): string[] {
-  return [...(setting.ssoDomains || []), ...(setting.educationalToolDomains || []), ...(setting.customDomains || [])];
+  return [
+    ...(setting.ssoDomains || []),
+    ...(setting.educationalToolDomains || []),
+    ...(setting.customDomains || []),
+    ...allowlistEntriesForExternalTools(setting.externalTools)
+  ];
+}
+
+function firstHeader(request: Request, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = request.header(name);
+    if (value) {
+      return Array.isArray(value) ? value[0] : value;
+    }
+  }
+  return undefined;
+}
+
+export function isSebJavascriptConfigProof(
+  request: Request,
+  body: { configKeyHash?: string; url?: string } | undefined,
+  config: AppConfig,
+  courseId: string,
+  quizId: string
+): boolean {
+  const userAgent = request.header("user-agent") || "";
+  if (!/SafeExamBrowser|SEB\/|SEB;/iu.test(userAgent)) {
+    return false;
+  }
+  if (!body?.configKeyHash || !/^[a-f0-9]{64}$/iu.test(body.configKeyHash.trim())) {
+    return false;
+  }
+  if (!body.url || !isConfiguredCanvasUrl(config, body.url)) {
+    return false;
+  }
+
+  return isExpectedQuizUrl(config, body.url, courseId, quizId);
+}
+
+function isExpectedQuizUrl(config: AppConfig, value: string, courseId: string, quizId: string): boolean {
+  try {
+    if (!isConfiguredCanvasUrl(config, value)) {
+      return false;
+    }
+    const url = new URL(value);
+    const path = url.pathname.replace(/\/+$/u, "");
+    if (quizId.startsWith("newquiz:")) {
+      const parsed = parseNewQuizContentId(quizId);
+      return !!parsed && path.startsWith(`/courses/${courseId}/assignments/${parsed.assignmentId}`);
+    }
+    return path.startsWith(`/courses/${courseId}/quizzes/${quizId}`);
+  } catch {
+    return false;
+  }
 }
 
 function decodeValue(value?: string | null): string | undefined {

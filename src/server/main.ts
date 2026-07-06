@@ -34,8 +34,12 @@ async function bootstrap(): Promise<void> {
   expressApp.use(
     "/assets",
     express.static(join(process.cwd(), "dist/client/assets"), {
-      immutable: true,
-      maxAge: "1y"
+      etag: true,
+      lastModified: true,
+      maxAge: 0,
+      setHeaders(response) {
+        response.setHeader("cache-control", "no-cache");
+      }
     })
   );
 

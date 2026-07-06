@@ -198,6 +198,7 @@ SEB/student flows:
 - `GET /seb/check`
 - `POST /api/seb/access-proof/:courseId/:quizId`
 - `GET /api/seb/access-code/:courseId/:quizId`
+- `GET /api/seb/tools/:courseId/:quizId`
 - `GET /seb/exit/:courseId/:quizId`
 - `GET /seb/exit/quit/:courseId/:quizId`
 - `GET /seb/exit/manual/:courseId/:quizId`
@@ -233,6 +234,8 @@ Tooling decisions, including why the repo currently stays on npm rather than pnp
 
 ## Safe Exam Browser Behavior
 
-The generated `.seb` files are binary plist payloads with Canvas start URLs, access codes, quit URLs, Config Key metadata, and allowed domains. Config downloads persist a Config Key hash. The Canvas detector script then requests a one-time proof token from `/api/seb/access-proof/:courseId/:quizId`, exchanges it at `/api/seb/access-code/:courseId/:quizId`, and fills the Canvas access-code field only after SEB proves it is using the downloaded config.
+The generated `.seb` files are binary plist payloads with Canvas start URLs, access codes, quit URLs, Config Key metadata, allowed URLs, and SEB-controlled new-window behavior for approved exam tools. The URL filter uses SEB's canonical `URLFilterEnable`, `URLFilterEnableContentFilter`, and `URLFilterRules` keys so only the quiz URL family, the LTI app, required Canvas file/media/CDN resources, narrow SSO support domains, and explicitly enabled exam-tool URLs can load. Config downloads persist a Config Key hash. The Canvas detector script then requests a one-time proof token from `/api/seb/access-proof/:courseId/:quizId`, exchanges it at `/api/seb/access-code/:courseId/:quizId`, and fills the Canvas access-code field only after SEB proves it is using the downloaded config.
+
+Instructor settings can enable external exam tools such as Desmos. Enabled tools are exposed to students through a draggable Canvas quiz sidebar from the detector script. The sidebar is only a launcher; the SEB URL filter allowlist remains the enforcement mechanism for which external sites can load.
 
 This preserves the legacy security model while removing the Java/Spring/Thymeleaf implementation.

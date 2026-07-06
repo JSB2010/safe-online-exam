@@ -1,7 +1,7 @@
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import type { Quiz, QuizSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
-import { defaultQuizSebSetting } from "../../shared/models.js";
+import { defaultQuizSebSetting, normalizeExternalTools } from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
 
@@ -49,7 +49,8 @@ export class QuizService {
       quizId: setting.quizId,
       ssoDomains: setting.ssoDomains || [],
       educationalToolDomains: setting.educationalToolDomains || [],
-      customDomains: setting.customDomains || []
+      customDomains: setting.customDomains || [],
+      externalTools: normalizeExternalTools(setting.externalTools)
     });
   }
 
@@ -71,6 +72,7 @@ export class QuizService {
       ssoDomains: request.ssoDomains || [],
       educationalToolDomains: request.educationalToolDomains || [],
       customDomains: request.customDomains || [],
+      externalTools: normalizeExternalTools(request.externalTools),
       externalToolUrl: request.externalToolUrl || existing?.externalToolUrl || null,
       quitPassword: normalizeBlank(request.quitPassword),
       browserExamKey: existing?.browserExamKey || generateBrowserExamKey()
@@ -94,7 +96,8 @@ export class QuizService {
       browserExamKey: existing?.browserExamKey || generateBrowserExamKey(),
       ssoDomains: existing?.ssoDomains || [],
       educationalToolDomains: existing?.educationalToolDomains || [],
-      customDomains: existing?.customDomains || []
+      customDomains: existing?.customDomains || [],
+      externalTools: normalizeExternalTools(existing?.externalTools)
     });
   }
 

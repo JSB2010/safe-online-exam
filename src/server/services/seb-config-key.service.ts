@@ -24,7 +24,12 @@ export class SebConfigKeyService {
     if (!providedHash || !url || !storedConfigKey) {
       return false;
     }
-    return safeHashEqual(providedHash, this.hashForUrl(url, storedConfigKey));
+    const candidates = [storedConfigKey, this.hashForUrl(url, storedConfigKey)];
+    const querylessUrl = stripQueryAndFragment(url);
+    if (querylessUrl !== stripFragment(url)) {
+      candidates.push(this.hashForUrl(querylessUrl, storedConfigKey));
+    }
+    return candidates.some((candidate) => safeHashEqual(providedHash, candidate));
   }
 
   validateConfigKeyHash(request: Request, storedConfigKey?: string | null): boolean {
@@ -80,6 +85,18 @@ function stableJson(value: unknown): string {
 function stripFragment(url: string): string {
   const hashIndex = url.indexOf("#");
   return hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+}
+
+function stripQueryAndFragment(url: string): string {
+  try {
+    const parsed = new URL(stripFragment(url));
+    parsed.search = "";
+    return parsed.toString();
+  } catch {
+    const withoutFragment = stripFragment(url);
+    const queryIndex = withoutFragment.indexOf("?");
+    return queryIndex >= 0 ? withoutFragment.slice(0, queryIndex) : withoutFragment;
+  }
 }
 
 function sha256Hex(value: string): string {

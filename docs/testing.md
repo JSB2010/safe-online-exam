@@ -33,7 +33,7 @@ The current automated tests cover:
 - Content discovery and New Quiz SEB setting behavior.
 - Quiz service enable/disable, access-code, and Browser Exam Key behavior.
 - Deep-link module item rewrite behavior.
-- SEB configuration plist generation and allowed-domain policy.
+- SEB configuration plist generation, canonical URL filter keys, and allowed-domain policy.
 - SEB Config Key and access-proof token behavior.
 - SEB request detection and Browser Exam Key validation.
 - Static detector script serving.

@@ -107,6 +107,8 @@ LTI launch proves Canvas identity but does not provide the Canvas API token need
 9. SEB opens the configured Canvas URL.
 10. The detector script validates Config Key proof and retrieves the access code through a one-time proof token.
 
+External exam tools are configured per quiz/content item. Enabled tools are stored with a label, HTTPS URL, and optional extra resource entries. During `.seb` generation their URLs are added to the canonical SEB `URLFilterRules` allowlist, with `URLFilterEnable` and `URLFilterEnableContentFilter` enabled so unmatched URLs remain blocked by SEB. Canvas itself is restricted to the configured quiz or assignment URL family plus static/file/media resources needed to render the assessment. The Canvas detector script fetches the enabled tool list from `/api/seb/tools/:courseId/:quizId` to render a draggable sidebar on the quiz page. The sidebar opens tools in SEB-controlled new tabs/windows; URL filtering remains the enforcement boundary.
+
 ## Security Notes
 
 - Production requires `STATE_ENCRYPTION_KEY`; dev has a fallback for local testing.

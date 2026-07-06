@@ -13,22 +13,58 @@ describe("SebConfigurationService", () => {
       contentId: "classicquiz_quiz-1",
       startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1",
       accessCode: "CODE123",
-      allowedDomains: ["www.desmos.com"],
+      allowedDomains: ["https://www.desmos.com/calculator", "https://www.desmos.com/assets/build/*"],
       quitPassword: "exit"
     });
     const parsed = plist.parse(config.toString("utf8")) as Record<string, any>;
+    const expressions = parsed.URLFilterRules.map((rule: { expression: string }) => rule.expression);
     expect(parsed.startURL).toBe("https://canvas.example.com/courses/course-1/quizzes/quiz-1");
     expect(parsed.quitURL).toBe("https://app.example.com/seb/exit/quit/course-1/quiz-1");
     expect(parsed.hashedQuitPassword).toMatch(/^[a-f0-9]{64}$/u);
-    expect(parsed.urlFilterRules).toEqual(
-      expect.arrayContaining([expect.objectContaining({ expression: "https://www.desmos.com/*" })])
+    expect(parsed.newBrowserWindowByLinkPolicy).toBe(2);
+    expect(parsed.newBrowserWindowByScriptPolicy).toBe(2);
+    expect(parsed.URLFilterEnable).toBe(true);
+    expect(parsed.URLFilterEnableContentFilter).toBe(true);
+    expect(parsed.URLFilterRules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          regex: true,
+          expression: "^https://canvas\\.example\\.com/?(?:[?#].*)?$"
+        }),
+        expect.objectContaining({
+          regex: true,
+          expression: "^https://canvas\\.example\\.com/courses/course-1/quizzes/quiz-1(?:/.*)?(?:[?#].*)?$"
+        }),
+        expect.objectContaining({
+          regex: true,
+          expression: "^https://www\\.desmos\\.com/calculator(?:[?#].*)?$"
+        }),
+        expect.objectContaining({ regex: false, expression: "https://www.desmos.com/assets/build/*" })
+      ])
     );
+    expect(expressions).toContain("https://accounts.google.com/*");
+    expect(expressions).not.toContain("https://*.google.com/*");
+    expect(expressions).toContain("^https://www\\.google\\.com/accounts/(?:.*)$");
+    expect(expressions).toContain("^https://accounts\\.youtube\\.com/accounts/(?:.*)$");
+    expect(expressions).toContain("^https://fonts\\.googleapis\\.com/(?:.*)$");
+    expect(expressions).toContain("^https://sso\\.canvaslms\\.com/(?:.*)$");
+    expect(expressions).not.toContain("https://www.google.com/*");
+    expect(expressions).not.toContain("https://*.youtube.com/*");
+    expect(expressions).not.toContain("https://*.canvaslms.com/*");
+    expect(expressions).not.toContain("https://*.instructure.com/*");
+    expect(expressions).not.toContain("https://canvas.example.com/*");
+    expect(expressions).not.toContain("https://www.desmos.com/*");
+    expect(expressions).not.toContain("https://canvas.example.com/courses/course-1/*");
+    expect(parsed.urlFilterRules).toBeUndefined();
   });
 
   it("rejects unsafe broad allowlist patterns", () => {
     const rules = buildAllowlistRules({
       appBaseUrl: "https://app.example.com",
       canvasBaseUrl: "https://canvas.example.com",
+      courseId: "course-1",
+      contentId: "classicquiz_quiz-1",
+      startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1",
       requiredDomains: [],
       additionalDomains: ["https://*/*", "*.amazonaws.com", "docs.google.com"]
     });
