@@ -68,7 +68,11 @@ export class OAuthController {
     try {
       const state = this.ltiState.consumeState(query.state);
       const token = await this.exchangeCode(query.code, this.oauthRedirectUri());
-      await this.canvasApi.storeAccessToken(state.userId, token.access_token, token.scope);
+      await this.canvasApi.storeAccessToken(state.userId, token.access_token, {
+        refreshToken: token.refresh_token || null,
+        scope: token.scope || null,
+        expiresIn: token.expires_in
+      });
       response.redirect(addOAuthReturnParams(state.redirectUrl, state.courseId, state.userId));
     } catch (error) {
       response.status(400).send(
@@ -96,7 +100,7 @@ export class OAuthController {
   private async exchangeCode(
     code: string | undefined,
     redirectUri: string
-  ): Promise<{ access_token: string; scope?: string }> {
+  ): Promise<{ access_token: string; refresh_token?: string; scope?: string; expires_in?: number }> {
     if (!code) {
       throw new Error("Missing OAuth code");
     }
@@ -120,7 +124,12 @@ export class OAuthController {
     if (!response.ok) {
       throw new Error(`Canvas OAuth token exchange failed: ${response.status}`);
     }
-    return response.json() as Promise<{ access_token: string; scope?: string }>;
+    return response.json() as Promise<{
+      access_token: string;
+      refresh_token?: string;
+      scope?: string;
+      expires_in?: number;
+    }>;
   }
 }
 

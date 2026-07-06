@@ -26,6 +26,22 @@ interface CanvasAssignmentResponse {
   quiz_lti?: boolean;
 }
 
+interface CanvasOAuthTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+}
+
+interface StoreAccessTokenOptions {
+  refreshToken?: string | null;
+  scope?: string | null;
+  expiresIn?: number | null;
+  expiresAt?: string | null;
+}
+
+const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class CanvasApiService {
   private readonly tokenCache = new Map<string, OAuthToken>();
@@ -171,25 +187,30 @@ export class CanvasApiService {
   }
 
   async getAccessToken(userId: string): Promise<string | null> {
-    const cached = this.tokenCache.get(userId);
-    if (cached?.accessToken) {
-      return cached.accessToken;
-    }
-    const matches = await this.repositories.value.oauthTokens.find([{ field: "userId", op: "==", value: userId }]);
-    const token = matches.filter((match) => !!match.accessToken).sort(compareTokenFreshness)[0];
+    const token = await this.getStoredToken(userId);
     if (!token?.accessToken) {
       return null;
     }
-    this.tokenCache.set(userId, token);
+    if (shouldRefreshToken(token)) {
+      const refreshed = await this.refreshStoredToken(userId, token);
+      return refreshed?.accessToken || token.accessToken;
+    }
     return token.accessToken;
   }
 
-  async storeAccessToken(userId: string, accessToken: string, scope?: string): Promise<OAuthToken> {
+  async storeAccessToken(
+    userId: string,
+    accessToken: string,
+    scopeOrOptions?: string | StoreAccessTokenOptions | null
+  ): Promise<OAuthToken> {
+    const options = normalizeStoreAccessTokenOptions(scopeOrOptions);
     await this.clearAccessToken(userId);
     const token: OAuthToken = {
       userId,
       accessToken,
-      scope: scope || null,
+      refreshToken: options.refreshToken || null,
+      scope: options.scope || null,
+      expiresAt: options.expiresAt || expiresAtFromSeconds(options.expiresIn),
       updatedAt: new Date().toISOString()
     };
     const saved = await this.repositories.value.oauthTokens.save(userId, token);
@@ -209,22 +230,23 @@ export class CanvasApiService {
     if (!accessToken) {
       throw new CanvasApiAuthorizationError("Canvas API authorization is required.", userId);
     }
-    const response = await fetch(url, {
-      ...init,
-      headers: {
-        ...Object.fromEntries(new Headers(init.headers).entries()),
-        authorization: `Bearer ${accessToken}`
-      }
-    });
-    const text = await response.text();
+    let response = await this.fetchWithAccessToken(url, init, accessToken);
+    let text = await response.text();
     if (response.status === 401) {
-      await this.clearAccessToken(userId);
-      throw new CanvasApiAuthorizationError(
-        `Canvas API authorization was rejected by Canvas (${response.status}).`,
-        userId,
-        response.status,
-        text
-      );
+      const refreshed = await this.refreshStoredToken(userId, await this.getStoredToken(userId));
+      if (refreshed?.accessToken) {
+        response = await this.fetchWithAccessToken(url, init, refreshed.accessToken);
+        text = await response.text();
+      }
+      if (response.status === 401) {
+        await this.clearAccessToken(userId);
+        throw new CanvasApiAuthorizationError(
+          `Canvas API authorization was rejected by Canvas (${response.status}).`,
+          userId,
+          response.status,
+          text
+        );
+      }
     }
     if (response.status === 403) {
       throw new CanvasApiPermissionError(
@@ -248,6 +270,88 @@ export class CanvasApiService {
       return undefined as T;
     }
     return JSON.parse(text) as T;
+  }
+
+  private async getStoredToken(userId: string): Promise<OAuthToken | null> {
+    const cached = this.tokenCache.get(userId);
+    if (cached?.accessToken) {
+      return cached;
+    }
+    const matches = await this.repositories.value.oauthTokens.find([{ field: "userId", op: "==", value: userId }]);
+    const token = matches.filter((match) => !!match.accessToken).sort(compareTokenFreshness)[0];
+    if (!token?.accessToken) {
+      return null;
+    }
+    this.tokenCache.set(userId, token);
+    return token;
+  }
+
+  private async refreshStoredToken(userId: string, token: OAuthToken | null | undefined): Promise<OAuthToken | null> {
+    if (!token?.refreshToken) {
+      return null;
+    }
+    const refreshed = await this.exchangeRefreshToken(token.refreshToken);
+    if (!refreshed?.access_token) {
+      return null;
+    }
+    const saved = await this.saveRefreshedToken(userId, token, refreshed);
+    this.tokenCache.set(userId, saved);
+    return saved;
+  }
+
+  private async exchangeRefreshToken(refreshToken: string): Promise<CanvasOAuthTokenResponse | null> {
+    const clientId = this.config.value.canvas.oauthClientId;
+    const clientSecret = this.config.value.canvas.oauthClientSecret;
+    if (!clientId || !clientSecret) {
+      return null;
+    }
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken
+    });
+    try {
+      const response = await fetch(`${this.getCanvasDomain()}/login/oauth2/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body
+      });
+      if (!response.ok) {
+        return null;
+      }
+      return (await response.json()) as CanvasOAuthTokenResponse;
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveRefreshedToken(
+    userId: string,
+    current: OAuthToken,
+    refreshed: CanvasOAuthTokenResponse
+  ): Promise<OAuthToken> {
+    const token: OAuthToken = {
+      ...current,
+      id: userId,
+      userId,
+      accessToken: refreshed.access_token,
+      refreshToken: refreshed.refresh_token || current.refreshToken || null,
+      scope: refreshed.scope || current.scope || null,
+      expiresAt: expiresAtFromSeconds(refreshed.expires_in),
+      updatedAt: new Date().toISOString()
+    };
+    return this.repositories.value.oauthTokens.save(userId, token);
+  }
+
+  private fetchWithAccessToken(url: string, init: RequestInit, accessToken: string): Promise<Response> {
+    return fetch(url, {
+      ...init,
+      headers: {
+        ...Object.fromEntries(new Headers(init.headers).entries()),
+        authorization: `Bearer ${accessToken}`
+      }
+    });
   }
 
   private async hydrateNewQuiz(
@@ -334,6 +438,33 @@ function tokenTimestamp(token: OAuthToken): number {
   const value = token.updatedAt || token.createdAt || "";
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function normalizeStoreAccessTokenOptions(
+  scopeOrOptions?: string | StoreAccessTokenOptions | null
+): StoreAccessTokenOptions {
+  if (!scopeOrOptions) {
+    return {};
+  }
+  if (typeof scopeOrOptions === "string") {
+    return { scope: scopeOrOptions };
+  }
+  return scopeOrOptions;
+}
+
+function expiresAtFromSeconds(expiresIn?: number | null): string | null {
+  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    return null;
+  }
+  return new Date(Date.now() + expiresIn * 1000).toISOString();
+}
+
+function shouldRefreshToken(token: OAuthToken): boolean {
+  if (!token.refreshToken || !token.expiresAt) {
+    return false;
+  }
+  const expiresAt = Date.parse(token.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt - TOKEN_REFRESH_SKEW_MS <= Date.now();
 }
 
 function isNewQuizAssignment(assignment: CanvasAssignmentResponse): boolean {

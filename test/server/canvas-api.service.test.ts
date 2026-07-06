@@ -10,6 +10,8 @@ describe("CanvasApiService", () => {
   beforeEach(async () => {
     process.env.CANVAS_API_BASE_URL = "https://canvas.example.com/api/v1";
     process.env.CANVAS_BASE_URL = "https://canvas.example.com";
+    process.env.CANVAS_API_CLIENT_ID = "client-1";
+    process.env.CANVAS_API_CLIENT_SECRET = "secret-1";
     repositories = createInMemoryRepositories();
     const provider = { value: repositories } as RepositoryProvider;
     service = new CanvasApiService(new AppConfig(), provider);
@@ -59,6 +61,24 @@ describe("CanvasApiService", () => {
     });
   });
 
+  it("stores refresh token metadata returned by Canvas OAuth", async () => {
+    const before = Date.now();
+
+    const saved = await service.storeAccessToken("user-with-refresh", "access-token", {
+      refreshToken: "refresh-token",
+      scope: "url:GET|/api/v1/courses/:id",
+      expiresIn: 3600
+    });
+
+    expect(saved).toMatchObject({
+      userId: "user-with-refresh",
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      scope: "url:GET|/api/v1/courses/:id"
+    });
+    expect(Date.parse(saved.expiresAt || "")).toBeGreaterThan(before + 3_500_000);
+  });
+
   it("stores OAuth tokens without undefined optional fields when Canvas omits scope", async () => {
     const saved = await service.storeAccessToken("user-without-scope", "token-without-scope");
 
@@ -69,6 +89,86 @@ describe("CanvasApiService", () => {
     });
     await expect(repositories.oauthTokens.get("user-without-scope")).resolves.toMatchObject({
       scope: null
+    });
+  });
+
+  it("refreshes expired OAuth access tokens before calling Canvas APIs", async () => {
+    await service.storeAccessToken("refresh-user", "old-token", {
+      refreshToken: "refresh-token",
+      expiresAt: new Date(Date.now() - 1000).toISOString()
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        oauthResponse({ access_token: "new-token", refresh_token: "new-refresh-token", expires_in: 3600 })
+      )
+      .mockResolvedValueOnce(jsonResponse([{ id: 42, title: "Classic Quiz" }]));
+
+    await expect(service.getQuizzesForCourse("course-7", "refresh-user")).resolves.toEqual([
+      expect.objectContaining({ id: "42" })
+    ]);
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://canvas.example.com/login/oauth2/token",
+      expect.objectContaining({ method: "POST" })
+    );
+    const [, refreshInit] = vi.mocked(fetch).mock.calls[0];
+    const refreshBody = new URLSearchParams(String((refreshInit as RequestInit).body));
+    expect(refreshBody.get("grant_type")).toBe("refresh_token");
+    expect(refreshBody.get("refresh_token")).toBe("refresh-token");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer new-token" })
+      })
+    );
+    await expect(repositories.oauthTokens.get("refresh-user")).resolves.toMatchObject({
+      accessToken: "new-token",
+      refreshToken: "new-refresh-token"
+    });
+  });
+
+  it("refreshes and retries once when Canvas rejects an expired access token", async () => {
+    await service.storeAccessToken("retry-user", "old-token", {
+      refreshToken: "refresh-token",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString()
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => '{"errors":[{"message":"Invalid access token."}]}'
+      } as Response)
+      .mockResolvedValueOnce(oauthResponse({ access_token: "new-token", expires_in: 3600 }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 42, title: "Classic Quiz" }]));
+
+    await expect(service.getQuizzesForCourse("course-7", "retry-user")).resolves.toEqual([
+      expect.objectContaining({ id: "42" })
+    ]);
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer old-token" })
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://canvas.example.com/login/oauth2/token",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer new-token" })
+      })
+    );
+    await expect(repositories.oauthTokens.get("retry-user")).resolves.toMatchObject({
+      accessToken: "new-token",
+      refreshToken: "refresh-token"
     });
   });
 
@@ -115,5 +215,13 @@ function jsonResponse(value: unknown): Response {
     ok: true,
     status: 200,
     text: async () => JSON.stringify(value)
+  } as Response;
+}
+
+function oauthResponse(value: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => value
   } as Response;
 }

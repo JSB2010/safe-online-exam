@@ -90,7 +90,8 @@ LTI launch proves Canvas identity but does not provide the Canvas API token need
 2. Canvas redirects to `/api/oauth2callback`.
 3. The service exchanges the code for access/refresh tokens.
 4. Tokens are stored in Firestore in `oauthTokens`.
-5. `CanvasApiService` uses the token for quiz, New Quiz, assignment, and module calls.
+5. `CanvasApiService` refreshes expiring access tokens with the stored refresh token before quiz, New Quiz, assignment, and module calls.
+6. If Canvas rejects an access token with `401`, the service refreshes once and retries the API call before asking the instructor to reauthorize.
 
 ## SEB Enforcement Flow
 
