@@ -33,6 +33,8 @@ test/
   server/              unit and service regression tests
 docs/
   architecture.md      system behavior and route inventory
+  canvas-school-setup.md
+                       Canvas LTI installation and theme JavaScript setup
   deployment.md        Cloud Run, Firestore, and secrets
   testing.md           verification strategy and commands
   tooling.md           package manager, CI, formatting, and repo hygiene decisions
@@ -222,7 +224,8 @@ These configs:
 - keep Firestore database IDs on `seb-canvaslti-dev` and `seb-canvaslti-prod`
 - inject secrets through Secret Manager
 
-See [docs/deployment.md](docs/deployment.md) for required secrets and deployment checks.
+See [docs/deployment.md](docs/deployment.md) for required secrets and deployment checks. See
+[docs/canvas-school-setup.md](docs/canvas-school-setup.md) for Canvas LTI installation and theme JavaScript setup.
 
 ## Testing
 
