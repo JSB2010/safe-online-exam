@@ -72,4 +72,25 @@ describe("SebConfigurationService", () => {
     expect(rules.map((rule) => rule.expression)).not.toContain("https://*/*");
     expect(rules.map((rule) => rule.expression)).not.toContain("https://*.amazonaws.com/*");
   });
+
+  it("supports structured exact, domain, and regex allowlist entries", () => {
+    const rules = buildAllowlistRules({
+      appBaseUrl: "https://app.example.com",
+      canvasBaseUrl: "https://canvas.example.com",
+      courseId: "course-1",
+      contentId: "classicquiz_quiz-1",
+      startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1",
+      requiredDomains: [],
+      additionalDomains: [
+        "exact:https://tool.example.edu/calculator",
+        "domain:docs.example.edu",
+        "regex:^https://cdn\\.example\\.edu/assets/.*$"
+      ]
+    });
+    const expressions = rules.map((rule) => rule.expression);
+
+    expect(expressions).toContain("^https://tool\\.example\\.edu/calculator(?:[?#].*)?$");
+    expect(expressions).toContain("https://docs.example.edu/*");
+    expect(expressions).toContain("^https://cdn\\.example\\.edu/assets/.*$");
+  });
 });

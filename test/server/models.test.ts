@@ -4,10 +4,14 @@ import {
   classicQuizContentId,
   enabledExternalTools,
   extractClassicQuizId,
+  isInstructor,
+  isStudent,
   normalizeExternalTools,
+  normalizeUrlRules,
   newQuizContentId,
   parseNewQuizContentId,
-  quizToContentItem
+  quizToContentItem,
+  urlRulesToAllowedEntries
 } from "../../src/shared/models.js";
 
 describe("content id helpers", () => {
@@ -71,5 +75,54 @@ describe("content id helpers", () => {
       "https://www.desmos.com/assets/img/apps/graphing/*",
       "https://www.desmos.com/assets/pwa/*"
     ]);
+  });
+
+  it("normalizes structured URL rules for exact, domain, and regex allowlists", () => {
+    const rules = normalizeUrlRules([
+      { id: "exact", match: "exact", value: "https://example.edu/tool" },
+      { id: "domain", match: "domain", value: "docs.example.edu/path-is-ignored" },
+      { id: "regex", match: "regex", value: "^https://cdn\\.example\\.edu/assets/.*$" }
+    ]);
+
+    expect(urlRulesToAllowedEntries(rules)).toEqual([
+      "exact:https://example.edu/tool",
+      "domain:docs.example.edu",
+      "regex:^https://cdn\\.example\\.edu/assets/.*$"
+    ]);
+  });
+});
+
+describe("LTI role helpers", () => {
+  it("does not treat institution instructor roles as course instructor access", () => {
+    const launchData = {
+      roles: [
+        "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Instructor",
+        "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"
+      ]
+    };
+
+    expect(isInstructor(launchData)).toBe(false);
+    expect(isStudent(launchData)).toBe(true);
+  });
+
+  it("prefers Canvas course membership custom fields when Canvas provides them", () => {
+    expect(
+      isInstructor({
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+        custom: { canvas_membership_roles: "TeacherEnrollment" }
+      })
+    ).toBe(true);
+    expect(
+      isInstructor({
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Instructor"],
+        custom: { canvas_membership_roles: "StudentEnrollment" }
+      })
+    ).toBe(false);
+    expect(
+      isStudent({
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Instructor"],
+        custom: { canvas_membership_roles: "StudentEnrollment" }
+      })
+    ).toBe(true);
   });
 });

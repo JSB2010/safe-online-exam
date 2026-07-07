@@ -1,7 +1,13 @@
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import type { Quiz, QuizSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
-import { defaultQuizSebSetting, normalizeExternalTools } from "../../shared/models.js";
+import type { CourseSebDefaults, Quiz, QuizSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
+import {
+  applyCourseDefaultsToQuizSetting,
+  defaultQuizSebSetting,
+  normalizeExternalTools,
+  normalizeUrlRules,
+  urlRulesToAllowedEntries
+} from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
 
@@ -50,6 +56,7 @@ export class QuizService {
       ssoDomains: setting.ssoDomains || [],
       educationalToolDomains: setting.educationalToolDomains || [],
       customDomains: setting.customDomains || [],
+      urlRules: normalizeUrlRules(setting.urlRules),
       externalTools: normalizeExternalTools(setting.externalTools)
     });
   }
@@ -71,34 +78,48 @@ export class QuizService {
       enabled: required,
       ssoDomains: request.ssoDomains || [],
       educationalToolDomains: request.educationalToolDomains || [],
-      customDomains: request.customDomains || [],
+      customDomains: request.customDomains || urlRulesToAllowedEntries(request.urlRules),
+      urlRules: normalizeUrlRules(request.urlRules),
       externalTools: normalizeExternalTools(request.externalTools),
       externalToolUrl: request.externalToolUrl || existing?.externalToolUrl || null,
       quitPassword: normalizeBlank(request.quitPassword),
+      usesCourseDefaults: request.usesCourseDefaults === true,
+      quitPasswordOverride: request.quitPasswordOverride === true,
       browserExamKey: existing?.browserExamKey || generateBrowserExamKey()
     });
   }
 
-  async enableSebWithAccessCode(courseId: string, quizId: string, userId: string): Promise<QuizSebSetting> {
+  async enableSebWithAccessCode(
+    courseId: string,
+    quizId: string,
+    userId: string,
+    defaults?: CourseSebDefaults | null
+  ): Promise<QuizSebSetting> {
     const accessCode = generateAccessCode();
     await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
     const existing = await this.getSebSettingForQuiz(quizId);
-    return this.saveSebSetting({
-      ...defaultQuizSebSetting(quizId, courseId),
-      ...existing,
-      id: existing?.id || quizId,
-      quizId,
-      courseId,
-      sebRequired: true,
-      enabled: true,
-      accessCode,
-      configKey: null,
-      browserExamKey: existing?.browserExamKey || generateBrowserExamKey(),
-      ssoDomains: existing?.ssoDomains || [],
-      educationalToolDomains: existing?.educationalToolDomains || [],
-      customDomains: existing?.customDomains || [],
-      externalTools: normalizeExternalTools(existing?.externalTools)
-    });
+    return this.saveSebSetting(
+      applyCourseDefaultsToQuizSetting(
+        {
+          ...defaultQuizSebSetting(quizId, courseId),
+          ...existing,
+          id: existing?.id || quizId,
+          quizId,
+          courseId,
+          sebRequired: true,
+          enabled: true,
+          accessCode,
+          configKey: null,
+          browserExamKey: existing?.browserExamKey || generateBrowserExamKey(),
+          ssoDomains: existing?.ssoDomains || [],
+          educationalToolDomains: existing?.educationalToolDomains || [],
+          customDomains: existing?.customDomains || [],
+          urlRules: normalizeUrlRules(existing?.urlRules),
+          externalTools: normalizeExternalTools(existing?.externalTools)
+        },
+        defaults
+      )
+    );
   }
 
   async disableSebWithAccessCode(courseId: string, quizId: string, userId: string): Promise<QuizSebSetting> {

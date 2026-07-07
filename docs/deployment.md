@@ -38,6 +38,19 @@ npm run build
 
 Cloud Build pulls the previous image and passes it as `--cache-from` before building. The Dockerfile then prunes dev dependencies and emits a Node 22 runtime image that starts `node dist/server/server/main.js`.
 
+## Cloud Run Invoker IAM
+
+Canvas launches the LTI app through public Cloud Run URLs, so each Cloud Run service needs an `allUsers` binding for `roles/run.invoker`.
+
+The dev service already has this binding. `cloudbuild-dev.yaml` intentionally does not pass `--allow-unauthenticated`; this avoids requiring the Cloud Build service account to mutate Cloud Run IAM on every deploy and prevents non-blocking `Setting IAM Policy` warnings. If the dev service is ever recreated, restore the binding once:
+
+```bash
+gcloud run services add-iam-policy-binding canvas-seb-dev \
+  --region=us-central1 \
+  --member=allUsers \
+  --role=roles/run.invoker
+```
+
 ## Required Secret Manager Secrets
 
 Dev deployment expects:
@@ -113,11 +126,13 @@ Then verify in Canvas:
 
 1. LTI launch opens the instructor dashboard.
 2. OAuth status prompts for Canvas authorization if no token exists.
-3. Refreshing a course lists Classic Quizzes and New Quizzes.
-4. Enabling SEB sets the Canvas access code and rewrites a module item when one exists.
-5. Downloading a `.seb` file stores a Config Key.
-6. SEB can retrieve the access code through the proof flow.
-7. The exit page renders and the quit link works in SEB.
+3. First authorization for a course opens the setup wizard and saves default password, URL, and tool settings.
+4. Refreshing a course lists Classic Quizzes and New Quizzes.
+5. Enabling SEB applies course defaults, sets the Canvas access code, and rewrites a module item when one exists.
+6. A student launch shows only SEB-enabled assessments with SEB launch buttons.
+7. Downloading a `.seb` file stores a Config Key.
+8. SEB can retrieve the access code through the proof flow.
+9. The exit page renders and the quit link works in SEB.
 
 ## Rollback
 

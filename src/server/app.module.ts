@@ -11,6 +11,7 @@ import { SebController } from "./controllers/seb.controller.js";
 import { StaticJsController } from "./controllers/static-js.controller.js";
 import { CanvasApiService } from "./services/canvas-api.service.js";
 import { ContentService } from "./services/content.service.js";
+import { CourseSettingsService } from "./services/course-settings.service.js";
 import { DeepLinkModuleService } from "./services/deep-link-module.service.js";
 import { JwkService } from "./services/jwk.service.js";
 import { LtiService } from "./services/lti.service.js";
@@ -37,6 +38,7 @@ import { SebDetector } from "./services/seb-detector.service.js";
     RepositoryProvider,
     CanvasApiService,
     ContentService,
+    CourseSettingsService,
     DeepLinkModuleService,
     JwkService,
     LtiService,

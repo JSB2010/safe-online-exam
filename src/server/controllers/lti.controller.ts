@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { ContentItem, LtiLaunchData, Quiz } from "../../shared/models.js";
-import { isInstructor, isStudent } from "../../shared/models.js";
+import type { ContentItem, ContentSebSetting, LtiLaunchData, Quiz, QuizSebSetting } from "../../shared/models.js";
+import { isInstructor, isStudent, parseNewQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { createActionToken } from "../http/action-token.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
@@ -14,6 +14,7 @@ import {
   isCanvasApiRequestError
 } from "../services/canvas-api.service.js";
 import { ContentService } from "../services/content.service.js";
+import { CourseSettingsService } from "../services/course-settings.service.js";
 import { JwkService } from "../services/jwk.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
@@ -30,6 +31,7 @@ export class LtiController {
     private readonly quizService: QuizService,
     private readonly canvasApi: CanvasApiService,
     private readonly contentService: ContentService,
+    private readonly courseSettings: CourseSettingsService,
     private readonly sebDetector: SebDetector
   ) {}
 
@@ -126,15 +128,33 @@ export class LtiController {
       response.redirect("/login");
       return;
     }
+    const canReuseLaunchData =
+      !!launchData &&
+      (!courseId || launchData.courseId === resolvedCourseId) &&
+      (!userId || launchData.userId === resolvedUserId);
+    const resolvedLaunchData: LtiLaunchData = {
+      ...(canReuseLaunchData ? launchData : {}),
+      userId: resolvedUserId,
+      courseId: resolvedCourseId,
+      roles: canReuseLaunchData ? launchData.roles : []
+    };
     if (courseId || userId) {
-      storeLaunchData(request, {
-        ...(launchData || {}),
-        userId: resolvedUserId,
-        courseId: resolvedCourseId,
-        roles: launchData?.roles || []
-      });
+      storeLaunchData(request, resolvedLaunchData);
     }
-    response.send(await this.renderTeacherView(request, resolvedCourseId, resolvedUserId, launchData || undefined));
+    if (isInstructor(resolvedLaunchData)) {
+      response.send(await this.renderTeacherView(request, resolvedCourseId, resolvedUserId, resolvedLaunchData));
+      return;
+    }
+    if (isStudent(resolvedLaunchData) || resolvedLaunchData.roles.length === 0) {
+      response.send(await this.renderStudentLaunch(request, resolvedLaunchData));
+      return;
+    }
+    response.send(
+      renderFallbackHtml(
+        "LTI Launch",
+        "<h1>Launch received</h1><p>Your Canvas role is not authorized for this tool.</p>"
+      )
+    );
   }
 
   @Get("/lti/config")
@@ -160,7 +180,14 @@ export class LtiController {
               {
                 placement: "course_navigation",
                 message_type: "LtiResourceLinkRequest",
-                target_link_uri: `${toolUrl}/lti/launch`
+                target_link_uri: `${toolUrl}/lti/launch`,
+                visibility: "admins",
+                custom_fields: {
+                  canvas_membership_roles: "$Canvas.membership.roles",
+                  canvas_lis_membership_roles: "$com.Instructure.membership.roles",
+                  canvas_membership_permissions:
+                    "$Canvas.membership.permissions<manage_assignments_add,manage_assignments_edit,manage_course_content_add,manage_course_content_edit,manage_course_content_delete>"
+                }
               },
               {
                 placement: "assignment_selection",
@@ -173,7 +200,11 @@ export class LtiController {
       ],
       custom_fields: {
         canvas_course_id: "$Canvas.course.id",
-        canvas_user_id: "$Canvas.user.id"
+        canvas_user_id: "$Canvas.user.id",
+        canvas_membership_roles: "$Canvas.membership.roles",
+        canvas_lis_membership_roles: "$com.Instructure.membership.roles",
+        canvas_membership_permissions:
+          "$Canvas.membership.permissions<manage_assignments_add,manage_assignments_edit,manage_course_content_add,manage_course_content_edit,manage_course_content_delete>"
       }
     };
   }
@@ -334,6 +365,7 @@ export class LtiController {
           quizSebSettings[item.id] = setting;
         }
       }
+      const courseDefaults = await this.courseSettings.getDefaults(courseId);
       return renderAppShell({
         title: "Safe Exam Browser Manager",
         view: "teacher",
@@ -343,6 +375,8 @@ export class LtiController {
           courseName: launchData?.courseName,
           launchData,
           hasApiAuthorization,
+          courseDefaults,
+          showSetupWizard: !courseDefaults.setupCompleted,
           quizzes,
           quizSebSettings,
           authToken: createActionToken(this.config, userId, courseId)
@@ -372,7 +406,7 @@ export class LtiController {
     request: Request,
     courseId: string,
     userId: string,
-    message = "Authorize Canvas access so this tool can read quizzes, set access codes, and update module links.",
+    message = "Let's get your course set up. Connect Canvas so this tool can read quizzes, set access codes, and update module links.",
     reauthorize = false
   ): string {
     const endpoint = reauthorize ? "/api/oauth2reauthorize" : "/api/oauth2authorize";
@@ -390,27 +424,127 @@ export class LtiController {
 
   private async renderStudentLaunch(request: Request, launchData: LtiLaunchData): Promise<string> {
     const courseId = launchData.courseId || "";
-    const quizId = launchData.resourceLinkId || "";
-    const setting = quizId ? await this.quizService.getSebSettingForQuiz(quizId) : null;
-    if (setting?.sebRequired && !this.sebDetector.isRequestFromSeb(request, setting)) {
-      const configUrl = `/seb/config/${courseId}/${quizId}.seb`;
+    const targetContentId =
+      launchData.custom?.quiz_id || launchData.custom?.content_id || launchData.resourceLinkId || "";
+    const target = targetContentId ? await this.resolveStudentContent(courseId, targetContentId, request) : null;
+    if (target?.setting?.sebRequired && !this.sebDetector.isRequestFromSeb(request, target.setting)) {
       return renderAppShell({
         title: "Safe Exam Browser Required",
         view: "seb-required",
         initialData: {
           courseId,
-          quizId,
-          configUrl,
-          sebConfigUrl: configUrl,
-          sebLaunchUrl: sebSchemeUrl(request, configUrl, this.config.getApplicationBaseUrl())
+          quizId: target.id,
+          configUrl: target.configUrl,
+          sebConfigUrl: target.configUrl,
+          sebLaunchUrl: target.sebLaunchUrl
         }
       });
     }
     return renderAppShell({
-      title: "Canvas Quiz",
+      title: "Safe Exam Browser Quizzes",
       view: "student",
-      initialData: { launchData }
+      initialData: {
+        courseId,
+        courseName: launchData.courseName,
+        studentName: launchData.fullName,
+        launchData,
+        quizzes: courseId ? await this.enabledStudentQuizzes(courseId, request) : []
+      }
     });
+  }
+
+  private async enabledStudentQuizzes(courseId: string, request: Request): Promise<Array<Record<string, unknown>>> {
+    const [classicQuizzes, contentItems] = await Promise.all([
+      this.quizService.getQuizzesForCourse(courseId),
+      this.contentService.getCachedContentForCourse(courseId)
+    ]);
+    const rows: Array<Record<string, unknown>> = [];
+    for (const quiz of classicQuizzes) {
+      const setting = await this.quizService.getSebSettingForQuiz(quiz.id);
+      if (setting?.sebRequired && setting.enabled) {
+        rows.push(
+          studentQuizView(
+            request,
+            this.config.getApplicationBaseUrl(),
+            courseId,
+            quiz.id,
+            quiz.title,
+            "Classic Quiz",
+            quiz.htmlUrl
+          )
+        );
+      }
+    }
+    for (const item of contentItems.filter((entry) => entry.contentType === "NEW_QUIZ")) {
+      const setting = await this.contentService.getSebSetting(item.id);
+      if (setting?.sebRequired && setting.enabled) {
+        rows.push(
+          studentQuizView(
+            request,
+            this.config.getApplicationBaseUrl(),
+            courseId,
+            item.id,
+            item.title,
+            "New Quiz",
+            item.htmlUrl
+          )
+        );
+      }
+    }
+    return rows.sort((left, right) => String(left.title).localeCompare(String(right.title)));
+  }
+
+  private async resolveStudentContent(
+    courseId: string,
+    contentId: string,
+    request: Request
+  ): Promise<
+    | (Record<string, unknown> & {
+        id: string;
+        setting: QuizSebSetting | ContentSebSetting | null;
+        configUrl: string;
+        sebLaunchUrl: string;
+      })
+    | null
+  > {
+    const parsedNewQuiz = parseNewQuizContentId(contentId);
+    if (parsedNewQuiz || contentId.startsWith("newquiz:")) {
+      const content = await this.contentService.getContentItem(contentId);
+      const setting = await this.contentService.getSebSetting(contentId);
+      if (!content && !setting) {
+        return null;
+      }
+      return {
+        ...studentQuizView(
+          request,
+          this.config.getApplicationBaseUrl(),
+          courseId || parsedNewQuiz?.courseId || setting?.courseId || "",
+          contentId,
+          content?.title || "New Quiz",
+          "New Quiz",
+          content?.htmlUrl || setting?.htmlUrl || null
+        ),
+        setting
+      };
+    }
+    const quizId = contentId.startsWith("classicquiz_") ? contentId.slice("classicquiz_".length) : contentId;
+    const quiz = await this.quizService.getQuiz(quizId);
+    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    if (!quiz && !setting) {
+      return null;
+    }
+    return {
+      ...studentQuizView(
+        request,
+        this.config.getApplicationBaseUrl(),
+        courseId || quiz?.courseId || setting?.courseId || "",
+        quizId,
+        quiz?.title || "Canvas Quiz",
+        "Classic Quiz",
+        quiz?.htmlUrl || null
+      ),
+      setting
+    };
   }
 
   private async deepLinkItemForQuiz(quizId: string, sebRequired: boolean): Promise<Record<string, unknown>> {
@@ -463,6 +597,26 @@ function contentView(item: ContentItem): Record<string, unknown> {
     id: item.id,
     canvasQuizId: item.canvasId,
     quizTypeDisplay: item.quizTypeDisplay || (item.contentType === "NEW_QUIZ" ? "New Quiz" : item.contentType)
+  };
+}
+
+function studentQuizView(
+  request: Request,
+  baseUrl: string | undefined,
+  courseId: string,
+  contentId: string,
+  title: string,
+  quizTypeDisplay: string,
+  htmlUrl?: string | null
+): Record<string, unknown> & { id: string; configUrl: string; sebLaunchUrl: string } {
+  const configUrl = `/seb/config/${encodeURIComponent(courseId)}/${encodeURIComponent(contentId)}.seb`;
+  return {
+    id: contentId,
+    title,
+    quizTypeDisplay,
+    htmlUrl,
+    configUrl,
+    sebLaunchUrl: sebSchemeUrl(request, configUrl, baseUrl)
   };
 }
 

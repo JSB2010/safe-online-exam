@@ -12,6 +12,7 @@ export interface AppConfigSnapshot {
     sebSettings: string;
     contentItems: string;
     contentSebSettings: string;
+    courseSebDefaults: string;
     oauthTokens: string;
     moduleItemUpdates: string;
   };
@@ -113,6 +114,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       sebSettings: firstPresent(env.FIRESTORE_SEB_SETTINGS_COLLECTION, "sebSettings")!,
       contentItems: firstPresent(env.FIRESTORE_CONTENT_ITEMS_COLLECTION, "contentItems")!,
       contentSebSettings: firstPresent(env.FIRESTORE_CONTENT_SEB_SETTINGS_COLLECTION, "contentSebSettings")!,
+      courseSebDefaults: firstPresent(env.FIRESTORE_COURSE_SEB_DEFAULTS_COLLECTION, "courseSebDefaults")!,
       oauthTokens: firstPresent(env.FIRESTORE_OAUTH_TOKENS_COLLECTION, "oauthTokens")!,
       moduleItemUpdates: firstPresent(env.FIRESTORE_MODULE_ITEM_UPDATES_COLLECTION, "module_item_updates")!
     },

@@ -1,6 +1,7 @@
 import { Firestore, type Query } from "@google-cloud/firestore";
 import { Injectable, OnModuleInit } from "@nestjs/common";
 import type {
+  CourseSebDefaults,
   ContentItem,
   ContentSebSetting,
   ModuleItemUpdate,
@@ -29,6 +30,7 @@ export interface AppRepositories {
   quizSebSettings: CollectionStore<QuizSebSetting>;
   contentItems: CollectionStore<ContentItem>;
   contentSebSettings: CollectionStore<ContentSebSetting>;
+  courseSebDefaults: CollectionStore<CourseSebDefaults>;
   oauthTokens: CollectionStore<OAuthToken>;
   moduleItemUpdates: CollectionStore<ModuleItemUpdate>;
 }
@@ -67,6 +69,7 @@ export function createRepositories(config: AppConfig): AppRepositories {
     quizSebSettings: new FirestoreCollectionStore<QuizSebSetting>(firestore, collections.sebSettings),
     contentItems: new FirestoreCollectionStore<ContentItem>(firestore, collections.contentItems),
     contentSebSettings: new FirestoreCollectionStore<ContentSebSetting>(firestore, collections.contentSebSettings),
+    courseSebDefaults: new FirestoreCollectionStore<CourseSebDefaults>(firestore, collections.courseSebDefaults),
     oauthTokens: new FirestoreCollectionStore<OAuthToken>(firestore, collections.oauthTokens),
     moduleItemUpdates: new FirestoreCollectionStore<ModuleItemUpdate>(firestore, collections.moduleItemUpdates)
   };
@@ -80,6 +83,7 @@ export function createInMemoryRepositories(
     quizSebSettings: new InMemoryCollectionStore<QuizSebSetting>(seed?.quizSebSettings),
     contentItems: new InMemoryCollectionStore<ContentItem>(seed?.contentItems),
     contentSebSettings: new InMemoryCollectionStore<ContentSebSetting>(seed?.contentSebSettings),
+    courseSebDefaults: new InMemoryCollectionStore<CourseSebDefaults>(seed?.courseSebDefaults),
     oauthTokens: new InMemoryCollectionStore<OAuthToken>(seed?.oauthTokens),
     moduleItemUpdates: new InMemoryCollectionStore<ModuleItemUpdate>(seed?.moduleItemUpdates)
   };

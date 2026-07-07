@@ -75,6 +75,9 @@ Canvas also supports `Paste JSON` and `Manual Entry` for LTI keys. If the JSON U
 - `public_jwk_url`: `${TOOL_URL}/.well-known/jwks.json`
 - Course Navigation placement
 - Assignment Selection deep-linking placement
+- `custom_fields.canvas_membership_roles`: `$Canvas.membership.roles`
+- `custom_fields.canvas_lis_membership_roles`: `$com.Instructure.membership.roles`
+- `custom_fields.canvas_membership_permissions`: `$Canvas.membership.permissions<...>`
 
 ## Install the App for the Entire School
 

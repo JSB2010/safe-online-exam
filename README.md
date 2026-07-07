@@ -119,7 +119,7 @@ Useful optional variables:
 - `APP_DEBUG_ENABLED`
 - `SEB_QUIT_PASSWORD`
 - `SEB_REQUIRED_DOMAINS`
-- Firestore collection overrides: `FIRESTORE_QUIZZES_COLLECTION`, `FIRESTORE_SEB_SETTINGS_COLLECTION`, `FIRESTORE_CONTENT_ITEMS_COLLECTION`, `FIRESTORE_CONTENT_SEB_SETTINGS_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_MODULE_ITEM_UPDATES_COLLECTION`
+- Firestore collection overrides: `FIRESTORE_QUIZZES_COLLECTION`, `FIRESTORE_SEB_SETTINGS_COLLECTION`, `FIRESTORE_CONTENT_ITEMS_COLLECTION`, `FIRESTORE_CONTENT_SEB_SETTINGS_COLLECTION`, `FIRESTORE_COURSE_SEB_DEFAULTS_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_MODULE_ITEM_UPDATES_COLLECTION`
 
 Production refuses to start without `LTI_PRIVATE_KEY` and `STATE_ENCRYPTION_KEY`.
 
@@ -136,6 +136,7 @@ Default collections:
 - `sebSettings`
 - `contentItems`
 - `contentSebSettings`
+- `courseSebDefaults`
 - `oauthTokens`
 - `module_item_updates`
 
@@ -144,6 +145,8 @@ The rewrite does not require Java model compatibility. The repository layer writ
 ## Canvas LTI Configuration
 
 The Canvas developer key should continue pointing at the Cloud Run service URL.
+
+The dynamic LTI config endpoint includes course navigation placement metadata and Canvas course-membership custom fields. The app also enforces role-aware rendering at launch time: instructors see quiz management, while students see a launch-only page with SEB-enabled assessments if the placement is visible to them in Canvas.
 
 Important URLs:
 
@@ -182,9 +185,12 @@ Instructor quiz APIs:
 
 - `GET /api/quizzes`
 - `POST /api/quizzes/course/:courseId/refresh`
+- `GET /api/quizzes/course/:courseId/defaults`
+- `PUT /api/quizzes/course/:courseId/defaults`
 - `PUT /api/quizzes/:quizId/seb`
 - `POST /api/quizzes/:courseId/:quizId/seb/enable`
 - `POST /api/quizzes/:courseId/:quizId/seb/disable`
+- `POST /api/quizzes/:courseId/:quizId/seb/reset-defaults`
 - `POST /api/quizzes/:courseId/:quizId/seb/regenerate-code`
 - `GET /api/quizzes/:courseId/:quizId/seb/status`
 - `POST /api/quizzes/seb-config-structured`
@@ -224,6 +230,8 @@ These configs:
 - keep Firestore database IDs on `seb-canvaslti-dev` and `seb-canvaslti-prod`
 - inject secrets through Secret Manager
 
+The dev Cloud Run service keeps its public `allUsers` / `roles/run.invoker` binding outside the deploy command. `cloudbuild-dev.yaml` does not pass `--allow-unauthenticated`, which avoids Cloud Build trying to reset service IAM on every deploy.
+
 See [docs/deployment.md](docs/deployment.md) for required secrets and deployment checks. See
 [docs/canvas-school-setup.md](docs/canvas-school-setup.md) for Canvas LTI installation and theme JavaScript setup.
 
@@ -239,6 +247,6 @@ Tooling decisions, including why the repo currently stays on npm rather than pnp
 
 The generated `.seb` files are binary plist payloads with Canvas start URLs, access codes, quit URLs, Config Key metadata, allowed URLs, and SEB-controlled new-window behavior for approved exam tools. The URL filter uses SEB's canonical `URLFilterEnable`, `URLFilterEnableContentFilter`, and `URLFilterRules` keys so only the quiz URL family, the LTI app, required Canvas file/media/CDN resources, narrow SSO support domains, and explicitly enabled exam-tool URLs can load. Config downloads persist a Config Key hash. The Canvas detector script then requests a one-time proof token from `/api/seb/access-proof/:courseId/:quizId`, exchanges it at `/api/seb/access-code/:courseId/:quizId`, and fills the Canvas access-code field only after SEB proves it is using the downloaded config.
 
-Instructor settings can enable external exam tools such as Desmos. Enabled tools are exposed to students through a draggable Canvas quiz sidebar from the detector script. The sidebar is only a launcher; the SEB URL filter allowlist remains the enforcement mechanism for which external sites can load.
+Instructor settings can enable external exam tools such as Desmos. Course defaults store the default exit password, allowed URL rules, and exam tools for newly enabled quizzes. Per-quiz settings can override those defaults or reset back to them. Enabled tools are exposed to students through a draggable Canvas quiz sidebar from the detector script. The sidebar is only a launcher; the SEB URL filter allowlist remains the enforcement mechanism for which external sites can load.
 
 This preserves the legacy security model while removing the Java/Spring/Thymeleaf implementation.

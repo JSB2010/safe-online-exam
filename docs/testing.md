@@ -30,6 +30,7 @@ The current automated tests cover:
 - JWK generation and production private-key requirements.
 - Canvas API URL construction and access-code update behavior.
 - Firestore/in-memory repository semantics.
+- Course-level SEB defaults and structured URL rule normalization.
 - Content discovery and New Quiz SEB setting behavior.
 - Quiz service enable/disable, access-code, and Browser Exam Key behavior.
 - Deep-link module item rewrite behavior.
@@ -87,6 +88,8 @@ Minimum checks:
 - Mobile viewport around 390x844: verify the same page remains readable and the quit button fits.
 - Open a SEB download page route if seeded data is available.
 - Open the instructor dashboard from a real Canvas LTI launch in dev.
+- Verify the instructor setup wizard appears after first Canvas authorization for a course, then saves course defaults.
+- Verify a student LTI launch shows only SEB-enabled assessments and no instructor controls.
 
 The committed Playwright smoke suite can be run with:
 

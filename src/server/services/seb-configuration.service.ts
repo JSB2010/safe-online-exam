@@ -126,6 +126,31 @@ function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   if (!value || isUnsafeBroadPattern(value)) {
     return [];
   }
+  if (value.startsWith("regex:")) {
+    const expression = value.slice("regex:".length).trim();
+    return expression && !isUnsafeBroadPattern(expression)
+      ? [{ active: true, regex: true, expression, action: 1 }]
+      : [];
+  }
+  if (value.startsWith("exact:")) {
+    try {
+      return [
+        { active: true, regex: true, expression: exactUrlPathRegex(new URL(value.slice("exact:".length))), action: 1 }
+      ];
+    } catch {
+      return [];
+    }
+  }
+  if (value.startsWith("domain:")) {
+    const domain = value
+      .slice("domain:".length)
+      .trim()
+      .replace(/^https?:\/\//iu, "")
+      .replace(/\/.*$/u, "");
+    return domain && !isUnsafeBroadPattern(domain)
+      ? [{ active: true, regex: false, expression: `https://${domain}/*`, action: 1 }]
+      : [];
+  }
   const withoutPath = value.replace(/\/+$/u, "");
   if (withoutPath.includes("://")) {
     try {

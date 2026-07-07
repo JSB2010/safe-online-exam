@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Controller, Get, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
+import type { LtiLaunchData } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { renderAppShell } from "../http/app-shell.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
@@ -23,7 +24,7 @@ export class OAuthController {
   }
 
   @Get("/oauth2authorize")
-  authorize(@Req() _request: Request, @Res() response: Response, @Query() query: Record<string, string>): void {
+  authorize(@Req() request: Request, @Res() response: Response, @Query() query: Record<string, string>): void {
     const userId = query.user_id;
     const courseId = query.course_id;
     if (!userId || !courseId) {
@@ -36,14 +37,25 @@ export class OAuthController {
       return;
     }
     const redirectUri = this.oauthRedirectUri();
-    const state = this.ltiState.createState({
+    const statePayload: Record<string, string> = {
       nonce: randomUUID(),
       userId,
       courseId,
       redirectUrl:
         query.redirect_url ||
         `/lti/launch?course_id=${encodeURIComponent(courseId)}&user_id=${encodeURIComponent(userId)}`
-    });
+    };
+    const launchData = request.session?.launchData;
+    if (launchData?.roles?.length) {
+      statePayload.roles = JSON.stringify(launchData.roles);
+    }
+    if (launchData?.courseName) {
+      statePayload.courseName = launchData.courseName;
+    }
+    if (launchData?.fullName) {
+      statePayload.fullName = launchData.fullName;
+    }
+    const state = this.ltiState.createState(statePayload);
     const authUrl = new URL(`${this.config.getCanvasDomain()}/login/oauth2/auth`);
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("response_type", "code");
@@ -54,7 +66,11 @@ export class OAuthController {
   }
 
   @Get("/oauth2callback")
-  async callback(@Res() response: Response, @Query() query: Record<string, string>): Promise<void> {
+  async callback(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Query() query: Record<string, string>
+  ): Promise<void> {
     if (query.error) {
       response.send(
         renderAppShell({
@@ -73,6 +89,7 @@ export class OAuthController {
         scope: token.scope || null,
         expiresIn: token.expires_in
       });
+      restoreLaunchDataFromOAuthState(request, state);
       response.redirect(addOAuthReturnParams(state.redirectUrl, state.courseId, state.userId));
     } catch (error) {
       response.status(400).send(
@@ -143,6 +160,40 @@ function addOAuthReturnParams(redirectUrl: string | undefined, courseId: string,
     url.searchParams.set("user_id", userId);
   }
   return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function restoreLaunchDataFromOAuthState(request: Request, state: Record<string, string>): void {
+  const roles = parseOAuthStateRoles(state.roles);
+  if (!request.session || roles.length === 0) {
+    return;
+  }
+  const existing = request.session.launchData as LtiLaunchData | undefined;
+  request.session.launchData = {
+    ...(existing || {}),
+    userId: state.userId,
+    courseId: state.courseId,
+    roles,
+    courseName: state.courseName || existing?.courseName,
+    fullName: state.fullName || existing?.fullName
+  };
+  request.session.ltiLaunchData = request.session.launchData;
+  request.session.canvas_user_id = state.userId;
+  request.session.userId = state.userId;
+  request.session.user_id = state.userId;
+  request.session.canvas_course_id = state.courseId;
+  request.session.courseId = state.courseId;
+}
+
+function parseOAuthStateRoles(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function canvasScopes(): string[] {

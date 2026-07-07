@@ -6,7 +6,8 @@ import {
   classicQuizContentId,
   enabledExternalTools,
   extractClassicQuizId,
-  parseNewQuizContentId
+  parseNewQuizContentId,
+  urlRulesToAllowedEntries
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { apiError } from "../http/api-error.js";
@@ -591,12 +592,17 @@ function isConfiguredCanvasUrl(config: AppConfig, value: string): boolean {
 }
 
 function allowedDomains(setting: QuizSebSetting | ContentSebSetting): string[] {
-  return [
-    ...(setting.ssoDomains || []),
-    ...(setting.educationalToolDomains || []),
-    ...(setting.customDomains || []),
-    ...allowlistEntriesForExternalTools(setting.externalTools)
-  ];
+  const customEntries = setting.urlRules?.length
+    ? urlRulesToAllowedEntries(setting.urlRules)
+    : setting.customDomains || [];
+  return Array.from(
+    new Set([
+      ...(setting.ssoDomains || []),
+      ...(setting.educationalToolDomains || []),
+      ...customEntries,
+      ...allowlistEntriesForExternalTools(setting.externalTools)
+    ])
+  );
 }
 
 function firstHeader(request: Request, names: string[]): string | undefined {

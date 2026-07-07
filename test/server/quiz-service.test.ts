@@ -23,4 +23,37 @@ describe("QuizService", () => {
     expect(disabled.accessCode).toBeNull();
     expect(canvas.removeQuizAccessCode).toHaveBeenCalled();
   });
+
+  it("applies course defaults when SEB is enabled for a new quiz setting", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      setQuizAccessCode: vi.fn().mockResolvedValue(true),
+      getQuizzesForCourse: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new QuizService(repos, canvas);
+
+    const enabled = await service.enableSebWithAccessCode("course-1", "quiz-1", "user-1", {
+      id: "course-1",
+      courseId: "course-1",
+      quitPassword: "default-exit",
+      setupCompleted: true,
+      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+      externalTools: [{ id: "calc", label: "Calculator", url: "https://calc.example.edu", enabled: true }]
+    });
+
+    expect(enabled.usesCourseDefaults).toBe(true);
+    expect(enabled.quitPassword).toBe("default-exit");
+    expect(enabled.urlRules).toEqual([{ id: "docs", match: "domain", value: "docs.example.edu" }]);
+    expect(enabled.customDomains).toEqual(["domain:docs.example.edu"]);
+    expect(enabled.externalTools).toEqual([
+      {
+        id: "calc",
+        label: "Calculator",
+        url: "https://calc.example.edu/",
+        enabled: true,
+        preset: null,
+        allowedDomains: []
+      }
+    ]);
+  });
 });

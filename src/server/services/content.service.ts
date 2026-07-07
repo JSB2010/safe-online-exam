@@ -4,6 +4,7 @@ import {
   defaultContentSebSetting,
   newQuizContentId,
   normalizeExternalTools,
+  normalizeUrlRules,
   quizToContentItem
 } from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
@@ -35,6 +36,10 @@ export class ContentService {
     return this.repositories.value.contentItems.get(contentId);
   }
 
+  async getCachedContentForCourse(courseId: string): Promise<ContentItem[]> {
+    return this.repositories.value.contentItems.find([{ field: "courseId", op: "==", value: courseId }]);
+  }
+
   async saveContentItem(content: ContentItem): Promise<ContentItem> {
     return this.repositories.value.contentItems.save(content.id, content);
   }
@@ -51,6 +56,7 @@ export class ContentService {
       ssoDomains: setting.ssoDomains || [],
       educationalToolDomains: setting.educationalToolDomains || [],
       customDomains: setting.customDomains || [],
+      urlRules: normalizeUrlRules(setting.urlRules),
       externalTools: normalizeExternalTools(setting.externalTools)
     });
   }
@@ -73,6 +79,7 @@ export class ContentService {
       ssoDomains: existing?.ssoDomains || [],
       educationalToolDomains: existing?.educationalToolDomains || [],
       customDomains: existing?.customDomains || [],
+      urlRules: normalizeUrlRules(existing?.urlRules),
       externalTools: normalizeExternalTools(existing?.externalTools)
     };
     await this.saveSebSetting(setting);

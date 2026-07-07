@@ -1,7 +1,17 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type { ContentItem, ContentSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
-import { defaultContentSebSetting, normalizeExternalTools, parseNewQuizContentId } from "../../shared/models.js";
+import {
+  applyCourseDefaultsToContentSetting,
+  applyCourseDefaultsToQuizSetting,
+  defaultContentSebSetting,
+  defaultQuizSebSetting,
+  normalizeCourseSebDefaults,
+  normalizeExternalTools,
+  normalizeUrlRules,
+  parseNewQuizContentId,
+  urlRulesToAllowedEntries
+} from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { verifyActionToken } from "../http/action-token.js";
 import { apiError, noUserSession } from "../http/api-error.js";
@@ -12,6 +22,7 @@ import {
   isCanvasApiPermissionError
 } from "../services/canvas-api.service.js";
 import { ContentService } from "../services/content.service.js";
+import { CourseSettingsService } from "../services/course-settings.service.js";
 import { DeepLinkModuleService } from "../services/deep-link-module.service.js";
 import { generateAccessCode, generateBrowserExamKey, QuizService } from "../services/quiz.service.js";
 
@@ -22,6 +33,7 @@ export class QuizController {
     private readonly quizService: QuizService,
     private readonly canvasApi: CanvasApiService,
     private readonly contentService: ContentService,
+    private readonly courseSettings: CourseSettingsService,
     private readonly deepLinkModules: DeepLinkModuleService
   ) {}
 
@@ -51,6 +63,39 @@ export class QuizController {
     }
   }
 
+  @Get("/course/:courseId/defaults")
+  async getCourseDefaults(
+    @Req() request: Request,
+    @Param("courseId") courseId: string
+  ): Promise<Record<string, unknown>> {
+    if (!isAuthorizedCourseRequest(request, this.config, courseId)) {
+      return noUserSession();
+    }
+    return { success: true, defaults: await this.courseSettings.getDefaults(courseId) };
+  }
+
+  @Put("/course/:courseId/defaults")
+  async saveCourseDefaults(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Body() body: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    if (!isAuthorizedCourseRequest(request, this.config, courseId)) {
+      return noUserSession();
+    }
+    const defaults = await this.courseSettings.saveDefaults(
+      courseId,
+      normalizeCourseSebDefaults({
+        courseId,
+        quitPassword: typeof body.quitPassword === "string" ? body.quitPassword : null,
+        urlRules: Array.isArray(body.urlRules) ? (body.urlRules as any) : [],
+        externalTools: Array.isArray(body.externalTools) ? (body.externalTools as any) : [],
+        setupCompleted: body.setupCompleted !== false
+      })
+    );
+    return { success: true, defaults };
+  }
+
   @Put("/:quizId/seb")
   async updateSebRequirement(
     @Req() request: Request,
@@ -65,7 +110,12 @@ export class QuizController {
     const required = !!body.required;
     try {
       if (required) {
-        const setting = await this.quizService.enableSebWithAccessCode(courseId, quizId, userId);
+        const setting = await this.quizService.enableSebWithAccessCode(
+          courseId,
+          quizId,
+          userId,
+          await this.courseSettings.getDefaults(courseId)
+        );
         return { success: true, setting };
       }
       const setting = await this.quizService.disableSebWithAccessCode(courseId, quizId, userId);
@@ -99,23 +149,59 @@ export class QuizController {
       return apiError(400, "quizId or contentId is required");
     }
     const parsed = parseNewQuizContentId(contentId);
+    const courseId = body.courseId || parsed?.courseId || courseIdFromRequest(request, this.config);
+    const defaults = courseId ? await this.courseSettings.getDefaults(courseId) : null;
     if (parsed) {
       const setting = await this.getOrCreateNewQuizSetting(contentId, parsed.courseId, parsed.assignmentId);
-      const saved = await this.contentService.saveSebSetting({
-        ...setting,
-        ssoDomains: body.ssoDomains || [],
-        educationalToolDomains: body.educationalToolDomains || [],
-        customDomains: body.customDomains || [],
-        externalTools: normalizeExternalTools(body.externalTools),
-        externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
-        quitPassword: normalizeBlank(body.quitPassword),
-        sebRequired: true,
-        enabled: setting.enabled,
-        browserExamKey: setting.browserExamKey || generateBrowserExamKey()
-      });
+      const saved = await this.contentService.saveSebSetting(
+        applyCourseDefaultsToContentSetting(
+          {
+            ...setting,
+            ssoDomains: body.ssoDomains || [],
+            educationalToolDomains: body.educationalToolDomains || [],
+            customDomains: body.customDomains || urlRulesToAllowedEntries(body.urlRules),
+            urlRules: normalizeUrlRules(body.urlRules),
+            externalTools: normalizeExternalTools(body.externalTools),
+            externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
+            quitPassword: normalizeBlank(body.quitPassword),
+            usesCourseDefaults: body.usesCourseDefaults === true,
+            quitPasswordOverride: body.quitPasswordOverride === true,
+            sebRequired: true,
+            enabled: setting.enabled,
+            browserExamKey: setting.browserExamKey || generateBrowserExamKey()
+          },
+          defaults
+        )
+      );
       return { success: true, setting: saved };
     }
-    const saved = await this.quizService.updateSebConfigurationStructured(body, true);
+    const setting = body.quizId ? await this.quizService.getSebSettingForQuiz(body.quizId) : null;
+    const saved = body.quizId
+      ? await this.quizService.saveSebSetting(
+          applyCourseDefaultsToQuizSetting(
+            {
+              ...defaultQuizSebSetting(body.quizId, courseId),
+              ...setting,
+              id: setting?.id || body.quizId,
+              quizId: body.quizId,
+              courseId: courseId || setting?.courseId || null,
+              ssoDomains: body.ssoDomains || [],
+              educationalToolDomains: body.educationalToolDomains || [],
+              customDomains: body.customDomains || urlRulesToAllowedEntries(body.urlRules),
+              urlRules: normalizeUrlRules(body.urlRules),
+              externalTools: normalizeExternalTools(body.externalTools),
+              externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
+              quitPassword: normalizeBlank(body.quitPassword),
+              usesCourseDefaults: body.usesCourseDefaults === true,
+              quitPasswordOverride: body.quitPasswordOverride === true,
+              sebRequired: true,
+              enabled: setting?.enabled ?? true,
+              browserExamKey: setting?.browserExamKey || generateBrowserExamKey()
+            },
+            defaults
+          )
+        )
+      : await this.quizService.updateSebConfigurationStructured(body, true);
     return { success: true, setting: saved };
   }
 
@@ -166,7 +252,12 @@ export class QuizController {
         const setting = await this.enableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
         return { success: true, message: "SEB enabled successfully with access code enforcement", setting };
       }
-      const setting = await this.quizService.enableSebWithAccessCode(courseId, quizId, userId);
+      const setting = await this.quizService.enableSebWithAccessCode(
+        courseId,
+        quizId,
+        userId,
+        await this.courseSettings.getDefaults(courseId)
+      );
       const quiz = await this.quizService.getQuiz(quizId);
       const moduleItemUpdated = quiz
         ? await this.deepLinkModules.createOrUpdateModuleItemForQuiz(courseId, quiz, userId, true)
@@ -186,6 +277,23 @@ export class QuizController {
       }
       throw error;
     }
+  }
+
+  @Post("/:courseId/:quizId/seb/reset-defaults")
+  async resetDefaults(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Param("quizId") quizId: string
+  ): Promise<Record<string, unknown>> {
+    const userId = userIdFromRequest(request, this.config);
+    if (!userId) {
+      return noUserSession();
+    }
+    const setting = await this.courseSettings.resetQuizToDefaults(courseId, quizId);
+    if (!setting) {
+      return apiError(404, "No SEB setting found for this quiz");
+    }
+    return { success: true, setting };
   }
 
   @Post("/:courseId/:quizId/seb/disable")
@@ -320,15 +428,20 @@ export class QuizController {
     const accessCode = generateAccessCode();
     await this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId);
     const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
-    const saved = await this.contentService.saveSebSetting({
-      ...setting,
-      sebRequired: true,
-      enabled: true,
-      accessCode,
-      configKey: null,
-      externalToolUrl: `${this.config.getRequiredToolUrl()}/seb/launch/${contentId}`,
-      browserExamKey: setting.browserExamKey || generateBrowserExamKey()
-    });
+    const saved = await this.contentService.saveSebSetting(
+      applyCourseDefaultsToContentSetting(
+        {
+          ...setting,
+          sebRequired: true,
+          enabled: true,
+          accessCode,
+          configKey: null,
+          externalToolUrl: `${this.config.getRequiredToolUrl()}/seb/launch/${contentId}`,
+          browserExamKey: setting.browserExamKey || generateBrowserExamKey()
+        },
+        await this.courseSettings.getDefaults(courseId)
+      )
+    );
     await this.deepLinkModules.createOrUpdateModuleItemForContent(
       courseId,
       buildNewQuizContent(contentId, courseId, assignmentId, saved),
@@ -383,6 +496,7 @@ export class QuizController {
         ssoDomains: existing.ssoDomains || [],
         educationalToolDomains: existing.educationalToolDomains || [],
         customDomains: existing.customDomains || [],
+        urlRules: normalizeUrlRules(existing.urlRules),
         externalTools: normalizeExternalTools(existing.externalTools)
       };
     }
@@ -434,6 +548,12 @@ function courseIdFromRequest(request: Request, config: AppConfig): string | unde
 function actionTokenPayload(request: Request, config: AppConfig): { userId: string; courseId: string } | null {
   const headerValue = request.header("x-auth-token");
   return verifyActionToken(config, headerValue);
+}
+
+function isAuthorizedCourseRequest(request: Request, config: AppConfig, courseId: string): boolean {
+  const userId = userIdFromRequest(request, config);
+  const resolvedCourseId = courseIdFromRequest(request, config);
+  return !!userId && resolvedCourseId === courseId;
 }
 
 function normalizeBlank(value?: string | null): string | null {
