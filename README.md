@@ -116,7 +116,7 @@ Useful optional variables:
 - `CANVAS_API_BASE_URL`, default `${CANVAS_DOMAIN}/api/v1`
 - `CANVAS_REDIRECT_URI`, default `${TOOL_URL}/api/oauth2callback`
 - `LTI_DEPLOYMENT_ID`
-- `APP_DEBUG_ENABLED`
+- `APP_DEBUG_ENABLED`, the single debug/development toggle for diagnostic endpoints, detector console logs, detector Cloud Run traces, and detector script cache behavior. It defaults on outside prod and off in prod.
 - `SEB_QUIT_PASSWORD`
 - `SEB_REQUIRED_DOMAINS`
 - Firestore collection overrides: `FIRESTORE_QUIZZES_COLLECTION`, `FIRESTORE_SEB_SETTINGS_COLLECTION`, `FIRESTORE_CONTENT_ITEMS_COLLECTION`, `FIRESTORE_CONTENT_SEB_SETTINGS_COLLECTION`, `FIRESTORE_COURSE_SEB_DEFAULTS_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_MODULE_ITEM_UPDATES_COLLECTION`

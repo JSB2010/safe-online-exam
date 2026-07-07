@@ -114,6 +114,8 @@ Course defaults are stored per Canvas course. They include a default exit passwo
 
 External exam tools are configured in course defaults or per quiz/content item. Enabled tools are stored with a label, HTTPS URL, and optional extra resource entries. During `.seb` generation their URLs are added to the canonical SEB `URLFilterRules` allowlist, with `URLFilterEnable` and `URLFilterEnableContentFilter` enabled so unmatched URLs remain blocked by SEB. Canvas itself is restricted to the configured quiz or assignment URL family plus static/file/media resources needed to render the assessment. The Canvas detector script fetches the enabled tool list from `/api/seb/tools/:courseId/:quizId` to render a draggable sidebar on the quiz page. The sidebar opens tools in SEB-controlled new tabs/windows; URL filtering remains the enforcement boundary.
 
+`APP_DEBUG_ENABLED` is the single debug/development toggle for the service. It enables diagnostic endpoints, detector console logging, sanitized detector trace callbacks to `/api/debug/canvas-detector-trace`, and no-store detector script serving. With debug disabled, the detector callback is dormant and the same public detector URLs serve the minified asset with cache headers.
+
 ## Security Notes
 
 - Production requires `STATE_ENCRYPTION_KEY`; dev has a fallback for local testing.
@@ -123,6 +125,7 @@ External exam tools are configured in course defaults or per quiz/content item. 
 - Access-code APIs return real HTTP 403/404/409 statuses for failed proof or missing SEB state.
 - The detector script never receives an access code until Config Key proof succeeds.
 - Config proof tokens are single-use and short lived.
+- Detector traces redact access codes, proof tokens, OAuth/state/token values, cookies, passwords, and secret/private key fields before logging.
 
 ## React UI
 

@@ -38,6 +38,8 @@ npm run build
 
 Cloud Build pulls the previous image and passes it as `--cache-from` before building. The Dockerfile then prunes dev dependencies and emits a Node 22 runtime image that starts `node dist/server/server/main.js`.
 
+The server build also copies `src/server/assets` and creates `canvas-seb-detector.min.js`. When `APP_DEBUG_ENABLED` is true, the public detector URL serves the readable script with `no-store` headers. When `APP_DEBUG_ENABLED` is false, the same public URL serves the minified script with a one-hour public cache and `stale-while-revalidate`.
+
 ## Cloud Run Invoker IAM
 
 Canvas launches the LTI app through public Cloud Run URLs, so each Cloud Run service needs an `allUsers` binding for `roles/run.invoker`.
@@ -119,6 +121,7 @@ Run these checks after deployment:
 ```bash
 curl -fsS "${TOOL_URL}/health"
 curl -fsS "${TOOL_URL}/.well-known/jwks.json"
+curl -fsSI "${TOOL_URL}/js/canvas-seb-detector.js"
 curl -fsS "${TOOL_URL}/js/canvas-seb-detector.js" | head
 ```
 

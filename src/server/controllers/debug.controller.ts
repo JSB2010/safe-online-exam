@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Param, Query } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Ip, Param, Post, Query } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
+import { DetectorTraceService } from "../services/detector-trace.service.js";
 import { QuizService } from "../services/quiz.service.js";
 
 @Controller(["/api/debug", "/api/diagnostic"])
@@ -8,7 +9,8 @@ export class DebugController {
   constructor(
     private readonly config: AppConfig,
     private readonly canvasApi: CanvasApiService,
-    private readonly quizService: QuizService
+    private readonly quizService: QuizService,
+    private readonly detectorTrace: DetectorTraceService
   ) {}
 
   @Get("/debug-status")
@@ -33,6 +35,21 @@ export class DebugController {
       toolUrlConfigured: !!this.config.toolUrl,
       ltiClientIdConfigured: !!this.config.value.lti.clientId
     };
+  }
+
+  @Post("/canvas-detector-trace")
+  canvasDetectorTrace(
+    @Body() payload: unknown,
+    @Headers("origin") origin?: string,
+    @Headers("user-agent") userAgent?: string,
+    @Ip() ip?: string
+  ): Record<string, unknown> {
+    if (!this.config.value.security.debugEnabled) {
+      return { enabled: false };
+    }
+
+    this.detectorTrace.recordEvent(payload, { ip, origin, userAgent });
+    return { enabled: true };
   }
 
   @Get("/quizzes/:courseId")

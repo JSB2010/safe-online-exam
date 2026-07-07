@@ -37,7 +37,8 @@ The current automated tests cover:
 - SEB configuration plist generation, canonical URL filter keys, and allowed-domain policy.
 - SEB Config Key and access-proof token behavior.
 - SEB request detection and Browser Exam Key validation.
-- Static detector script serving.
+- Static detector script serving, safe base URL/debug injection, cache headers, and minified production asset selection.
+- Canvas detector jsdom behavior for quiz ID extraction, access-code proof/fill, final submit redirects, debug logging, server trace callbacks, and external exam tools.
 - App shell escaping, forwarded URL handling, CORS allow-listing, and API error bodies.
 
 ## Local Server Smoke Test

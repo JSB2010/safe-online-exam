@@ -13,6 +13,7 @@ import { CanvasApiService } from "./services/canvas-api.service.js";
 import { ContentService } from "./services/content.service.js";
 import { CourseSettingsService } from "./services/course-settings.service.js";
 import { DeepLinkModuleService } from "./services/deep-link-module.service.js";
+import { DetectorTraceService } from "./services/detector-trace.service.js";
 import { JwkService } from "./services/jwk.service.js";
 import { LtiService } from "./services/lti.service.js";
 import { LtiStateService } from "./services/lti-state.service.js";
@@ -40,6 +41,7 @@ import { SebDetector } from "./services/seb-detector.service.js";
     ContentService,
     CourseSettingsService,
     DeepLinkModuleService,
+    DetectorTraceService,
     JwkService,
     LtiService,
     LtiStateService,

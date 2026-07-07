@@ -18,4 +18,11 @@ describe("AppConfig", () => {
     expect(config.lti.toolUrl).toBe("https://canvas-seb-dev.run.app");
     expect(config.canvas.domain).toBe("https://kentdenver.instructure.com");
   });
+
+  it("uses the app debug flag as the single debug/development toggle", () => {
+    expect(loadConfigFromEnv({ APP_ENV: "dev" }).security.debugEnabled).toBe(true);
+    expect(loadConfigFromEnv({ APP_ENV: "prod" }).security.debugEnabled).toBe(false);
+    expect(loadConfigFromEnv({ APP_ENV: "dev", APP_DEBUG_ENABLED: "false" }).security.debugEnabled).toBe(false);
+    expect(loadConfigFromEnv({ APP_ENV: "prod", APP_DEBUG_ENABLED: "true" }).security.debugEnabled).toBe(true);
+  });
 });
