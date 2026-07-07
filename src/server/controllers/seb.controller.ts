@@ -237,14 +237,16 @@ export class SebController {
       return apiError(404, "No SEB setting found for this quiz");
     }
     if (!setting.configKey) {
-      return apiError(409, "SEB configuration must be downloaded before access-code proof can be issued");
+      return apiError(
+        409,
+        "No valid SEB configuration is registered for this quiz. Download a fresh SEB configuration from Canvas and reopen the quiz.",
+        { error_code: "SEB_CONFIG_NOT_REGISTERED" }
+      );
     }
-    let valid =
-      this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, setting.configKey) ||
-      this.configKey.validateConfigKeyHash(request, setting.configKey);
-    if (!valid && isSebJavascriptConfigProof(request, body, this.config, courseId, quizId)) {
-      valid = true;
-    }
+    const expectedConfigKey = await this.currentConfigKey(courseId, quizId, setting);
+    const valid =
+      this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey) ||
+      this.configKey.validateConfigKeyHash(request, expectedConfigKey);
     if (!valid) {
       console.warn(
         "SEB access proof rejected",
@@ -263,7 +265,11 @@ export class SebController {
           sebUserAgent: /SafeExamBrowser|SEB\/|SEB;/iu.test(request.header("user-agent") || "")
         })
       );
-      return apiError(403, "Invalid SEB configuration proof");
+      return apiError(
+        403,
+        "This SEB configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh SEB configuration from Canvas and reopen the quiz.",
+        { error_code: "INVALID_SEB_CONFIG_PROOF" }
+      );
     }
     return {
       success: true,
@@ -483,6 +489,38 @@ export class SebController {
     return generated;
   }
 
+  private async currentConfigKey(
+    courseId: string,
+    contentId: string,
+    setting: QuizSebSetting | ContentSebSetting
+  ): Promise<string> {
+    const classicId = extractClassicQuizId(contentId);
+    if (classicId) {
+      const quiz = await this.quizService.getQuiz(classicId);
+      const startUrl = resolveClassicCanvasUrl(this.config, courseId, classicId, undefined, quiz?.htmlUrl);
+      const generated = this.sebConfig.generateSebConfiguration({
+        courseId,
+        contentId: contentId.startsWith("classicquiz_") ? contentId : classicQuizContentId(classicId),
+        startUrl,
+        accessCode: setting.accessCode || "",
+        allowedDomains: allowedDomains(setting),
+        quitPassword: setting.quitPassword
+      });
+      return this.configKey.computeConfigKey(generated);
+    }
+
+    const startUrl = await this.resolveNewQuizStartUrl(courseId, contentId, setting as ContentSebSetting);
+    const generated = this.sebConfig.generateSebConfiguration({
+      courseId,
+      contentId,
+      startUrl,
+      accessCode: setting.accessCode || "",
+      allowedDomains: allowedDomains(setting),
+      quitPassword: setting.quitPassword
+    });
+    return this.configKey.computeConfigKey(generated);
+  }
+
   private async resolveContentForLaunch(
     contentId: string
   ): Promise<{ content: any; setting: QuizSebSetting | ContentSebSetting | null; launchTarget: string } | null> {
@@ -539,14 +577,14 @@ export class SebController {
     const candidates = [content?.htmlUrl, setting.htmlUrl, content?.canvasLaunchUrl, setting.canvasLaunchUrl];
     for (const candidate of candidates) {
       if (candidate && isConfiguredCanvasUrl(this.config, candidate)) {
-        return candidate;
+        return canonicalCanvasAssignmentTakeUrl(this.config, courseId, candidate);
       }
     }
     const assignmentId = setting.assignmentId || setting.canvasId || parseNewQuizContentId(contentId)?.assignmentId;
     if (!assignmentId) {
       throw new Error("Unable to determine Canvas start URL");
     }
-    return `${this.config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentId}`;
+    return `${this.config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentId}/take`;
   }
 
   private async resolveSebSetting(
@@ -568,17 +606,22 @@ function resolveClassicCanvasUrl(
   config: AppConfig,
   courseId: string,
   quizId: string,
-  canvasUrl?: string,
-  storedUrl?: string | null
+  _canvasUrl?: string,
+  _storedUrl?: string | null
 ): string {
-  const candidates = [canvasUrl, storedUrl];
-  for (const candidate of candidates) {
-    const decoded = decodeValue(candidate);
-    if (decoded && isConfiguredCanvasUrl(config, decoded)) {
-      return decoded;
-    }
+  return `${config.getCanvasDomain()}/courses/${courseId}/quizzes/${quizId}/take`;
+}
+
+function canonicalCanvasAssignmentTakeUrl(config: AppConfig, courseId: string, value: string): string {
+  const url = new URL(value);
+  const assignmentMatch = url.pathname.match(/^\/courses\/([^/]+)\/assignments\/([^/?#]+)(?:\/take)?\/?$/u);
+  if (!assignmentMatch) {
+    url.hash = "";
+    url.searchParams.delete("user_id");
+    url.searchParams.delete("attempt");
+    return url.toString();
   }
-  return `${config.getCanvasDomain()}/courses/${courseId}/quizzes/${quizId}`;
+  return `${config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentMatch[2]}/take`;
 }
 
 function isConfiguredCanvasUrl(config: AppConfig, value: string): boolean {
@@ -615,27 +658,6 @@ function firstHeader(request: Request, names: string[]): string | undefined {
   return undefined;
 }
 
-export function isSebJavascriptConfigProof(
-  request: Request,
-  body: { configKeyHash?: string; url?: string } | undefined,
-  config: AppConfig,
-  courseId: string,
-  quizId: string
-): boolean {
-  const userAgent = request.header("user-agent") || "";
-  if (!/SafeExamBrowser|SEB\/|SEB;/iu.test(userAgent)) {
-    return false;
-  }
-  if (!body?.configKeyHash || !/^[a-f0-9]{64}$/iu.test(body.configKeyHash.trim())) {
-    return false;
-  }
-  if (!body.url || !isConfiguredCanvasUrl(config, body.url)) {
-    return false;
-  }
-
-  return isExpectedQuizUrl(config, body.url, courseId, quizId);
-}
-
 function isExpectedQuizUrl(config: AppConfig, value: string, courseId: string, quizId: string): boolean {
   try {
     if (!isConfiguredCanvasUrl(config, value)) {
@@ -650,17 +672,6 @@ function isExpectedQuizUrl(config: AppConfig, value: string, courseId: string, q
     return path.startsWith(`/courses/${courseId}/quizzes/${quizId}`);
   } catch {
     return false;
-  }
-}
-
-function decodeValue(value?: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
   }
 }
 

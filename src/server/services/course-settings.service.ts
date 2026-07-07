@@ -44,33 +44,33 @@ export class CourseSettingsService {
       if (!existing) {
         return null;
       }
-      return this.repositories.value.contentSebSettings.save(
-        existing.id || existing.contentId,
-        applyCourseDefaultsToContentSetting(
+      return this.repositories.value.contentSebSettings.save(existing.id || existing.contentId, {
+        ...applyCourseDefaultsToContentSetting(
           {
             ...existing,
             usesCourseDefaults: true,
             quitPasswordOverride: false
           },
           defaults
-        )
-      );
+        ),
+        configKey: null
+      });
     }
     const existing = await this.getQuizSetting(quizId);
     if (!existing) {
       return null;
     }
-    return this.repositories.value.quizSebSettings.save(
-      existing.id || existing.quizId,
-      applyCourseDefaultsToQuizSetting(
+    return this.repositories.value.quizSebSettings.save(existing.id || existing.quizId, {
+      ...applyCourseDefaultsToQuizSetting(
         {
           ...existing,
           usesCourseDefaults: true,
           quitPasswordOverride: false
         },
         defaults
-      )
-    );
+      ),
+      configKey: null
+    });
   }
 
   private async getQuizSetting(quizId: string) {
@@ -89,16 +89,16 @@ export class CourseSettingsService {
     ]);
     await Promise.all([
       ...quizSettings.map((setting) =>
-        this.repositories.value.quizSebSettings.save(
-          setting.id || setting.quizId,
-          applyCourseDefaultsToQuizSetting(setting, defaults)
-        )
+        this.repositories.value.quizSebSettings.save(setting.id || setting.quizId, {
+          ...applyCourseDefaultsToQuizSetting(setting, defaults),
+          configKey: null
+        })
       ),
       ...contentSettings.map((setting) =>
-        this.repositories.value.contentSebSettings.save(
-          setting.id || setting.contentId,
-          applyCourseDefaultsToContentSetting(setting, defaults)
-        )
+        this.repositories.value.contentSebSettings.save(setting.id || setting.contentId, {
+          ...applyCourseDefaultsToContentSetting(setting, defaults),
+          configKey: null
+        })
       )
     ]);
   }

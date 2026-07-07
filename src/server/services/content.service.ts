@@ -9,6 +9,7 @@ import {
 } from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
+import { invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
 
 @Injectable()
 export class ContentService {
@@ -49,7 +50,8 @@ export class ContentService {
   }
 
   async saveSebSetting(setting: ContentSebSetting): Promise<ContentSebSetting> {
-    return this.repositories.value.contentSebSettings.save(setting.id || setting.contentId, {
+    const existing = await this.getSebSetting(setting.contentId);
+    const normalized = {
       ...setting,
       id: setting.id || setting.contentId,
       contentId: setting.contentId,
@@ -58,7 +60,11 @@ export class ContentService {
       customDomains: setting.customDomains || [],
       urlRules: normalizeUrlRules(setting.urlRules),
       externalTools: normalizeExternalTools(setting.externalTools)
-    });
+    };
+    return this.repositories.value.contentSebSettings.save(
+      setting.id || setting.contentId,
+      invalidateConfigKeyIfSebConfigChanged(existing, normalized)
+    );
   }
 
   private async seedNewQuizSetting(item: ContentItem): Promise<void> {

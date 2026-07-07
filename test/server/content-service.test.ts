@@ -29,4 +29,42 @@ describe("ContentService", () => {
       contentType: "NEW_QUIZ"
     });
   });
+
+  it("invalidates stored Config Keys when SEB-affecting content settings change", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new ContentService(repos, canvas);
+    await service.saveSebSetting({
+      contentId: "newquiz:course-7:99",
+      courseId: "course-7",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      configKey: "stored-config-key",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: ["domain:docs.example.edu"],
+      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+      externalTools: []
+    });
+
+    const saved = await service.saveSebSetting({
+      contentId: "newquiz:course-7:99",
+      courseId: "course-7",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      configKey: "stored-config-key",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: ["domain:calc.example.edu"],
+      urlRules: [{ id: "calc", match: "domain", value: "calc.example.edu" }],
+      externalTools: []
+    });
+
+    expect(saved.configKey).toBeNull();
+  });
 });

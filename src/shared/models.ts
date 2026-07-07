@@ -378,6 +378,39 @@ export function normalizeUrlRules(input?: SebUrlRule[] | string[] | null): SebUr
   });
 }
 
+export function isUnsafeBroadUrlPattern(value?: string | null): boolean {
+  const stripped = stripRulePrefix(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/gu, "");
+  if (!stripped) {
+    return true;
+  }
+  const normalizedRegexDots = stripped.replace(/\\\./gu, ".");
+  const withoutAnchors = normalizedRegexDots.replace(/^\^/u, "").replace(/\$$/u, "");
+  return (
+    [
+      "*",
+      "*/*",
+      ".*",
+      "https://*/*",
+      "http://*/*",
+      "https?://.*",
+      "https://.*",
+      "http://.*",
+      "*.com",
+      "*.org",
+      "*.net",
+      "*.edu",
+      "*.amazonaws.com",
+      "*.s3.amazonaws.com"
+    ].includes(withoutAnchors) ||
+    /^(?:https?:\/\/)?\*\.[a-z]{2,}(?:\/\*)?$/u.test(withoutAnchors) ||
+    /^https\?:\/\/\.\*$/u.test(withoutAnchors) ||
+    /^https?:\/\/\.\*$/u.test(withoutAnchors)
+  );
+}
+
 export function legacyDomainsToUrlRules(input?: string[] | null): SebUrlRule[] {
   if (!Array.isArray(input)) {
     return [];
@@ -521,6 +554,9 @@ function normalizeUrlRule(entry: SebUrlRule | string, index: number): SebUrlRule
   const value = entry.value?.trim();
   const match = normalizeUrlRuleMatch(entry.match) || "domain";
   if (!value) {
+    return null;
+  }
+  if (isUnsafeBroadUrlPattern(value)) {
     return null;
   }
   if (match === "exact" && !normalizeRuleUrl(value)) {

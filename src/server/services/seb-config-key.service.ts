@@ -75,11 +75,30 @@ function stableJson(value: unknown): string {
   }
   if (value && typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right, undefined, { sensitivity: "base" }))
-      .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
+      .sort(([left], [right]) => compareSebJsonKeys(left, right))
+      .map(([key, child]) => `${sebJsonString(key)}:${stableJson(child)}`)
       .join(",")}}`;
   }
+  if (typeof value === "string") {
+    return sebJsonString(value);
+  }
   return JSON.stringify(value);
+}
+
+function compareSebJsonKeys(left: string, right: string): number {
+  const leftLower = left.toLowerCase();
+  const rightLower = right.toLowerCase();
+  if (leftLower < rightLower) {
+    return -1;
+  }
+  if (leftLower > rightLower) {
+    return 1;
+  }
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function sebJsonString(value: string): string {
+  return `"${value.replace(/"/gu, '\\"')}"`;
 }
 
 function stripFragment(url: string): string {

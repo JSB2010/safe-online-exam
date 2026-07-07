@@ -16,6 +16,11 @@ export class SebDetector {
       "x-seb-config-key-hash",
       "x-seb-browser-exam-key"
     ]);
+    const configKeyHeader = firstHeader(request, [
+      "x-safeexambrowser-requesthash",
+      "x-safeexambrowser-configkeyhash",
+      "x-seb-config-key-hash"
+    ]);
     const uaLooksLikeSeb =
       /SafeExamBrowser|SEB\/|SEB;/iu.test(userAgent) || (/AppleWebKit/iu.test(userAgent) && /SEB/iu.test(userAgent));
     if (!uaLooksLikeSeb && !sebHeader) {
@@ -28,7 +33,7 @@ export class SebDetector {
       request.header("x-seb-browser-exam-key") ||
       request.header("browser-exam-key");
     if (expectedBek && providedBek) {
-      return this.validateBrowserExamKey(providedBek, expectedBek);
+      return this.validateBrowserExamKey(providedBek, expectedBek) || !!configKeyHeader;
     }
 
     return true;

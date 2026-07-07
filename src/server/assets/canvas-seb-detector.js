@@ -1259,18 +1259,19 @@
     async function requestAndFillAccessCode(quizInfo, shouldShowAccessCodeErrors) {
         try {
             debugLog('Requesting SEB access proof...');
-            const proofToken = await requestAccessProofToken(quizInfo.courseId, quizInfo.quizId);
-            if (!proofToken) {
+            const proofResult = await requestAccessProofToken(quizInfo.courseId, quizInfo.quizId);
+            if (!proofResult.proofToken) {
                 debugLog('No SEB access proof available', 'warn');
                 showAutoFillError(
-                    'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.',
+                    proofResult.errorMessage ||
+                        'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.',
                     shouldShowAccessCodeErrors
                 );
                 return;
             }
 
             debugLog('Fetching access code from backend...');
-            const accessCode = await fetchAccessCodeForQuiz(quizInfo.courseId, quizInfo.quizId, proofToken);
+            const accessCode = await fetchAccessCodeForQuiz(quizInfo.courseId, quizInfo.quizId, proofResult.proofToken);
             if (accessCode) {
                 debugLog('Access code retrieved from backend', 'success');
                 attemptAutoFillWithRetry(accessCode, 0, shouldShowAccessCodeErrors);
@@ -1349,7 +1350,11 @@
         const configKeyHash = await getSebConfigKeyHash();
         if (!configKeyHash) {
             debugLog('No SEB Config Key hash available from SEB security API', 'warn');
-            return null;
+            return {
+                proofToken: null,
+                errorMessage:
+                    'Safe Exam Browser could not read the Config Key for this quiz. Open the quiz using the downloaded SEB configuration file, or download a fresh SEB configuration from Canvas.'
+            };
         }
 
         try {
@@ -1372,17 +1377,50 @@
             debugLog('Proof response status: ' + response.status);
             if (!response.ok) {
                 debugLog('Failed to create access proof: ' + response.status, 'warn');
+                const responseText = await response.text();
                 if (state.debugMode) {
-                    debugLog('Access proof error response: ' + await response.text());
+                    debugLog('Access proof error response: ' + responseText);
                 }
-                return null;
+                return {
+                    proofToken: null,
+                    errorMessage: accessProofErrorMessage(response.status, responseText)
+                };
             }
 
             const data = await response.json();
-            return data.success ? data.proofToken : null;
+            return data.success
+                ? { proofToken: data.proofToken, errorMessage: null }
+                : {
+                      proofToken: null,
+                      errorMessage:
+                          data.message ||
+                          'Safe Exam Browser could not verify this quiz configuration. Download a fresh SEB configuration from Canvas and reopen the quiz.'
+                  };
         } catch (error) {
             debugLog('Error creating access proof: ' + errorMessage(error), 'warn');
-            return null;
+            return {
+                proofToken: null,
+                errorMessage:
+                    'Safe Exam Browser could not verify this quiz configuration because the verification request failed. Check your connection, then reload the quiz in SEB.'
+            };
+        }
+    }
+
+    function accessProofErrorMessage(status, responseText) {
+        const fallback =
+            status === 403 || status === 409
+                ? 'This SEB configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh SEB configuration from Canvas and reopen the quiz.'
+                : 'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.';
+
+        if (!responseText) {
+            return fallback;
+        }
+
+        try {
+            const payload = JSON.parse(responseText);
+            return typeof payload.message === 'string' && payload.message.trim() ? payload.message : fallback;
+        } catch (error) {
+            return fallback;
         }
     }
 

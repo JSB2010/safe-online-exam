@@ -10,6 +10,15 @@ describe("SebConfigKeyService", () => {
     expect(left).not.toContain("originatorVersion");
   });
 
+  it("uses SEB-JSON string formatting for URL filter regexes", () => {
+    const canonical = canonicalizeSebPlist({
+      URLFilterRules: [{ active: true, regex: true, expression: "^https://canvas\\.example\\.com/.*$" }]
+    });
+
+    expect(canonical).toContain('"expression":"^https://canvas\\.example\\.com/.*$"');
+    expect(canonical).not.toContain("canvas\\\\.example");
+  });
+
   it("computes config-key URL hashes and ignores fragments", () => {
     const service = new SebConfigKeyService();
     const config = Buffer.from(plist.build({ startURL: "https://canvas.example.com", originatorVersion: "3.7.0" }));
@@ -41,5 +50,33 @@ describe("SebConfigKeyService", () => {
         key
       )
     ).toBe(true);
+  });
+
+  it("rejects proof from a config after SEB URL rules are edited", () => {
+    const service = new SebConfigKeyService();
+    const originalKey = service.computeConfigKey(
+      Buffer.from(
+        plist.build({
+          startURL: "https://canvas.example.com/courses/1/quizzes/2",
+          URLFilterRules: [{ active: true, regex: false, expression: "https://canvas.example.com/*", action: 1 }]
+        })
+      )
+    );
+    const editedKey = service.computeConfigKey(
+      Buffer.from(
+        plist.build({
+          startURL: "https://canvas.example.com/courses/1/quizzes/2",
+          URLFilterRules: [
+            { active: true, regex: false, expression: "https://canvas.example.com/*", action: 1 },
+            { active: true, regex: false, expression: "https://chatgpt.com/*", action: 1 }
+          ]
+        })
+      )
+    );
+
+    expect(editedKey).not.toBe(originalKey);
+    expect(
+      service.validateConfigKeyHashForUrl(editedKey, "https://canvas.example.com/courses/1/quizzes/2/take", originalKey)
+    ).toBe(false);
   });
 });

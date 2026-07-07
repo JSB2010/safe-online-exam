@@ -14,7 +14,8 @@ describe("CourseSettingsService", () => {
       educationalToolDomains: [],
       customDomains: [],
       externalTools: [],
-      usesCourseDefaults: true
+      usesCourseDefaults: true,
+      configKey: "defaulted-config-key"
     });
     await repos.value.quizSebSettings.save("custom", {
       quizId: "custom",
@@ -27,7 +28,8 @@ describe("CourseSettingsService", () => {
       urlRules: [{ id: "custom", match: "domain", value: "custom.example.edu" }],
       externalTools: [],
       usesCourseDefaults: false,
-      quitPasswordOverride: false
+      quitPasswordOverride: false,
+      configKey: "custom-config-key"
     });
     const service = new CourseSettingsService(repos);
 
@@ -41,12 +43,14 @@ describe("CourseSettingsService", () => {
     await expect(repos.value.quizSebSettings.get("defaulted")).resolves.toMatchObject({
       quitPassword: "course-password",
       customDomains: ["domain:docs.example.edu"],
-      usesCourseDefaults: true
+      usesCourseDefaults: true,
+      configKey: null
     });
     await expect(repos.value.quizSebSettings.get("custom")).resolves.toMatchObject({
       quitPassword: "course-password",
       customDomains: ["domain:custom.example.edu"],
-      usesCourseDefaults: false
+      usesCourseDefaults: false,
+      configKey: null
     });
   });
 });

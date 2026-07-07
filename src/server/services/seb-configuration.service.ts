@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import plist from "plist";
+import { isUnsafeBroadUrlPattern } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 
 export interface SebConfigurationInput {
@@ -41,7 +42,7 @@ export class SebConfigurationService {
       quitURL: `${appBaseUrl.replace(/\/+$/u, "")}/seb/exit/quit/${input.courseId}/${quitPathId(input.contentId)}`,
       quitURLConfirm: false,
       URLFilterEnable: true,
-      URLFilterEnableContentFilter: true,
+      URLFilterEnableContentFilter: false,
       allowReloading: true,
       showReloadButton: true,
       sendBrowserExamKey: false,
@@ -51,7 +52,8 @@ export class SebConfigurationService {
       allowPreferencesWindow: false,
       allowSpellCheck: false,
       allowDictionaryLookup: false,
-      browserViewMode: 0,
+      browserWindowWebView: 3,
+      browserWindowWebViewClassicHideDeprecationNote: false,
       newBrowserWindowByLinkPolicy: 2,
       newBrowserWindowByScriptPolicy: 2,
       newBrowserWindowNavigation: true,
@@ -106,7 +108,23 @@ export function buildAllowlistRules(input: {
   add("*.canvas-user-content.com");
   add("*.inscloudgate.net");
   add("canvas-files-prod.s3.amazonaws.com");
+  add("canvas-network.s3.amazonaws.com");
+  add("canvas-static.s3.amazonaws.com");
+  add("canvas-user-content.s3.amazonaws.com");
+  add("instructure-uploads.s3.amazonaws.com");
+  add("instructure-uploads-prod.s3.amazonaws.com");
   add("inst-fs-iad-prod.inscloudgate.net");
+  add("du11hjcvx0uqb.cloudfront.net");
+  add("d2l3jyjp24noqc.cloudfront.net");
+  add("media.instructuremedia.com");
+  add("canvas-media.instructure.com");
+  add("canvas-rce.instructure.com");
+  add("canvas-rce-api.instructure.com");
+  add("quiz-lti.instructure.com");
+  add("quiz-api.instructure.com");
+  add("quiz-lti-iad-prod.instructure.com");
+  add("quiz-lti-pdx-prod.instructure.com");
+  add("quiz-lti-dub-prod.instructure.com");
   add(input.appBaseUrl);
   for (const domain of input.requiredDomains) {
     add(domain);
@@ -226,19 +244,7 @@ function exactUrlPathRegex(url: URL): string {
 }
 
 function isUnsafeBroadPattern(value: string): boolean {
-  const lower = value.toLowerCase();
-  return [
-    "*",
-    "*/*",
-    "https://*/*",
-    "http://*/*",
-    "*.com",
-    "*.org",
-    "*.net",
-    "*.edu",
-    "*.amazonaws.com",
-    "*.s3.amazonaws.com"
-  ].includes(lower);
+  return isUnsafeBroadUrlPattern(value);
 }
 
 function escapeRegex(value: string): string {

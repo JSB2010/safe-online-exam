@@ -56,4 +56,41 @@ describe("QuizService", () => {
       }
     ]);
   });
+
+  it("invalidates stored Config Keys when SEB-affecting quiz settings change", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new QuizService(repos, canvas);
+    await service.saveSebSetting({
+      quizId: "quiz-1",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      configKey: "stored-config-key",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: ["domain:docs.example.edu"],
+      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+      externalTools: []
+    });
+
+    const saved = await service.saveSebSetting({
+      quizId: "quiz-1",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      configKey: "stored-config-key",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: ["domain:calc.example.edu"],
+      urlRules: [{ id: "calc", match: "domain", value: "calc.example.edu" }],
+      externalTools: []
+    });
+
+    expect(saved.configKey).toBeNull();
+  });
 });

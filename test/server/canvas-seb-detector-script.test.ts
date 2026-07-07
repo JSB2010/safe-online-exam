@@ -1,11 +1,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
+import plist from "plist";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 
 const DETECTOR_PATH = join(process.cwd(), "src/server/assets/canvas-seb-detector.js");
 const APP_BASE_URL = "https://tool.example.edu";
 const CANVAS_BASE_URL = "https://canvas.example.edu";
+const DETECTOR_CONFIG_KEY = new SebConfigKeyService().computeConfigKey(
+  Buffer.from(plist.build({ startURL: `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/take` }))
+);
 
 describe("Canvas SEB detector script", () => {
   beforeEach(() => {
@@ -99,7 +104,7 @@ describe("Canvas SEB detector script", () => {
       userAgent: "Mozilla/5.0 SafeExamBrowser",
       safeExamBrowser: {
         security: {
-          configKey: "a".repeat(64),
+          configKey: DETECTOR_CONFIG_KEY,
           updateKeys(callback: () => void) {
             callback();
           }
@@ -144,6 +149,49 @@ describe("Canvas SEB detector script", () => {
     expect(logOutput).not.toContain("sen***");
     expect(logOutput).not.toContain("user_id=7288");
     expect(logOutput).toContain("user_id=%5Bredacted%5D");
+  });
+
+  it("shows a stale or modified SEB configuration message when proof is rejected", async () => {
+    const message =
+      "This SEB configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh SEB configuration from Canvas and reopen the quiz.";
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take?user_id=7288",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: {
+        security: {
+          configKey: "stale-config-key",
+          updateKeys(callback: () => void) {
+            callback();
+          }
+        }
+      },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": {
+          __status: 403,
+          success: false,
+          statusCode: 403,
+          error_code: "INVALID_SEB_CONFIG_PROOF",
+          message
+        },
+        "/api/seb/tools/11825/23455": { success: true, tools: [] }
+      },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form">
+            <input name="access_code" type="password" />
+            <button type="submit">Submit</button>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushPromises();
+
+    expect(context.document.body.textContent).toContain("Something went wrong");
+    expect(context.document.body.textContent).toContain(message);
   });
 
   it("does not treat access-code submit buttons as final quiz submissions", async () => {
@@ -204,7 +252,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
@@ -229,7 +277,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
@@ -251,7 +299,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
@@ -279,7 +327,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
@@ -307,7 +355,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/history?version=1",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `<main><h1 id="quiz_title">Midterm Quiz</h1><p>Attempt History</p></main>`
     });
 
@@ -321,7 +369,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `<main><h1 id="quiz_title">Midterm Quiz</h1></main>`
     });
 
@@ -355,7 +403,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
@@ -383,7 +431,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/submissions/777",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
-      safeExamBrowser: { security: { configKey: "a".repeat(64) } },
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       body: `<main><p>Your quiz has been submitted</p></main>`
     });
 
@@ -671,14 +719,16 @@ function createStorage() {
 }
 
 function jsonResponse(body: FetchResponse) {
+  const { __status, ...payload } = body;
+  const status = typeof __status === "number" ? __status : 200;
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     async json() {
-      return body;
+      return payload;
     },
     async text() {
-      return JSON.stringify(body);
+      return JSON.stringify(payload);
     }
   };
 }

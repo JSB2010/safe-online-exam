@@ -90,6 +90,16 @@ describe("content id helpers", () => {
       "regex:^https://cdn\\.example\\.edu/assets/.*$"
     ]);
   });
+
+  it("rejects broad regex URL rules before they are saved", () => {
+    const rules = normalizeUrlRules([
+      { id: "allow-all", match: "regex", value: "^https://.*$" },
+      { id: "allow-any", match: "regex", value: ".*" },
+      { id: "cdn", match: "regex", value: "^https://cdn\\.example\\.edu/assets/.*$" }
+    ]);
+
+    expect(urlRulesToAllowedEntries(rules)).toEqual(["regex:^https://cdn\\.example\\.edu/assets/.*$"]);
+  });
 });
 
 describe("LTI role helpers", () => {
