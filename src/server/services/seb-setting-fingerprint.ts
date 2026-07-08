@@ -21,7 +21,6 @@ function sebConfigFingerprint(setting: SebConfigSetting): string {
     quizId: setting.quizId || null,
     assignmentId: setting.assignmentId || null,
     canvasId: setting.canvasId || null,
-    canvasAssignmentId: setting.canvasAssignmentId || null,
     htmlUrl: setting.htmlUrl || null,
     canvasLaunchUrl: setting.canvasLaunchUrl || null,
     sebRequired: setting.sebRequired === true,

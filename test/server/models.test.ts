@@ -24,7 +24,7 @@ describe("content id helpers", () => {
     expect(extractClassicQuizId("assignment_42")).toBeNull();
   });
 
-  it("maps Canvas quizzes to content items for module launch routes", () => {
+  it("maps Canvas quizzes to canonical Classic Quiz content items", () => {
     expect(
       quizToContentItem({
         id: "42",

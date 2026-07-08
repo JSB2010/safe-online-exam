@@ -2,24 +2,21 @@ import { describe, expect, it } from "vitest";
 import { SebDetector } from "../../src/server/services/seb-detector.service.js";
 
 describe("SebDetector", () => {
-  it("accepts modern SEB user agents and validates provided Browser Exam Keys", () => {
+  it("accepts modern SEB user agents", () => {
     const detector = new SebDetector();
     const request = requestWithHeaders({ "user-agent": "Mozilla/5.0 SafeExamBrowser" });
 
-    expect(detector.isRequestFromSeb(request, { browserExamKey: "bek-1" })).toBe(true);
-    expect(detector.validateBrowserExamKey("bek-1", "bek-1")).toBe(true);
-    expect(detector.validateBrowserExamKey("wrong", "bek-1")).toBe(false);
+    expect(detector.isRequestFromSeb(request)).toBe(true);
   });
 
-  it("does not reject SEB requests only because Browser Exam Key differs when Config Key proof headers exist", () => {
+  it("accepts Config Key proof headers as SEB signals", () => {
     const detector = new SebDetector();
     const request = requestWithHeaders({
-      "user-agent": "Mozilla/5.0 SafeExamBrowser",
-      "x-safeexambrowser-configkeyhash": "hash-from-seb",
-      "x-safeexambrowser-browserexamkey": "browser-key-from-generated-config"
+      "user-agent": "Chrome",
+      "x-safeexambrowser-configkeyhash": "hash-from-seb"
     });
 
-    expect(detector.isRequestFromSeb(request, { browserExamKey: "legacy-random-browser-key" })).toBe(true);
+    expect(detector.isRequestFromSeb(request)).toBe(true);
   });
 
   it("rejects non-SEB requests", () => {

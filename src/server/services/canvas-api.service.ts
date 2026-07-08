@@ -174,14 +174,6 @@ export class CanvasApiService {
     return true;
   }
 
-  async getSessionToken(userId: string, targetUrl: string): Promise<string | null> {
-    const data = await this.request<{ session_url?: string }>(
-      userId,
-      `${this.getCanvasApiBaseUrl()}/login/session_token?return_to=${encodeURIComponent(targetUrl)}`
-    );
-    return data.session_url || null;
-  }
-
   async hasAccessToken(userId: string): Promise<boolean> {
     return !!(await this.getAccessToken(userId));
   }

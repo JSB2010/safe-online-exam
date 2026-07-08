@@ -1,4 +1,4 @@
-import { createHash, randomInt, randomUUID } from "node:crypto";
+import { randomInt } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import type {
   AssessmentRecord,
@@ -95,14 +95,6 @@ export class AssessmentService {
     return (await this.refreshCourseContent(courseId, userId)).classicQuizzes;
   }
 
-  async getAllContentForCourse(courseId: string, userId: string): Promise<ContentItem[]> {
-    try {
-      return (await this.refreshCourseContent(courseId, userId)).contentItems;
-    } catch {
-      return this.getCachedContentForCourse(courseId);
-    }
-  }
-
   async getCachedContentForCourse(courseId: string): Promise<ContentItem[]> {
     return (await this.getAssessmentRecordsForCourse(courseId)).map(assessmentToContentItem);
   }
@@ -115,15 +107,6 @@ export class AssessmentService {
   async getContentItem(contentId: string): Promise<ContentItem | null> {
     const record = await this.getAssessmentRecord(contentId);
     return record ? assessmentToContentItem(record) : null;
-  }
-
-  async saveContentItem(content: ContentItem): Promise<ContentItem> {
-    const existing = await this.getAssessmentRecord(content.id);
-    const saved = await this.repositories.value.assessments.save(
-      content.id,
-      contentItemToAssessmentRecord(content, existing)
-    );
-    return assessmentToContentItem(saved);
   }
 
   async getSebSettingForQuiz(quizId: string): Promise<QuizSebSetting | null> {
@@ -238,8 +221,7 @@ export class AssessmentService {
       startPassword: normalizeBlank(request.startPassword),
       usesCourseDefaults: request.usesCourseDefaults === true,
       quitPasswordOverride: request.quitPasswordOverride === true,
-      startPasswordOverride: request.startPasswordOverride === true,
-      browserExamKey: existing?.browserExamKey || generateBrowserExamKey()
+      startPasswordOverride: request.startPasswordOverride === true
     });
   }
 
@@ -264,7 +246,6 @@ export class AssessmentService {
           enabled: true,
           accessCode,
           configKey: null,
-          browserExamKey: existing?.browserExamKey || generateBrowserExamKey(),
           ssoDomains: existing?.ssoDomains || [],
           educationalToolDomains: existing?.educationalToolDomains || [],
           customDomains: existing?.customDomains || [],
@@ -316,10 +297,6 @@ export function generateAccessCode(length = 16): string {
     value += chars[randomInt(chars.length)];
   }
   return value;
-}
-
-export function generateBrowserExamKey(): string {
-  return createHash("sha256").update(`SEB${randomUUID()}${Date.now()}`, "utf8").digest("hex");
 }
 
 function compareAssessmentRecords(left: AssessmentRecord, right: AssessmentRecord): number {

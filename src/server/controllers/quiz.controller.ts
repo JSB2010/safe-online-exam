@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { ContentItem, ContentSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
+import type { ContentSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
@@ -14,7 +14,7 @@ import {
 import { AppConfig } from "../config/app-config.js";
 import { verifyActionToken } from "../http/action-token.js";
 import { apiError, noUserSession } from "../http/api-error.js";
-import { AssessmentService, generateAccessCode, generateBrowserExamKey } from "../services/assessment.service.js";
+import { AssessmentService, generateAccessCode } from "../services/assessment.service.js";
 import {
   type CanvasApiPermissionError,
   CanvasApiService,
@@ -22,7 +22,6 @@ import {
   isCanvasApiPermissionError
 } from "../services/canvas-api.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
-import { DeepLinkModuleService } from "../services/deep-link-module.service.js";
 
 @Controller("/api/quizzes")
 export class QuizController {
@@ -30,8 +29,7 @@ export class QuizController {
     private readonly config: AppConfig,
     private readonly assessments: AssessmentService,
     private readonly canvasApi: CanvasApiService,
-    private readonly courseSettings: CourseSettingsService,
-    private readonly deepLinkModules: DeepLinkModuleService
+    private readonly courseSettings: CourseSettingsService
   ) {}
 
   @Post("/course/:courseId/refresh")
@@ -166,8 +164,7 @@ export class QuizController {
             quitPasswordOverride: body.quitPasswordOverride === true,
             startPasswordOverride: body.startPasswordOverride === true,
             sebRequired: true,
-            enabled: setting.enabled,
-            browserExamKey: setting.browserExamKey || generateBrowserExamKey()
+            enabled: setting.enabled
           },
           defaults
         )
@@ -196,8 +193,7 @@ export class QuizController {
               quitPasswordOverride: body.quitPasswordOverride === true,
               startPasswordOverride: body.startPasswordOverride === true,
               sebRequired: true,
-              enabled: setting?.enabled ?? true,
-              browserExamKey: setting?.browserExamKey || generateBrowserExamKey()
+              enabled: setting?.enabled ?? true
             },
             defaults
           )
@@ -259,14 +255,9 @@ export class QuizController {
         userId,
         await this.courseSettings.getDefaults(courseId)
       );
-      const quiz = await this.assessments.getQuiz(quizId);
-      const moduleItemUpdated = quiz
-        ? await this.deepLinkModules.createOrUpdateModuleItemForQuiz(courseId, quiz, userId, true)
-        : false;
       return {
         success: true,
         message: "SEB enabled successfully with access code enforcement",
-        moduleItemUpdated,
         setting
       };
     } catch (error) {
@@ -314,11 +305,7 @@ export class QuizController {
         return { success: true, message: "SEB disabled successfully", setting };
       }
       const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
-      const quiz = await this.assessments.getQuiz(quizId);
-      const moduleItemRestored = quiz
-        ? await this.deepLinkModules.createOrUpdateModuleItemForQuiz(courseId, quiz, userId, false)
-        : false;
-      return { success: true, message: "SEB disabled successfully", moduleItemRestored, setting };
+      return { success: true, message: "SEB disabled successfully", setting };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
         return canvasAuthorizationRequired(courseId, userId);
@@ -415,8 +402,7 @@ export class QuizController {
       ssoDomains: setting?.ssoDomains || [],
       educationalToolDomains: setting?.educationalToolDomains || [],
       customDomains: setting?.customDomains || [],
-      externalTools: normalizeExternalTools(setting?.externalTools),
-      allowedSites: setting?.allowedSites
+      externalTools: normalizeExternalTools(setting?.externalTools)
     };
   }
 
@@ -436,18 +422,10 @@ export class QuizController {
           sebRequired: true,
           enabled: true,
           accessCode,
-          configKey: null,
-          externalToolUrl: `${this.config.getRequiredToolUrl()}/seb/launch/${contentId}`,
-          browserExamKey: setting.browserExamKey || generateBrowserExamKey()
+          configKey: null
         },
         await this.courseSettings.getDefaults(courseId)
       )
-    );
-    await this.deepLinkModules.createOrUpdateModuleItemForContent(
-      courseId,
-      buildNewQuizContent(contentId, courseId, assignmentId, saved),
-      userId,
-      true
     );
     return saved;
   }
@@ -467,15 +445,8 @@ export class QuizController {
       sebRequired: false,
       enabled: false,
       accessCode: null,
-      configKey: null,
-      externalToolUrl: null
+      configKey: null
     });
-    await this.deepLinkModules.createOrUpdateModuleItemForContent(
-      courseId,
-      buildNewQuizContent(contentId, courseId, assignmentId, saved),
-      userId,
-      false
-    );
     return saved;
   }
 
@@ -486,25 +457,6 @@ export class QuizController {
   ): Promise<ContentSebSetting> {
     return this.assessments.getOrCreateContentSebSetting(contentId, courseId, assignmentId);
   }
-}
-
-function buildNewQuizContent(
-  contentId: string,
-  courseId: string,
-  assignmentId: string,
-  setting: ContentSebSetting
-): ContentItem {
-  return {
-    id: contentId,
-    courseId,
-    canvasId: assignmentId,
-    assignmentId,
-    contentType: "NEW_QUIZ",
-    title: "New Quiz",
-    htmlUrl: setting.htmlUrl || null,
-    canvasLaunchUrl: setting.canvasLaunchUrl || null,
-    externalToolUrl: setting.externalToolUrl || null
-  };
 }
 
 function userIdFromRequest(request: Request, config: AppConfig): string | undefined {
@@ -555,7 +507,7 @@ function canvasPermissionDenied(error: CanvasApiPermissionError): Record<string,
     success: false,
     error_code: "CANVAS_PERMISSION_DENIED",
     message:
-      "Canvas denied this update. The saved Canvas authorization is valid, but Canvas rejected the write request. Confirm the Canvas API Developer Key allows quiz and module write scopes, then reauthorize Canvas.",
+      "Canvas denied this update. The saved Canvas authorization is valid, but Canvas rejected the write request. Confirm the Canvas API Developer Key allows quiz access-code write scopes, then reauthorize Canvas.",
     canvasStatus: error.status,
     canvasPath: safeCanvasPath(error.url),
     canvasMessage: summarizeCanvasMessage(error.responseBody)

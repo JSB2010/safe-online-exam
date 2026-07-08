@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { exportJWK, generateKeyPair, importJWK, jwtVerify, type JWK, SignJWT } from "jose";
+import { exportJWK, generateKeyPair, importJWK, type JWK } from "jose";
 import { AppConfig } from "../config/app-config.js";
 
 @Injectable()
@@ -25,39 +24,6 @@ export class JwkService {
         }
       ]
     };
-  }
-
-  async createClientAssertion(clientId: string, issuer: string, audience: string): Promise<string> {
-    await this.ensureKey();
-    const now = Math.floor(Date.now() / 1000);
-    return new SignJWT({
-      sub: clientId,
-      jti: randomUUID()
-    })
-      .setProtectedHeader({ alg: "RS256", typ: "JWT", kid: this.keyId })
-      .setIssuer(issuer.replace(/\/+$/u, ""))
-      .setAudience(audience)
-      .setIssuedAt(now)
-      .setExpirationTime(now + 300)
-      .sign(this.key!);
-  }
-
-  async signDeepLinkingJwt(payload: Record<string, unknown>, issuer: string, audience: string): Promise<string> {
-    await this.ensureKey();
-    const now = Math.floor(Date.now() / 1000);
-    return new SignJWT(payload)
-      .setProtectedHeader({ alg: "RS256", typ: "JWT", kid: this.keyId })
-      .setIssuer(issuer)
-      .setAudience(audience)
-      .setIssuedAt(now)
-      .setExpirationTime(now + 600)
-      .sign(this.key!);
-  }
-
-  async verifyOwnJwt(token: string): Promise<Record<string, unknown>> {
-    await this.ensureKey();
-    const { payload } = await jwtVerify(token, this.key!);
-    return payload;
   }
 
   private async ensureKey(): Promise<void> {

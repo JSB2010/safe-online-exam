@@ -109,7 +109,6 @@ Use the Cloud Run `TOOL_URL` value for Canvas LTI settings:
 - Target link URI: `${TOOL_URL}/lti/launch`
 - JWKS URL: `${TOOL_URL}/.well-known/jwks.json`
 - OAuth redirect URI: `${TOOL_URL}/api/oauth2callback`
-- Deep linking URL: `${TOOL_URL}/lti/deeplink/select`
 
 The detector script URL is:
 
@@ -134,7 +133,7 @@ Then verify in Canvas:
 2. OAuth status prompts for Canvas authorization if no token exists.
 3. First authorization for a course opens the setup wizard and saves default password, URL, and tool settings.
 4. Refreshing a course lists Classic Quizzes and New Quizzes.
-5. Enabling SEB applies course defaults, sets the Canvas access code, and rewrites a module item when one exists.
+5. Enabling SEB applies course defaults and sets the Canvas access code.
 6. A student launch shows only SEB-enabled assessments with SEB launch buttons.
 7. Downloading a `.seb` file stores a Config Key.
 8. If an exam start password is configured, SEB prompts for it before opening Canvas.

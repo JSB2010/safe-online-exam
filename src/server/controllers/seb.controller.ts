@@ -14,7 +14,6 @@ import { apiError } from "../http/api-error.js";
 import { absoluteUrl, sebSchemeUrl } from "../http/request-url.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 import { AssessmentService } from "../services/assessment.service.js";
-import { CanvasApiService } from "../services/canvas-api.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
 import { SebAccessProofService } from "../services/seb-access-proof.service.js";
@@ -29,7 +28,6 @@ export class SebController {
     private readonly ltiService: LtiService,
     private readonly ltiState: LtiStateService,
     private readonly assessments: AssessmentService,
-    private readonly canvasApi: CanvasApiService,
     private readonly sebDetector: SebDetector,
     private readonly sebConfig: SebConfigurationService,
     private readonly configKey: SebConfigKeyService,
@@ -162,45 +160,6 @@ export class SebController {
     response.redirect(`/lti/login?${params.toString()}`);
   }
 
-  @Get("/seb/redirect/:quizId")
-  async redirectQuiz(
-    @Req() request: Request,
-    @Res() response: Response,
-    @Param("quizId") quizId: string,
-    @Query("userId") userId?: string
-  ): Promise<void> {
-    const quiz = await this.assessments.getQuiz(quizId);
-    if (!quiz) {
-      response.status(404).send(renderFallbackHtml("Quiz Not Found", "<h1>Quiz not found</h1>"));
-      return;
-    }
-    const setting = await this.assessments.getSebSettingForQuiz(quizId);
-    if (!setting?.sebRequired) {
-      response.redirect(quiz.htmlUrl || this.config.getCanvasDomain());
-      return;
-    }
-    if (this.sebDetector.isRequestFromSeb(request, setting)) {
-      const resolvedUserId = userId || request.session?.canvas_user_id;
-      const sessionUrl = resolvedUserId
-        ? await this.canvasApi.getSessionToken(resolvedUserId, quiz.htmlUrl || "")
-        : null;
-      response.redirect(sessionUrl || quiz.htmlUrl || this.config.getCanvasDomain());
-      return;
-    }
-    response.send(
-      renderAppShell({
-        title: "Safe Exam Browser Required",
-        view: "seb-required",
-        initialData: {
-          courseId: quiz.courseId,
-          quizId,
-          configUrl: `/seb/config/${quiz.courseId}/${quizId}.seb`,
-          sebConfigUrl: `/seb/config/${quiz.courseId}/${quizId}.seb`
-        }
-      })
-    );
-  }
-
   @Get("/seb/config/:quizId")
   async legacyConfigRedirect(@Res() response: Response, @Param("quizId") quizId: string): Promise<void> {
     const quiz = await this.assessments.getQuiz(quizId);
@@ -209,32 +168,6 @@ export class SebController {
       return;
     }
     response.redirect(302, `/seb/config/${quiz.courseId}/${quizId}.seb`);
-  }
-
-  @Post("/seb/validate")
-  async validateSeb(@Req() request: Request, @Body() body: Record<string, string>): Promise<Record<string, unknown>> {
-    const quizId = body.quiz_id;
-    const browserExamKey = body.browser_exam_key;
-    if (!quizId || !browserExamKey) {
-      return { valid: false, error: "Missing required parameters" };
-    }
-    const setting = await this.assessments.getSebSettingForQuiz(quizId);
-    if (!setting) {
-      return { valid: false, error: "No SEB settings found for quiz" };
-    }
-    const valid = this.sebDetector.validateBrowserExamKey(browserExamKey, setting.browserExamKey);
-    return valid ? { valid: true } : { valid: false, error: "Invalid Browser Exam Key" };
-  }
-
-  @Get("/seb/check")
-  async checkSeb(@Req() request: Request, @Query("quizId") quizId: string): Promise<Record<string, unknown>> {
-    const setting = await this.assessments.getSebSettingForQuiz(quizId);
-    const sebRequired = !!setting?.sebRequired;
-    return {
-      seb_required: sebRequired,
-      using_seb: sebRequired ? this.sebDetector.isRequestFromSeb(request, setting) : true,
-      ...(sebRequired ? { config_url: `/seb/config/${quizId}` } : {})
-    };
   }
 
   @Get("/api/seb/tools/:courseId/:quizId")
@@ -387,29 +320,6 @@ export class SebController {
           initialData: { courseId, quizId, quitUrl, legacyQuitUrl: quitUrl }
         })
       );
-  }
-
-  @Get("/seb/exit/api/:courseId/:quizId/urls")
-  async exitUrls(
-    @Req() request: Request,
-    @Param("courseId") courseId: string,
-    @Param("quizId") quizId: string
-  ): Promise<Record<string, unknown>> {
-    const setting = await this.resolveSebSetting(courseId, quizId);
-    return {
-      exitPageUrl: absoluteUrl(request, `/seb/exit/${courseId}/${quizId}`, this.config.getApplicationBaseUrl()),
-      quitUrl: absoluteUrl(
-        request,
-        `/seb/exit/quit/${courseId}/${quitPathId(quizId)}`,
-        this.config.getApplicationBaseUrl()
-      ),
-      manualQuitUrl: absoluteUrl(
-        request,
-        `/seb/exit/manual/${courseId}/${quitPathId(quizId)}`,
-        this.config.getApplicationBaseUrl()
-      ),
-      sebRequired: !!setting?.sebRequired
-    };
   }
 
   private async handleSebLaunch(

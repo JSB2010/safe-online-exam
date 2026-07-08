@@ -219,7 +219,6 @@ function controllerWithSetting(setting: Record<string, unknown>) {
       })
     } as any,
     {} as any,
-    {} as any,
     new SebConfigurationService(new AppConfig()),
     new SebConfigKeyService(),
     proofService

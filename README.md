@@ -2,7 +2,7 @@
 
 A TypeScript rewrite of the Canvas Safe Exam Browser integration. The app is a NestJS service with a React/Vite UI that runs on the existing Google Cloud Run services and uses the existing Firestore databases.
 
-The tool supports Canvas LTI 1.3 launches, Canvas OAuth for instructor API actions, Classic Quiz and New Quiz SEB enforcement, generated `.seb` configuration downloads, SEB Config Key proof, access-code injection, module item rewriting, and SEB exit pages.
+The tool supports Canvas LTI 1.3 launches, Canvas OAuth for instructor API actions, Classic Quiz and New Quiz SEB enforcement, generated `.seb` configuration downloads, SEB Config Key proof, access-code injection, and SEB exit pages.
 
 ## Current Stack
 
@@ -116,7 +116,7 @@ Useful optional variables:
 - `CANVAS_API_BASE_URL`, default `${CANVAS_DOMAIN}/api/v1`
 - `CANVAS_REDIRECT_URI`, default `${TOOL_URL}/api/oauth2callback`
 - `LTI_DEPLOYMENT_ID`
-- `APP_DEBUG_ENABLED`, the single debug/development toggle for diagnostic endpoints, detector console logs, detector Cloud Run traces, and detector script cache behavior. It defaults on outside prod and off in prod.
+- `APP_DEBUG_ENABLED`, the single debug/development toggle for detector console logs, detector Cloud Run traces, and detector script cache behavior. It defaults on outside prod and off in prod.
 - `SEB_QUIT_PASSWORD`
 - `SEB_REQUIRED_DOMAINS`
 - `SEB_CONFIG_ENCRYPTION_ENABLED`, default `true`. Set to `false` to disable certificate wrapping; instructor-configured exam start passwords still use SEB password encryption.
@@ -153,10 +153,9 @@ Important URLs:
 - Target link URI: `${TOOL_URL}/lti/launch`
 - Redirect URIs: `${TOOL_URL}/lti/launch` and `${TOOL_URL}/api/oauth2callback`
 - Public JWKS URL: `${TOOL_URL}/.well-known/jwks.json`
-- Deep link select URL: `${TOOL_URL}/lti/deeplink/select`
 - Detector script: `${TOOL_URL}/js/canvas-seb-detector.js`
 
-Required Canvas API OAuth scopes depend on the account configuration, but the tool needs enough access to read course content, read quizzes/assignments/modules, update quiz access codes, and create or update module items.
+Required Canvas API OAuth scopes depend on the account configuration, but the tool needs enough access to read course content, read quizzes/assignments, and update quiz access codes.
 
 ## Core Routes
 
@@ -172,9 +171,6 @@ LTI and OAuth:
 - `GET|POST /lti/login`
 - `GET|POST /lti/launch`
 - `GET /lti/config`
-- `GET /lti/deeplink/select`
-- `POST /lti/deeplink/process`
-- `POST /lti/deeplink/update-seb`
 - `GET /api/oauth2authorize`
 - `GET /api/oauth2reauthorize`
 - `GET /api/oauth2callback`
@@ -200,9 +196,6 @@ SEB/student flows:
 - `GET /seb/config/:courseId/:contentId.seb`
 - `GET /seb/launch/:contentId`
 - `POST /seb/launch/:contentId`
-- `GET /seb/redirect/:quizId`
-- `POST /seb/validate`
-- `GET /seb/check`
 - `POST /api/seb/access-proof/:courseId/:quizId`
 - `GET /api/seb/access-code/:courseId/:quizId`
 - `GET /api/seb/tools/:courseId/:quizId`
@@ -236,7 +229,7 @@ See [docs/deployment.md](docs/deployment.md) for required secrets and deployment
 
 ## Testing
 
-`npm test` runs fast unit and service regression tests. `npm run test:coverage` enforces the current coverage floor. The suite covers shared model parsing, config loading, LTI state, JWK generation, Canvas API behavior, repositories, SEB configuration generation, SEB Config Key proof, detector behavior, content and quiz services, module item rewrites, static detector serving, and HTTP helpers.
+`npm test` runs fast unit and service regression tests. `npm run test:coverage` enforces the current coverage floor. The suite covers shared model parsing, config loading, LTI state, JWK generation, Canvas API behavior, repositories, SEB configuration generation, SEB Config Key proof, detector behavior, content and quiz services, static detector serving, and HTTP helpers.
 
 Browser verification uses Playwright against a built local server for the React app shell and responsive UI checks. See [docs/testing.md](docs/testing.md).
 

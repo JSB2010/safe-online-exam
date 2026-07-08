@@ -176,7 +176,7 @@ describe("StaticJsController", () => {
     expect(response.headers.get("expires")).toBe("0");
     expect(script).toContain("const SERVER_DEBUG_ENABLED = true;");
     expect(script).not.toContain("__SEB_DEBUG_ENABLED__");
-    expect(script).not.toContain("/api/debug/debug-status");
+    expect(script).toContain("/api/debug/canvas-detector-trace");
   });
 
   it("serves a cacheable detector when app debug mode is disabled", async () => {

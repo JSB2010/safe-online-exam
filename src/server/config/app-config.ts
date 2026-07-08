@@ -15,7 +15,6 @@ export interface AppConfigSnapshot {
   lti: {
     issuer: string;
     keySetUrl: string;
-    tokenUrl: string;
     authUrl: string;
     clientId?: string;
     deploymentId?: string;
@@ -32,7 +31,6 @@ export interface AppConfigSnapshot {
   security: {
     sessionSecret: string;
     stateEncryptionKey: string;
-    adminPassword?: string;
     debugEnabled: boolean;
   };
   seb: {
@@ -120,7 +118,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
     lti: {
       issuer: firstPresent(env.LTI_ISSUER, "https://canvas.instructure.com")!,
       keySetUrl: firstPresent(env.LTI_KEY_SET_URL, "https://sso.canvaslms.com/api/lti/security/jwks")!,
-      tokenUrl: firstPresent(env.LTI_TOKEN_URL, "https://sso.canvaslms.com/login/oauth2/token")!,
       authUrl: firstPresent(env.LTI_AUTH_URL, "https://sso.canvaslms.com/api/lti/authorize_redirect")!,
       clientId: firstPresent(env.LTI_CLIENT_ID, env.DEV_LTI_CLIENT_ID, env.PROD_LTI_CLIENT_ID, env.lti_client_id),
       deploymentId: firstPresent(env.LTI_DEPLOYMENT_ID, env.DEPLOYMENT_ID),
@@ -144,7 +141,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       sessionSecret: firstPresent(env.SESSION_SECRET, env.ADMIN_PASSWORD, "seb-canvas-session-dev-secret")!,
       stateEncryptionKey:
         firstPresent(env.STATE_ENCRYPTION_KEY, profile === "prod" ? undefined : "seb-canvas-dev-state-key") || "",
-      adminPassword: firstPresent(env.ADMIN_PASSWORD),
       debugEnabled
     },
     seb: {

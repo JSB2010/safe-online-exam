@@ -87,8 +87,6 @@ export function App() {
           message={String(bootstrap.data.error || "Canvas did not authorize access.")}
         />
       );
-    case "deep-link-select":
-      return <DeepLinkSelect data={bootstrap.data} />;
     case "student":
       return <StudentDashboard data={bootstrap.data} />;
     default:
@@ -1105,10 +1103,7 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
     <MessagePage
       icon={<KeyRound />}
       title="Set Up Safe Exam Browser"
-      message={
-        data.message ||
-        "Connect Canvas so SEB Canvas LTI can read course quizzes, enable access codes, and update quiz launch links."
-      }
+      message={data.message || "Connect Canvas so SEB Canvas LTI can read course quizzes and enable access codes."}
       action={
         <a className="button primary" href={data.authUrl}>
           <KeyRound size={16} /> Connect Canvas
@@ -1176,34 +1171,6 @@ function SebQuitPage({ data }: { data: Record<string, any> }) {
         </a>
       }
     />
-  );
-}
-
-function DeepLinkSelect({ data }: { data: Record<string, any> }) {
-  const quizzes: QuizView[] = data.quizzes || [];
-  return (
-    <main className="message-shell wide">
-      <section className="message-panel">
-        <div className="message-icon">
-          <Shield size={34} />
-        </div>
-        <h1>Choose Canvas Links</h1>
-        <form method="post" action="/lti/deeplink/process" className="deeplink-list">
-          {quizzes.map((quiz) => (
-            <label key={quiz.id} className="check-row">
-              <input type="checkbox" name={`quiz_${quiz.id}`} />
-              <span>{quiz.title}</span>
-              <label className="inline-check">
-                <input type="checkbox" name={`seb_${quiz.id}`} /> Require SEB
-              </label>
-            </label>
-          ))}
-          <button className="button primary" type="submit">
-            Create links
-          </button>
-        </form>
-      </section>
-    </main>
   );
 }
 

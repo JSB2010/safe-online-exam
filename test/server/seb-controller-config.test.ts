@@ -44,7 +44,6 @@ describe("SEB config downloads", () => {
           saveQuizSebSetting: saveSebSetting
         } as any,
         {} as any,
-        {} as any,
         new SebConfigurationService(new AppConfig()),
         new SebConfigKeyService(),
         new SebAccessProofService()
@@ -100,7 +99,6 @@ describe("SEB config downloads", () => {
           saveContentSebSetting: saveSebSetting
         } as any,
         {} as any,
-        {} as any,
         new SebConfigurationService(new AppConfig()),
         new SebConfigKeyService(),
         new SebAccessProofService()
@@ -151,7 +149,6 @@ describe("SEB config downloads", () => {
             }),
             saveQuizSebSetting: saveSebSetting
           } as any,
-          {} as any,
           {} as any,
           new SebConfigurationService(new AppConfig()),
           new SebConfigKeyService(),
@@ -211,7 +208,6 @@ describe("SEB config downloads", () => {
           }),
           saveQuizSebSetting: saveSebSetting
         } as any,
-        {} as any,
         {} as any,
         new SebConfigurationService(new AppConfig()),
         new SebConfigKeyService(),

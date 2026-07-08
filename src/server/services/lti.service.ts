@@ -12,7 +12,6 @@ const LTI_CLAIMS = {
   context: "https://purl.imsglobal.org/spec/lti/claim/context",
   roles: "https://purl.imsglobal.org/spec/lti/claim/roles",
   custom: "https://purl.imsglobal.org/spec/lti/claim/custom",
-  deepLinkingSettings: "https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings",
   toolPlatform: "https://purl.imsglobal.org/spec/lti/claim/tool_platform",
   ags: "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint"
 } as const;
@@ -85,7 +84,6 @@ export function launchDataFromPayload(payload: JWTPayload): LtiLaunchData {
     resourceLinkTitle: asString(resourceLink.title),
     resourceLinkDescription: asString(resourceLink.description),
     custom: stringifyRecord(custom),
-    deepLinkingSettings: asRecord(payload[LTI_CLAIMS.deepLinkingSettings]),
     platform: asRecord(payload[LTI_CLAIMS.toolPlatform]),
     ags
   };

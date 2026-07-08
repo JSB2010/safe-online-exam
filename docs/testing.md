@@ -32,12 +32,11 @@ The current automated tests cover:
 - Firestore/in-memory repository semantics.
 - Course-level SEB defaults and structured URL rule normalization.
 - Content discovery and New Quiz SEB setting behavior.
-- Quiz service enable/disable, access-code, and Browser Exam Key behavior.
-- Deep-link module item rewrite behavior.
+- Quiz service enable/disable and access-code behavior.
 - SEB configuration plist generation, canonical URL filter keys, and allowed-domain policy.
 - SEB certificate-encrypted `pkhs` download wrapping, password-encrypted `pswd` wrapping, and plaintext fallback.
 - SEB Config Key and access-proof token behavior.
-- SEB request detection and Browser Exam Key validation.
+- SEB request detection.
 - Static detector script serving, safe base URL/debug injection, cache headers, and minified production asset selection.
 - Canvas detector jsdom behavior for quiz ID extraction, access-code proof/fill, final submit redirects, debug logging, server trace callbacks, and external exam tools.
 - App shell escaping, forwarded URL handling, CORS allow-listing, and API error bodies.

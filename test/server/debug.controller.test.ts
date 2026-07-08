@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/server/config/app-config.js";
 import { DebugController } from "../../src/server/controllers/debug.controller.js";
-import type { AssessmentService } from "../../src/server/services/assessment.service.js";
-import type { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
 import type { DetectorTraceService } from "../../src/server/services/detector-trace.service.js";
 
 describe("DebugController", () => {
@@ -38,5 +36,5 @@ function createController(debugEnabled: boolean, trace: DetectorTraceService): D
     }
   } as unknown as AppConfig;
 
-  return new DebugController(config, {} as CanvasApiService, {} as AssessmentService, trace);
+  return new DebugController(config, trace);
 }

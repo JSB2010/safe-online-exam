@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This service connects Canvas LMS to Safe Exam Browser (SEB). Instructors launch the tool from Canvas, authorize Canvas API access, choose which quizzes require SEB, and the service updates Canvas access codes and module links. Students receive SEB configuration files and are redirected back into Canvas only after SEB can prove it is using the generated configuration.
+This service connects Canvas LMS to Safe Exam Browser (SEB). Instructors launch the tool from Canvas, authorize Canvas API access, choose which quizzes require SEB, and the service updates Canvas access codes. Students receive SEB configuration files and are redirected back into Canvas only after SEB can prove it is using the generated configuration.
 
 ## Framework Choice
 
@@ -81,13 +81,13 @@ The public JWKS endpoint is `/.well-known/jwks.json`. In production the private 
 
 ## Canvas OAuth Flow
 
-LTI launch proves Canvas identity but does not provide the Canvas API token needed to update quizzes and modules. Instructor API actions use a separate Canvas OAuth2 flow:
+LTI launch proves Canvas identity but does not provide the Canvas API token needed to read course content or update quiz access codes. Instructor API actions use a separate Canvas OAuth2 flow:
 
 1. `/api/oauth2authorize` creates an encrypted state and redirects to Canvas.
 2. Canvas redirects to `/api/oauth2callback`.
 3. The service exchanges the code for access/refresh tokens.
 4. Tokens are stored in Firestore in `canvasOAuthTokens`.
-5. `CanvasApiService` refreshes expiring access tokens with the stored refresh token before quiz, New Quiz, assignment, and module calls.
+5. `CanvasApiService` refreshes expiring access tokens with the stored refresh token before quiz, New Quiz, and assignment calls.
 6. If Canvas rejects an access token with `401`, the service refreshes once and retries the API call before asking the instructor to reauthorize.
 
 ## SEB Enforcement Flow
@@ -97,14 +97,13 @@ LTI launch proves Canvas identity but does not provide the Canvas API token need
 3. Canvas is updated:
    - Classic Quiz: quiz access code via Canvas quiz API.
    - New Quiz: New Quiz API access code endpoint.
-4. The SEB setting is saved with `sebRequired`, `enabled`, `accessCode`, and a Browser Exam Key.
-5. Module items are rewritten to point to the tool launch where possible.
-6. Student launches the assessment.
-7. Non-SEB browsers receive a React page that offers the `.seb` configuration download.
-8. Downloading the config uses a canonical Canvas start URL, generates the plaintext config, persists a Config Key from that plaintext, and returns a certificate-encrypted `pkhs` `.seb` file unless certificate wrapping is explicitly disabled.
-9. If an exam start password is configured, SEB prompts for that password before opening the exam config.
-10. SEB opens the configured Canvas URL.
-11. The detector script validates strict Config Key proof and retrieves the access code through a one-time proof token.
+4. The SEB setting is saved with `sebRequired`, `enabled`, and `accessCode`.
+5. Student launches the assessment.
+6. Non-SEB browsers receive a React page that offers the `.seb` configuration download.
+7. Downloading the config uses a canonical Canvas start URL, generates the plaintext config, persists a Config Key from that plaintext, and returns a certificate-encrypted `pkhs` `.seb` file unless certificate wrapping is explicitly disabled.
+8. If an exam start password is configured, SEB prompts for that password before opening the exam config.
+9. SEB opens the configured Canvas URL.
+10. The detector script validates strict Config Key proof and retrieves the access code through a one-time proof token.
 
 Course defaults are stored per Canvas course. They include an optional exam start password, a default exit password, structured allowed URL rules, and external exam tools. Enabling SEB for a quiz applies those defaults unless the quiz already has an override. Per-quiz settings can reset to defaults. URL rules support exact URLs, whole-domain entries, and an advanced regex option while preserving legacy domain arrays for older settings.
 
@@ -114,7 +113,7 @@ Generated `.seb` downloads are certificate-encrypted by default using SEB macOS-
 
 Certificate and password encryption harden the file against casual editing, but the server-side security boundary remains strict Config Key proof before releasing the hidden Canvas access code. Any SEB-affecting setting change clears the stored Config Key so students must download a fresh config before access-code proof can succeed. Changing the exam start password rotates `configKeySalt`, which makes older passwordless or differently passworded configs fail Config Key validation. Broad allowlist patterns and effectively global regex rules are rejected before config generation.
 
-`APP_DEBUG_ENABLED` is the single debug/development toggle for the service. It enables diagnostic endpoints, detector console logging, sanitized detector trace callbacks to `/api/debug/canvas-detector-trace`, and no-store detector script serving. With debug disabled, the detector callback is dormant and the same public detector URLs serve the minified asset with cache headers.
+`APP_DEBUG_ENABLED` is the single debug/development toggle for the service. It enables detector console logging, sanitized detector trace callbacks to `/api/debug/canvas-detector-trace`, and no-store detector script serving. With debug disabled, the detector callback is dormant and the same public detector URLs serve the minified asset with cache headers.
 
 ## Security Notes
 

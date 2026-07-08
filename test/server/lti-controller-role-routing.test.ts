@@ -31,7 +31,6 @@ describe("LtiController role routing", () => {
       } as any,
       {} as any,
       {} as any,
-      {} as any,
       assessments as any,
       canvasApi as any,
       {

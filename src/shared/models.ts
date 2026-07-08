@@ -54,7 +54,6 @@ export interface AssessmentSebState {
   required: boolean;
   enabled: boolean;
   accessCode?: string | null;
-  browserExamKey?: string | null;
   configKey?: string | null;
   configKeySalt?: string | null;
   quitPassword?: string | null;
@@ -67,7 +66,6 @@ export interface AssessmentSebState {
   customDomains: string[];
   urlRules: SebUrlRule[];
   externalTools: ExternalToolConfig[];
-  deepLinkUrl?: string | null;
 }
 
 export interface AssessmentRecord {
@@ -88,9 +86,7 @@ export interface QuizSebSetting {
   sebRequired: boolean;
   enabled: boolean;
   accessCode?: string | null;
-  browserExamKey?: string | null;
   configKey?: string | null;
-  allowedSites?: string | null;
   externalToolUrl?: string | null;
   ssoDomains: string[];
   educationalToolDomains: string[];
@@ -98,8 +94,6 @@ export interface QuizSebSetting {
   urlRules?: SebUrlRule[] | null;
   externalTools: ExternalToolConfig[];
   canvasDomain?: string | null;
-  canvasAssignmentId?: string | null;
-  deepLinkUrl?: string | null;
   quitPassword?: string | null;
   startPassword?: string | null;
   configKeySalt?: string | null;
@@ -124,10 +118,8 @@ export interface ContentSebSetting {
   sebRequired: boolean;
   enabled: boolean;
   accessCode?: string | null;
-  browserExamKey?: string | null;
   configKey?: string | null;
   externalToolUrl?: string | null;
-  deepLinkUrl?: string | null;
   ssoDomains: string[];
   educationalToolDomains: string[];
   customDomains: string[];
@@ -204,7 +196,6 @@ export interface LtiLaunchData {
   resourceLinkTitle?: string | null;
   resourceLinkDescription?: string | null;
   custom?: Record<string, string>;
-  deepLinkingSettings?: Record<string, unknown>;
   platform?: Record<string, unknown>;
   ags?: Record<string, unknown>;
 }
@@ -449,9 +440,7 @@ export function assessmentToQuizSebSetting(record: AssessmentRecord): QuizSebSet
     sebRequired: seb.required,
     enabled: seb.enabled,
     accessCode: seb.accessCode || null,
-    browserExamKey: seb.browserExamKey || null,
     configKey: seb.configKey || null,
-    allowedSites: null,
     externalToolUrl: record.canvas.externalToolUrl || null,
     ssoDomains: seb.ssoDomains,
     educationalToolDomains: seb.educationalToolDomains,
@@ -459,8 +448,6 @@ export function assessmentToQuizSebSetting(record: AssessmentRecord): QuizSebSet
     urlRules: seb.urlRules,
     externalTools: seb.externalTools,
     canvasDomain: null,
-    canvasAssignmentId: null,
-    deepLinkUrl: seb.deepLinkUrl || null,
     quitPassword: seb.quitPassword || null,
     startPassword: seb.startPassword || null,
     configKeySalt: seb.configKeySalt || null,
@@ -488,10 +475,8 @@ export function assessmentToContentSebSetting(record: AssessmentRecord): Content
     sebRequired: seb.required,
     enabled: seb.enabled,
     accessCode: seb.accessCode || null,
-    browserExamKey: seb.browserExamKey || null,
     configKey: seb.configKey || null,
     externalToolUrl: record.canvas.externalToolUrl || null,
-    deepLinkUrl: seb.deepLinkUrl || null,
     ssoDomains: seb.ssoDomains,
     educationalToolDomains: seb.educationalToolDomains,
     customDomains: seb.customDomains,
@@ -900,7 +885,6 @@ function quizSebSettingToAssessmentSebState(setting: QuizSebSetting): Assessment
     required: setting.sebRequired,
     enabled: setting.enabled,
     accessCode: setting.accessCode || null,
-    browserExamKey: setting.browserExamKey || null,
     configKey: setting.configKey || null,
     configKeySalt: setting.configKeySalt || null,
     quitPassword: setting.quitPassword || null,
@@ -912,8 +896,7 @@ function quizSebSettingToAssessmentSebState(setting: QuizSebSetting): Assessment
     educationalToolDomains: setting.educationalToolDomains || [],
     customDomains: setting.customDomains || [],
     urlRules: setting.urlRules || [],
-    externalTools: setting.externalTools || [],
-    deepLinkUrl: setting.deepLinkUrl || null
+    externalTools: setting.externalTools || []
   });
 }
 
@@ -922,7 +905,6 @@ function contentSebSettingToAssessmentSebState(setting: ContentSebSetting): Asse
     required: setting.sebRequired,
     enabled: setting.enabled,
     accessCode: setting.accessCode || null,
-    browserExamKey: setting.browserExamKey || null,
     configKey: setting.configKey || null,
     configKeySalt: setting.configKeySalt || null,
     quitPassword: setting.quitPassword || null,
@@ -934,8 +916,7 @@ function contentSebSettingToAssessmentSebState(setting: ContentSebSetting): Asse
     educationalToolDomains: setting.educationalToolDomains || [],
     customDomains: setting.customDomains || [],
     urlRules: setting.urlRules || [],
-    externalTools: setting.externalTools || [],
-    deepLinkUrl: setting.deepLinkUrl || null
+    externalTools: setting.externalTools || []
   });
 }
 
@@ -946,7 +927,6 @@ function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null)
     required: input?.required === true,
     enabled: input?.enabled === true,
     accessCode: input?.accessCode || null,
-    browserExamKey: input?.browserExamKey || null,
     configKey: input?.configKey || null,
     configKeySalt: input?.configKeySalt || null,
     quitPassword: normalizeOptionalText(input?.quitPassword),
@@ -958,8 +938,7 @@ function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null)
     educationalToolDomains: input?.educationalToolDomains || [],
     customDomains: input?.customDomains || [],
     urlRules: normalizeUrlRules(input?.urlRules),
-    externalTools: normalizeExternalTools(input?.externalTools),
-    deepLinkUrl: input?.deepLinkUrl || null
+    externalTools: normalizeExternalTools(input?.externalTools)
   };
 }
 

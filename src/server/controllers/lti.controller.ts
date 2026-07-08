@@ -15,7 +15,6 @@ import {
   isCanvasApiRequestError
 } from "../services/canvas-api.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
-import { JwkService } from "../services/jwk.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
 import { SebDetector } from "../services/seb-detector.service.js";
@@ -26,7 +25,6 @@ export class LtiController {
     private readonly config: AppConfig,
     private readonly ltiService: LtiService,
     private readonly ltiState: LtiStateService,
-    private readonly jwkService: JwkService,
     private readonly assessments: AssessmentService,
     private readonly canvasApi: CanvasApiService,
     private readonly courseSettings: CourseSettingsService,
@@ -78,7 +76,14 @@ export class LtiController {
       storeLaunchData(request, launchData);
 
       if (launchData.messageType === "LtiDeepLinkingRequest") {
-        response.redirect(`/lti/deeplink/select?course_id=${encodeURIComponent(launchData.courseId || "")}`);
+        response
+          .status(410)
+          .send(
+            renderFallbackHtml(
+              "Deep Linking Removed",
+              "<h1>Deep Linking Removed</h1><p>Use the Safe Exam Browser course navigation app to manage SEB requirements.</p>"
+            )
+          );
         return;
       }
 
@@ -164,11 +169,7 @@ export class LtiController {
       oidc_initiation_url: `${toolUrl}/lti/login`,
       target_link_uri: `${toolUrl}/lti/launch`,
       public_jwk_url: `${toolUrl}/.well-known/jwks.json`,
-      scopes: [
-        "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
-        "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
-        "https://purl.imsglobal.org/spec/lti-dl/scope/contentitem"
-      ],
+      scopes: [],
       extensions: [
         {
           platform: "canvas.instructure.com",
@@ -186,11 +187,6 @@ export class LtiController {
                   canvas_membership_permissions:
                     "$Canvas.membership.permissions<manage_assignments_add,manage_assignments_edit,manage_course_content_add,manage_course_content_edit,manage_course_content_delete>"
                 }
-              },
-              {
-                placement: "assignment_selection",
-                message_type: "LtiDeepLinkingRequest",
-                target_link_uri: `${toolUrl}/lti/launch`
               }
             ]
           }
@@ -205,90 +201,6 @@ export class LtiController {
           "$Canvas.membership.permissions<manage_assignments_add,manage_assignments_edit,manage_course_content_add,manage_course_content_edit,manage_course_content_delete>"
       }
     };
-  }
-
-  @Get("/lti/deeplink/select")
-  async deepLinkSelect(
-    @Req() request: Request,
-    @Res() response: Response,
-    @Query("course_id") courseId?: string
-  ): Promise<void> {
-    const launchData = sessionValue<LtiLaunchData>(request, "launchData");
-    const resolvedCourseId = courseId || launchData?.courseId;
-    const userId = launchData?.userId;
-    let quizzes: Quiz[] = [];
-    if (resolvedCourseId && userId) {
-      try {
-        quizzes = await this.assessments.getQuizzesForCourse(resolvedCourseId, userId);
-      } catch (error) {
-        if (isCanvasApiAuthorizationError(error)) {
-          response.send(
-            this.renderApiAuthorizationView(
-              request,
-              resolvedCourseId,
-              userId,
-              "Canvas rejected the saved authorization. Reauthorize Canvas access before selecting content.",
-              true
-            )
-          );
-          return;
-        }
-        if (isCanvasApiPermissionError(error)) {
-          response.send(renderCanvasContentError(resolvedCourseId, error));
-          return;
-        }
-        throw error;
-      }
-    }
-    response.send(
-      renderAppShell({
-        title: "Configure SEB Links",
-        view: "deep-link-select",
-        initialData: { courseId: resolvedCourseId, quizzes }
-      })
-    );
-  }
-
-  @Post("/lti/deeplink/process")
-  async deepLinkProcess(
-    @Req() request: Request,
-    @Res() response: Response,
-    @Body() body: Record<string, string>
-  ): Promise<void> {
-    const launchData = sessionValue<LtiLaunchData>(request, "launchData");
-    if (!launchData?.deepLinkingSettings || !launchData.deploymentId) {
-      response.status(400).send("Missing deep linking launch data");
-      return;
-    }
-    const returnUrl = String((launchData.deepLinkingSettings as Record<string, unknown>).deep_link_return_url || "");
-    const quizIds = Object.keys(body)
-      .filter((key) => key.startsWith("quiz_"))
-      .map((key) => key.slice("quiz_".length));
-    const contentItems = await Promise.all(
-      quizIds.map(async (quizId) => this.deepLinkItemForQuiz(quizId, body[`seb_${quizId}`] === "on"))
-    );
-    const jwt = await this.jwkService.signDeepLinkingJwt(
-      {
-        "https://purl.imsglobal.org/spec/lti/claim/message_type": "LtiDeepLinkingResponse",
-        "https://purl.imsglobal.org/spec/lti/claim/version": "1.3.0",
-        "https://purl.imsglobal.org/spec/lti/claim/deployment_id": launchData.deploymentId,
-        "https://purl.imsglobal.org/spec/lti-dl/claim/content_items": contentItems,
-        data: (launchData.deepLinkingSettings as Record<string, unknown>).data
-      },
-      this.config.getRequiredToolUrl(),
-      this.config.value.lti.issuer
-    );
-    response.type("html").send(autoSubmitDeepLinkForm(returnUrl, jwt));
-  }
-
-  @Post("/lti/deeplink/update-seb")
-  async updateSebDeepLink(@Body() body: Record<string, string>): Promise<Record<string, unknown>> {
-    const quizId = body.quizId;
-    if (!quizId) {
-      return { success: false, error: "quizId is required" };
-    }
-    await this.assessments.updateSebConfigurationStructured({ quizId }, body.sebRequired === "true");
-    return { success: true };
   }
 
   private handleLogin(request: Request, response: Response, params: Record<string, string>): void {
@@ -403,7 +315,7 @@ export class LtiController {
     request: Request,
     courseId: string,
     userId: string,
-    message = "Let's get your course set up. Connect Canvas so this tool can read quizzes, set access codes, and update module links.",
+    message = "Let's get your course set up. Connect Canvas so this tool can read quizzes and set access codes.",
     reauthorize = false
   ): string {
     const endpoint = reauthorize ? "/api/oauth2reauthorize" : "/api/oauth2authorize";
@@ -543,24 +455,6 @@ export class LtiController {
       setting
     };
   }
-
-  private async deepLinkItemForQuiz(quizId: string, sebRequired: boolean): Promise<Record<string, unknown>> {
-    const quiz = await this.assessments.getQuiz(quizId);
-    const title = quiz?.title || "Canvas Quiz";
-    const url = sebRequired
-      ? `${this.config.getRequiredToolUrl()}/seb/redirect/${encodeURIComponent(quizId)}`
-      : quiz?.htmlUrl || this.config.getRequiredToolUrl();
-    return {
-      type: "ltiResourceLink",
-      title,
-      url,
-      custom: {
-        seb_required: String(sebRequired),
-        quiz_id: quizId,
-        original_url: quiz?.htmlUrl || ""
-      }
-    };
-  }
 }
 
 function storeLaunchData(request: Request, launchData: LtiLaunchData): void {
@@ -617,16 +511,8 @@ function studentQuizView(
   };
 }
 
-function autoSubmitDeepLinkForm(returnUrl: string, jwt: string): string {
-  return `<!doctype html><html lang="en"><body><form id="deeplink" method="post" action="${escapeAttribute(returnUrl)}"><input type="hidden" name="JWT" value="${escapeAttribute(jwt)}" /></form><script>document.getElementById("deeplink").submit();</script></body></html>`;
-}
-
 function escapeHtml(value: string): string {
   return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
-}
-
-function escapeAttribute(value: string): string {
-  return escapeHtml(value).replace(/"/gu, "&quot;");
 }
 
 function errorMessage(error: unknown): string {

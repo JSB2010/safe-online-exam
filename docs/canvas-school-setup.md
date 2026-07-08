@@ -48,10 +48,9 @@ For the selected environment, Canvas should point at these URLs:
 | Target link URI        | `${TOOL_URL}/lti/launch`                |
 | Redirect URI           | `${TOOL_URL}/lti/launch`                |
 | Public JWK URL         | `${TOOL_URL}/.well-known/jwks.json`     |
-| Deep linking URL       | `${TOOL_URL}/lti/deeplink/select`       |
 | Detector script URL    | `${TOOL_URL}/js/canvas-seb-detector.js` |
 
-The app's `/lti/config` endpoint returns a Canvas-compatible LTI 1.3 JSON configuration with course navigation and assignment selection placements. Prefer that URL over manual entry so Canvas receives the same settings the service exposes.
+The app's `/lti/config` endpoint returns a Canvas-compatible LTI 1.3 JSON configuration with course navigation placement metadata. Prefer that URL over manual entry so Canvas receives the same settings the service exposes.
 
 ## Create the LTI Developer Key
 
@@ -125,7 +124,7 @@ Create a small JavaScript file, for example `canvas-seb-theme-loader.js`:
   "use strict";
 
   const detectorUrl = "https://canvas-seb-dev-184075650720.us-central1.run.app/js/canvas-seb-detector.js";
-  const quizTakePath = /^\/courses\/\d+\/quizzes\/\d+\/take(?:\/|$)/;
+  const quizTakePath = /^\/courses\/\d+\/(?:quizzes\/\d+\/take|assignments\/\d+)(?:\/|$)/;
 
   function onPage(pattern, callback) {
     if (pattern.test(window.location.pathname)) {
@@ -150,7 +149,7 @@ Create a small JavaScript file, for example `canvas-seb-theme-loader.js`:
 For a course-limited pilot, replace the path pattern with the specific course ID:
 
 ```javascript
-const quizTakePath = /^\/courses\/11825\/quizzes\/\d+\/take(?:\/|$)/;
+const quizTakePath = /^\/courses\/11825\/(?:quizzes\/\d+\/take|assignments\/\d+)(?:\/|$)/;
 ```
 
 Do not paste a Markdown link into `script.src`. It must be a plain URL string:
