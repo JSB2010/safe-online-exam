@@ -96,6 +96,36 @@ export class SebController {
     }
   }
 
+  @Get("/seb/config-encryption-certificate.pem")
+  downloadConfigEncryptionCertificatePem(@Res() response: Response): void {
+    const certificate = this.sebConfig.getEncryptionCertificate();
+    if (!certificate) {
+      response.status(404).send("SEB config encryption certificate is not configured");
+      return;
+    }
+    response
+      .status(200)
+      .type("application/x-pem-file")
+      .setHeader("content-disposition", 'attachment; filename="seb-config-encryption-certificate.pem"')
+      .setHeader("x-seb-public-key-hash", certificate.publicKeyHash.toString("hex"))
+      .send(certificate.pem);
+  }
+
+  @Get("/seb/config-encryption-certificate.cer")
+  downloadConfigEncryptionCertificateDer(@Res() response: Response): void {
+    const certificate = this.sebConfig.getEncryptionCertificate();
+    if (!certificate) {
+      response.status(404).send("SEB config encryption certificate is not configured");
+      return;
+    }
+    response
+      .status(200)
+      .type("application/pkix-cert")
+      .setHeader("content-disposition", 'attachment; filename="seb-config-encryption-certificate.cer"')
+      .setHeader("x-seb-public-key-hash", certificate.publicKeyHash.toString("hex"))
+      .send(certificate.der);
+  }
+
   @Get("/seb/config/:courseId/:quizId")
   redirectConfig(
     @Res() response: Response,
@@ -469,7 +499,7 @@ export class SebController {
         quitPassword: setting.quitPassword
       });
       await this.quizService.saveSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
-      return generated;
+      return this.sebConfig.prepareSebConfigurationDownload(generated);
     }
 
     const setting = await this.contentService.getSebSetting(contentId);
@@ -486,7 +516,7 @@ export class SebController {
       quitPassword: setting.quitPassword
     });
     await this.contentService.saveSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
-    return generated;
+    return this.sebConfig.prepareSebConfigurationDownload(generated);
   }
 
   private async currentConfigKey(

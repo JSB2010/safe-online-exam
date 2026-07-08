@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import plist from "plist";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { SebController } from "../../src/server/controllers/seb.controller.js";
@@ -8,6 +10,10 @@ import { SebConfigurationService } from "../../src/server/services/seb-configura
 
 const CANVAS_URL = "https://kentdenver.instructure.com";
 const TOOL_URL = "https://tool.example.edu";
+const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({
+  type: "pkcs1",
+  format: "pem"
+}) as string;
 
 describe("SEB config downloads", () => {
   it("uses canonical Canvas quiz URLs instead of student-specific canvas_url query values", async () => {
@@ -118,6 +124,65 @@ describe("SEB config downloads", () => {
       );
     });
   });
+
+  it("encrypts downloaded configs while saving Config Keys from plaintext settings", async () => {
+    await withConfig(
+      async () => {
+        const saveSebSetting = vi.fn(async (setting) => setting);
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {
+            getSebSettingForQuiz: async () => ({
+              quizId: "23455",
+              courseId: "11825",
+              sebRequired: true,
+              enabled: true,
+              accessCode: "ACCESS-CODE",
+              ssoDomains: [],
+              educationalToolDomains: [],
+              customDomains: [],
+              externalTools: []
+            }),
+            getQuiz: async () => ({
+              id: "23455",
+              courseId: "11825",
+              title: "Midterm",
+              htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
+            }),
+            saveSebSetting
+          } as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          new SebConfigurationService(new AppConfig()),
+          new SebConfigKeyService(),
+          new SebAccessProofService()
+        );
+
+        const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+        const unzipped = gunzipSync(downloaded);
+        const plaintext = new SebConfigurationService(new AppConfig()).generateSebConfiguration({
+          courseId: "11825",
+          contentId: "classicquiz_23455",
+          startUrl: `${CANVAS_URL}/courses/11825/quizzes/23455/take`,
+          accessCode: "ACCESS-CODE",
+          allowedDomains: [],
+          quitPassword: undefined
+        });
+
+        expect(unzipped.subarray(0, 4).toString("utf8")).toBe("pkhs");
+        expect(downloaded.toString("utf8")).not.toContain("<plist");
+        expect(saveSebSetting).toHaveBeenCalledWith(
+          expect.objectContaining({
+            configKey: new SebConfigKeyService().computeConfigKey(plaintext)
+          })
+        );
+      },
+      { encryptionEnabled: true }
+    );
+  });
 });
 
 async function downloadConfig(
@@ -140,16 +205,26 @@ async function downloadConfig(
   return sent as Buffer;
 }
 
-async function withConfig(run: () => Promise<void>): Promise<void> {
+async function withConfig(run: () => Promise<void>, options: { encryptionEnabled?: boolean } = {}): Promise<void> {
   const previousCanvasBaseUrl = process.env.CANVAS_BASE_URL;
   const previousToolUrl = process.env.TOOL_URL;
+  const previousEncryptionEnabled = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
+  const previousPublicKeyPem = process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
   process.env.CANVAS_BASE_URL = CANVAS_URL;
   process.env.TOOL_URL = TOOL_URL;
+  process.env.SEB_CONFIG_ENCRYPTION_ENABLED = options.encryptionEnabled ? "true" : "false";
+  if (options.encryptionEnabled) {
+    process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM = TEST_PUBLIC_KEY_PEM;
+  } else {
+    delete process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
+  }
   try {
     await run();
   } finally {
     restoreEnv("CANVAS_BASE_URL", previousCanvasBaseUrl);
     restoreEnv("TOOL_URL", previousToolUrl);
+    restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previousEncryptionEnabled);
+    restoreEnv("SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM", previousPublicKeyPem);
   }
 }
 

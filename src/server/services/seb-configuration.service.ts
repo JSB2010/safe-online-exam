@@ -3,6 +3,11 @@ import { Injectable } from "@nestjs/common";
 import plist from "plist";
 import { isUnsafeBroadUrlPattern } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
+import {
+  encryptSebConfigWithPublicKey,
+  loadSebEncryptionKeyMaterial,
+  type SebEncryptionKeyMaterial
+} from "./seb-config-encryption.js";
 
 export interface SebConfigurationInput {
   courseId: string;
@@ -22,6 +27,8 @@ interface UrlFilterRule {
 
 @Injectable()
 export class SebConfigurationService {
+  private encryptionKeyMaterial?: SebEncryptionKeyMaterial;
+
   constructor(private readonly config: AppConfig) {}
 
   generateSebConfiguration(input: SebConfigurationInput): Buffer {
@@ -76,6 +83,34 @@ export class SebConfigurationService {
       })
     };
     return Buffer.from(plist.build(plistValue as any), "utf8");
+  }
+
+  prepareSebConfigurationDownload(plainConfig: Buffer): Buffer {
+    if (!this.config.value.seb.configEncryption.enabled) {
+      return plainConfig;
+    }
+    return encryptSebConfigWithPublicKey(plainConfig, this.getEncryptionKeyMaterial());
+  }
+
+  getEncryptionCertificate(): { pem: string; der: Buffer; publicKeyHash: Buffer } | null {
+    const settings = this.config.value.seb.configEncryption;
+    if (!settings.enabled || (!settings.certificatePem && !settings.certificatePath)) {
+      return null;
+    }
+    const keyMaterial = this.getEncryptionKeyMaterial();
+    if (!keyMaterial.certificatePem || !keyMaterial.certificateDer) {
+      return null;
+    }
+    return {
+      pem: keyMaterial.certificatePem,
+      der: keyMaterial.certificateDer,
+      publicKeyHash: keyMaterial.publicKeyHash
+    };
+  }
+
+  private getEncryptionKeyMaterial(): SebEncryptionKeyMaterial {
+    this.encryptionKeyMaterial ||= loadSebEncryptionKeyMaterial(this.config.value.seb.configEncryption);
+    return this.encryptionKeyMaterial;
   }
 }
 

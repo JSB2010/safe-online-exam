@@ -36,7 +36,7 @@ steps:
       - "--execution-environment=gen2"
       - "--platform=managed"
       - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev"
-      - "--set-secrets=LTI_CLIENT_ID=dev_lti_client_id:latest,TOOL_URL=dev_tool_url:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest,ADMIN_PASSWORD=dev_admin_password:latest,CANVAS_API_CLIENT_ID=dev_api_client_id:latest,CANVAS_API_CLIENT_SECRET=dev_api_client_secret:latest"
+      - "--set-secrets=LTI_CLIENT_ID=dev_lti_client_id:latest,TOOL_URL=dev_tool_url:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest,ADMIN_PASSWORD=dev_admin_password:latest,CANVAS_API_CLIENT_ID=dev_api_client_id:latest,CANVAS_API_CLIENT_SECRET=dev_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:latest"
       - "--memory=2Gi"
       - "--cpu=2"
       - "--min-instances=0"

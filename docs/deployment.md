@@ -63,6 +63,7 @@ Dev deployment expects:
 - `dev_admin_password`
 - `dev_api_client_id`
 - `dev_api_client_secret`
+- `dev_seb_config_encryption_cert_pem`
 
 Prod deployment expects:
 
@@ -73,6 +74,7 @@ Prod deployment expects:
 - `prod_state_encryption_key`
 - `prod_api_client_id`
 - `prod_api_client_secret`
+- `prod_seb_config_encryption_cert_pem`
 
 Secret values are mounted as environment variables:
 
@@ -83,6 +85,7 @@ Secret values are mounted as environment variables:
 - `STATE_ENCRYPTION_KEY` in prod
 - `CANVAS_API_CLIENT_ID`
 - `CANVAS_API_CLIENT_SECRET`
+- `SEB_CONFIG_ENCRYPTION_CERT_PEM` or `SEB_CONFIG_ENCRYPTION_CERT_PATH` when certificate-encrypted `.seb` downloads are enabled
 
 ## IAM
 
@@ -136,6 +139,35 @@ Then verify in Canvas:
 7. Downloading a `.seb` file stores a Config Key.
 8. SEB can retrieve the access code through the proof flow.
 9. The exit page renders and the quit link works in SEB.
+
+## SEB Config Encryption
+
+Certificate encryption is enabled by default. The app encrypts generated `.seb` downloads with the configured public certificate using SEB macOS-compatible `pkhs` format, while Config Keys are still computed from the plaintext settings before encryption.
+
+For local testing:
+
+```bash
+bash scripts/generate-seb-config-cert.sh
+```
+
+Then set:
+
+```text
+SEB_CONFIG_ENCRYPTION_ENABLED=true
+SEB_CONFIG_ENCRYPTION_CERT_PATH=.local/seb-certs/seb-config-encryption-local.crt.pem
+```
+
+Import the generated `.p12` into the macOS login keychain on the test machine before opening encrypted configs in SEB. The generated script prints a `security import` command. The `.p12` contains the private key and should be handled like a secret. See [seb-certificate-runbook.md](seb-certificate-runbook.md) for Jamf rollout, BYOD install, private-key storage, and rotation.
+
+For Cloud Run, store the public certificate PEM in Secret Manager and inject it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`, or mount/provide a file path through `SEB_CONFIG_ENCRYPTION_CERT_PATH`. Distribute the matching `.p12` identity through Jamf or another managed channel. Do not deploy the private key or `.p12` to Cloud Run, and do not serve the `.p12` from this app.
+
+To disable certificate wrapping entirely:
+
+```text
+SEB_CONFIG_ENCRYPTION_ENABLED=false
+```
+
+In that mode, config downloads return plaintext plist `.seb` files and rely on strict Config Key validation for tamper detection.
 
 ## Rollback
 

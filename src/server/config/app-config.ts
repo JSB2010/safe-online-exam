@@ -42,6 +42,13 @@ export interface AppConfigSnapshot {
   seb: {
     defaultQuitPassword?: string;
     requiredDomains: string[];
+    configEncryption: {
+      enabled: boolean;
+      certificatePem?: string;
+      certificatePath?: string;
+      publicKeyPem?: string;
+      publicKeyPath?: string;
+    };
   };
 }
 
@@ -155,7 +162,14 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
           env.SEB_REQUIRED_DOMAINS,
           "accounts.google.com,*.googleusercontent.com,*.gstatic.com,ssl.gstatic.com,*.canvas-user-content.com,*.instructuremedia.com,*.inscloudgate.net"
         )
-      )
+      ),
+      configEncryption: {
+        enabled: parseBoolean(firstPresent(env.SEB_CONFIG_ENCRYPTION_ENABLED), true),
+        certificatePem: normalizeMultilineSecret(firstPresent(env.SEB_CONFIG_ENCRYPTION_CERT_PEM)),
+        certificatePath: firstPresent(env.SEB_CONFIG_ENCRYPTION_CERT_PATH),
+        publicKeyPem: normalizeMultilineSecret(firstPresent(env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM)),
+        publicKeyPath: firstPresent(env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH)
+      }
     }
   };
 }
@@ -224,4 +238,8 @@ function splitList(value?: string): string[] {
     .split(/[,\n]/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function normalizeMultilineSecret(value?: string): string | undefined {
+  return value?.replace(/\\n/gu, "\n");
 }

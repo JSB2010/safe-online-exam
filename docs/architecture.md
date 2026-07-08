@@ -106,7 +106,7 @@ LTI launch proves Canvas identity but does not provide the Canvas API token need
 5. Module items are rewritten to point to the tool launch where possible.
 6. Student launches the assessment.
 7. Non-SEB browsers receive a React page that offers the `.seb` configuration download.
-8. Downloading the config uses a canonical Canvas start URL, generates the config, and persists a Config Key.
+8. Downloading the config uses a canonical Canvas start URL, generates the plaintext config, persists a Config Key from that plaintext, and returns a certificate-encrypted `pkhs` `.seb` file unless plaintext mode is explicitly enabled.
 9. SEB opens the configured Canvas URL.
 10. The detector script validates strict Config Key proof and retrieves the access code through a one-time proof token.
 
@@ -114,7 +114,9 @@ Course defaults are stored per Canvas course. They include a default exit passwo
 
 External exam tools are configured in course defaults or per quiz/content item. Enabled tools are stored with a label, HTTPS URL, and optional extra resource entries. During `.seb` generation their URLs are added to the canonical SEB `URLFilterRules` allowlist, with `URLFilterEnable` enabled so unmatched page loads and links remain blocked by SEB. `URLFilterEnableContentFilter` is intentionally disabled because SEB macOS modern WKWebView and the SEB JavaScript Config Key API do not support that content-filter mode. Canvas itself is restricted to the configured quiz or assignment URL family plus static/file/media resources needed to render the assessment. The Canvas detector script fetches the enabled tool list from `/api/seb/tools/:courseId/:quizId` to render a draggable sidebar on the quiz page. The sidebar opens tools in SEB-controlled new tabs/windows; URL filtering remains the enforcement boundary.
 
-The generated `.seb` files are currently not password- or certificate-encrypted. The server-side security boundary is strict Config Key proof before releasing the hidden Canvas access code. Any SEB-affecting setting change clears the stored Config Key so students must download a fresh config before access-code proof can succeed. Broad allowlist patterns and effectively global regex rules are rejected before config generation.
+Generated `.seb` downloads are certificate-encrypted by default using SEB macOS-compatible `pkhs` public-key-hash format. The server stores only the public certificate or public key and never needs the private key. SEB clients need the matching private-key identity installed in Keychain or the Windows certificate store, usually through Jamf or another device-management channel. `SEB_CONFIG_ENCRYPTION_ENABLED=false` disables the wrapper and returns plaintext plist files for explicit troubleshooting or rollout fallback. The public certificate, when configured, is available from `/seb/config-encryption-certificate.pem` and `/seb/config-encryption-certificate.cer`; the private `.p12` identity is never served by the app.
+
+Certificate encryption hardens the file against casual editing, but the server-side security boundary remains strict Config Key proof before releasing the hidden Canvas access code. Any SEB-affecting setting change clears the stored Config Key so students must download a fresh config before access-code proof can succeed. Broad allowlist patterns and effectively global regex rules are rejected before config generation.
 
 `APP_DEBUG_ENABLED` is the single debug/development toggle for the service. It enables diagnostic endpoints, detector console logging, sanitized detector trace callbacks to `/api/debug/canvas-detector-trace`, and no-store detector script serving. With debug disabled, the detector callback is dormant and the same public detector URLs serve the minified asset with cache headers.
 

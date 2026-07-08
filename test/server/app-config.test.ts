@@ -25,4 +25,13 @@ describe("AppConfig", () => {
     expect(loadConfigFromEnv({ APP_ENV: "dev", APP_DEBUG_ENABLED: "false" }).security.debugEnabled).toBe(false);
     expect(loadConfigFromEnv({ APP_ENV: "prod", APP_DEBUG_ENABLED: "true" }).security.debugEnabled).toBe(true);
   });
+
+  it("enables SEB config certificate encryption by default with an env kill switch", () => {
+    expect(loadConfigFromEnv({}).seb.configEncryption.enabled).toBe(true);
+    expect(loadConfigFromEnv({ SEB_CONFIG_ENCRYPTION_ENABLED: "false" }).seb.configEncryption.enabled).toBe(false);
+    expect(
+      loadConfigFromEnv({ SEB_CONFIG_ENCRYPTION_CERT_PEM: "-----BEGIN CERTIFICATE-----\\n..." }).seb.configEncryption
+        .certificatePem
+    ).toBe("-----BEGIN CERTIFICATE-----\n...");
+  });
 });
