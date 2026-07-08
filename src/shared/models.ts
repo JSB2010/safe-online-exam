@@ -53,8 +53,11 @@ export interface QuizSebSetting {
   canvasAssignmentId?: string | null;
   deepLinkUrl?: string | null;
   quitPassword?: string | null;
+  startPassword?: string | null;
+  configKeySalt?: string | null;
   usesCourseDefaults?: boolean | null;
   quitPasswordOverride?: boolean | null;
+  startPasswordOverride?: boolean | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -83,8 +86,11 @@ export interface ContentSebSetting {
   urlRules?: SebUrlRule[] | null;
   externalTools: ExternalToolConfig[];
   quitPassword?: string | null;
+  startPassword?: string | null;
+  configKeySalt?: string | null;
   usesCourseDefaults?: boolean | null;
   quitPasswordOverride?: boolean | null;
+  startPasswordOverride?: boolean | null;
   metadata?: Record<string, unknown>;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -102,6 +108,7 @@ export interface CourseSebDefaults {
   id?: string | null;
   courseId: string;
   quitPassword?: string | null;
+  startPassword?: string | null;
   urlRules: SebUrlRule[];
   externalTools: ExternalToolConfig[];
   setupCompleted: boolean;
@@ -165,8 +172,10 @@ export interface StructuredSebConfigRequest {
   externalTools?: ExternalToolConfig[] | null;
   externalToolUrl?: string | null;
   quitPassword?: string | null;
+  startPassword?: string | null;
   usesCourseDefaults?: boolean | null;
   quitPasswordOverride?: boolean | null;
+  startPasswordOverride?: boolean | null;
 }
 
 export interface ExternalToolConfig {
@@ -283,6 +292,7 @@ export function defaultCourseSebDefaults(courseId: string): CourseSebDefaults {
     id: courseId,
     courseId,
     quitPassword: null,
+    startPassword: null,
     urlRules: [],
     externalTools: [],
     setupCompleted: false
@@ -297,6 +307,7 @@ export function normalizeCourseSebDefaults(input: Partial<CourseSebDefaults> | n
     id: input?.id || courseId,
     courseId,
     quitPassword: normalizeOptionalText(input?.quitPassword),
+    startPassword: normalizeOptionalText(input?.startPassword),
     urlRules: normalizeUrlRules(input?.urlRules),
     externalTools: normalizeExternalTools(input?.externalTools),
     setupCompleted: !!input?.setupCompleted
@@ -465,6 +476,7 @@ export function applyCourseDefaultsToQuizSetting(
   const normalizedDefaults = defaults ? normalizeCourseSebDefaults(defaults) : null;
   const usesDefaults = settingUsesCourseDefaults(setting);
   const quitPasswordOverride = setting.quitPasswordOverride === true;
+  const startPasswordOverride = setting.startPasswordOverride === true;
   const urlRules = usesDefaults ? normalizedDefaults?.urlRules || [] : normalizeUrlRules(setting.urlRules);
   return {
     ...setting,
@@ -482,8 +494,12 @@ export function applyCourseDefaultsToQuizSetting(
     quitPassword: quitPasswordOverride
       ? normalizeOptionalText(setting.quitPassword)
       : normalizedDefaults?.quitPassword || null,
+    startPassword: startPasswordOverride
+      ? normalizeOptionalText(setting.startPassword)
+      : normalizedDefaults?.startPassword || null,
     usesCourseDefaults: usesDefaults,
-    quitPasswordOverride
+    quitPasswordOverride,
+    startPasswordOverride
   };
 }
 
@@ -494,6 +510,7 @@ export function applyCourseDefaultsToContentSetting(
   const normalizedDefaults = defaults ? normalizeCourseSebDefaults(defaults) : null;
   const usesDefaults = settingUsesCourseDefaults(setting);
   const quitPasswordOverride = setting.quitPasswordOverride === true;
+  const startPasswordOverride = setting.startPasswordOverride === true;
   const urlRules = usesDefaults ? normalizedDefaults?.urlRules || [] : normalizeUrlRules(setting.urlRules);
   return {
     ...setting,
@@ -511,8 +528,12 @@ export function applyCourseDefaultsToContentSetting(
     quitPassword: quitPasswordOverride
       ? normalizeOptionalText(setting.quitPassword)
       : normalizedDefaults?.quitPassword || null,
+    startPassword: startPasswordOverride
+      ? normalizeOptionalText(setting.startPassword)
+      : normalizedDefaults?.startPassword || null,
     usesCourseDefaults: usesDefaults,
-    quitPasswordOverride
+    quitPasswordOverride,
+    startPasswordOverride
   };
 }
 

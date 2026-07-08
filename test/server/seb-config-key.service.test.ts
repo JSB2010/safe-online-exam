@@ -19,6 +19,12 @@ describe("SebConfigKeyService", () => {
     expect(canonical).not.toContain("canvas\\\\.example");
   });
 
+  it("canonicalizes binary plist data as base64 strings", () => {
+    const canonical = canonicalizeSebPlist({ configKeySalt: Buffer.from("salt-bytes") });
+
+    expect(canonical).toBe('{"configKeySalt":"c2FsdC1ieXRlcw=="}');
+  });
+
   it("computes config-key URL hashes and ignores fragments", () => {
     const service = new SebConfigKeyService();
     const config = Buffer.from(plist.build({ startURL: "https://canvas.example.com", originatorVersion: "3.7.0" }));

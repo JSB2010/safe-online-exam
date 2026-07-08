@@ -230,7 +230,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
         <div className="list-header">
           <div>
             <h2>Quiz Management</h2>
-            <p>Enable SEB, adjust quiz settings, and view exit passwords.</p>
+            <p>Enable SEB, adjust quiz settings, and view exam passwords.</p>
           </div>
           <div className="search">
             <Search size={18} />
@@ -241,7 +241,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           {filtered.map((item) => {
             const setting = settings[item.id] || {};
             const enabled = !!setting.sebRequired;
-            const password = effectivePassword(setting, courseDefaults);
+            const exitPassword = effectiveExitPassword(setting, courseDefaults);
+            const startPassword = effectiveStartPassword(setting, courseDefaults);
             const passwordVisible = visiblePasswordId === item.id;
             return (
               <article className="content-row teacher-row" key={item.id}>
@@ -275,23 +276,22 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
                         onClick={() => setVisiblePasswordId(passwordVisible ? null : item.id)}
                       >
                         {passwordVisible ? <EyeOff size={16} /> : <Eye size={16} />}
-                        Password
+                        Passwords
                       </button>
                       {passwordVisible && (
-                        <div className="password-popover">
-                          <span>{password || "No exit password set"}</span>
-                          {password && (
-                            <button
-                              className="icon-button tiny"
-                              title="Copy password"
-                              onClick={() => {
-                                void navigator.clipboard?.writeText(password);
-                                pushToast("success", "Password copied.");
-                              }}
-                            >
-                              <Clipboard size={14} />
-                            </button>
-                          )}
+                        <div className="password-popover password-list">
+                          <PasswordPopoverRow
+                            label="Start"
+                            value={startPassword}
+                            emptyLabel="No start password set"
+                            onCopy={() => pushToast("success", "Start password copied.")}
+                          />
+                          <PasswordPopoverRow
+                            label="Exit"
+                            value={exitPassword}
+                            emptyLabel="No exit password set"
+                            onCopy={() => pushToast("success", "Exit password copied.")}
+                          />
                         </div>
                       )}
                     </div>
@@ -361,6 +361,39 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((t) => t.id !== id))} />
     </main>
+  );
+}
+
+function PasswordPopoverRow({
+  label,
+  value,
+  emptyLabel,
+  onCopy
+}: {
+  label: string;
+  value: string;
+  emptyLabel: string;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="password-popover-row">
+      <div>
+        <strong>{label}</strong>
+        <span>{value || emptyLabel}</span>
+      </div>
+      {value && (
+        <button
+          className="icon-button tiny"
+          title={`Copy ${label.toLowerCase()} password`}
+          onClick={() => {
+            void navigator.clipboard?.writeText(value);
+            onCopy();
+          }}
+        >
+          <Clipboard size={14} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -446,8 +479,11 @@ function SettingsDialog({
     toolsForSetting(setting, courseDefaults)
   );
   const [passwordOverride, setPasswordOverride] = useState(setting.quitPasswordOverride === true);
-  const [quitPassword, setQuitPassword] = useState(effectivePassword(setting, courseDefaults));
+  const [quitPassword, setQuitPassword] = useState(effectiveExitPassword(setting, courseDefaults));
+  const [startPasswordOverride, setStartPasswordOverride] = useState(setting.startPasswordOverride === true);
+  const [startPassword, setStartPassword] = useState(effectiveStartPassword(setting, courseDefaults));
   const [showPassword, setShowPassword] = useState(false);
+  const [showStartPassword, setShowStartPassword] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -467,6 +503,14 @@ function SettingsDialog({
     setUsesDefaults(false);
     setQuitPassword(next);
   };
+  const customizeStartPasswordOverride = (next: boolean) => {
+    setUsesDefaults(false);
+    setStartPasswordOverride(next);
+  };
+  const customizeStartPassword = (next: string) => {
+    setUsesDefaults(false);
+    setStartPassword(next);
+  };
 
   async function save() {
     setSaving(true);
@@ -481,8 +525,10 @@ function SettingsDialog({
         urlRules,
         externalTools: normalizeExternalTools(externalTools),
         quitPassword: passwordOverride ? quitPassword : null,
+        startPassword: startPasswordOverride ? startPassword : null,
         usesCourseDefaults: usesDefaults,
-        quitPasswordOverride: passwordOverride
+        quitPasswordOverride: passwordOverride,
+        startPasswordOverride
       };
       const saved = await requestJson(`/api/quizzes/seb-config-structured?userId=${encodeURIComponent(userId)}`, {
         method: "POST",
@@ -520,6 +566,8 @@ function SettingsDialog({
       setExternalTools(mergeToolPresets(courseDefaults.externalTools || []));
       setPasswordOverride(false);
       setQuitPassword(courseDefaults.quitPassword || "");
+      setStartPasswordOverride(false);
+      setStartPassword(courseDefaults.startPassword || "");
       onReset(saved);
     } catch (resetError) {
       setError(errorMessage(resetError, "Could not reset quiz defaults."));
@@ -548,11 +596,18 @@ function SettingsDialog({
           setExternalTools={customizeExternalTools}
           quitPassword={quitPassword}
           setQuitPassword={customizeQuitPassword}
+          startPassword={startPassword}
+          setStartPassword={customizeStartPassword}
           passwordOverride={passwordOverride}
           setPasswordOverride={customizePasswordOverride}
+          startPasswordOverride={startPasswordOverride}
+          setStartPasswordOverride={customizeStartPasswordOverride}
           showPassword={showPassword}
           setShowPassword={setShowPassword}
+          showStartPassword={showStartPassword}
+          setShowStartPassword={setShowStartPassword}
           defaultPassword={courseDefaults.quitPassword || ""}
+          defaultStartPassword={courseDefaults.startPassword || ""}
         />
 
         {error && (
@@ -645,7 +700,7 @@ function SetupWizard({
   const [draft, setDraft] = useDefaultsDraft(defaults);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const steps = ["Password", "Allowed URLs", "Tools"];
+  const steps = ["Passwords", "Allowed URLs", "Tools"];
 
   async function finish() {
     setSaving(true);
@@ -725,11 +780,29 @@ function DefaultsEditor({
   const showUrls = visibleSection === "all" || visibleSection === "urls";
   const showTools = visibleSection === "all" || visibleSection === "tools";
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [startPasswordVisible, setStartPasswordVisible] = useState(false);
 
   return (
     <div className="settings-stack">
       {showPassword && (
         <section className="settings-section">
+          <SectionHeading title="Default exam start password" />
+          <div className="password-field">
+            <input
+              type={startPasswordVisible ? "text" : "password"}
+              value={draft.startPassword || ""}
+              onChange={(event) => setDraft((current) => ({ ...current, startPassword: event.target.value }))}
+              placeholder="Require a password before SEB opens the quiz"
+            />
+            <button
+              className="icon-button"
+              onClick={() => setStartPasswordVisible((current) => !current)}
+              title="Show or hide start password"
+            >
+              {startPasswordVisible ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+          </div>
+
           <SectionHeading title="Default exit password" />
           <div className="password-field">
             <input
@@ -787,11 +860,18 @@ function SettingsSections({
   setExternalTools,
   quitPassword,
   setQuitPassword,
+  startPassword,
+  setStartPassword,
   passwordOverride,
   setPasswordOverride,
+  startPasswordOverride,
+  setStartPasswordOverride,
   showPassword,
   setShowPassword,
-  defaultPassword
+  showStartPassword,
+  setShowStartPassword,
+  defaultPassword,
+  defaultStartPassword
 }: {
   urlRules: SebUrlRule[];
   setUrlRules: (rules: SebUrlRule[]) => void;
@@ -799,14 +879,56 @@ function SettingsSections({
   setExternalTools: (tools: ExternalToolConfig[]) => void;
   quitPassword: string;
   setQuitPassword: (value: string) => void;
+  startPassword: string;
+  setStartPassword: (value: string) => void;
   passwordOverride: boolean;
   setPasswordOverride: (value: boolean) => void;
+  startPasswordOverride: boolean;
+  setStartPasswordOverride: (value: boolean) => void;
   showPassword: boolean;
   setShowPassword: (value: boolean) => void;
+  showStartPassword: boolean;
+  setShowStartPassword: (value: boolean) => void;
   defaultPassword: string;
+  defaultStartPassword: string;
 }) {
   return (
     <div className="settings-stack">
+      <section className="settings-section">
+        <SectionHeading title="Exam start password" />
+        <label className="toggle-row compact">
+          <input
+            type="checkbox"
+            checked={startPasswordOverride}
+            onChange={(event) => setStartPasswordOverride(event.target.checked)}
+          />
+          <span>
+            <strong>Override default start password</strong>
+            <small>
+              {defaultStartPassword
+                ? "Unchecked quizzes use the course start password."
+                : "No course start password is set."}
+            </small>
+          </span>
+        </label>
+        <div className="password-field">
+          <input
+            type={showStartPassword ? "text" : "password"}
+            value={startPasswordOverride ? startPassword : defaultStartPassword}
+            disabled={!startPasswordOverride}
+            onChange={(event) => setStartPassword(event.target.value)}
+            placeholder="Password students enter before SEB opens the quiz"
+          />
+          <button
+            className="icon-button"
+            onClick={() => setShowStartPassword(!showStartPassword)}
+            title="Show or hide start password"
+          >
+            {showStartPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+          </button>
+        </div>
+      </section>
+
       <section className="settings-section">
         <SectionHeading title="Exit password" />
         <label className="toggle-row compact">
@@ -1196,6 +1318,7 @@ function normalizeCourseDefaults(input: any, courseId: string): CourseSebDefault
     id: input?.id || courseId,
     courseId: input?.courseId || courseId,
     quitPassword: input?.quitPassword || "",
+    startPassword: input?.startPassword || "",
     urlRules: normalizeUrlRules(input?.urlRules),
     externalTools: mergeToolPresets(input?.externalTools || []),
     setupCompleted: !!input?.setupCompleted,
@@ -1222,11 +1345,18 @@ function toolsForSetting(setting: Record<string, any>, defaults: CourseSebDefaul
   return mergeToolPresets(setting.externalTools || []);
 }
 
-function effectivePassword(setting: Record<string, any>, defaults: CourseSebDefaults): string {
+function effectiveExitPassword(setting: Record<string, any>, defaults: CourseSebDefaults): string {
   if (setting.quitPasswordOverride === true) {
     return setting.quitPassword || "";
   }
   return setting.quitPassword || defaults.quitPassword || "";
+}
+
+function effectiveStartPassword(setting: Record<string, any>, defaults: CourseSebDefaults): string {
+  if (setting.startPasswordOverride === true) {
+    return setting.startPassword || "";
+  }
+  return setting.startPassword || defaults.startPassword || "";
 }
 
 function mergeToolPresets(value: ExternalToolConfig[]): ExternalToolConfig[] {

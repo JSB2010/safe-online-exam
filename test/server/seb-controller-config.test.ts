@@ -183,6 +183,66 @@ describe("SEB config downloads", () => {
       { encryptionEnabled: true }
     );
   });
+
+  it("password-protects downloads while saving Config Keys from salted plaintext settings", async () => {
+    await withConfig(async () => {
+      const saveSebSetting = vi.fn(async (setting) => setting);
+      const configKeySalt = Buffer.alloc(32, 9).toString("base64");
+      const controller = new SebController(
+        new AppConfig(),
+        {} as any,
+        {} as any,
+        {
+          getSebSettingForQuiz: async () => ({
+            quizId: "23455",
+            courseId: "11825",
+            sebRequired: true,
+            enabled: true,
+            accessCode: "ACCESS-CODE",
+            startPassword: "exam-start",
+            configKeySalt,
+            ssoDomains: [],
+            educationalToolDomains: [],
+            customDomains: [],
+            externalTools: []
+          }),
+          getQuiz: async () => ({
+            id: "23455",
+            courseId: "11825",
+            title: "Midterm",
+            htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
+          }),
+          saveSebSetting
+        } as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        new SebConfigurationService(new AppConfig()),
+        new SebConfigKeyService(),
+        new SebAccessProofService()
+      );
+
+      const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+      const wrapped = gunzipSync(downloaded);
+      const plaintext = new SebConfigurationService(new AppConfig()).generateSebConfiguration({
+        courseId: "11825",
+        contentId: "classicquiz_23455",
+        startUrl: `${CANVAS_URL}/courses/11825/quizzes/23455/take`,
+        accessCode: "ACCESS-CODE",
+        allowedDomains: [],
+        quitPassword: undefined,
+        startPassword: "exam-start",
+        configKeySalt
+      });
+
+      expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pswd");
+      expect(saveSebSetting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          configKey: new SebConfigKeyService().computeConfigKey(plaintext)
+        })
+      );
+    });
+  });
 });
 
 async function downloadConfig(

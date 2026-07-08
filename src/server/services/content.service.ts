@@ -10,6 +10,7 @@ import {
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
 import { invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
+import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 
 @Injectable()
 export class ContentService {
@@ -61,9 +62,10 @@ export class ContentService {
       urlRules: normalizeUrlRules(setting.urlRules),
       externalTools: normalizeExternalTools(setting.externalTools)
     };
+    const withStartPassword = normalizeSebStartPasswordState(existing, normalized);
     return this.repositories.value.contentSebSettings.save(
       setting.id || setting.contentId,
-      invalidateConfigKeyIfSebConfigChanged(existing, normalized)
+      invalidateConfigKeyIfSebConfigChanged(existing, withStartPassword)
     );
   }
 

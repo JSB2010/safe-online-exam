@@ -35,6 +35,7 @@ describe("CourseSettingsService", () => {
 
     await service.saveDefaults("course-1", {
       quitPassword: "course-password",
+      startPassword: "course-start",
       setupCompleted: true,
       urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
       externalTools: [{ id: "calc", label: "Calculator", url: "https://calc.example.edu", enabled: true }]
@@ -42,15 +43,21 @@ describe("CourseSettingsService", () => {
 
     await expect(repos.value.quizSebSettings.get("defaulted")).resolves.toMatchObject({
       quitPassword: "course-password",
+      startPassword: "course-start",
       customDomains: ["domain:docs.example.edu"],
       usesCourseDefaults: true,
       configKey: null
     });
     await expect(repos.value.quizSebSettings.get("custom")).resolves.toMatchObject({
       quitPassword: "course-password",
+      startPassword: "course-start",
       customDomains: ["domain:custom.example.edu"],
       usesCourseDefaults: false,
       configKey: null
     });
+    const defaulted = await repos.value.quizSebSettings.get("defaulted");
+    const custom = await repos.value.quizSebSettings.get("custom");
+    expect(Buffer.from(defaulted?.configKeySalt || "", "base64")).toHaveLength(32);
+    expect(Buffer.from(custom?.configKeySalt || "", "base64")).toHaveLength(32);
   });
 });

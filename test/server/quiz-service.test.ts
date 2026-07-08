@@ -36,6 +36,7 @@ describe("QuizService", () => {
       id: "course-1",
       courseId: "course-1",
       quitPassword: "default-exit",
+      startPassword: "default-start",
       setupCompleted: true,
       urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
       externalTools: [{ id: "calc", label: "Calculator", url: "https://calc.example.edu", enabled: true }]
@@ -43,6 +44,8 @@ describe("QuizService", () => {
 
     expect(enabled.usesCourseDefaults).toBe(true);
     expect(enabled.quitPassword).toBe("default-exit");
+    expect(enabled.startPassword).toBe("default-start");
+    expect(Buffer.from(enabled.configKeySalt || "", "base64")).toHaveLength(32);
     expect(enabled.urlRules).toEqual([{ id: "docs", match: "domain", value: "docs.example.edu" }]);
     expect(enabled.customDomains).toEqual(["domain:docs.example.edu"]);
     expect(enabled.externalTools).toEqual([
@@ -92,5 +95,38 @@ describe("QuizService", () => {
     });
 
     expect(saved.configKey).toBeNull();
+  });
+
+  it("rotates Config Key salt when the exam start password changes", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new QuizService(repos, canvas);
+    const first = await service.saveSebSetting({
+      quizId: "quiz-1",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      configKey: "stored-config-key",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      urlRules: [],
+      externalTools: [],
+      startPassword: "start-one"
+    });
+
+    const second = await service.saveSebSetting({
+      ...first,
+      configKey: "stored-config-key",
+      startPassword: "start-two"
+    });
+
+    expect(Buffer.from(first.configKeySalt || "", "base64")).toHaveLength(32);
+    expect(Buffer.from(second.configKeySalt || "", "base64")).toHaveLength(32);
+    expect(second.configKeySalt).not.toBe(first.configKeySalt);
+    expect(second.configKey).toBeNull();
   });
 });

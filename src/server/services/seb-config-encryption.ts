@@ -1,5 +1,16 @@
 import { readFileSync } from "node:fs";
-import { constants, createHash, createPublicKey, publicEncrypt, type KeyObject, X509Certificate } from "node:crypto";
+import {
+  constants,
+  createCipheriv,
+  createHash,
+  createHmac,
+  createPublicKey,
+  pbkdf2Sync,
+  publicEncrypt,
+  randomBytes,
+  type KeyObject,
+  X509Certificate
+} from "node:crypto";
 import { gzipSync } from "node:zlib";
 
 export interface SebConfigEncryptionSettings {
@@ -19,12 +30,20 @@ export interface SebEncryptionKeyMaterial {
 
 export interface SebConfigEncryptionOptions {
   encryptBlock?: (block: Buffer, publicKey: KeyObject) => Buffer;
+  startPassword?: string | null;
 }
 
 const OUTER_PREFIX = Buffer.from("pkhs", "utf8");
 const INNER_PLAIN_PREFIX = Buffer.from("plnd", "utf8");
+const INNER_PASSWORD_PREFIX = Buffer.from("pswd", "utf8");
 const PUBLIC_KEY_HASH_LENGTH = 20;
 const Pkcs1PaddingOverhead = 11;
+const RNCryptorVersion = 3;
+const RNCryptorHasPasswordOption = 1;
+const RNCryptorSaltBytes = 8;
+const RNCryptorIvBytes = 16;
+const RNCryptorKeyBytes = 32;
+const RNCryptorRounds = 10000;
 
 export function loadSebEncryptionKeyMaterial(settings: SebConfigEncryptionSettings): SebEncryptionKeyMaterial {
   const loaded =
@@ -45,10 +64,26 @@ export function encryptSebConfigWithPublicKey(
   keyMaterial: SebEncryptionKeyMaterial,
   options: SebConfigEncryptionOptions = {}
 ): Buffer {
-  const innerPlainBlock = Buffer.concat([INNER_PLAIN_PREFIX, gzipSync(plainConfig)]);
-  const encryptedSettings = rsaPkcs1EncryptChunks(innerPlainBlock, keyMaterial.publicKey, options.encryptBlock);
+  const innerBlock = wrapSebConfigPayload(plainConfig, options.startPassword);
+  const encryptedSettings = rsaPkcs1EncryptChunks(innerBlock, keyMaterial.publicKey, options.encryptBlock);
 
   return gzipSync(Buffer.concat([OUTER_PREFIX, keyMaterial.publicKeyHash, encryptedSettings]));
+}
+
+export function wrapSebConfigPayload(plainConfig: Buffer, startPassword?: string | null): Buffer {
+  const compressedPlainConfig = gzipSync(plainConfig);
+  const normalizedPassword = startPassword?.trim();
+  if (!normalizedPassword) {
+    return Buffer.concat([INNER_PLAIN_PREFIX, compressedPlainConfig]);
+  }
+  return Buffer.concat([
+    INNER_PASSWORD_PREFIX,
+    rncryptorEncryptWithPassword(compressedPlainConfig, normalizedPassword)
+  ]);
+}
+
+export function preparePasswordProtectedSebConfig(plainConfig: Buffer, startPassword: string): Buffer {
+  return gzipSync(wrapSebConfigPayload(plainConfig, startPassword));
 }
 
 export function keyMaterialFromPem(pem: string, source = "configured PEM"): SebEncryptionKeyMaterial {
@@ -135,4 +170,22 @@ function parseCertificate(pem: string): X509Certificate | null {
 function exportRsaPublicKeyDer(publicKey: KeyObject): Buffer {
   const exported = publicKey.export({ format: "der", type: "pkcs1" });
   return Buffer.isBuffer(exported) ? exported : Buffer.from(exported);
+}
+
+function rncryptorEncryptWithPassword(data: Buffer, password: string): Buffer {
+  const encryptionSalt = randomBytes(RNCryptorSaltBytes);
+  const hmacSalt = randomBytes(RNCryptorSaltBytes);
+  const iv = randomBytes(RNCryptorIvBytes);
+  const encryptionKey = pbkdf2Sync(password, encryptionSalt, RNCryptorRounds, RNCryptorKeyBytes, "sha1");
+  const hmacKey = pbkdf2Sync(password, hmacSalt, RNCryptorRounds, RNCryptorKeyBytes, "sha1");
+  const cipher = createCipheriv("aes-256-cbc", encryptionKey, iv);
+  const encryptedData = Buffer.concat([cipher.update(data), cipher.final()]);
+  const header = Buffer.concat([
+    Buffer.from([RNCryptorVersion, RNCryptorHasPasswordOption]),
+    encryptionSalt,
+    hmacSalt,
+    iv
+  ]);
+  const hmac = createHmac("sha256", hmacKey).update(header).update(encryptedData).digest();
+  return Buffer.concat([header, encryptedData, hmac]);
 }

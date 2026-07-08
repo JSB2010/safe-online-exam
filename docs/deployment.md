@@ -137,12 +137,13 @@ Then verify in Canvas:
 5. Enabling SEB applies course defaults, sets the Canvas access code, and rewrites a module item when one exists.
 6. A student launch shows only SEB-enabled assessments with SEB launch buttons.
 7. Downloading a `.seb` file stores a Config Key.
-8. SEB can retrieve the access code through the proof flow.
-9. The exit page renders and the quit link works in SEB.
+8. If an exam start password is configured, SEB prompts for it before opening Canvas.
+9. SEB can retrieve the access code through the proof flow.
+10. The exit page renders and the quit link works in SEB.
 
 ## SEB Config Encryption
 
-Certificate encryption is enabled by default. The app encrypts generated `.seb` downloads with the configured public certificate using SEB macOS-compatible `pkhs` format, while Config Keys are still computed from the plaintext settings before encryption.
+Certificate encryption is enabled by default. The app encrypts generated `.seb` downloads with the configured public certificate using SEB macOS-compatible `pkhs` format, while Config Keys are still computed from the plaintext settings before encryption. Instructor-configured exam start passwords add SEB `pswd` password encryption inside the certificate wrapper and rotate SEB's native `configKeySalt`.
 
 For local testing:
 
@@ -167,7 +168,7 @@ To disable certificate wrapping entirely:
 SEB_CONFIG_ENCRYPTION_ENABLED=false
 ```
 
-In that mode, config downloads return plaintext plist `.seb` files and rely on strict Config Key validation for tamper detection.
+In that mode, configs without an exam start password return plaintext plist `.seb` files and rely on strict Config Key validation for tamper detection. Configs with an exam start password are still password-encrypted in SEB `pswd` format.
 
 ## Rollback
 

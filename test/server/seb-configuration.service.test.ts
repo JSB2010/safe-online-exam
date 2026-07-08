@@ -97,6 +97,26 @@ describe("SebConfigurationService", () => {
     expect(expressions).not.toContain(".*");
   });
 
+  it("includes native Config Key salt data when an exam start password is set", () => {
+    process.env.TOOL_URL = "https://app.example.com";
+    process.env.CANVAS_BASE_URL = "https://canvas.example.com";
+    const service = new SebConfigurationService(new AppConfig());
+    const configKeySalt = Buffer.alloc(32, 7).toString("base64");
+
+    const config = service.generateSebConfiguration({
+      courseId: "course-1",
+      contentId: "classicquiz_quiz-1",
+      startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1/take",
+      accessCode: "CODE123",
+      startPassword: "exam-start",
+      configKeySalt
+    });
+    const parsed = plist.parse(config.toString("utf8")) as Record<string, any>;
+
+    expect(Buffer.isBuffer(parsed.configKeySalt)).toBe(true);
+    expect(parsed.configKeySalt).toEqual(Buffer.alloc(32, 7));
+  });
+
   it("supports structured exact, domain, and regex allowlist entries", () => {
     const rules = buildAllowlistRules({
       appBaseUrl: "https://app.example.com",

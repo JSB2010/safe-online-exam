@@ -35,7 +35,7 @@ The current automated tests cover:
 - Quiz service enable/disable, access-code, and Browser Exam Key behavior.
 - Deep-link module item rewrite behavior.
 - SEB configuration plist generation, canonical URL filter keys, and allowed-domain policy.
-- SEB certificate-encrypted `pkhs` download wrapping and plaintext fallback.
+- SEB certificate-encrypted `pkhs` download wrapping, password-encrypted `pswd` wrapping, and plaintext fallback.
 - SEB Config Key and access-proof token behavior.
 - SEB request detection and Browser Exam Key validation.
 - Static detector script serving, safe base URL/debug injection, cache headers, and minified production asset selection.
@@ -114,3 +114,4 @@ Before merging deployment changes:
 9. Canvas LTI launch and OAuth flows work in dev.
 10. SEB `.seb` download, Config Key proof, access-code retrieval, and exit link work in SEB.
 11. With certificate encryption enabled, a machine without the matching private-key identity cannot open the downloaded config; a test machine with the generated/imported identity can open it and still completes Config Key proof.
+12. For a quiz with an exam start password, SEB prompts for that password before loading Canvas, and configs downloaded before the password change fail Config Key proof.

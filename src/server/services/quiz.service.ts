@@ -11,6 +11,7 @@ import {
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
 import { invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
+import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 
 @Injectable()
 export class QuizService {
@@ -61,9 +62,10 @@ export class QuizService {
       urlRules: normalizeUrlRules(setting.urlRules),
       externalTools: normalizeExternalTools(setting.externalTools)
     };
+    const withStartPassword = normalizeSebStartPasswordState(existing, normalized);
     return this.repositories.value.quizSebSettings.save(
       setting.id || setting.quizId,
-      invalidateConfigKeyIfSebConfigChanged(existing, normalized)
+      invalidateConfigKeyIfSebConfigChanged(existing, withStartPassword)
     );
   }
 
@@ -89,8 +91,10 @@ export class QuizService {
       externalTools: normalizeExternalTools(request.externalTools),
       externalToolUrl: request.externalToolUrl || existing?.externalToolUrl || null,
       quitPassword: normalizeBlank(request.quitPassword),
+      startPassword: normalizeBlank(request.startPassword),
       usesCourseDefaults: request.usesCourseDefaults === true,
       quitPasswordOverride: request.quitPasswordOverride === true,
+      startPasswordOverride: request.startPasswordOverride === true,
       browserExamKey: existing?.browserExamKey || generateBrowserExamKey()
     });
   }

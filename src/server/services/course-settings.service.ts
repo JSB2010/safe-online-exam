@@ -7,6 +7,7 @@ import {
   normalizeCourseSebDefaults
 } from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
+import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 
 @Injectable()
 export class CourseSettingsService {
@@ -44,15 +45,17 @@ export class CourseSettingsService {
       if (!existing) {
         return null;
       }
+      const withDefaults = applyCourseDefaultsToContentSetting(
+        {
+          ...existing,
+          usesCourseDefaults: true,
+          quitPasswordOverride: false,
+          startPasswordOverride: false
+        },
+        defaults
+      );
       return this.repositories.value.contentSebSettings.save(existing.id || existing.contentId, {
-        ...applyCourseDefaultsToContentSetting(
-          {
-            ...existing,
-            usesCourseDefaults: true,
-            quitPasswordOverride: false
-          },
-          defaults
-        ),
+        ...normalizeSebStartPasswordState(existing, withDefaults),
         configKey: null
       });
     }
@@ -60,15 +63,17 @@ export class CourseSettingsService {
     if (!existing) {
       return null;
     }
+    const withDefaults = applyCourseDefaultsToQuizSetting(
+      {
+        ...existing,
+        usesCourseDefaults: true,
+        quitPasswordOverride: false,
+        startPasswordOverride: false
+      },
+      defaults
+    );
     return this.repositories.value.quizSebSettings.save(existing.id || existing.quizId, {
-      ...applyCourseDefaultsToQuizSetting(
-        {
-          ...existing,
-          usesCourseDefaults: true,
-          quitPasswordOverride: false
-        },
-        defaults
-      ),
+      ...normalizeSebStartPasswordState(existing, withDefaults),
       configKey: null
     });
   }
@@ -88,18 +93,20 @@ export class CourseSettingsService {
       this.repositories.value.contentSebSettings.find([{ field: "courseId", op: "==", value: courseId }])
     ]);
     await Promise.all([
-      ...quizSettings.map((setting) =>
-        this.repositories.value.quizSebSettings.save(setting.id || setting.quizId, {
-          ...applyCourseDefaultsToQuizSetting(setting, defaults),
+      ...quizSettings.map((setting) => {
+        const withDefaults = applyCourseDefaultsToQuizSetting(setting, defaults);
+        return this.repositories.value.quizSebSettings.save(setting.id || setting.quizId, {
+          ...normalizeSebStartPasswordState(setting, withDefaults),
           configKey: null
-        })
-      ),
-      ...contentSettings.map((setting) =>
-        this.repositories.value.contentSebSettings.save(setting.id || setting.contentId, {
-          ...applyCourseDefaultsToContentSetting(setting, defaults),
+        });
+      }),
+      ...contentSettings.map((setting) => {
+        const withDefaults = applyCourseDefaultsToContentSetting(setting, defaults);
+        return this.repositories.value.contentSebSettings.save(setting.id || setting.contentId, {
+          ...normalizeSebStartPasswordState(setting, withDefaults),
           configKey: null
-        })
-      )
+        });
+      })
     ]);
   }
 }

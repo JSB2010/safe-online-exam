@@ -373,7 +373,7 @@ p {
   position: absolute;
   right: 0;
   z-index: 5;
-  min-width: 220px;
+  min-width: 260px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -387,7 +387,29 @@ p {
   box-shadow: 0 14px 28px rgba(24, 36, 56, 0.16);
 }
 
-.password-popover span {
+.password-popover.password-list {
+  display: grid;
+  gap: 10px;
+}
+
+.password-popover-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.password-popover-row strong {
+  display: block;
+  margin-bottom: 2px;
+  color: #667085;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.password-popover span,
+.password-popover-row span {
   min-width: 0;
   overflow-wrap: anywhere;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;

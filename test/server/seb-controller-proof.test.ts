@@ -158,6 +158,29 @@ describe("SEB access proof validation", () => {
       );
     });
   });
+
+  it("rejects configs generated before an exam start password was added", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const staleConfigKey = classicConfigKey();
+      const { controller } = controllerWithSetting({
+        quizId: "23455",
+        courseId: "11825",
+        configKey: staleConfigKey,
+        startPassword: "exam-start",
+        configKeySalt: Buffer.alloc(32, 5).toString("base64")
+      });
+      const staleHash = configKey.hashForUrl(`${CANVAS_URL}/courses/11825/quizzes/23455/take`, staleConfigKey);
+
+      await expectApiError(
+        controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+          configKeyHash: staleHash,
+          url: `${CANVAS_URL}/courses/11825/quizzes/23455/take`
+        }),
+        403
+      );
+    });
+  });
 });
 
 async function withConfig(run: () => Promise<void>): Promise<void> {

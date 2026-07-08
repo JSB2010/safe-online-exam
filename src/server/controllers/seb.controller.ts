@@ -484,8 +484,15 @@ export class SebController {
   private async generateConfig(courseId: string, contentId: string, canvasUrl?: string): Promise<Buffer> {
     const classicId = extractClassicQuizId(contentId);
     if (classicId) {
-      const setting = await this.quizService.getSebSettingForQuiz(classicId);
+      let setting = await this.quizService.getSebSettingForQuiz(classicId);
       if (!setting?.sebRequired || !setting.accessCode) {
+        throw new Error("SEB not enabled or access code missing");
+      }
+      if (setting.startPassword && !setting.configKeySalt) {
+        setting = await this.quizService.saveSebSetting(setting);
+      }
+      const accessCode = setting.accessCode;
+      if (!accessCode) {
         throw new Error("SEB not enabled or access code missing");
       }
       const quiz = await this.quizService.getQuiz(classicId);
@@ -494,16 +501,25 @@ export class SebController {
         courseId,
         contentId: contentId.startsWith("classicquiz_") ? contentId : classicQuizContentId(classicId),
         startUrl,
-        accessCode: setting.accessCode,
+        accessCode,
         allowedDomains: allowedDomains(setting),
-        quitPassword: setting.quitPassword
+        quitPassword: setting.quitPassword,
+        startPassword: setting.startPassword,
+        configKeySalt: setting.configKeySalt
       });
       await this.quizService.saveSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
-      return this.sebConfig.prepareSebConfigurationDownload(generated);
+      return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
     }
 
-    const setting = await this.contentService.getSebSetting(contentId);
+    let setting = await this.contentService.getSebSetting(contentId);
     if (!setting?.sebRequired || !setting.accessCode) {
+      throw new Error("SEB not enabled or access code missing");
+    }
+    if (setting.startPassword && !setting.configKeySalt) {
+      setting = await this.contentService.saveSebSetting(setting);
+    }
+    const accessCode = setting.accessCode;
+    if (!accessCode) {
       throw new Error("SEB not enabled or access code missing");
     }
     const startUrl = await this.resolveNewQuizStartUrl(courseId, contentId, setting);
@@ -511,12 +527,14 @@ export class SebController {
       courseId,
       contentId,
       startUrl,
-      accessCode: setting.accessCode,
+      accessCode,
       allowedDomains: allowedDomains(setting),
-      quitPassword: setting.quitPassword
+      quitPassword: setting.quitPassword,
+      startPassword: setting.startPassword,
+      configKeySalt: setting.configKeySalt
     });
     await this.contentService.saveSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
-    return this.sebConfig.prepareSebConfigurationDownload(generated);
+    return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
   }
 
   private async currentConfigKey(
@@ -534,7 +552,9 @@ export class SebController {
         startUrl,
         accessCode: setting.accessCode || "",
         allowedDomains: allowedDomains(setting),
-        quitPassword: setting.quitPassword
+        quitPassword: setting.quitPassword,
+        startPassword: setting.startPassword,
+        configKeySalt: setting.configKeySalt
       });
       return this.configKey.computeConfigKey(generated);
     }
@@ -546,7 +566,9 @@ export class SebController {
       startUrl,
       accessCode: setting.accessCode || "",
       allowedDomains: allowedDomains(setting),
-      quitPassword: setting.quitPassword
+      quitPassword: setting.quitPassword,
+      startPassword: setting.startPassword,
+      configKeySalt: setting.configKeySalt
     });
     return this.configKey.computeConfigKey(generated);
   }

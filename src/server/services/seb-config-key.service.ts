@@ -51,6 +51,9 @@ function pruneForConfigKey(value: unknown, keyName?: string): unknown {
   if (keyName === "originatorVersion") {
     return undefined;
   }
+  if (isBinaryData(value)) {
+    return Buffer.from(value).toString("base64");
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => pruneForConfigKey(entry)).filter((entry) => entry !== undefined);
   }
@@ -63,10 +66,11 @@ function pruneForConfigKey(value: unknown, keyName?: string): unknown {
       );
     return Object.fromEntries(entries);
   }
-  if (value instanceof Uint8Array) {
-    return Buffer.from(value).toString("base64");
-  }
   return value;
+}
+
+function isBinaryData(value: unknown): value is Uint8Array {
+  return Buffer.isBuffer(value) || (ArrayBuffer.isView(value) && !(value instanceof DataView));
 }
 
 function stableJson(value: unknown): string {

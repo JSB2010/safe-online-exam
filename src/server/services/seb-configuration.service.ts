@@ -6,8 +6,10 @@ import { AppConfig } from "../config/app-config.js";
 import {
   encryptSebConfigWithPublicKey,
   loadSebEncryptionKeyMaterial,
+  preparePasswordProtectedSebConfig,
   type SebEncryptionKeyMaterial
 } from "./seb-config-encryption.js";
+import { configKeySaltBuffer } from "./seb-start-password.js";
 
 export interface SebConfigurationInput {
   courseId: string;
@@ -16,6 +18,8 @@ export interface SebConfigurationInput {
   accessCode: string;
   allowedDomains?: string[];
   quitPassword?: string | null;
+  startPassword?: string | null;
+  configKeySalt?: string | null;
 }
 
 interface UrlFilterRule {
@@ -38,10 +42,12 @@ export class SebConfigurationService {
     }
     const canvasBaseUrl = this.config.getCanvasDomain();
     const quitPassword = input.quitPassword || this.config.value.seb.defaultQuitPassword || null;
+    const configKeySalt = input.startPassword ? configKeySaltBuffer(input.configKeySalt) : null;
     const plistValue: Record<string, unknown> = {
       sebConfigPurpose: 0,
       originatorVersion: "3.7.0",
       startURL: input.startUrl,
+      ...(configKeySalt ? { configKeySalt } : {}),
       allowQuit: !!quitPassword,
       ignoreQuitPassword: !quitPassword,
       hashedQuitPassword: quitPassword ? sha256Hex(quitPassword) : "",
@@ -85,11 +91,16 @@ export class SebConfigurationService {
     return Buffer.from(plist.build(plistValue as any), "utf8");
   }
 
-  prepareSebConfigurationDownload(plainConfig: Buffer): Buffer {
+  prepareSebConfigurationDownload(plainConfig: Buffer, options: { startPassword?: string | null } = {}): Buffer {
     if (!this.config.value.seb.configEncryption.enabled) {
+      if (options.startPassword?.trim()) {
+        return preparePasswordProtectedSebConfig(plainConfig, options.startPassword);
+      }
       return plainConfig;
     }
-    return encryptSebConfigWithPublicKey(plainConfig, this.getEncryptionKeyMaterial());
+    return encryptSebConfigWithPublicKey(plainConfig, this.getEncryptionKeyMaterial(), {
+      startPassword: options.startPassword
+    });
   }
 
   getEncryptionCertificate(): { pem: string; der: Buffer; publicKeyHash: Buffer } | null {

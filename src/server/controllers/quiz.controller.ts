@@ -88,6 +88,7 @@ export class QuizController {
       normalizeCourseSebDefaults({
         courseId,
         quitPassword: typeof body.quitPassword === "string" ? body.quitPassword : null,
+        startPassword: typeof body.startPassword === "string" ? body.startPassword : null,
         urlRules: Array.isArray(body.urlRules) ? (body.urlRules as any) : [],
         externalTools: Array.isArray(body.externalTools) ? (body.externalTools as any) : [],
         setupCompleted: body.setupCompleted !== false
@@ -164,8 +165,10 @@ export class QuizController {
             externalTools: normalizeExternalTools(body.externalTools),
             externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
             quitPassword: normalizeBlank(body.quitPassword),
+            startPassword: normalizeBlank(body.startPassword),
             usesCourseDefaults: body.usesCourseDefaults === true,
             quitPasswordOverride: body.quitPasswordOverride === true,
+            startPasswordOverride: body.startPasswordOverride === true,
             sebRequired: true,
             enabled: setting.enabled,
             browserExamKey: setting.browserExamKey || generateBrowserExamKey()
@@ -192,8 +195,10 @@ export class QuizController {
               externalTools: normalizeExternalTools(body.externalTools),
               externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
               quitPassword: normalizeBlank(body.quitPassword),
+              startPassword: normalizeBlank(body.startPassword),
               usesCourseDefaults: body.usesCourseDefaults === true,
               quitPasswordOverride: body.quitPasswordOverride === true,
+              startPasswordOverride: body.startPasswordOverride === true,
               sebRequired: true,
               enabled: setting?.enabled ?? true,
               browserExamKey: setting?.browserExamKey || generateBrowserExamKey()

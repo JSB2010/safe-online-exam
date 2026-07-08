@@ -28,6 +28,8 @@ function sebConfigFingerprint(setting: SebConfigSetting): string {
     enabled: setting.enabled === true,
     accessCode: setting.accessCode || null,
     quitPassword: setting.quitPassword || null,
+    startPassword: setting.startPassword || null,
+    configKeySalt: setting.configKeySalt || null,
     ssoDomains: setting.ssoDomains || [],
     educationalToolDomains: setting.educationalToolDomains || [],
     customDomains: setting.customDomains || [],
