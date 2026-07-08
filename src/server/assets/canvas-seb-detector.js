@@ -584,24 +584,36 @@
         }
 
         const isError = stateName === 'error';
-        card.style.cssText = 'width: min(420px, 100%); background: #ffffff; border: 1px solid #dfe3ea; border-radius: 8px; box-shadow: 0 18px 48px rgba(24,36,56,0.22); padding: 28px; text-align: left;';
+        const isSuccess = stateName === 'success';
+        const iconColor = isError ? '#b42318' : isSuccess ? '#05603a' : '#075985';
+        const iconBackground = isError ? '#fff1f0' : isSuccess ? '#ecfdf3' : '#e0f2fe';
+        const iconBorder = isError ? '#fecdca' : isSuccess ? '#abefc6' : '#bae6fd';
+        const title = isError ? 'Something went wrong' : isSuccess ? 'Success' : 'Preparing your quiz';
+        const body = isError
+            ? escapeHtml(message || 'The access code could not be entered automatically. Reload the quiz in Safe Exam Browser, or ask your instructor for help.')
+            : isSuccess
+                ? 'Entering your quiz now.'
+                : 'Entering the access code automatically.';
+        card.style.cssText = 'width: min(420px, 100%); background: #ffffff; border: 1px solid #dbe2ea; border-radius: 8px; box-shadow: 0 16px 34px rgba(24,36,56,0.16); padding: 28px; text-align: left;';
         card.innerHTML = `
-            <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: ${isError ? '#b42318' : '#0f766e'}; background: ${isError ? '#fee4e2' : '#e6f4f1'}; border-radius: 8px;">
+            <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: ${iconColor}; background: ${iconBackground}; border: 1px solid ${iconBorder}; border-radius: 8px;">
                 ${
                     isError
                         ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; border: 2px solid #b42318; border-radius: 999px; font-size: 15px; font-weight: 900; line-height: 1;">!</div>'
-                        : '<div style="width: 18px; height: 18px; border: 2px solid #98d2c9; border-top-color: #0f766e; border-radius: 999px; animation: sebProgressSpin 0.8s linear infinite;"></div>'
+                        : isSuccess
+                            ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; font-size: 21px; font-weight: 900; line-height: 1;">✓</div>'
+                            : '<div style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #075985; border-radius: 999px; animation: sebProgressSpin 0.8s linear infinite;"></div>'
                 }
             </div>
-            <h2 style="margin: 0 0 10px; color: #172033; font-size: 28px; line-height: 1.15; font-weight: 800;">
-                ${isError ? 'Something went wrong' : 'Getting your quiz ready'}
+            <h2 style="margin: 0 0 10px; color: #182230; font-size: 24px; line-height: 1.15; font-weight: 800;">
+                ${title}
             </h2>
-            <p style="margin: 0; color: #475467; font-size: 16px; line-height: 1.45;">
-                ${isError ? escapeHtml(message || 'The access code could not be entered automatically. Reload the quiz in Safe Exam Browser, or ask your instructor for help.') : 'This should only take a moment.'}
+            <p style="margin: 0; color: #667085; font-size: 15px; line-height: 1.45;">
+                ${body}
             </p>
             ${
                 isError
-                    ? '<button type="button" id="seb-access-code-retry-button" style="margin-top: 18px; min-height: 38px; padding: 0 14px; border: 1px solid #0f766e; border-radius: 8px; background: #0f766e; color: #ffffff; font-weight: 800; cursor: pointer;">Try again</button>'
+                    ? '<button type="button" id="seb-access-code-retry-button" style="margin-top: 18px; min-height: 38px; padding: 0 14px; border: 1px solid #0b63ce; border-radius: 8px; background: #0b63ce; color: #ffffff; font-weight: 800; cursor: pointer;">Try again</button>'
                     : ''
             }
         `;
@@ -789,6 +801,7 @@
         const sebLaunchUrl = configFileUrl
             .replace(/^https:\/\//i, 'sebs://')
             .replace(/^http:\/\//i, 'seb://');
+        const countdownSeconds = 2;
 
         const message = document.createElement('div');
         message.style.cssText = `
@@ -809,31 +822,66 @@
         `;
 
         message.innerHTML = `
-            <div style="width: min(560px, 100%); background: #ffffff; color: #172033; padding: 32px; border: 1px solid #dfe3ea; border-radius: 8px; box-shadow: 0 18px 48px rgba(24,36,56,0.22); text-align: left;">
-                <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: #0f766e; background: #e6f4f1; border-radius: 8px; font-weight: 800;">
+            <div style="width: min(560px, 100%); overflow: hidden; background: #ffffff; color: #182230; border: 1px solid #dbe2ea; border-radius: 8px; box-shadow: 0 16px 34px rgba(24,36,56,0.16); text-align: left;">
+                <div style="padding: 32px 32px 22px;">
+                <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: #075985; background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; font-weight: 800;">
                     SEB
                 </div>
-                <p style="margin: 0 0 6px; color: #0f766e; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0;">
+                <p style="margin: 0 0 6px; color: #0b63ce; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0;">
                     Secure assessment
                 </p>
-                <h2 style="color: #172033; margin: 0 0 12px; font-size: 30px; line-height: 1.15; font-weight: 800;">
+                <h2 style="color: #182230; margin: 0 0 12px; font-size: 24px; line-height: 1.15; font-weight: 800;">
                     Safe Exam Browser Required
                 </h2>
-                <p style="margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: #344054;">
-                    This quiz requires Safe Exam Browser. Open SEB to continue.
+                <p style="margin: 0 0 18px; font-size: 15px; line-height: 1.45; color: #667085;">
+                    Opening SEB now. If prompted, allow your browser to open Safe Exam Browser.
                 </p>
-                <div style="display: grid; justify-items: start; gap: 12px;">
-                    <a href="${sebLaunchUrl}" style="min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; border-radius: 8px; background: #0f766e; color: #ffffff; text-decoration: none; font-weight: 800;">
+                </div>
+                <div style="display: grid; gap: 12px; padding: 14px 32px 18px; background: #f8fafc; border-top: 1px solid #dbe2ea;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+                        <div style="min-width: 180px;">
+                            <strong style="display: block; color: #182230; font-size: 13px;">Opening automatically</strong>
+                            <span id="seb-launch-countdown-text" style="display: block; margin-top: 2px; color: #667085; font-size: 12px; font-weight: 700;">${countdownSeconds}s remaining</span>
+                        </div>
+                        <a href="${escapeHtml(sebLaunchUrl)}" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">
                         Open SEB
-                    </a>
-                    <a href="${configFileUrl}" style="display: inline-flex; align-items: center; gap: 7px; color: #475467; font-size: 14px; font-weight: 700; text-decoration: none;">
-                        If that does not work, try the file
-                    </a>
+                        </a>
+                    </div>
+                    <div style="height: 7px; overflow: hidden; background: #e7ecf2; border-radius: 999px;">
+                        <span id="seb-launch-countdown-bar" style="width: 0%; height: 100%; display: block; background: #0b63ce; border-radius: inherit; transition: width 220ms ease;"></span>
+                    </div>
                 </div>
             </div>
         `;
 
         document.body.appendChild(message);
+
+        let remaining = countdownSeconds;
+        const countdownText = document.getElementById('seb-launch-countdown-text');
+        const countdownBar = document.getElementById('seb-launch-countdown-bar');
+        const updateCountdown = () => {
+            const elapsed = countdownSeconds - remaining;
+            if (countdownBar) {
+                countdownBar.style.width = `${Math.min(100, (elapsed / countdownSeconds) * 100)}%`;
+            }
+            if (countdownText) {
+                countdownText.textContent = remaining > 0 ? `${remaining}s remaining` : 'Opening now';
+            }
+        };
+        updateCountdown();
+        const interval = setInterval(() => {
+            remaining = Math.max(0, remaining - 1);
+            updateCountdown();
+            if (remaining === 0) {
+                clearInterval(interval);
+            }
+        }, 1000);
+        setTimeout(() => {
+            if (countdownBar) {
+                countdownBar.style.width = '100%';
+            }
+            window.location.assign(sebLaunchUrl);
+        }, countdownSeconds * 1000);
     }
 
     async function setupExamToolsSidebar(quizInfo) {
@@ -1353,7 +1401,7 @@
             return {
                 proofToken: null,
                 errorMessage:
-                    'Safe Exam Browser could not read the Config Key for this quiz. Open the quiz using the downloaded SEB configuration file, or download a fresh SEB configuration from Canvas.'
+                    'Safe Exam Browser could not read the Config Key for this quiz. Reopen the quiz from Canvas using the Safe Exam Browser link.'
             };
         }
 
@@ -1394,7 +1442,7 @@
                       proofToken: null,
                       errorMessage:
                           data.message ||
-                          'Safe Exam Browser could not verify this quiz configuration. Download a fresh SEB configuration from Canvas and reopen the quiz.'
+                          'Safe Exam Browser could not verify this quiz configuration. Reopen the quiz from Canvas using the Safe Exam Browser link.'
                   };
         } catch (error) {
             debugLog('Error creating access proof: ' + errorMessage(error), 'warn');
@@ -1409,7 +1457,7 @@
     function accessProofErrorMessage(status, responseText) {
         const fallback =
             status === 403 || status === 409
-                ? 'This SEB configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh SEB configuration from Canvas and reopen the quiz.'
+                ? 'This SEB configuration could not be verified. It may be stale, incorrect, or modified. Reopen the quiz from Canvas using the Safe Exam Browser link.'
                 : 'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.';
 
         if (!responseText) {
@@ -1418,6 +1466,9 @@
 
         try {
             const payload = JSON.parse(responseText);
+            if (payload && payload.error_code === 'INVALID_SEB_CONFIG_PROOF') {
+                return fallback;
+            }
             return typeof payload.message === 'string' && payload.message.trim() ? payload.message : fallback;
         } catch (error) {
             return fallback;
@@ -1548,6 +1599,7 @@
                 if (submitButton) {
                     debugLog('Auto-submitting access code form', 'success');
                     setTimeout(() => {
+                        renderAccessCodeOverlayContent('success');
                         submitButton.click();
                     }, 500);
                     return true;
@@ -1561,6 +1613,7 @@
             if (submitButton) {
                 debugLog('Auto-submitting access code using nearby button', 'success');
                 setTimeout(() => {
+                    renderAccessCodeOverlayContent('success');
                     submitButton.click();
                 }, 500);
                 return true;

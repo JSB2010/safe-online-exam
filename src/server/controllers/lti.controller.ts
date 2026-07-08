@@ -319,7 +319,7 @@ export class LtiController {
     request: Request,
     courseId: string,
     userId: string,
-    message = "Let's get your course set up. Connect Canvas so this tool can read quizzes and set access codes.",
+    message = "Authorize Canvas access so this tool can read quizzes and set access codes.",
     reauthorize = false
   ): string {
     const endpoint = reauthorize ? "/api/oauth2reauthorize" : "/api/oauth2authorize";

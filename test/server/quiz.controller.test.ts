@@ -125,7 +125,7 @@ describe("QuizController", () => {
 
     expect(result).toMatchObject({
       success: true,
-      message: "SEB enabled successfully with access code enforcement"
+      message: "SEB enabled."
     });
     expect(canvasApi.setNewQuizAccessCode).toHaveBeenCalledWith(
       COURSE_ID,
@@ -155,7 +155,7 @@ describe("QuizController", () => {
 
     const result = await controller.disable(requestWithSession(), COURSE_ID, "newquiz:course-1:assignment-99");
 
-    expect(result).toMatchObject({ success: true, message: "SEB disabled successfully" });
+    expect(result).toMatchObject({ success: true, message: "SEB disabled." });
     expect(canvasApi.removeNewQuizAccessCode).not.toHaveBeenCalled();
     expect(assessments.saveContentSebSetting).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -187,7 +187,7 @@ describe("QuizController", () => {
 
     expect(result).toMatchObject({
       success: true,
-      message: "SEB access code regenerated. Students must download a fresh configuration file."
+      message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
     });
     expect(canvasApi.setQuizAccessCode).toHaveBeenCalledWith(
       COURSE_ID,

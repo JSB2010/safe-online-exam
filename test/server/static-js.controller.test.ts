@@ -40,8 +40,8 @@ describe("StaticJsController", () => {
 
     const script = await controller.canvasDetector(request);
 
-    expect(script).toContain("Getting your quiz ready");
-    expect(script).toContain("This should only take a moment.");
+    expect(script).toContain("Preparing your quiz");
+    expect(script).toContain("Entering the access code automatically.");
     expect(script).toContain("Something went wrong");
     expect(script).toContain("Try again");
     expect(script).toContain("showAccessCodeProgressOverlay();");

@@ -247,7 +247,7 @@ export class QuizController {
       const parsed = parseNewQuizContentId(quizId);
       if (parsed) {
         const setting = await this.enableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
-        return { success: true, message: "SEB enabled successfully with access code enforcement", setting };
+        return { success: true, message: "SEB enabled.", setting };
       }
       const setting = await this.assessments.enableSebWithAccessCode(
         courseId,
@@ -257,7 +257,7 @@ export class QuizController {
       );
       return {
         success: true,
-        message: "SEB enabled successfully with access code enforcement",
+        message: "SEB enabled.",
         setting
       };
     } catch (error) {
@@ -302,10 +302,10 @@ export class QuizController {
       const parsed = parseNewQuizContentId(quizId);
       if (parsed) {
         const setting = await this.disableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
-        return { success: true, message: "SEB disabled successfully", setting };
+        return { success: true, message: "SEB disabled.", setting };
       }
       const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
-      return { success: true, message: "SEB disabled successfully", setting };
+      return { success: true, message: "SEB disabled.", setting };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
         return canvasAuthorizationRequired(courseId, userId);
@@ -349,7 +349,7 @@ export class QuizController {
           await this.assessments.saveContentSebSetting({ ...setting, accessCode, configKey: null });
           return {
             success: true,
-            message: "SEB access code regenerated. Students must download a fresh configuration file."
+            message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
           };
         }
         const setting = await this.assessments.getSebSettingForQuiz(quizId);
@@ -360,7 +360,7 @@ export class QuizController {
         await this.assessments.saveQuizSebSetting({ ...setting, accessCode, configKey: null });
         return {
           success: true,
-          message: "SEB access code regenerated. Students must download a fresh configuration file."
+          message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
         };
       });
     } catch (error) {

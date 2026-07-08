@@ -4,7 +4,6 @@ import {
   Calculator,
   Check,
   Clipboard,
-  Download,
   ExternalLink,
   Eye,
   EyeOff,
@@ -89,9 +88,43 @@ export function App() {
       );
     case "student":
       return <StudentDashboard data={bootstrap.data} />;
+    case "service-status":
+      return <ServiceStatusPage />;
     default:
       return <MessagePage icon={<Shield />} title="Safe Exam Browser" message="This service is running." />;
   }
+}
+
+function ServiceStatusPage() {
+  return (
+    <main className="app-shell service-shell">
+      <header className="topbar">
+        <div className="topbar-title">
+          <div className="brand-mark">
+            <Shield size={20} />
+          </div>
+          <div>
+            <h1>Canvas SEB LTI</h1>
+            <p>Safe Exam Browser integration service</p>
+          </div>
+        </div>
+        <div className="stat-pill active">
+          <span>Status</span>
+          <strong>UP</strong>
+        </div>
+      </header>
+      <section className="work-surface service-status-panel">
+        <div className="service-status-main">
+          <div className="message-icon">
+            <Check size={22} />
+          </div>
+          <span className="section-kicker">Service status</span>
+          <h2>Canvas SEB LTI service is running</h2>
+          <p>Launch from Canvas to manage quizzes or open SEB assessments.</p>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function TeacherDashboard({ data }: { data: Record<string, any> }) {
@@ -143,7 +176,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           ...current,
           [item.id]: body.setting || { ...current[item.id], sebRequired: !enabled }
         }));
-        pushToast("success", body.message || "SEB setting updated.");
+        pushToast("success", enabled ? "SEB disabled." : "SEB enabled.");
       }
     } catch (error) {
       pushToast("error", errorMessage(error, "The SEB setting could not be updated."));
@@ -227,8 +260,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       <section className="work-surface">
         <div className="list-header">
           <div>
-            <h2>Quiz Management</h2>
-            <p>Enable SEB, adjust quiz settings, and view exam passwords.</p>
+            <h2>Quizzes</h2>
+            <p>Choose which quizzes require SEB and manage passwords.</p>
           </div>
           <div className="search">
             <Search size={18} />
@@ -279,13 +312,13 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
                       {passwordVisible && (
                         <div className="password-popover password-list">
                           <PasswordPopoverRow
-                            label="Start"
+                            label="Start password"
                             value={startPassword}
                             emptyLabel="No start password set"
                             onCopy={() => pushToast("success", "Start password copied.")}
                           />
                           <PasswordPopoverRow
-                            label="Exit"
+                            label="Exit password"
                             value={exitPassword}
                             emptyLabel="No exit password set"
                             onCopy={() => pushToast("success", "Exit password copied.")}
@@ -382,7 +415,7 @@ function PasswordPopoverRow({
       {value && (
         <button
           className="icon-button tiny"
-          title={`Copy ${label.toLowerCase()} password`}
+          title={`Copy ${label.toLowerCase()}`}
           onClick={() => {
             void navigator.clipboard?.writeText(value);
             onCopy();
@@ -418,8 +451,8 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
       <section className="work-surface">
         <div className="list-header">
           <div>
-            <h2>Assessments Requiring SEB</h2>
-            <p>Open the quiz in Safe Exam Browser when you are ready to begin.</p>
+            <h2>Quizzes</h2>
+            <p>Open each quiz in Safe Exam Browser.</p>
           </div>
         </div>
         <div className="content-list">
@@ -662,7 +695,7 @@ function DefaultsDialog({
         <header className="dialog-header">
           <div>
             <span className="section-kicker">Course defaults</span>
-            <h2 id="defaults-title">Default SEB Settings</h2>
+            <h2 id="defaults-title">Starting settings</h2>
           </div>
           <button className="icon-button" onClick={onClose} title="Close defaults">
             <X size={17} />
@@ -720,8 +753,8 @@ function SetupWizard({
             <Shield size={22} />
           </div>
           <div>
-            <h2 id="setup-title">Welcome to SEB Canvas LTI</h2>
-            <p>Set the course defaults instructors will start from when enabling quizzes.</p>
+            <h2 id="setup-title">Set course defaults</h2>
+            <p>Choose the starting settings for SEB-enabled quizzes.</p>
           </div>
         </header>
         <nav className="stepper" aria-label="Setup steps">
@@ -779,39 +812,81 @@ function DefaultsEditor({
   const showTools = visibleSection === "all" || visibleSection === "tools";
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [startPasswordVisible, setStartPasswordVisible] = useState(false);
+  const [startPasswordEnabled, setStartPasswordEnabled] = useState(() => !!draft.startPassword);
+  const [quitPasswordEnabled, setQuitPasswordEnabled] = useState(() => !!draft.quitPassword);
+
+  const updateStartPasswordEnabled = (enabled: boolean) => {
+    setStartPasswordEnabled(enabled);
+    if (!enabled) {
+      setDraft((current) => ({ ...current, startPassword: null }));
+    }
+  };
+
+  const updateQuitPasswordEnabled = (enabled: boolean) => {
+    setQuitPasswordEnabled(enabled);
+    if (!enabled) {
+      setDraft((current) => ({ ...current, quitPassword: null }));
+    }
+  };
 
   return (
     <div className="settings-stack">
       {showPassword && (
         <section className="settings-section">
-          <SectionHeading title="Default exam start password" />
+          <SectionHeading title="Start password" />
+          <label className="toggle-row compact">
+            <input
+              type="checkbox"
+              checked={startPasswordEnabled}
+              onChange={(event) => updateStartPasswordEnabled(event.target.checked)}
+            />
+            <span>
+              <strong>Require a start password</strong>
+              <small>Students enter this before SEB opens a quiz.</small>
+            </span>
+          </label>
           <div className="password-field">
             <input
               type={startPasswordVisible ? "text" : "password"}
               value={draft.startPassword || ""}
+              disabled={!startPasswordEnabled}
               onChange={(event) => setDraft((current) => ({ ...current, startPassword: event.target.value }))}
-              placeholder="Require a password before SEB opens the quiz"
+              placeholder="Start password"
             />
             <button
               className="icon-button"
               onClick={() => setStartPasswordVisible((current) => !current)}
+              disabled={!startPasswordEnabled}
               title="Show or hide start password"
             >
               {startPasswordVisible ? <EyeOff size={17} /> : <Eye size={17} />}
             </button>
           </div>
 
-          <SectionHeading title="Default exit password" />
+          <SectionHeading title="Exit password" />
+          <label className="toggle-row compact">
+            <input
+              type="checkbox"
+              checked={quitPasswordEnabled}
+              onChange={(event) => updateQuitPasswordEnabled(event.target.checked)}
+            />
+            <span>
+              <strong>Use an exit password</strong>
+              <small>SEB asks for this before students can quit during a quiz.</small>
+            </span>
+          </label>
           <div className="password-field">
             <input
               type={passwordVisible ? "text" : "password"}
               value={draft.quitPassword || ""}
+              disabled={!quitPasswordEnabled}
               onChange={(event) => setDraft((current) => ({ ...current, quitPassword: event.target.value }))}
-              placeholder="Set a course default password"
+              placeholder="Exit password"
             />
             <button
               className="icon-button"
               onClick={() => setPasswordVisible((current) => !current)}
+              disabled={!quitPasswordEnabled}
               title="Show or hide password"
             >
               {passwordVisible ? <EyeOff size={17} /> : <Eye size={17} />}
@@ -901,11 +976,11 @@ function SettingsSections({
             onChange={(event) => setStartPasswordOverride(event.target.checked)}
           />
           <span>
-            <strong>Override default start password</strong>
+            <strong>Set a quiz-specific start password</strong>
             <small>
               {defaultStartPassword
-                ? "Unchecked quizzes use the course start password."
-                : "No course start password is set."}
+                ? "Otherwise this quiz uses the course default."
+                : "Otherwise this quiz has no start password."}
             </small>
           </span>
         </label>
@@ -936,9 +1011,11 @@ function SettingsSections({
             onChange={(event) => setPasswordOverride(event.target.checked)}
           />
           <span>
-            <strong>Override default password</strong>
+            <strong>Set a quiz-specific exit password</strong>
             <small>
-              {defaultPassword ? "Unchecked quizzes use the course password." : "No course password is set."}
+              {defaultPassword
+                ? "Otherwise this quiz uses the course default."
+                : "Otherwise this quiz has no exit password."}
             </small>
           </span>
         </label>
@@ -1102,8 +1179,8 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
   return (
     <MessagePage
       icon={<KeyRound />}
-      title="Set Up Safe Exam Browser"
-      message={data.message || "Connect Canvas so SEB Canvas LTI can read course quizzes and enable access codes."}
+      title="Connect Canvas"
+      message={data.message || "Authorize Canvas access so this tool can read quizzes and set access codes."}
       action={
         <a className="button primary" href={data.authUrl}>
           <KeyRound size={16} /> Connect Canvas
@@ -1115,47 +1192,102 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
 
 function SebDownloadPage({ data }: { data: Record<string, any> }) {
   const configUrl = data.sebConfigUrl || data.configUrl || data.configDownloadUrl;
+  const launchUrl = data.sebLaunchUrl || configUrl;
   return (
     <MessagePage
       icon={<Shield />}
       title="Safe Exam Browser Required"
-      message="This quiz requires Safe Exam Browser. Open SEB to continue to the assessment."
+      message="Opening SEB now. If prompted, allow your browser to open Safe Exam Browser."
       action={
-        <div className="student-action-stack">
-          <a className="button primary" href={data.sebLaunchUrl || configUrl}>
-            <ExternalLink size={16} /> Open SEB
-          </a>
-          <a className="backup-link" href={configUrl}>
-            <Download size={15} /> If that does not work, try the file
-          </a>
-        </div>
+        <AutoRedirectAction
+          url={launchUrl}
+          label="Open SEB"
+          icon={<ExternalLink size={16} />}
+          seconds={2}
+          statusLabel="Opening automatically"
+          doneLabel="Opening now"
+        />
       }
     />
   );
 }
 
 function SebExitPage({ data }: { data: Record<string, any> }) {
-  useEffect(() => {
-    if (!data.quitUrl) {
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      window.location.assign(data.quitUrl);
-    }, 300);
-    return () => window.clearTimeout(timeout);
-  }, [data.quitUrl]);
-
+  const seconds = 2;
   return (
     <MessagePage
       icon={<Check />}
       title="Assessment Complete"
-      message="Safe Exam Browser should close automatically. Use the button if it stays open."
+      message="SEB will close this session automatically. Use the button if it stays open."
       action={
-        <a className="button primary" id="sebQuitLink" href={data.quitUrl}>
-          <LogOut size={16} /> Quit Safe Exam Browser
-        </a>
+        <AutoRedirectAction
+          url={data.quitUrl}
+          label="Quit Safe Exam Browser"
+          icon={<LogOut size={16} />}
+          seconds={seconds}
+          linkId="sebQuitLink"
+          statusLabel="Quitting automatically"
+          doneLabel="Quitting now"
+        />
       }
     />
+  );
+}
+
+function AutoRedirectAction({
+  url,
+  label,
+  icon,
+  seconds,
+  linkId,
+  statusLabel,
+  doneLabel
+}: {
+  url?: string;
+  label: string;
+  icon: ReactNode;
+  seconds: number;
+  linkId?: string;
+  statusLabel: string;
+  doneLabel: string;
+}) {
+  const [remaining, setRemaining] = useState(seconds);
+
+  useEffect(() => {
+    if (!url) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setRemaining((current) => Math.max(0, current - 1));
+    }, 1000);
+    const timeout = window.setTimeout(() => {
+      window.location.assign(url);
+    }, seconds * 1000);
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(timeout);
+    };
+  }, [seconds, url]);
+
+  const progress = ((seconds - remaining) / seconds) * 100;
+
+  return (
+    <div className="countdown-action">
+      <div className="countdown-status" aria-live="polite">
+        <div className="countdown-row">
+          <div>
+            <strong>{statusLabel}</strong>
+            <span>{remaining > 0 ? `${remaining}s remaining` : doneLabel}</span>
+          </div>
+          <a className="button primary countdown-button" id={linkId} href={url}>
+            {icon} {label}
+          </a>
+        </div>
+        <div className="countdown-track" aria-hidden="true">
+          <span style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1164,10 +1296,10 @@ function SebQuitPage({ data }: { data: Record<string, any> }) {
     <MessagePage
       icon={<LogOut />}
       title="Safe Exam Browser Closing"
-      message="Safe Exam Browser should close this session. Use the retry link if your browser remains open."
+      message="SEB should close this session. Use the button again if this window remains open."
       action={
         <a className="button primary" id="sebLegacyQuitLink" href={data.legacyQuitUrl || data.quitUrl}>
-          Retry quit
+          Quit again
         </a>
       }
     />

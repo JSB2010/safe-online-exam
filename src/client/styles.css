@@ -82,6 +82,10 @@ p {
   width: min(980px, calc(100vw - 32px));
 }
 
+.service-shell {
+  width: min(840px, calc(100vw - 32px));
+}
+
 .topbar,
 .topbar-title,
 .topbar-actions,
@@ -252,6 +256,25 @@ p {
 
 .work-surface {
   overflow: visible;
+}
+
+.service-status-panel {
+  padding: 28px;
+}
+
+.service-status-main {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.service-status-main .message-icon {
+  margin-bottom: 6px;
+}
+
+.service-status-main h2 {
+  margin: 0;
+  font-size: 24px;
 }
 
 .list-header {
@@ -737,6 +760,7 @@ select:disabled {
 }
 
 .message-actions {
+  width: 100%;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -748,6 +772,63 @@ select:disabled {
   display: grid;
   justify-items: start;
   gap: 12px;
+}
+
+.countdown-action {
+  width: 100%;
+}
+
+.countdown-status {
+  width: 100%;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.countdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.countdown-status strong,
+.countdown-status span {
+  display: block;
+}
+
+.countdown-status strong {
+  color: #182230;
+  font-size: 13px;
+}
+
+.countdown-status span {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.countdown-track {
+  height: 7px;
+  overflow: hidden;
+  background: #e7ecf2;
+  border-radius: 999px;
+}
+
+.countdown-track span {
+  height: 100%;
+  display: block;
+  background: #0b63ce;
+  border-radius: inherit;
+  transition: width 220ms ease;
+}
+
+.countdown-button {
+  flex: 0 0 auto;
 }
 
 .backup-link {
@@ -838,6 +919,15 @@ select:disabled {
   .rule-row,
   .password-field {
     grid-template-columns: 1fr;
+  }
+
+  .countdown-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .countdown-button {
+    width: 100%;
   }
 
   .dialog-backdrop {

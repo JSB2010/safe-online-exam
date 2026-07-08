@@ -13,7 +13,7 @@ test("automatically navigates the SEB exit page to the quit endpoint without bro
 
   await expect(page).toHaveURL(/\/seb\/exit\/quit\/course-1\/quiz-1$/u);
   await expect(page.getByRole("heading", { name: "Safe Exam Browser Closing" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Retry quit" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Quit again" })).toHaveAttribute(
     "href",
     /\/seb\/exit\/quit\/course-1\/quiz-1$/
   );

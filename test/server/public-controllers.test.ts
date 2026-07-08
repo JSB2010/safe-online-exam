@@ -7,7 +7,7 @@ describe("public utility controllers", () => {
   it("serves health and launch fallback responses", () => {
     const controller = new HomeController();
 
-    expect(controller.home()).toBe("Canvas SEB LTI service is running");
+    expect(controller.home()).toContain('"view":"service-status"');
     expect(controller.health()).toEqual({ status: "UP" });
     expect(controller.loginHealth()).toEqual({ status: "UP" });
     expect(controller.login()).toContain("Launch from Canvas");

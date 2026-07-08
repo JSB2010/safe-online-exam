@@ -1,11 +1,15 @@
 import { Controller, Get, Header } from "@nestjs/common";
-import { renderFallbackHtml } from "../http/app-shell.js";
+import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 
 @Controller()
 export class HomeController {
   @Get("/")
+  @Header("content-type", "text/html; charset=utf-8")
   home(): string {
-    return "Canvas SEB LTI service is running";
+    return renderAppShell({
+      title: "Canvas SEB LTI",
+      view: "service-status"
+    });
   }
 
   @Get("/login")

@@ -39,13 +39,10 @@ describe("Canvas SEB detector script", () => {
 
     expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>('a[href^="sebs://"]');
-    const configLink = context.document.querySelector<HTMLAnchorElement>(
-      'a[href^="https://tool.example.edu/seb/config"]'
-    );
 
     expect(openSebLink?.href).toContain("sebs://tool.example.edu/seb/config/11825/23455.seb");
-    expect(configLink?.href).toContain("https://tool.example.edu/seb/config/11825/23455.seb");
-    expect(decodeURIComponent(configLink?.href || "")).toContain(
+    expect(context.document.querySelector('a[href^="https://tool.example.edu/seb/config"]')).toBeNull();
+    expect(decodeURIComponent(openSebLink?.href || "")).toContain(
       "canvas_url=https://canvas.example.edu/courses/11825/quizzes/23455/take?user_id=7288"
     );
   });
@@ -90,10 +87,8 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
 
     expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
-    const configLink = context.document.querySelector<HTMLAnchorElement>(
-      'a[href^="https://tool.example.edu/seb/config"]'
-    );
-    expect(configLink?.href).toContain("https://tool.example.edu/seb/config/11825/newquiz%3A11825%3A991.seb");
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>('a[href^="sebs://"]');
+    expect(openSebLink?.href).toContain("sebs://tool.example.edu/seb/config/11825/newquiz%3A11825%3A991.seb");
   });
 
   it("proves SEB config key, retrieves the one-time access code, fills it, and submits the access-code form", async () => {
@@ -153,7 +148,7 @@ describe("Canvas SEB detector script", () => {
 
   it("shows a stale or modified SEB configuration message when proof is rejected", async () => {
     const message =
-      "This SEB configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh SEB configuration from Canvas and reopen the quiz.";
+      "This SEB configuration could not be verified. It may be stale, incorrect, or modified. Reopen the quiz from Canvas using the Safe Exam Browser link.";
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?user_id=7288",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
