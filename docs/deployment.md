@@ -1,31 +1,40 @@
 # Deployment
 
-## Existing Cloud Run Targets
+## Maintained Cloud Run Targets
 
-The rewrite keeps the existing Cloud Run service names and Firestore database IDs.
+The repository keeps these maintained Cloud Run targets for the current deployment line:
 
-| Environment | Cloud Run service | Region        | Firestore database   |
-| ----------- | ----------------- | ------------- | -------------------- |
-| Dev         | `canvas-seb-dev`  | `us-central1` | `seb-canvaslti-dev`  |
-| Prod        | `canvas-seb-prod` | `us-central1` | `seb-canvaslti-prod` |
+| Environment | Cloud Run service | Region        | Firestore database   | Build config             |
+| ----------- | ----------------- | ------------- | -------------------- | ------------------------ |
+| Dev         | `canvas-seb-dev`  | `us-central1` | `seb-canvaslti-dev`  | `cloudbuild-dev.yaml`    |
+| Prod        | `canvas-seb-prod` | `us-central1` | `seb-canvaslti-prod` | `cloudbuild-prod.yaml`   |
+| New school  | configured by you | configured    | configured by you    | `cloudbuild-school.yaml` |
 
-Canvas LTI developer keys should continue pointing to the existing Cloud Run URLs. Do not create a new service URL unless Canvas is updated to match it.
+Do not change an existing Cloud Run service URL without also updating the matching Canvas LTI developer key, Canvas OAuth developer key, and detector script loader.
 
-## Build and Deploy
+## Build And Deploy
 
-Dev:
+Maintained dev:
 
 ```bash
 gcloud builds submit --config=cloudbuild-dev.yaml
 ```
 
-Prod:
+Maintained prod:
 
 ```bash
 gcloud builds submit --config=cloudbuild-prod.yaml
 ```
 
-Both Cloud Build configs build the Docker image. The Dockerfile runs the deployment CI gate inside Docker:
+Portable new-school deployment:
+
+```bash
+gcloud builds submit \
+  --config=cloudbuild-school.yaml \
+  --substitutions=_SERVICE=school-canvas-seb,_IMAGE=school-canvas-seb,_FIRESTORE_DATABASE_ID=school-canvas-seb,_SECRET_PREFIX=school_canvas_seb
+```
+
+All three Cloud Build configs build the Docker image. The Dockerfile runs the deploy gate inside Docker:
 
 ```bash
 npm ci
@@ -38,13 +47,13 @@ npm run build
 
 Cloud Build pulls the previous image and passes it as `--cache-from` before building. The Dockerfile then prunes dev dependencies and emits a distroless Node 24 runtime image that starts `dist/server/server/main.js` through the image's Node entrypoint.
 
-The server build also copies `src/server/assets` and creates `canvas-seb-detector.min.js`. When `APP_DEBUG_ENABLED` is true, the public detector URL serves the readable script with `no-store` headers. When `APP_DEBUG_ENABLED` is false, the same public URL serves the minified script with a one-hour public cache and `stale-while-revalidate`.
+The server build copies `src/server/assets` and creates `canvas-seb-detector.min.js`. When `APP_DEBUG_ENABLED` is true, the public detector URL serves the readable script with `no-store` headers. When `APP_DEBUG_ENABLED` is false, the same public URL serves the minified script with a one-hour public cache and `stale-while-revalidate`.
 
 ## Cloud Run Invoker IAM
 
-Canvas launches the LTI app through public Cloud Run URLs, so each Cloud Run service needs an `allUsers` binding for `roles/run.invoker`.
+Canvas launches the LTI app through public Cloud Run URLs, so each service needs an `allUsers` binding for `roles/run.invoker`.
 
-The dev service already has this binding. `cloudbuild-dev.yaml` intentionally does not pass `--allow-unauthenticated`; this avoids requiring the Cloud Build service account to mutate Cloud Run IAM on every deploy and prevents non-blocking `Setting IAM Policy` warnings. If the dev service is ever recreated, restore the binding once:
+`cloudbuild-prod.yaml` and `cloudbuild-school.yaml` pass `--allow-unauthenticated`. `cloudbuild-dev.yaml` intentionally does not; the maintained dev service keeps its public invoker binding outside deploys to avoid IAM churn. If dev is recreated, restore the binding once:
 
 ```bash
 gcloud run services add-iam-policy-binding canvas-seb-dev \
@@ -55,68 +64,108 @@ gcloud run services add-iam-policy-binding canvas-seb-dev \
 
 ## Required Secret Manager Secrets
 
-Dev deployment expects:
+Cloud Run injects school-specific values through `--set-secrets`. The app refuses to start on Cloud Run if the required values are missing.
 
+Maintained dev expects these secret names:
+
+- `dev_canvas_domain`
 - `dev_lti_client_id`
 - `dev_tool_url`
 - `dev_lti_private_key`
-- `dev_admin_password`
+- `dev_admin_password` mounted as `SESSION_SECRET`
 - `dev_state_encryption_key`
 - `dev_api_client_id`
 - `dev_api_client_secret`
 - `dev_seb_config_encryption_cert_pem`
 
-Prod deployment expects:
+Maintained prod expects:
 
+- `prod_canvas_domain`
 - `prod_lti_client_id`
 - `prod_tool_url`
 - `prod_lti_private_key`
-- `prod_admin_password`
+- `prod_admin_password` mounted as `SESSION_SECRET`
 - `prod_state_encryption_key`
 - `prod_api_client_id`
 - `prod_api_client_secret`
 - `prod_seb_config_encryption_cert_pem`
 
-Secret values are mounted as environment variables:
+`cloudbuild-school.yaml` expects a configurable prefix. With `_SECRET_PREFIX=school_canvas_seb`, create:
 
+- `school_canvas_seb_canvas_domain`
+- `school_canvas_seb_lti_client_id`
+- `school_canvas_seb_tool_url`
+- `school_canvas_seb_lti_private_key`
+- `school_canvas_seb_session_secret`
+- `school_canvas_seb_state_encryption_key`
+- `school_canvas_seb_api_client_id`
+- `school_canvas_seb_api_client_secret`
+- `school_canvas_seb_seb_config_encryption_cert_pem`
+
+These secrets mount to canonical runtime variables:
+
+- `CANVAS_DOMAIN`
 - `LTI_CLIENT_ID`
 - `TOOL_URL`
 - `LTI_PRIVATE_KEY`
-- `ADMIN_PASSWORD`
+- `SESSION_SECRET`
 - `STATE_ENCRYPTION_KEY`
 - `CANVAS_API_CLIENT_ID`
 - `CANVAS_API_CLIENT_SECRET`
-- `SEB_CONFIG_ENCRYPTION_CERT_PEM` or `SEB_CONFIG_ENCRYPTION_CERT_PATH` when certificate-encrypted `.seb` downloads are enabled
+- `SEB_CONFIG_ENCRYPTION_CERT_PEM`
+
+Optional runtime variables can be set with `--set-env-vars` or added to `--set-secrets` if they are sensitive:
+
+- `LTI_DEPLOYMENT_ID`: one deployment ID, or comma/newline-separated IDs. When set, LTI launches from other Canvas deployment IDs are rejected.
+- `CANVAS_REDIRECT_URI`: defaults to `${TOOL_URL}/api/oauth2callback`.
+- `CANVAS_API_BASE_URL`: defaults to `${CANVAS_DOMAIN}/api/v1`.
+- `APP_DEBUG_ENABLED`: defaults true outside prod and false in prod.
+- `SEB_REQUIRED_DOMAINS`: school-wide additional domains needed by every generated `.seb` config.
+- `SEB_QUIT_PASSWORD`: default quit password applied when a course/quiz does not override it.
+- `SEB_CONFIG_ENCRYPTION_ENABLED`: defaults `true`; set `false` only for an explicit no-certificate rollout.
 
 ## IAM
 
-The Cloud Run service account remains:
+The maintained services use this service account name:
 
 ```text
 seb-canvas@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
-It needs access to:
+Portable deployments can use the same name or pass `_SERVICE_ACCOUNT=your-service-account` to `cloudbuild-school.yaml`.
 
-- Firestore for the configured database.
+The service account needs:
+
+- Firestore access for the configured database.
 - Secret Manager accessor for deployment-injected secrets.
 - Artifact Registry read access for deployed images.
 
+Cloud Build also needs permission to build and push images, deploy Cloud Run, and act as the runtime service account.
+
 ## Firestore Runtime State
 
-In addition to `assessments`, `courses`, and `canvasOAuthTokens`, the service uses these default collections for multi-instance Cloud Run behavior:
+Default collections:
+
+- `assessments`
+- `courses`
+- `canvasOAuthTokens`
+- `sessions`
+- `transientStates`
+- `operationLocks`
+
+Create Firestore TTL policies on the `expiresAt` field for:
 
 - `sessions`
 - `transientStates`
 - `operationLocks`
 
-Create Firestore TTL policies on the `expiresAt` field for all three runtime collections. The app deletes expired entries opportunistically while handling requests, but Firestore TTL keeps abandoned sessions, OIDC/OAuth states, SEB proof tokens, and expired operation leases from accumulating.
+The app deletes expired entries opportunistically while handling requests, but Firestore TTL keeps abandoned sessions, OIDC/OAuth states, SEB proof tokens, and expired operation leases from accumulating.
 
 Do not set `USE_IN_MEMORY_STORE=true` on Cloud Run. The service refuses to start with the in-memory repository when `K_SERVICE` is present.
 
 ## Canvas URLs
 
-Use the Cloud Run `TOOL_URL` value for Canvas LTI settings:
+Use the Cloud Run `TOOL_URL` value for Canvas LTI and OAuth settings:
 
 - OIDC initiation URL: `${TOOL_URL}/lti/login`
 - Target link URI: `${TOOL_URL}/lti/launch`
@@ -187,8 +236,6 @@ In that mode, configs without an exam start password return plaintext plist `.se
 Cloud Run keeps previous revisions. If a deploy has to be rolled back:
 
 ```bash
-gcloud run revisions list --service=canvas-seb-prod --region=us-central1
-gcloud run services update-traffic canvas-seb-prod --region=us-central1 --to-revisions=REVISION_NAME=100
+gcloud run revisions list --service=SERVICE_NAME --region=us-central1
+gcloud run services update-traffic SERVICE_NAME --region=us-central1 --to-revisions=REVISION_NAME=100
 ```
-
-Use the same commands with `canvas-seb-dev` for dev.

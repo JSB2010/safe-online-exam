@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { launchDataFromPayload } from "../../src/server/services/lti.service.js";
+import { isAllowedDeploymentId, launchDataFromPayload } from "../../src/server/services/lti.service.js";
 
 describe("launchDataFromPayload", () => {
   it("extracts Canvas custom course ids, roles, and resource links", () => {
@@ -47,5 +47,14 @@ describe("launchDataFromPayload", () => {
     ).toMatchObject({
       courseId: "11825"
     });
+  });
+
+  it("allows only configured Canvas deployment ids when provided", () => {
+    expect(isAllowedDeploymentId(undefined, "deployment-1")).toBe(true);
+    expect(isAllowedDeploymentId("", "deployment-1")).toBe(true);
+    expect(isAllowedDeploymentId("deployment-1", "deployment-1")).toBe(true);
+    expect(isAllowedDeploymentId("deployment-1,deployment-2", "deployment-2")).toBe(true);
+    expect(isAllowedDeploymentId("deployment-1\ndeployment-2", "deployment-3")).toBe(false);
+    expect(isAllowedDeploymentId("deployment-1", undefined)).toBe(false);
   });
 });

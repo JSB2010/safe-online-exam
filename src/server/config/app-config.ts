@@ -2,6 +2,10 @@ import { Injectable } from "@nestjs/common";
 
 export type AppProfile = "dev" | "prod" | "test";
 
+const LOCAL_CANVAS_DOMAIN = "https://canvas.example.test";
+const DEFAULT_SEB_REQUIRED_DOMAINS =
+  "accounts.google.com,*.googleusercontent.com,*.gstatic.com,ssl.gstatic.com,*.canvas-user-content.com,*.instructuremedia.com,*.inscloudgate.net";
+
 export interface AppConfigSnapshot {
   profile: AppProfile;
   port: number;
@@ -55,6 +59,10 @@ export class AppConfig {
 
   constructor() {
     this.snapshot = loadConfigFromEnv(process.env);
+    const errors = validateRuntimeConfig(this.snapshot, process.env);
+    if (errors.length) {
+      throw new Error(`Invalid application configuration:\n- ${errors.join("\n- ")}`);
+    }
   }
 
   get value(): AppConfigSnapshot {
@@ -98,7 +106,7 @@ export class AppConfig {
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
   const profile = resolveProfile(env);
   const canvasDomain = normalizeCanvasDomain(
-    firstPresent(env.CANVAS_DOMAIN, env.CANVAS_BASE_URL, env.APP_CANVAS_BASE_URL, "https://kentdenver.instructure.com")!
+    firstPresent(env.CANVAS_DOMAIN, env.CANVAS_BASE_URL, env.APP_CANVAS_BASE_URL, LOCAL_CANVAS_DOMAIN)!
   );
   const canvasApiBaseUrl = firstPresent(env.CANVAS_API_BASE_URL, `${canvasDomain}/api/v1`)!;
   const projectId = firstPresent(env.GCP_PROJECT_ID, env.GOOGLE_CLOUD_PROJECT);
@@ -151,12 +159,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
     },
     seb: {
       defaultQuitPassword: firstPresent(env.SEB_QUIT_PASSWORD, env.DEFAULT_SEB_QUIT_PASSWORD),
-      requiredDomains: splitList(
-        firstPresent(
-          env.SEB_REQUIRED_DOMAINS,
-          "accounts.google.com,*.googleusercontent.com,*.gstatic.com,ssl.gstatic.com,*.canvas-user-content.com,*.instructuremedia.com,*.inscloudgate.net"
-        )
-      ),
+      requiredDomains: splitList(firstPresent(env.SEB_REQUIRED_DOMAINS, DEFAULT_SEB_REQUIRED_DOMAINS)),
       configEncryption: {
         enabled: parseBoolean(firstPresent(env.SEB_CONFIG_ENCRYPTION_ENABLED), true),
         certificatePem: normalizeMultilineSecret(firstPresent(env.SEB_CONFIG_ENCRYPTION_CERT_PEM)),
@@ -166,6 +169,57 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       }
     }
   };
+}
+
+export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.ProcessEnv): string[] {
+  if (!isCloudRunRuntime(env)) {
+    return [];
+  }
+
+  const errors: string[] = [];
+  requirePresent(errors, env, ["TOOL_URL", "DEV_TOOL_URL", "PROD_TOOL_URL", "SERVICE_URL", "APP_BASE_URL"], "TOOL_URL");
+  requirePresent(errors, env, ["CANVAS_DOMAIN", "CANVAS_BASE_URL", "APP_CANVAS_BASE_URL"], "CANVAS_DOMAIN");
+  requirePresent(
+    errors,
+    env,
+    ["LTI_CLIENT_ID", "DEV_LTI_CLIENT_ID", "PROD_LTI_CLIENT_ID", "lti_client_id"],
+    "LTI_CLIENT_ID"
+  );
+  requirePresent(errors, env, ["LTI_PRIVATE_KEY", "DEV_LTI_PRIVATE_KEY", "PROD_LTI_PRIVATE_KEY"], "LTI_PRIVATE_KEY");
+  requirePresent(errors, env, ["SESSION_SECRET", "ADMIN_PASSWORD"], "SESSION_SECRET");
+  requirePresent(errors, env, ["STATE_ENCRYPTION_KEY"], "STATE_ENCRYPTION_KEY");
+  requirePresent(
+    errors,
+    env,
+    ["CANVAS_API_CLIENT_ID", "DEV_API_CLIENT_ID", "PROD_API_CLIENT_ID"],
+    "CANVAS_API_CLIENT_ID"
+  );
+  requirePresent(
+    errors,
+    env,
+    ["CANVAS_API_CLIENT_SECRET", "DEV_API_CLIENT_SECRET", "PROD_API_CLIENT_SECRET"],
+    "CANVAS_API_CLIENT_SECRET"
+  );
+  requirePresent(errors, env, ["GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT"], "GCP_PROJECT_ID");
+  requirePresent(errors, env, ["FIRESTORE_DATABASE_ID"], "FIRESTORE_DATABASE_ID");
+
+  if (snapshot.canvas.domain === LOCAL_CANVAS_DOMAIN) {
+    errors.push("CANVAS_DOMAIN must be set to the school's Canvas base URL in Cloud Run");
+  }
+
+  if (
+    snapshot.seb.configEncryption.enabled &&
+    !snapshot.seb.configEncryption.certificatePem &&
+    !snapshot.seb.configEncryption.certificatePath &&
+    !snapshot.seb.configEncryption.publicKeyPem &&
+    !snapshot.seb.configEncryption.publicKeyPath
+  ) {
+    errors.push(
+      "SEB config encryption is enabled, so set SEB_CONFIG_ENCRYPTION_CERT_PEM or SEB_CONFIG_ENCRYPTION_CERT_PATH, or set SEB_CONFIG_ENCRYPTION_ENABLED=false"
+    );
+  }
+
+  return errors;
 }
 
 export function resolveProfile(env: NodeJS.ProcessEnv): AppProfile {
@@ -236,4 +290,20 @@ function splitList(value?: string): string[] {
 
 function normalizeMultilineSecret(value?: string): string | undefined {
   return value?.replace(/\\n/gu, "\n");
+}
+
+function isCloudRunRuntime(env: NodeJS.ProcessEnv): boolean {
+  return !!firstPresent(env.K_SERVICE);
+}
+
+function requirePresent(
+  errors: string[],
+  env: NodeJS.ProcessEnv,
+  acceptedNames: string[],
+  canonicalName: string
+): void {
+  if (firstPresent(...acceptedNames.map((name) => env[name]))) {
+    return;
+  }
+  errors.push(`${canonicalName} is required in Cloud Run`);
 }

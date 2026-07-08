@@ -9,7 +9,7 @@ import { SebAccessProofService } from "../../src/server/services/seb-access-proo
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
 
-const CANVAS_URL = "https://kentdenver.instructure.com";
+const CANVAS_URL = "https://canvas.example.edu";
 const TOOL_URL = "https://tool.example.edu";
 const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({
   type: "pkcs1",

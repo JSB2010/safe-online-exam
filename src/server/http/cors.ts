@@ -44,8 +44,7 @@ function isCanvasHost(host: string): boolean {
     host.endsWith(".canvaslms.com") ||
     host.endsWith(".insops.net") ||
     host.endsWith(".inscloudgate.net") ||
-    host === "canvas.instructure.com" ||
-    host === "kentdenver.instructure.com"
+    host === "canvas.instructure.com"
   );
 }
 

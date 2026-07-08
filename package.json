@@ -21,6 +21,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
+    "generate:lti-key": "node scripts/generate-lti-private-key.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run build",
     "verify:e2e": "npm run verify && npm run test:e2e"

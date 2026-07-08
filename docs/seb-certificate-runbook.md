@@ -27,7 +27,7 @@ For a named production identity:
 
 ```bash
 SEB_CERT_NAME=seb-config-encryption-prod \
-SEB_CERT_SUBJECT="/CN=SEB Canvas LTI Config Encryption/O=Kent Denver School" \
+SEB_CERT_SUBJECT="/CN=SEB Canvas LTI Config Encryption/O=School Name" \
 SEB_CERT_P12_PASSWORD="REPLACE_WITH_LONG_RANDOM_PASSWORD" \
 bash scripts/generate-seb-config-cert.sh .local/seb-certs
 ```
@@ -71,8 +71,8 @@ Delete temporary retrieved copies after installation.
 Cloud Run needs only the public certificate:
 
 ```bash
-gcloud secrets create dev_seb_config_encryption_cert_pem --replication-policy=automatic
-gcloud secrets versions add dev_seb_config_encryption_cert_pem --data-file=.local/seb-certs/seb-config-encryption-prod.crt.pem
+gcloud secrets create school_canvas_seb_seb_config_encryption_cert_pem --replication-policy=automatic
+gcloud secrets versions add school_canvas_seb_seb_config_encryption_cert_pem --data-file=.local/seb-certs/seb-config-encryption-prod.crt.pem
 ```
 
 The deployment config injects this as `SEB_CONFIG_ENCRYPTION_CERT_PEM`.
@@ -80,7 +80,7 @@ The deployment config injects this as `SEB_CONFIG_ENCRYPTION_CERT_PEM`.
 To confirm the active public-key hash:
 
 ```bash
-curl -fsSI https://canvas-seb-dev-184075650720.us-central1.run.app/seb/config-encryption-certificate.pem
+curl -fsSI "${TOOL_URL}/seb/config-encryption-certificate.pem"
 ```
 
 Check the `x-seb-public-key-hash` header.

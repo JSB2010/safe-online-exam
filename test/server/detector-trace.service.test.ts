@@ -14,7 +14,7 @@ describe("DetectorTraceService", () => {
     service.recordEvent(
       {
         traceId: "trace-1",
-        pageUrl: "https://kentdenver.instructure.com/courses/11825/quizzes/23455/take?user_id=7288&access_code=SECRET",
+        pageUrl: "https://canvas.example.edu/courses/11825/quizzes/23455/take?user_id=7288&access_code=SECRET",
         accessCode: "SECRET",
         proofToken: "proof-1",
         events: [
@@ -22,13 +22,13 @@ describe("DetectorTraceService", () => {
             event: "submit",
             readyState: "complete",
             details: {
-              action: "https://kentdenver.instructure.com/courses/11825/quizzes/23455?state=abc123"
+              action: "https://canvas.example.edu/courses/11825/quizzes/23455?state=abc123"
             }
           }
         ]
       },
       {
-        origin: "https://kentdenver.instructure.com",
+        origin: "https://canvas.example.edu",
         userAgent: "SafeExamBrowser"
       }
     );

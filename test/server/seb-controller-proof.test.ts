@@ -7,7 +7,7 @@ import { SebAccessProofService } from "../../src/server/services/seb-access-proo
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
 
-const CANVAS_URL = "https://kentdenver.instructure.com";
+const CANVAS_URL = "https://canvas.example.edu";
 const TOOL_URL = "https://tool.example.edu";
 
 describe("SEB access proof validation", () => {
@@ -140,7 +140,7 @@ describe("SEB access proof validation", () => {
       const configKey = new SebConfigKeyService();
       const staleConfigKey = configKey.computeConfigKey(
         Buffer.from(
-          "<plist><dict><key>startURL</key><string>https://kentdenver.instructure.com/courses/11825/quizzes/23455</string></dict></plist>"
+          "<plist><dict><key>startURL</key><string>https://canvas.example.edu/courses/11825/quizzes/23455</string></dict></plist>"
         )
       );
       const { controller } = controllerWithSetting({

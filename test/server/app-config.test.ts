@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { loadConfigFromEnv, resolveProfile, sanitizeToolUrl } from "../../src/server/config/app-config.js";
+import {
+  loadConfigFromEnv,
+  resolveProfile,
+  sanitizeToolUrl,
+  validateRuntimeConfig
+} from "../../src/server/config/app-config.js";
 
 describe("AppConfig", () => {
   it("honors Spring profile compatibility and Firestore database defaults", () => {
@@ -7,6 +12,11 @@ describe("AppConfig", () => {
     expect(resolveProfile({ SPRING_PROFILES_ACTIVE: "prod" })).toBe("prod");
     expect(loadConfigFromEnv({ SPRING_PROFILES_ACTIVE: "prod" }).firestoreDatabaseId).toBe("seb-canvaslti-prod");
     expect(loadConfigFromEnv({ SPRING_PROFILES_ACTIVE: "dev" }).firestoreDatabaseId).toBe("seb-canvaslti-dev");
+  });
+
+  it("uses a school-neutral local Canvas placeholder outside Cloud Run", () => {
+    const config = loadConfigFromEnv({});
+    expect(config.canvas.domain).toBe("https://canvas.example.test");
   });
 
   it("uses the reset Firestore collection names", () => {
@@ -41,10 +51,10 @@ describe("AppConfig", () => {
     expect(sanitizeToolUrl("tool.example.com/")).toBe("https://tool.example.com");
     const config = loadConfigFromEnv({
       TOOL_URL: "canvas-seb-dev.run.app/",
-      CANVAS_BASE_URL: "kentdenver.instructure.com/api/v1"
+      CANVAS_BASE_URL: "school.instructure.com/api/v1"
     });
     expect(config.lti.toolUrl).toBe("https://canvas-seb-dev.run.app");
-    expect(config.canvas.domain).toBe("https://kentdenver.instructure.com");
+    expect(config.canvas.domain).toBe("https://school.instructure.com");
   });
 
   it("uses the app debug flag as the single debug/development toggle", () => {
@@ -61,5 +71,39 @@ describe("AppConfig", () => {
       loadConfigFromEnv({ SEB_CONFIG_ENCRYPTION_CERT_PEM: "-----BEGIN CERTIFICATE-----\\n..." }).seb.configEncryption
         .certificatePem
     ).toBe("-----BEGIN CERTIFICATE-----\n...");
+  });
+
+  it("requires school-specific runtime config in Cloud Run", () => {
+    expect(validateRuntimeConfig(loadConfigFromEnv({ K_SERVICE: "canvas-seb" }), { K_SERVICE: "canvas-seb" })).toEqual(
+      expect.arrayContaining([
+        "TOOL_URL is required in Cloud Run",
+        "CANVAS_DOMAIN is required in Cloud Run",
+        "LTI_CLIENT_ID is required in Cloud Run",
+        "LTI_PRIVATE_KEY is required in Cloud Run",
+        "SESSION_SECRET is required in Cloud Run",
+        "STATE_ENCRYPTION_KEY is required in Cloud Run",
+        "CANVAS_API_CLIENT_ID is required in Cloud Run",
+        "CANVAS_API_CLIENT_SECRET is required in Cloud Run",
+        "GCP_PROJECT_ID is required in Cloud Run",
+        "FIRESTORE_DATABASE_ID is required in Cloud Run"
+      ])
+    );
+
+    const env = {
+      K_SERVICE: "canvas-seb",
+      TOOL_URL: "https://tool.example.edu",
+      CANVAS_DOMAIN: "https://school.instructure.com",
+      LTI_CLIENT_ID: "client-id",
+      LTI_PRIVATE_KEY: '{"kty":"RSA","d":"private"}',
+      SESSION_SECRET: "session-secret",
+      STATE_ENCRYPTION_KEY: "state-key",
+      CANVAS_API_CLIENT_ID: "api-client",
+      CANVAS_API_CLIENT_SECRET: "api-secret",
+      GCP_PROJECT_ID: "project-id",
+      FIRESTORE_DATABASE_ID: "school-firestore",
+      SEB_CONFIG_ENCRYPTION_ENABLED: "false"
+    };
+
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual([]);
   });
 });

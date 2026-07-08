@@ -47,6 +47,9 @@ export class LtiService {
     if (!payload[LTI_CLAIMS.deploymentId]) {
       throw new Error("Missing LTI deployment id");
     }
+    if (!isAllowedDeploymentId(this.config.value.lti.deploymentId, payload[LTI_CLAIMS.deploymentId])) {
+      throw new Error("Invalid LTI deployment id");
+    }
     if (!payload[LTI_CLAIMS.targetLinkUri]) {
       throw new Error("Missing LTI target link URI");
     }
@@ -117,4 +120,19 @@ function resolveCanvasCourseId(
 
 function firstNumeric(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => !!value && /^\d+$/u.test(value));
+}
+
+export function isAllowedDeploymentId(configuredDeploymentIds: string | undefined, actual: unknown): boolean {
+  if (!configuredDeploymentIds?.trim()) {
+    return true;
+  }
+  const actualValue = asString(actual);
+  if (!actualValue) {
+    return false;
+  }
+  return configuredDeploymentIds
+    .split(/[,\n]/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .includes(actualValue);
 }

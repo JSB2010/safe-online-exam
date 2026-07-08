@@ -60,11 +60,11 @@ describe("HTTP helpers", () => {
     const config = {
       profile: "dev",
       toolUrl: "https://canvas-seb-dev.run.app",
-      getCanvasDomain: () => "https://kentdenver.instructure.com"
+      getCanvasDomain: () => "https://canvas.example.edu"
     } as AppConfig;
 
     expect(isAllowedCorsOrigin(undefined, config)).toBe(true);
-    expect(isAllowedCorsOrigin("https://kentdenver.instructure.com", config)).toBe(true);
+    expect(isAllowedCorsOrigin("https://canvas.example.edu", config)).toBe(true);
     expect(isAllowedCorsOrigin("https://school.instructure.com", config)).toBe(true);
     expect(isAllowedCorsOrigin("https://canvas-seb-dev.run.app", config)).toBe(true);
     expect(isAllowedCorsOrigin("http://127.0.0.1:8080", config)).toBe(true);
@@ -75,7 +75,7 @@ describe("HTTP helpers", () => {
     const config = {
       profile: "prod",
       toolUrl: "https://canvas-seb-prod.run.app",
-      getCanvasDomain: () => "https://kentdenver.instructure.com"
+      getCanvasDomain: () => "https://canvas.example.edu"
     } as AppConfig;
 
     expect(isAllowedCorsOrigin("http://localhost:8080", config)).toBe(false);

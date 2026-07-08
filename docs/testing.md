@@ -120,7 +120,7 @@ Before merging deployment changes:
 5. Production build starts locally.
 6. Health, JWKS, detector, app shell, and React assets return 200.
 7. Browser console has no errors on desktop and mobile app-shell routes.
-8. Cloud Build deploys to the existing service URL.
+8. Cloud Build deploys to the configured Cloud Run service URL.
 9. Canvas LTI launch and OAuth flows work in dev.
 10. SEB `.seb` download, Config Key proof, access-code retrieval, and exit link work in SEB.
 11. With certificate encryption enabled, a machine without the matching private-key identity cannot open the downloaded config; a test machine with the generated/imported identity can open it and still completes Config Key proof.

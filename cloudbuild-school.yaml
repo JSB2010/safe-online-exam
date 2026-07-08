@@ -1,0 +1,64 @@
+substitutions:
+  _LOCATION: us-central1
+  _REPOSITORY: canvas-seb-repo
+  _SERVICE: canvas-seb
+  _IMAGE: canvas-seb
+  _TAG: latest
+  _APP_ENV: prod
+  _FIRESTORE_DATABASE_ID: canvas-seb
+  _SECRET_PREFIX: canvas_seb
+  _SERVICE_ACCOUNT: seb-canvas
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "10"
+
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - "docker pull ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG} || exit 0"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+      - "--cache-from"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE}"
+      - "--image=${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"
+      - "--region=${_LOCATION}"
+      - "--execution-environment=gen2"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=${_FIRESTORE_DATABASE_ID}"
+      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:latest,LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:latest,TOOL_URL=${_SECRET_PREFIX}_tool_url:latest,LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:latest,SESSION_SECRET=${_SECRET_PREFIX}_session_secret:latest,STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:latest,CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:latest,CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:latest"
+      - "--memory=2Gi"
+      - "--cpu=2"
+      - "--min-instances=${_MIN_INSTANCES}"
+      - "--max-instances=${_MAX_INSTANCES}"
+      - "--timeout=600s"
+      - "--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com"
+
+images:
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA"

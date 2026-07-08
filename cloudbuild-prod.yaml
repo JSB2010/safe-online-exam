@@ -44,7 +44,7 @@ steps:
       - "--platform=managed"
       - "--allow-unauthenticated"
       - "--set-env-vars=NODE_ENV=production,APP_ENV=prod,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-prod"
-      - "--set-secrets=LTI_CLIENT_ID=prod_lti_client_id:latest,TOOL_URL=prod_tool_url:latest,LTI_PRIVATE_KEY=prod_lti_private_key:latest,ADMIN_PASSWORD=prod_admin_password:latest,STATE_ENCRYPTION_KEY=prod_state_encryption_key:latest,CANVAS_API_CLIENT_ID=prod_api_client_id:latest,CANVAS_API_CLIENT_SECRET=prod_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=prod_seb_config_encryption_cert_pem:latest"
+      - "--set-secrets=CANVAS_DOMAIN=prod_canvas_domain:latest,LTI_CLIENT_ID=prod_lti_client_id:latest,TOOL_URL=prod_tool_url:latest,LTI_PRIVATE_KEY=prod_lti_private_key:latest,SESSION_SECRET=prod_admin_password:latest,STATE_ENCRYPTION_KEY=prod_state_encryption_key:latest,CANVAS_API_CLIENT_ID=prod_api_client_id:latest,CANVAS_API_CLIENT_SECRET=prod_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=prod_seb_config_encryption_cert_pem:latest"
       - "--memory=2Gi"
       - "--cpu=2"
       - "--min-instances=1"

@@ -126,6 +126,8 @@ Config downloads persist Config Keys with a compare-and-set update: if instructo
 ## Security Notes
 
 - Production requires `STATE_ENCRYPTION_KEY`; dev has a fallback for local testing.
+- Cloud Run requires explicit school configuration through env vars or Secret Manager, including `TOOL_URL`, `CANVAS_DOMAIN`, LTI credentials, Canvas OAuth credentials, Firestore database ID, and runtime secrets.
+- If `LTI_DEPLOYMENT_ID` is configured, launches from other Canvas deployment IDs are rejected.
 - Sessions use `JSESSIONID` for legacy cookie compatibility and are stored in Firestore by hashed session ID.
 - Secure cookies are used when the profile is prod or `TOOL_URL` is HTTPS.
 - CORS allows Canvas domains, the configured tool origin, and localhost only in non-production.

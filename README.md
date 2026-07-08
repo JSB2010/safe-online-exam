@@ -1,6 +1,6 @@
 # Canvas Safe Exam Browser LTI
 
-A TypeScript rewrite of the Canvas Safe Exam Browser integration. The app is a NestJS service with a React/Vite UI that runs on the existing Google Cloud Run services and uses the existing Firestore databases.
+A TypeScript rewrite of the Canvas Safe Exam Browser integration. The app is a NestJS service with a React/Vite UI that can be deployed as a portable, single-school Cloud Run service backed by Firestore.
 
 The tool supports Canvas LTI 1.3 launches, Canvas OAuth for instructor API actions, Classic Quiz and New Quiz SEB enforcement, generated `.seb` configuration downloads, SEB Config Key proof, access-code injection, and SEB exit pages.
 
@@ -35,7 +35,8 @@ docs/
   architecture.md      system behavior and route inventory
   canvas-school-setup.md
                        Canvas LTI installation and theme JavaScript setup
-  deployment.md        Cloud Run, Firestore, and secrets
+  deployment.md        Current deployment targets, Cloud Run, Firestore, and secrets
+  school-deployment.md Portable new-school setup guide
   testing.md           verification strategy and commands
   tooling.md           package manager, CI, formatting, and repo hygiene decisions
 ```
@@ -103,16 +104,17 @@ Required in Cloud Run:
 - `GCP_PROJECT_ID`
 - `FIRESTORE_DATABASE_ID`
 - `TOOL_URL`
+- `CANVAS_DOMAIN`
 - `LTI_CLIENT_ID`
 - `LTI_PRIVATE_KEY`
-- `ADMIN_PASSWORD` or `SESSION_SECRET`
+- `SESSION_SECRET`
 - `CANVAS_API_CLIENT_ID`
 - `CANVAS_API_CLIENT_SECRET`
-- `STATE_ENCRYPTION_KEY` in Cloud Run
+- `STATE_ENCRYPTION_KEY`
+- `SEB_CONFIG_ENCRYPTION_CERT_PEM` or `SEB_CONFIG_ENCRYPTION_ENABLED=false`
 
 Useful optional variables:
 
-- `CANVAS_DOMAIN`, default `https://kentdenver.instructure.com`
 - `CANVAS_API_BASE_URL`, default `${CANVAS_DOMAIN}/api/v1`
 - `CANVAS_REDIRECT_URI`, default `${TOOL_URL}/api/oauth2callback`
 - `LTI_DEPLOYMENT_ID`
@@ -124,11 +126,11 @@ Useful optional variables:
 - `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM` or `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH`, optional server-only RSA public key fallback when the public certificate is managed elsewhere.
 - Firestore collection overrides: `FIRESTORE_ASSESSMENTS_COLLECTION`, `FIRESTORE_COURSES_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_SESSIONS_COLLECTION`, `FIRESTORE_TRANSIENT_STATES_COLLECTION`, `FIRESTORE_OPERATION_LOCKS_COLLECTION`
 
-Production refuses to start without `LTI_PRIVATE_KEY` and `STATE_ENCRYPTION_KEY`. Dev Cloud Run also injects `STATE_ENCRYPTION_KEY` so LTI/OAuth state remains stable across instances.
+Cloud Run refuses to start unless the school-specific URL, Canvas, LTI, OAuth, Firestore, and secret values are injected. Local development has neutral placeholder defaults for tests, but production and dev Cloud Run services must set their real values through environment variables and Secret Manager. `ADMIN_PASSWORD` remains a legacy alias for `SESSION_SECRET`; new deployments should use `SESSION_SECRET`.
 
 ## Firestore
 
-The deployment keeps the existing Firestore database IDs:
+The maintained deployment configs keep the current Firestore database IDs:
 
 - Dev: `seb-canvaslti-dev`
 - Prod: `seb-canvaslti-prod`
@@ -214,7 +216,7 @@ Classic quiz IDs use the raw Canvas quiz ID internally and `classicquiz_{quizId}
 
 ## Cloud Run Deployment
 
-The repo includes Cloud Build configs for the existing services:
+The repo includes Cloud Build configs for the maintained services:
 
 ```bash
 gcloud builds submit --config=cloudbuild-dev.yaml
@@ -227,12 +229,11 @@ These configs:
 - build with Node 24, then emit a distroless Node 24 runtime image after install, typecheck, lint, formatting check, coverage tests, build, and production dependency pruning
 - deploy `canvas-seb-dev` or `canvas-seb-prod`
 - keep Firestore database IDs on `seb-canvaslti-dev` and `seb-canvaslti-prod`
-- inject secrets through Secret Manager
+- inject school-specific secrets through Secret Manager
 
 The dev Cloud Run service keeps its public `allUsers` / `roles/run.invoker` binding outside the deploy command. `cloudbuild-dev.yaml` does not pass `--allow-unauthenticated`, which avoids Cloud Build trying to reset service IAM on every deploy.
 
-See [docs/deployment.md](docs/deployment.md) for required secrets and deployment checks. See
-[docs/canvas-school-setup.md](docs/canvas-school-setup.md) for Canvas LTI installation and theme JavaScript setup.
+For a new school, use [docs/school-deployment.md](docs/school-deployment.md) with `cloudbuild-school.yaml`. See [docs/deployment.md](docs/deployment.md) for maintained target details and [docs/canvas-school-setup.md](docs/canvas-school-setup.md) for Canvas LTI installation and theme JavaScript setup.
 
 ## Testing
 
