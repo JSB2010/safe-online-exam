@@ -6,7 +6,7 @@ The tool supports Canvas LTI 1.3 launches, Canvas OAuth for instructor API actio
 
 ## Current Stack
 
-- Node.js 22
+- Node.js 24
 - TypeScript
 - NestJS 11 on Express
 - React 19 and Vite
@@ -217,7 +217,7 @@ gcloud builds submit --config=cloudbuild-prod.yaml
 These configs:
 
 - pull the previous image as a Docker build cache source
-- build a Node 22 Docker image whose stages run install, typecheck, lint, formatting check, coverage tests, build, and production dependency pruning
+- build with Node 24, then emit a distroless Node 24 runtime image after install, typecheck, lint, formatting check, coverage tests, build, and production dependency pruning
 - deploy `canvas-seb-dev` or `canvas-seb-prod`
 - keep Firestore database IDs on `seb-canvaslti-dev` and `seb-canvaslti-prod`
 - inject secrets through Secret Manager

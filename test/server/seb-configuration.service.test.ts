@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import plist from "plist";
+import * as plist from "plist";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { buildAllowlistRules, SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
 
@@ -113,8 +113,8 @@ describe("SebConfigurationService", () => {
     });
     const parsed = plist.parse(config.toString("utf8")) as Record<string, any>;
 
-    expect(Buffer.isBuffer(parsed.configKeySalt)).toBe(true);
-    expect(parsed.configKeySalt).toEqual(Buffer.alloc(32, 7));
+    expect(parsed.configKeySalt).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(parsed.configKeySalt)).toEqual(Buffer.alloc(32, 7));
   });
 
   it("supports structured exact, domain, and regex allowlist entries", () => {

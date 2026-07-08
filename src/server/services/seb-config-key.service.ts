@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import plist from "plist";
+import * as plist from "plist";
 import type { Request } from "express";
 
 @Injectable()

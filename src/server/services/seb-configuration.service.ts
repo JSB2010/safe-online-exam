@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import plist from "plist";
+import * as plist from "plist";
 import { isUnsafeBroadUrlPattern } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import {

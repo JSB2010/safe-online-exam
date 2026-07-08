@@ -4,7 +4,7 @@
 
 Use npm.
 
-This repo is one deployable TypeScript application. npm is already included with the Node 22 base image, `npm ci` gives deterministic frozen installs from `package-lock.json`, and Cloud Build/Docker support stays simple.
+This repo is one deployable TypeScript application. npm is pinned through `packageManager` and the Dockerfile, `npm ci` gives deterministic frozen installs from `package-lock.json`, and Cloud Build/Docker support stays simple.
 
 Do not migrate to pnpm, Bun, or Turborepo right now.
 
@@ -24,6 +24,8 @@ Cloud Build now delegates install, verification, build, and production dependenc
 4. `runtime`: copy only `dist`, production `node_modules`, and package metadata
 
 This removes the previous duplicate work where Cloud Build installed and built outside Docker, then the Dockerfile installed and built again.
+
+The build stages use the official Node image so npm and shell tooling are available. The final runtime stage uses a distroless Node 24 nonroot image to reduce OS package surface and scanner noise.
 
 The Cloud Build configs also pull the previous image and pass `--cache-from` to Docker. This lets Docker reuse layers when dependency files or source files have not changed.
 

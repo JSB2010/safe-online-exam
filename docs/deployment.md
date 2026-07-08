@@ -36,7 +36,7 @@ npm run test:coverage
 npm run build
 ```
 
-Cloud Build pulls the previous image and passes it as `--cache-from` before building. The Dockerfile then prunes dev dependencies and emits a Node 22 runtime image that starts `node dist/server/server/main.js`.
+Cloud Build pulls the previous image and passes it as `--cache-from` before building. The Dockerfile then prunes dev dependencies and emits a distroless Node 24 runtime image that starts `dist/server/server/main.js` through the image's Node entrypoint.
 
 The server build also copies `src/server/assets` and creates `canvas-seb-detector.min.js`. When `APP_DEBUG_ENABLED` is true, the public detector URL serves the readable script with `no-store` headers. When `APP_DEBUG_ENABLED` is false, the same public URL serves the minified script with a one-hour public cache and `stale-while-revalidate`.
 

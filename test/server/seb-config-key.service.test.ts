@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import plist from "plist";
+import * as plist from "plist";
 import { canonicalizeSebPlist, SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 
 describe("SebConfigKeyService", () => {

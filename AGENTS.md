@@ -10,7 +10,7 @@ Preserve behavior before refactoring. Canvas LTI URLs, Cloud Run service names, 
 
 ## Current Stack
 
-- Runtime: Node.js 22 on Google Cloud Run Gen2.
+- Runtime: Node.js 24 on Google Cloud Run Gen2.
 - Package manager: npm, pinned with `packageManager` in `package.json`.
 - Backend: NestJS on Express under `src/server`.
 - Frontend: React and Vite under `src/client`.

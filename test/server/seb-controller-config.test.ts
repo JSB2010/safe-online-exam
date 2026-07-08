@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import plist from "plist";
+import * as plist from "plist";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { SebController } from "../../src/server/controllers/seb.controller.js";
 import { SebAccessProofService } from "../../src/server/services/seb-access-proof.service.js";
