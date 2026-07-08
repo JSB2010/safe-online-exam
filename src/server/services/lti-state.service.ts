@@ -81,10 +81,23 @@ function decryptJson(state: string, key: Buffer): unknown {
 }
 
 function constantJsonEqual(left: unknown, right: unknown): boolean {
-  const leftBuffer = Buffer.from(JSON.stringify(left));
-  const rightBuffer = Buffer.from(JSON.stringify(right));
+  const leftBuffer = Buffer.from(stableJson(left));
+  const rightBuffer = Buffer.from(stableJson(right));
   if (leftBuffer.length !== rightBuffer.length) {
     return false;
   }
   return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

@@ -27,6 +27,25 @@ describe("LtiStateService", () => {
     await expect(service.consumeState(state)).rejects.toThrow("Invalid or already consumed LTI state");
   });
 
+  it("accepts Firestore payload maps even when key order differs from the encrypted state", async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new LtiStateService(new AppConfig(), { value: repositories } as RepositoryProvider);
+    const state = await service.createState({ nonce: "nonce-1", targetLinkUri: "https://tool.example/lti/launch" });
+    const stored = await repositories.transientStates.get(stateDocumentId(state));
+    await repositories.transientStates.save(stateDocumentId(state), {
+      ...stored!,
+      payload: {
+        targetLinkUri: "https://tool.example/lti/launch",
+        nonce: "nonce-1"
+      }
+    });
+
+    await expect(service.consumeState(state)).resolves.toEqual({
+      nonce: "nonce-1",
+      targetLinkUri: "https://tool.example/lti/launch"
+    });
+  });
+
   it("rejects missing or malformed state", async () => {
     const repositories = createInMemoryRepositories();
     const service = new LtiStateService(new AppConfig(), { value: repositories } as RepositoryProvider);
