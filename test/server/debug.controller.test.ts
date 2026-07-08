@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/server/config/app-config.js";
 import { DebugController } from "../../src/server/controllers/debug.controller.js";
+import type { AssessmentService } from "../../src/server/services/assessment.service.js";
 import type { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
 import type { DetectorTraceService } from "../../src/server/services/detector-trace.service.js";
-import type { QuizService } from "../../src/server/services/quiz.service.js";
 
 describe("DebugController", () => {
   it("records Canvas detector trace events only when debug mode is enabled", () => {
@@ -38,5 +38,5 @@ function createController(debugEnabled: boolean, trace: DetectorTraceService): D
     }
   } as unknown as AppConfig;
 
-  return new DebugController(config, {} as CanvasApiService, {} as QuizService, trace);
+  return new DebugController(config, {} as CanvasApiService, {} as AssessmentService, trace);
 }

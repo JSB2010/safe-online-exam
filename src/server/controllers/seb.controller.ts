@@ -13,11 +13,10 @@ import { AppConfig } from "../config/app-config.js";
 import { apiError } from "../http/api-error.js";
 import { absoluteUrl, sebSchemeUrl } from "../http/request-url.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
+import { AssessmentService } from "../services/assessment.service.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
-import { ContentService } from "../services/content.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
-import { QuizService } from "../services/quiz.service.js";
 import { SebAccessProofService } from "../services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "../services/seb-config-key.service.js";
 import { SebConfigurationService } from "../services/seb-configuration.service.js";
@@ -29,8 +28,7 @@ export class SebController {
     private readonly config: AppConfig,
     private readonly ltiService: LtiService,
     private readonly ltiState: LtiStateService,
-    private readonly quizService: QuizService,
-    private readonly contentService: ContentService,
+    private readonly assessments: AssessmentService,
     private readonly canvasApi: CanvasApiService,
     private readonly sebDetector: SebDetector,
     private readonly sebConfig: SebConfigurationService,
@@ -47,7 +45,7 @@ export class SebController {
     @Query("canvas_url") canvasUrl?: string,
     @Query("user_id") userId?: string
   ): Promise<void> {
-    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    const setting = await this.assessments.getSebSettingForQuiz(quizId);
     if (!setting?.sebRequired || this.sebDetector.isRequestFromSeb(request, setting)) {
       response.redirect(resolveClassicCanvasUrl(this.config, courseId, quizId, canvasUrl, undefined));
       return;
@@ -171,12 +169,12 @@ export class SebController {
     @Param("quizId") quizId: string,
     @Query("userId") userId?: string
   ): Promise<void> {
-    const quiz = await this.quizService.getQuiz(quizId);
+    const quiz = await this.assessments.getQuiz(quizId);
     if (!quiz) {
       response.status(404).send(renderFallbackHtml("Quiz Not Found", "<h1>Quiz not found</h1>"));
       return;
     }
-    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    const setting = await this.assessments.getSebSettingForQuiz(quizId);
     if (!setting?.sebRequired) {
       response.redirect(quiz.htmlUrl || this.config.getCanvasDomain());
       return;
@@ -205,7 +203,7 @@ export class SebController {
 
   @Get("/seb/config/:quizId")
   async legacyConfigRedirect(@Res() response: Response, @Param("quizId") quizId: string): Promise<void> {
-    const quiz = await this.quizService.getQuiz(quizId);
+    const quiz = await this.assessments.getQuiz(quizId);
     if (!quiz?.courseId) {
       response.status(400).send("Quiz course ID is missing");
       return;
@@ -220,7 +218,7 @@ export class SebController {
     if (!quizId || !browserExamKey) {
       return { valid: false, error: "Missing required parameters" };
     }
-    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    const setting = await this.assessments.getSebSettingForQuiz(quizId);
     if (!setting) {
       return { valid: false, error: "No SEB settings found for quiz" };
     }
@@ -230,7 +228,7 @@ export class SebController {
 
   @Get("/seb/check")
   async checkSeb(@Req() request: Request, @Query("quizId") quizId: string): Promise<Record<string, unknown>> {
-    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    const setting = await this.assessments.getSebSettingForQuiz(quizId);
     const sebRequired = !!setting?.sebRequired;
     return {
       seb_required: sebRequired,
@@ -397,7 +395,7 @@ export class SebController {
     @Param("courseId") courseId: string,
     @Param("quizId") quizId: string
   ): Promise<Record<string, unknown>> {
-    const setting = await this.quizService.getSebSettingForQuiz(quitPathId(quizId));
+    const setting = await this.resolveSebSetting(courseId, quizId);
     return {
       exitPageUrl: absoluteUrl(request, `/seb/exit/${courseId}/${quizId}`, this.config.getApplicationBaseUrl()),
       quitUrl: absoluteUrl(
@@ -484,18 +482,18 @@ export class SebController {
   private async generateConfig(courseId: string, contentId: string, canvasUrl?: string): Promise<Buffer> {
     const classicId = extractClassicQuizId(contentId);
     if (classicId) {
-      let setting = await this.quizService.getSebSettingForQuiz(classicId);
+      let setting = await this.assessments.getSebSettingForQuiz(classicId);
       if (!setting?.sebRequired || !setting.accessCode) {
         throw new Error("SEB not enabled or access code missing");
       }
       if (setting.startPassword && !setting.configKeySalt) {
-        setting = await this.quizService.saveSebSetting(setting);
+        setting = await this.assessments.saveQuizSebSetting(setting);
       }
       const accessCode = setting.accessCode;
       if (!accessCode) {
         throw new Error("SEB not enabled or access code missing");
       }
-      const quiz = await this.quizService.getQuiz(classicId);
+      const quiz = await this.assessments.getQuiz(classicId);
       const startUrl = resolveClassicCanvasUrl(this.config, courseId, classicId, canvasUrl, quiz?.htmlUrl);
       const generated = this.sebConfig.generateSebConfiguration({
         courseId,
@@ -507,16 +505,16 @@ export class SebController {
         startPassword: setting.startPassword,
         configKeySalt: setting.configKeySalt
       });
-      await this.quizService.saveSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
+      await this.assessments.saveQuizSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
       return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
     }
 
-    let setting = await this.contentService.getSebSetting(contentId);
+    let setting = await this.assessments.getContentSebSetting(contentId);
     if (!setting?.sebRequired || !setting.accessCode) {
       throw new Error("SEB not enabled or access code missing");
     }
     if (setting.startPassword && !setting.configKeySalt) {
-      setting = await this.contentService.saveSebSetting(setting);
+      setting = await this.assessments.saveContentSebSetting(setting);
     }
     const accessCode = setting.accessCode;
     if (!accessCode) {
@@ -533,7 +531,7 @@ export class SebController {
       startPassword: setting.startPassword,
       configKeySalt: setting.configKeySalt
     });
-    await this.contentService.saveSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
+    await this.assessments.saveContentSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
     return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
   }
 
@@ -544,7 +542,7 @@ export class SebController {
   ): Promise<string> {
     const classicId = extractClassicQuizId(contentId);
     if (classicId) {
-      const quiz = await this.quizService.getQuiz(classicId);
+      const quiz = await this.assessments.getQuiz(classicId);
       const startUrl = resolveClassicCanvasUrl(this.config, courseId, classicId, undefined, quiz?.htmlUrl);
       const generated = this.sebConfig.generateSebConfiguration({
         courseId,
@@ -578,7 +576,7 @@ export class SebController {
   ): Promise<{ content: any; setting: QuizSebSetting | ContentSebSetting | null; launchTarget: string } | null> {
     const classicId = extractClassicQuizId(contentId);
     if (classicId) {
-      const quiz = await this.quizService.getQuiz(classicId);
+      const quiz = await this.assessments.getQuiz(classicId);
       if (!quiz) {
         return null;
       }
@@ -591,12 +589,12 @@ export class SebController {
           title: quiz.title,
           htmlUrl: quiz.htmlUrl
         },
-        setting: await this.quizService.getSebSettingForQuiz(classicId),
+        setting: await this.assessments.getSebSettingForQuiz(classicId),
         launchTarget: quiz.htmlUrl || this.config.getCanvasDomain()
       };
     }
-    const content = await this.contentService.getContentItem(contentId);
-    const setting = await this.contentService.getSebSetting(contentId);
+    const content = await this.assessments.getContentItem(contentId);
+    const setting = await this.assessments.getContentSebSetting(contentId);
     if (!content && !setting) {
       return null;
     }
@@ -625,7 +623,7 @@ export class SebController {
     contentId: string,
     setting: ContentSebSetting
   ): Promise<string> {
-    const content = await this.contentService.getContentItem(contentId);
+    const content = await this.assessments.getContentItem(contentId);
     const candidates = [content?.htmlUrl, setting.htmlUrl, content?.canvasLaunchUrl, setting.canvasLaunchUrl];
     for (const candidate of candidates) {
       if (candidate && isConfiguredCanvasUrl(this.config, candidate)) {
@@ -644,13 +642,13 @@ export class SebController {
     quizId: string
   ): Promise<(QuizSebSetting | ContentSebSetting) | null> {
     if (quizId.startsWith("newquiz:")) {
-      return this.contentService.getSebSetting(quizId);
+      return this.assessments.getContentSebSetting(quizId);
     }
     const parsed = parseNewQuizContentId(quizId);
     if (parsed) {
-      return this.contentService.getSebSetting(quizId);
+      return this.assessments.getContentSebSetting(quizId);
     }
-    return this.quizService.getSebSettingForQuiz(quizId);
+    return this.assessments.getSebSettingForQuiz(quizId);
   }
 }
 

@@ -9,6 +9,25 @@ describe("AppConfig", () => {
     expect(loadConfigFromEnv({ SPRING_PROFILES_ACTIVE: "dev" }).firestoreDatabaseId).toBe("seb-canvaslti-dev");
   });
 
+  it("uses the reset Firestore collection names", () => {
+    expect(loadConfigFromEnv({}).firestoreCollections).toEqual({
+      assessments: "assessments",
+      courses: "courses",
+      oauthTokens: "canvasOAuthTokens"
+    });
+    expect(
+      loadConfigFromEnv({
+        FIRESTORE_ASSESSMENTS_COLLECTION: "testAssessments",
+        FIRESTORE_COURSES_COLLECTION: "testCourses",
+        FIRESTORE_OAUTH_TOKENS_COLLECTION: "testTokens"
+      }).firestoreCollections
+    ).toEqual({
+      assessments: "testAssessments",
+      courses: "testCourses",
+      oauthTokens: "testTokens"
+    });
+  });
+
   it("sanitizes tool and Canvas URLs for Cloud Run", () => {
     expect(sanitizeToolUrl("tool.example.com/")).toBe("https://tool.example.com");
     const config = loadConfigFromEnv({

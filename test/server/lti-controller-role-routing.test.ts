@@ -6,26 +6,22 @@ import type { LtiLaunchData } from "../../src/shared/models.js";
 describe("LtiController role routing", () => {
   let controller: LtiController;
   let canvasApi: { hasAccessToken: ReturnType<typeof vi.fn> };
-  let quizService: {
+  let assessments: {
+    refreshCourseContent: ReturnType<typeof vi.fn>;
     getQuizzesForCourse: ReturnType<typeof vi.fn>;
-    getSebSettingForQuiz: ReturnType<typeof vi.fn>;
-  };
-  let contentService: {
-    getAllContentForCourse: ReturnType<typeof vi.fn>;
     getCachedContentForCourse: ReturnType<typeof vi.fn>;
-    getSebSetting: ReturnType<typeof vi.fn>;
+    getSebSettingForQuiz: ReturnType<typeof vi.fn>;
+    getContentSebSetting: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     canvasApi = { hasAccessToken: vi.fn().mockResolvedValue(true) };
-    quizService = {
+    assessments = {
+      refreshCourseContent: vi.fn().mockResolvedValue({ classicQuizzes: [], contentItems: [] }),
       getQuizzesForCourse: vi.fn().mockResolvedValue([]),
-      getSebSettingForQuiz: vi.fn().mockResolvedValue(null)
-    };
-    contentService = {
-      getAllContentForCourse: vi.fn().mockResolvedValue([]),
       getCachedContentForCourse: vi.fn().mockResolvedValue([]),
-      getSebSetting: vi.fn().mockResolvedValue(null)
+      getSebSettingForQuiz: vi.fn().mockResolvedValue(null),
+      getContentSebSetting: vi.fn().mockResolvedValue(null)
     };
     controller = new LtiController(
       {
@@ -36,9 +32,8 @@ describe("LtiController role routing", () => {
       {} as any,
       {} as any,
       {} as any,
-      quizService as any,
+      assessments as any,
       canvasApi as any,
-      contentService as any,
       {
         getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults("course-1"))
       } as any,

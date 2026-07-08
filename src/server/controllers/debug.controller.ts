@@ -1,15 +1,15 @@
 import { Body, Controller, Get, Headers, Ip, Param, Post, Query } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
+import { AssessmentService } from "../services/assessment.service.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
 import { DetectorTraceService } from "../services/detector-trace.service.js";
-import { QuizService } from "../services/quiz.service.js";
 
 @Controller(["/api/debug", "/api/diagnostic"])
 export class DebugController {
   constructor(
     private readonly config: AppConfig,
     private readonly canvasApi: CanvasApiService,
-    private readonly quizService: QuizService,
+    private readonly assessments: AssessmentService,
     private readonly detectorTrace: DetectorTraceService
   ) {}
 
@@ -57,7 +57,7 @@ export class DebugController {
     if (!this.config.value.security.debugEnabled || !userId) {
       return { enabled: false };
     }
-    return this.quizService.getQuizzesForCourse(courseId, userId, true);
+    return this.assessments.getQuizzesForCourse(courseId, userId, true);
   }
 
   @Get("/test-oauth/:userId")

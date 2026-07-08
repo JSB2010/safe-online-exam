@@ -41,9 +41,8 @@ describe("SEB config downloads", () => {
             title: "Midterm",
             htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455?module_item_id=44`
           }),
-          saveSebSetting
+          saveQuizSebSetting: saveSebSetting
         } as any,
-        {} as any,
         {} as any,
         {} as any,
         new SebConfigurationService(new AppConfig()),
@@ -74,9 +73,8 @@ describe("SEB config downloads", () => {
         new AppConfig(),
         {} as any,
         {} as any,
-        {} as any,
         {
-          getSebSetting: async () => ({
+          getContentSebSetting: async () => ({
             contentId: "newquiz:11825:991",
             courseId: "11825",
             assignmentId: "991",
@@ -99,7 +97,7 @@ describe("SEB config downloads", () => {
             title: "New Quiz",
             htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991?module_item_id=44`
           }),
-          saveSebSetting
+          saveContentSebSetting: saveSebSetting
         } as any,
         {} as any,
         {} as any,
@@ -151,9 +149,8 @@ describe("SEB config downloads", () => {
               title: "Midterm",
               htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
             }),
-            saveSebSetting
+            saveQuizSebSetting: saveSebSetting
           } as any,
-          {} as any,
           {} as any,
           {} as any,
           new SebConfigurationService(new AppConfig()),
@@ -212,9 +209,8 @@ describe("SEB config downloads", () => {
             title: "Midterm",
             htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
           }),
-          saveSebSetting
+          saveQuizSebSetting: saveSebSetting
         } as any,
-        {} as any,
         {} as any,
         {} as any,
         new SebConfigurationService(new AppConfig()),

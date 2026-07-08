@@ -210,15 +210,13 @@ function controllerWithSetting(setting: Record<string, unknown>) {
     {} as any,
     {
       getSebSettingForQuiz: async () => resolvedSetting,
+      getContentSebSetting: async () => resolvedSetting,
+      getContentItem: async () => null,
       getQuiz: async () => ({
         id: setting.quizId || "23455",
         courseId: setting.courseId || "11825",
         htmlUrl: `${CANVAS_URL}/courses/${setting.courseId || "11825"}/quizzes/${setting.quizId || "23455"}`
       })
-    } as any,
-    {
-      getSebSetting: async () => resolvedSetting,
-      getContentItem: async () => null
     } as any,
     {} as any,
     {} as any,

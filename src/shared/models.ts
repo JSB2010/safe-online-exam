@@ -33,6 +33,54 @@ export interface ContentItem {
   metadata?: Record<string, unknown>;
 }
 
+export interface AssessmentCanvasState {
+  id: string;
+  quizId?: string | null;
+  assignmentId?: string | null;
+  title: string;
+  description?: string | null;
+  htmlUrl?: string | null;
+  apiUrl?: string | null;
+  canvasLaunchUrl?: string | null;
+  resourceLinkUuid?: string | null;
+  lookupUuid?: string | null;
+  externalToolUrl?: string | null;
+  quizEngine?: string | null;
+  quizTypeDisplay?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AssessmentSebState {
+  required: boolean;
+  enabled: boolean;
+  accessCode?: string | null;
+  browserExamKey?: string | null;
+  configKey?: string | null;
+  configKeySalt?: string | null;
+  quitPassword?: string | null;
+  startPassword?: string | null;
+  usesCourseDefaults: boolean;
+  quitPasswordOverride: boolean;
+  startPasswordOverride: boolean;
+  ssoDomains: string[];
+  educationalToolDomains: string[];
+  customDomains: string[];
+  urlRules: SebUrlRule[];
+  externalTools: ExternalToolConfig[];
+  deepLinkUrl?: string | null;
+}
+
+export interface AssessmentRecord {
+  id: string;
+  courseId: string;
+  contentType: ContentType;
+  canvas: AssessmentCanvasState;
+  seb: AssessmentSebState;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  lastSyncedAt?: string | null;
+}
+
 export interface QuizSebSetting {
   id?: string | null;
   quizId: string;
@@ -116,6 +164,20 @@ export interface CourseSebDefaults {
   updatedAt?: string | null;
 }
 
+export interface CourseRecord {
+  id?: string | null;
+  courseId: string;
+  setupCompleted: boolean;
+  sebDefaults: {
+    quitPassword?: string | null;
+    startPassword?: string | null;
+    urlRules: SebUrlRule[];
+    externalTools: ExternalToolConfig[];
+  };
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface OAuthToken {
   id?: string | null;
   userId: string;
@@ -125,20 +187,6 @@ export interface OAuthToken {
   expiresAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
-}
-
-export interface ModuleItemUpdate {
-  id?: string | null;
-  courseId: string;
-  quizId: string;
-  moduleId: string;
-  moduleName?: string | null;
-  moduleItemId: string;
-  title?: string | null;
-  originalUrl?: string | null;
-  sebUrl?: string | null;
-  usingSebUrl: boolean;
-  metadata?: Record<string, unknown>;
 }
 
 export interface LtiLaunchData {
@@ -238,6 +286,33 @@ export function extractClassicQuizId(contentId: string | undefined | null): stri
   return null;
 }
 
+export function assessmentIdForClassicQuiz(quizId: string): string {
+  return classicQuizContentId(extractClassicQuizId(quizId) || quizId);
+}
+
+export function canonicalAssessmentId(id: string): string {
+  if (parseNewQuizContentId(id)) {
+    return id;
+  }
+  const classicId = extractClassicQuizId(id);
+  return classicId ? classicQuizContentId(classicId) : id;
+}
+
+export function defaultAssessmentSebState(): AssessmentSebState {
+  return {
+    required: false,
+    enabled: false,
+    usesCourseDefaults: true,
+    quitPasswordOverride: false,
+    startPasswordOverride: false,
+    ssoDomains: [],
+    educationalToolDomains: [],
+    customDomains: [],
+    urlRules: [],
+    externalTools: []
+  };
+}
+
 export function quizToContentItem(quiz: Quiz): ContentItem {
   const canvasId = quiz.canvasQuizId || quiz.id;
   return {
@@ -250,6 +325,248 @@ export function quizToContentItem(quiz: Quiz): ContentItem {
     htmlUrl: quiz.htmlUrl,
     quizEngine: quiz.quizEngine || "classic",
     quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz"
+  };
+}
+
+export function quizToAssessmentRecord(
+  quiz: Quiz,
+  existing?: AssessmentRecord | null,
+  syncedAt?: string
+): AssessmentRecord {
+  const canvasId = quiz.canvasQuizId || quiz.id;
+  return {
+    ...existing,
+    id: classicQuizContentId(canvasId),
+    courseId: quiz.courseId || existing?.courseId || "",
+    contentType: "CLASSIC_QUIZ",
+    canvas: {
+      ...(existing?.canvas || {}),
+      id: canvasId,
+      quizId: canvasId,
+      assignmentId: null,
+      title: quiz.title,
+      description: quiz.description,
+      htmlUrl: quiz.htmlUrl,
+      quizEngine: quiz.quizEngine || "classic",
+      quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz"
+    },
+    seb: normalizeAssessmentSebState(existing?.seb),
+    lastSyncedAt: syncedAt || existing?.lastSyncedAt || null,
+    createdAt: existing?.createdAt,
+    updatedAt: existing?.updatedAt
+  };
+}
+
+export function contentItemToAssessmentRecord(
+  item: ContentItem,
+  existing?: AssessmentRecord | null,
+  syncedAt?: string
+): AssessmentRecord {
+  const parsedNewQuiz = parseNewQuizContentId(item.id);
+  const quizId = item.contentType === "CLASSIC_QUIZ" ? extractClassicQuizId(item.id) || item.canvasId : null;
+  return {
+    ...existing,
+    id: item.id,
+    courseId: item.courseId || existing?.courseId || parsedNewQuiz?.courseId || "",
+    contentType: item.contentType,
+    canvas: {
+      ...(existing?.canvas || {}),
+      id: item.canvasId,
+      quizId,
+      assignmentId: item.assignmentId || parsedNewQuiz?.assignmentId || null,
+      title: item.title,
+      description: item.description,
+      htmlUrl: item.htmlUrl,
+      apiUrl: item.apiUrl,
+      canvasLaunchUrl: item.canvasLaunchUrl,
+      resourceLinkUuid: item.resourceLinkUuid,
+      lookupUuid: item.lookupUuid,
+      externalToolUrl: item.externalToolUrl,
+      quizEngine: item.quizEngine,
+      quizTypeDisplay: item.quizTypeDisplay,
+      metadata: item.metadata
+    },
+    seb: normalizeAssessmentSebState(existing?.seb),
+    lastSyncedAt: syncedAt || existing?.lastSyncedAt || null,
+    createdAt: existing?.createdAt,
+    updatedAt: existing?.updatedAt
+  };
+}
+
+export function assessmentToQuiz(record: AssessmentRecord): Quiz | null {
+  if (record.contentType !== "CLASSIC_QUIZ") {
+    return null;
+  }
+  const quizId = record.canvas.quizId || extractClassicQuizId(record.id) || record.canvas.id;
+  return {
+    id: quizId,
+    canvasQuizId: record.canvas.quizId || record.canvas.id,
+    courseId: record.courseId,
+    title: record.canvas.title || "Canvas Quiz",
+    description: record.canvas.description,
+    htmlUrl: record.canvas.htmlUrl,
+    quizEngine: record.canvas.quizEngine || "classic",
+    quizTypeDisplay: record.canvas.quizTypeDisplay || "Classic Quiz",
+    contentType: "CLASSIC_QUIZ",
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
+export function assessmentToContentItem(record: AssessmentRecord): ContentItem {
+  return {
+    id: record.id,
+    courseId: record.courseId,
+    canvasId: record.canvas.id,
+    assignmentId: record.canvas.assignmentId,
+    contentType: record.contentType,
+    title: record.canvas.title || "Canvas content",
+    description: record.canvas.description,
+    htmlUrl: record.canvas.htmlUrl,
+    apiUrl: record.canvas.apiUrl,
+    canvasLaunchUrl: record.canvas.canvasLaunchUrl,
+    resourceLinkUuid: record.canvas.resourceLinkUuid,
+    lookupUuid: record.canvas.lookupUuid,
+    externalToolUrl: record.canvas.externalToolUrl,
+    quizEngine: record.canvas.quizEngine,
+    quizTypeDisplay:
+      record.canvas.quizTypeDisplay ||
+      (record.contentType === "CLASSIC_QUIZ" ? "Classic Quiz" : record.contentType === "NEW_QUIZ" ? "New Quiz" : null),
+    metadata: record.canvas.metadata
+  };
+}
+
+export function assessmentToQuizSebSetting(record: AssessmentRecord): QuizSebSetting | null {
+  const quizId = record.canvas.quizId || extractClassicQuizId(record.id);
+  if (!quizId) {
+    return null;
+  }
+  const seb = normalizeAssessmentSebState(record.seb);
+  return {
+    id: quizId,
+    quizId,
+    courseId: record.courseId || null,
+    sebRequired: seb.required,
+    enabled: seb.enabled,
+    accessCode: seb.accessCode || null,
+    browserExamKey: seb.browserExamKey || null,
+    configKey: seb.configKey || null,
+    allowedSites: null,
+    externalToolUrl: record.canvas.externalToolUrl || null,
+    ssoDomains: seb.ssoDomains,
+    educationalToolDomains: seb.educationalToolDomains,
+    customDomains: seb.customDomains,
+    urlRules: seb.urlRules,
+    externalTools: seb.externalTools,
+    canvasDomain: null,
+    canvasAssignmentId: null,
+    deepLinkUrl: seb.deepLinkUrl || null,
+    quitPassword: seb.quitPassword || null,
+    startPassword: seb.startPassword || null,
+    configKeySalt: seb.configKeySalt || null,
+    usesCourseDefaults: seb.usesCourseDefaults,
+    quitPasswordOverride: seb.quitPasswordOverride,
+    startPasswordOverride: seb.startPasswordOverride,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
+export function assessmentToContentSebSetting(record: AssessmentRecord): ContentSebSetting {
+  const seb = normalizeAssessmentSebState(record.seb);
+  return {
+    id: record.id,
+    contentId: record.id,
+    canvasId: record.canvas.id,
+    assignmentId: record.canvas.assignmentId || null,
+    contentType: record.contentType,
+    courseId: record.courseId || null,
+    htmlUrl: record.canvas.htmlUrl || null,
+    canvasLaunchUrl: record.canvas.canvasLaunchUrl || null,
+    resourceLinkUuid: record.canvas.resourceLinkUuid || null,
+    lookupUuid: record.canvas.lookupUuid || null,
+    sebRequired: seb.required,
+    enabled: seb.enabled,
+    accessCode: seb.accessCode || null,
+    browserExamKey: seb.browserExamKey || null,
+    configKey: seb.configKey || null,
+    externalToolUrl: record.canvas.externalToolUrl || null,
+    deepLinkUrl: seb.deepLinkUrl || null,
+    ssoDomains: seb.ssoDomains,
+    educationalToolDomains: seb.educationalToolDomains,
+    customDomains: seb.customDomains,
+    urlRules: seb.urlRules,
+    externalTools: seb.externalTools,
+    quitPassword: seb.quitPassword || null,
+    startPassword: seb.startPassword || null,
+    configKeySalt: seb.configKeySalt || null,
+    usesCourseDefaults: seb.usesCourseDefaults,
+    quitPasswordOverride: seb.quitPasswordOverride,
+    startPasswordOverride: seb.startPasswordOverride,
+    metadata: record.canvas.metadata,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
+export function assessmentWithQuizSebSetting(
+  existing: AssessmentRecord | null | undefined,
+  setting: QuizSebSetting
+): AssessmentRecord {
+  const quizId = extractClassicQuizId(setting.quizId) || setting.quizId;
+  return {
+    ...existing,
+    id: classicQuizContentId(quizId),
+    courseId: setting.courseId || existing?.courseId || "",
+    contentType: "CLASSIC_QUIZ",
+    canvas: {
+      ...(existing?.canvas || {}),
+      id: existing?.canvas.id || quizId,
+      quizId,
+      assignmentId: null,
+      title: existing?.canvas.title || "Canvas Quiz",
+      externalToolUrl: setting.externalToolUrl || existing?.canvas.externalToolUrl || null,
+      quizEngine: existing?.canvas.quizEngine || "classic",
+      quizTypeDisplay: existing?.canvas.quizTypeDisplay || "Classic Quiz"
+    },
+    seb: quizSebSettingToAssessmentSebState(setting),
+    createdAt: existing?.createdAt,
+    updatedAt: existing?.updatedAt,
+    lastSyncedAt: existing?.lastSyncedAt || null
+  };
+}
+
+export function assessmentWithContentSebSetting(
+  existing: AssessmentRecord | null | undefined,
+  setting: ContentSebSetting
+): AssessmentRecord {
+  const parsed = parseNewQuizContentId(setting.contentId);
+  const assignmentId = setting.assignmentId || parsed?.assignmentId || setting.canvasId || null;
+  return {
+    ...existing,
+    id: setting.contentId,
+    courseId: setting.courseId || existing?.courseId || parsed?.courseId || "",
+    contentType: setting.contentType || existing?.contentType || (parsed ? "NEW_QUIZ" : "ASSIGNMENT"),
+    canvas: {
+      ...(existing?.canvas || {}),
+      id: setting.canvasId || existing?.canvas.id || assignmentId || setting.contentId,
+      quizId: null,
+      assignmentId,
+      title: existing?.canvas.title || (parsed ? "New Quiz" : "Canvas content"),
+      description: existing?.canvas.description,
+      htmlUrl: setting.htmlUrl || existing?.canvas.htmlUrl || null,
+      canvasLaunchUrl: setting.canvasLaunchUrl || existing?.canvas.canvasLaunchUrl || null,
+      resourceLinkUuid: setting.resourceLinkUuid || existing?.canvas.resourceLinkUuid || null,
+      lookupUuid: setting.lookupUuid || existing?.canvas.lookupUuid || null,
+      externalToolUrl: setting.externalToolUrl || existing?.canvas.externalToolUrl || null,
+      quizEngine: existing?.canvas.quizEngine || (parsed ? "new_quiz" : null),
+      quizTypeDisplay: existing?.canvas.quizTypeDisplay || (parsed ? "New Quiz" : null),
+      metadata: setting.metadata || existing?.canvas.metadata
+    },
+    seb: contentSebSettingToAssessmentSebState(setting),
+    createdAt: existing?.createdAt,
+    updatedAt: existing?.updatedAt,
+    lastSyncedAt: existing?.lastSyncedAt || null
   };
 }
 
@@ -296,6 +613,47 @@ export function defaultCourseSebDefaults(courseId: string): CourseSebDefaults {
     urlRules: [],
     externalTools: [],
     setupCompleted: false
+  };
+}
+
+export function courseRecordToDefaults(record: CourseRecord | null | undefined, courseId: string): CourseSebDefaults {
+  return normalizeCourseSebDefaults({
+    id: record?.id || courseId,
+    courseId: record?.courseId || courseId,
+    setupCompleted: !!record?.setupCompleted,
+    quitPassword: record?.sebDefaults?.quitPassword || null,
+    startPassword: record?.sebDefaults?.startPassword || null,
+    urlRules: record?.sebDefaults?.urlRules || [],
+    externalTools: record?.sebDefaults?.externalTools || [],
+    createdAt: record?.createdAt,
+    updatedAt: record?.updatedAt
+  });
+}
+
+export function courseDefaultsToRecord(
+  courseId: string,
+  defaults: Partial<CourseSebDefaults>,
+  existing?: CourseRecord | null
+): CourseRecord {
+  const normalized = normalizeCourseSebDefaults({
+    ...defaultCourseSebDefaults(courseId),
+    ...defaults,
+    id: courseId,
+    courseId
+  });
+  return {
+    ...existing,
+    id: courseId,
+    courseId,
+    setupCompleted: normalized.setupCompleted,
+    sebDefaults: {
+      quitPassword: normalized.quitPassword,
+      startPassword: normalized.startPassword,
+      urlRules: normalized.urlRules,
+      externalTools: normalized.externalTools
+    },
+    createdAt: existing?.createdAt,
+    updatedAt: existing?.updatedAt
   };
 }
 
@@ -534,6 +892,74 @@ export function applyCourseDefaultsToContentSetting(
     usesCourseDefaults: usesDefaults,
     quitPasswordOverride,
     startPasswordOverride
+  };
+}
+
+function quizSebSettingToAssessmentSebState(setting: QuizSebSetting): AssessmentSebState {
+  return normalizeAssessmentSebState({
+    required: setting.sebRequired,
+    enabled: setting.enabled,
+    accessCode: setting.accessCode || null,
+    browserExamKey: setting.browserExamKey || null,
+    configKey: setting.configKey || null,
+    configKeySalt: setting.configKeySalt || null,
+    quitPassword: setting.quitPassword || null,
+    startPassword: setting.startPassword || null,
+    usesCourseDefaults: setting.usesCourseDefaults !== false,
+    quitPasswordOverride: setting.quitPasswordOverride === true,
+    startPasswordOverride: setting.startPasswordOverride === true,
+    ssoDomains: setting.ssoDomains || [],
+    educationalToolDomains: setting.educationalToolDomains || [],
+    customDomains: setting.customDomains || [],
+    urlRules: setting.urlRules || [],
+    externalTools: setting.externalTools || [],
+    deepLinkUrl: setting.deepLinkUrl || null
+  });
+}
+
+function contentSebSettingToAssessmentSebState(setting: ContentSebSetting): AssessmentSebState {
+  return normalizeAssessmentSebState({
+    required: setting.sebRequired,
+    enabled: setting.enabled,
+    accessCode: setting.accessCode || null,
+    browserExamKey: setting.browserExamKey || null,
+    configKey: setting.configKey || null,
+    configKeySalt: setting.configKeySalt || null,
+    quitPassword: setting.quitPassword || null,
+    startPassword: setting.startPassword || null,
+    usesCourseDefaults: setting.usesCourseDefaults !== false,
+    quitPasswordOverride: setting.quitPasswordOverride === true,
+    startPasswordOverride: setting.startPasswordOverride === true,
+    ssoDomains: setting.ssoDomains || [],
+    educationalToolDomains: setting.educationalToolDomains || [],
+    customDomains: setting.customDomains || [],
+    urlRules: setting.urlRules || [],
+    externalTools: setting.externalTools || [],
+    deepLinkUrl: setting.deepLinkUrl || null
+  });
+}
+
+function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null): AssessmentSebState {
+  return {
+    ...defaultAssessmentSebState(),
+    ...input,
+    required: input?.required === true,
+    enabled: input?.enabled === true,
+    accessCode: input?.accessCode || null,
+    browserExamKey: input?.browserExamKey || null,
+    configKey: input?.configKey || null,
+    configKeySalt: input?.configKeySalt || null,
+    quitPassword: normalizeOptionalText(input?.quitPassword),
+    startPassword: normalizeOptionalText(input?.startPassword),
+    usesCourseDefaults: input?.usesCourseDefaults !== false,
+    quitPasswordOverride: input?.quitPasswordOverride === true,
+    startPasswordOverride: input?.startPasswordOverride === true,
+    ssoDomains: input?.ssoDomains || [],
+    educationalToolDomains: input?.educationalToolDomains || [],
+    customDomains: input?.customDomains || [],
+    urlRules: normalizeUrlRules(input?.urlRules),
+    externalTools: normalizeExternalTools(input?.externalTools),
+    deepLinkUrl: input?.deepLinkUrl || null
   };
 }
 

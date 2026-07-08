@@ -204,8 +204,8 @@ export class CanvasApiService {
     scopeOrOptions?: string | StoreAccessTokenOptions | null
   ): Promise<OAuthToken> {
     const options = normalizeStoreAccessTokenOptions(scopeOrOptions);
-    await this.clearAccessToken(userId);
     const token: OAuthToken = {
+      id: userId,
       userId,
       accessToken,
       refreshToken: options.refreshToken || null,
@@ -220,9 +220,7 @@ export class CanvasApiService {
 
   async clearAccessToken(userId: string): Promise<void> {
     this.tokenCache.delete(userId);
-    const matches = await this.repositories.value.oauthTokens.find([{ field: "userId", op: "==", value: userId }]);
-    const ids = new Set([userId, ...matches.map((token) => token.id).filter((id): id is string => !!id)]);
-    await Promise.all(Array.from(ids).map((id) => this.repositories.value.oauthTokens.delete(id)));
+    await this.repositories.value.oauthTokens.delete(userId);
   }
 
   async request<T = unknown>(userId: string, url: string, init: RequestInit = {}): Promise<T> {
@@ -277,8 +275,7 @@ export class CanvasApiService {
     if (cached?.accessToken) {
       return cached;
     }
-    const matches = await this.repositories.value.oauthTokens.find([{ field: "userId", op: "==", value: userId }]);
-    const token = matches.filter((match) => !!match.accessToken).sort(compareTokenFreshness)[0];
+    const token = await this.repositories.value.oauthTokens.get(userId);
     if (!token?.accessToken) {
       return null;
     }
@@ -428,16 +425,6 @@ export class CanvasApiRequestError extends Error {
 
 export function isCanvasApiRequestError(error: unknown): error is CanvasApiRequestError {
   return error instanceof CanvasApiRequestError;
-}
-
-function compareTokenFreshness(left: OAuthToken, right: OAuthToken): number {
-  return tokenTimestamp(right) - tokenTimestamp(left);
-}
-
-function tokenTimestamp(token: OAuthToken): number {
-  const value = token.updatedAt || token.createdAt || "";
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function normalizeStoreAccessTokenOptions(

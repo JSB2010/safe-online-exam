@@ -46,17 +46,15 @@ describe("CanvasApiService", () => {
     expect(params.get("quiz[quiz_settings][student_access_code]")).toBe("ACCESS42");
   });
 
-  it("removes generated-id legacy OAuth token documents before storing fresh tokens", async () => {
-    repositories = createInMemoryRepositories({
-      oauthTokens: { "legacy-doc": { id: null, userId: "legacy-user", accessToken: "old-token" } }
-    });
+  it("stores OAuth token documents directly by Canvas user id", async () => {
+    repositories = createInMemoryRepositories();
     service = new CanvasApiService(new AppConfig(), { value: repositories } as RepositoryProvider);
 
-    await service.storeAccessToken("legacy-user", "new-token");
+    await service.storeAccessToken("canvas-user", "new-token");
 
-    await expect(repositories.oauthTokens.get("legacy-doc")).resolves.toBeNull();
-    await expect(repositories.oauthTokens.get("legacy-user")).resolves.toMatchObject({
-      userId: "legacy-user",
+    await expect(repositories.oauthTokens.get("canvas-user")).resolves.toMatchObject({
+      id: "canvas-user",
+      userId: "canvas-user",
       accessToken: "new-token"
     });
   });
@@ -174,7 +172,7 @@ describe("CanvasApiService", () => {
 
   it("clears stale OAuth tokens and raises an authorization error when Canvas rejects an invalid token", async () => {
     repositories = createInMemoryRepositories({
-      oauthTokens: { "legacy-doc": { id: null, userId: "legacy-user", accessToken: "bad-token" } }
+      oauthTokens: { "legacy-user": { id: "legacy-user", userId: "legacy-user", accessToken: "bad-token" } }
     });
     service = new CanvasApiService(new AppConfig(), { value: repositories } as RepositoryProvider);
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -186,9 +184,7 @@ describe("CanvasApiService", () => {
     await expect(service.getQuizzesForCourse("course-7", "legacy-user")).rejects.toMatchObject({
       name: "CanvasApiAuthorizationError"
     });
-    await expect(repositories.oauthTokens.find([{ field: "userId", op: "==", value: "legacy-user" }])).resolves.toEqual(
-      []
-    );
+    await expect(repositories.oauthTokens.get("legacy-user")).resolves.toBeNull();
   });
 
   it("keeps OAuth tokens and raises a permission error when Canvas denies a scoped request", async () => {

@@ -122,7 +122,7 @@ Useful optional variables:
 - `SEB_CONFIG_ENCRYPTION_ENABLED`, default `true`. Set to `false` to disable certificate wrapping; instructor-configured exam start passwords still use SEB password encryption.
 - `SEB_CONFIG_ENCRYPTION_CERT_PEM` or `SEB_CONFIG_ENCRYPTION_CERT_PATH`, the public X.509 certificate used to encrypt generated `.seb` files. The server does not need the private key.
 - `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM` or `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH`, optional server-only RSA public key fallback when the public certificate is managed elsewhere.
-- Firestore collection overrides: `FIRESTORE_QUIZZES_COLLECTION`, `FIRESTORE_SEB_SETTINGS_COLLECTION`, `FIRESTORE_CONTENT_ITEMS_COLLECTION`, `FIRESTORE_CONTENT_SEB_SETTINGS_COLLECTION`, `FIRESTORE_COURSE_SEB_DEFAULTS_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_MODULE_ITEM_UPDATES_COLLECTION`
+- Firestore collection overrides: `FIRESTORE_ASSESSMENTS_COLLECTION`, `FIRESTORE_COURSES_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`
 
 Production refuses to start without `LTI_PRIVATE_KEY` and `STATE_ENCRYPTION_KEY`.
 
@@ -135,15 +135,11 @@ The deployment keeps the existing Firestore database IDs:
 
 Default collections:
 
-- `quizzes`
-- `sebSettings`
-- `contentItems`
-- `contentSebSettings`
-- `courseSebDefaults`
-- `oauthTokens`
-- `module_item_updates`
+- `assessments`
+- `courses`
+- `canvasOAuthTokens`
 
-The rewrite does not require Java model compatibility. The repository layer writes TypeScript-shaped documents with stable IDs and timestamps.
+The rewrite does not require Java model compatibility. The repository layer writes TypeScript-shaped documents with stable IDs and timestamps. Classic Quiz and New Quiz content share the `assessments` collection; course defaults live in `courses`; Canvas OAuth tokens live in `canvasOAuthTokens`.
 
 ## Canvas LTI Configuration
 

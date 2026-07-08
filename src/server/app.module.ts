@@ -9,15 +9,14 @@ import { OAuthController } from "./controllers/oauth.controller.js";
 import { QuizController } from "./controllers/quiz.controller.js";
 import { SebController } from "./controllers/seb.controller.js";
 import { StaticJsController } from "./controllers/static-js.controller.js";
+import { AssessmentService } from "./services/assessment.service.js";
 import { CanvasApiService } from "./services/canvas-api.service.js";
-import { ContentService } from "./services/content.service.js";
 import { CourseSettingsService } from "./services/course-settings.service.js";
 import { DeepLinkModuleService } from "./services/deep-link-module.service.js";
 import { DetectorTraceService } from "./services/detector-trace.service.js";
 import { JwkService } from "./services/jwk.service.js";
 import { LtiService } from "./services/lti.service.js";
 import { LtiStateService } from "./services/lti-state.service.js";
-import { QuizService } from "./services/quiz.service.js";
 import { SebAccessProofService } from "./services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "./services/seb-config-key.service.js";
 import { SebConfigurationService } from "./services/seb-configuration.service.js";
@@ -37,15 +36,14 @@ import { SebDetector } from "./services/seb-detector.service.js";
   providers: [
     AppConfig,
     RepositoryProvider,
+    AssessmentService,
     CanvasApiService,
-    ContentService,
     CourseSettingsService,
     DeepLinkModuleService,
     DetectorTraceService,
     JwkService,
     LtiService,
     LtiStateService,
-    QuizService,
     SebAccessProofService,
     SebConfigKeyService,
     SebConfigurationService,

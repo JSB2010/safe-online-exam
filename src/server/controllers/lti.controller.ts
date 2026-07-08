@@ -7,18 +7,17 @@ import { AppConfig } from "../config/app-config.js";
 import { createActionToken } from "../http/action-token.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 import { sebSchemeUrl } from "../http/request-url.js";
+import { AssessmentService } from "../services/assessment.service.js";
 import {
   CanvasApiService,
   isCanvasApiAuthorizationError,
   isCanvasApiPermissionError,
   isCanvasApiRequestError
 } from "../services/canvas-api.service.js";
-import { ContentService } from "../services/content.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
 import { JwkService } from "../services/jwk.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
-import { QuizService } from "../services/quiz.service.js";
 import { SebDetector } from "../services/seb-detector.service.js";
 
 @Controller()
@@ -28,9 +27,8 @@ export class LtiController {
     private readonly ltiService: LtiService,
     private readonly ltiState: LtiStateService,
     private readonly jwkService: JwkService,
-    private readonly quizService: QuizService,
+    private readonly assessments: AssessmentService,
     private readonly canvasApi: CanvasApiService,
-    private readonly contentService: ContentService,
     private readonly courseSettings: CourseSettingsService,
     private readonly sebDetector: SebDetector
   ) {}
@@ -221,7 +219,7 @@ export class LtiController {
     let quizzes: Quiz[] = [];
     if (resolvedCourseId && userId) {
       try {
-        quizzes = await this.quizService.getQuizzesForCourse(resolvedCourseId, userId);
+        quizzes = await this.assessments.getQuizzesForCourse(resolvedCourseId, userId);
       } catch (error) {
         if (isCanvasApiAuthorizationError(error)) {
           response.send(
@@ -289,7 +287,7 @@ export class LtiController {
     if (!quizId) {
       return { success: false, error: "quizId is required" };
     }
-    await this.quizService.updateSebConfigurationStructured({ quizId }, body.sebRequired === "true");
+    await this.assessments.updateSebConfigurationStructured({ quizId }, body.sebRequired === "true");
     return { success: true };
   }
 
@@ -348,19 +346,18 @@ export class LtiController {
       return this.renderApiAuthorizationView(request, courseId, userId);
     }
     try {
-      const classicQuizzes = await this.quizService.getQuizzesForCourse(courseId, userId, true);
-      const content = await this.contentService.getAllContentForCourse(courseId, userId);
+      const { classicQuizzes, contentItems: content } = await this.assessments.refreshCourseContent(courseId, userId);
       const newQuizzes = content.filter((item) => item.contentType === "NEW_QUIZ");
       const quizzes = [...classicQuizzes.map(quizView), ...newQuizzes.map(contentView)];
       const quizSebSettings: Record<string, unknown> = {};
       for (const quiz of classicQuizzes) {
-        const setting = await this.quizService.getSebSettingForQuiz(quiz.id);
+        const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
         if (setting) {
           quizSebSettings[quiz.id] = setting;
         }
       }
       for (const item of newQuizzes) {
-        const setting = await this.contentService.getSebSetting(item.id);
+        const setting = await this.assessments.getContentSebSetting(item.id);
         if (setting) {
           quizSebSettings[item.id] = setting;
         }
@@ -455,12 +452,12 @@ export class LtiController {
 
   private async enabledStudentQuizzes(courseId: string, request: Request): Promise<Array<Record<string, unknown>>> {
     const [classicQuizzes, contentItems] = await Promise.all([
-      this.quizService.getQuizzesForCourse(courseId),
-      this.contentService.getCachedContentForCourse(courseId)
+      this.assessments.getQuizzesForCourse(courseId),
+      this.assessments.getCachedContentForCourse(courseId)
     ]);
     const rows: Array<Record<string, unknown>> = [];
     for (const quiz of classicQuizzes) {
-      const setting = await this.quizService.getSebSettingForQuiz(quiz.id);
+      const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
       if (setting?.sebRequired && setting.enabled) {
         rows.push(
           studentQuizView(
@@ -476,7 +473,7 @@ export class LtiController {
       }
     }
     for (const item of contentItems.filter((entry) => entry.contentType === "NEW_QUIZ")) {
-      const setting = await this.contentService.getSebSetting(item.id);
+      const setting = await this.assessments.getContentSebSetting(item.id);
       if (setting?.sebRequired && setting.enabled) {
         rows.push(
           studentQuizView(
@@ -509,8 +506,8 @@ export class LtiController {
   > {
     const parsedNewQuiz = parseNewQuizContentId(contentId);
     if (parsedNewQuiz || contentId.startsWith("newquiz:")) {
-      const content = await this.contentService.getContentItem(contentId);
-      const setting = await this.contentService.getSebSetting(contentId);
+      const content = await this.assessments.getContentItem(contentId);
+      const setting = await this.assessments.getContentSebSetting(contentId);
       if (!content && !setting) {
         return null;
       }
@@ -528,8 +525,8 @@ export class LtiController {
       };
     }
     const quizId = contentId.startsWith("classicquiz_") ? contentId.slice("classicquiz_".length) : contentId;
-    const quiz = await this.quizService.getQuiz(quizId);
-    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    const quiz = await this.assessments.getQuiz(quizId);
+    const setting = await this.assessments.getSebSettingForQuiz(quizId);
     if (!quiz && !setting) {
       return null;
     }
@@ -548,7 +545,7 @@ export class LtiController {
   }
 
   private async deepLinkItemForQuiz(quizId: string, sebRequired: boolean): Promise<Record<string, unknown>> {
-    const quiz = await this.quizService.getQuiz(quizId);
+    const quiz = await this.assessments.getQuiz(quizId);
     const title = quiz?.title || "Canvas Quiz";
     const url = sebRequired
       ? `${this.config.getRequiredToolUrl()}/seb/redirect/${encodeURIComponent(quizId)}`

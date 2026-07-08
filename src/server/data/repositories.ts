@@ -1,14 +1,6 @@
 import { Firestore, type Query } from "@google-cloud/firestore";
 import { Injectable, OnModuleInit } from "@nestjs/common";
-import type {
-  CourseSebDefaults,
-  ContentItem,
-  ContentSebSetting,
-  ModuleItemUpdate,
-  OAuthToken,
-  Quiz,
-  QuizSebSetting
-} from "../../shared/models.js";
+import type { AssessmentRecord, CourseRecord, OAuthToken } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 
 export interface QueryFilter {
@@ -26,13 +18,9 @@ export interface CollectionStore<T extends Record<string, any>> {
 }
 
 export interface AppRepositories {
-  quizzes: CollectionStore<Quiz>;
-  quizSebSettings: CollectionStore<QuizSebSetting>;
-  contentItems: CollectionStore<ContentItem>;
-  contentSebSettings: CollectionStore<ContentSebSetting>;
-  courseSebDefaults: CollectionStore<CourseSebDefaults>;
+  assessments: CollectionStore<AssessmentRecord>;
+  courses: CollectionStore<CourseRecord>;
   oauthTokens: CollectionStore<OAuthToken>;
-  moduleItemUpdates: CollectionStore<ModuleItemUpdate>;
 }
 
 @Injectable()
@@ -65,13 +53,9 @@ export function createRepositories(config: AppConfig): AppRepositories {
   const collections = config.value.firestoreCollections;
 
   return {
-    quizzes: new FirestoreCollectionStore<Quiz>(firestore, collections.quizzes),
-    quizSebSettings: new FirestoreCollectionStore<QuizSebSetting>(firestore, collections.sebSettings),
-    contentItems: new FirestoreCollectionStore<ContentItem>(firestore, collections.contentItems),
-    contentSebSettings: new FirestoreCollectionStore<ContentSebSetting>(firestore, collections.contentSebSettings),
-    courseSebDefaults: new FirestoreCollectionStore<CourseSebDefaults>(firestore, collections.courseSebDefaults),
-    oauthTokens: new FirestoreCollectionStore<OAuthToken>(firestore, collections.oauthTokens),
-    moduleItemUpdates: new FirestoreCollectionStore<ModuleItemUpdate>(firestore, collections.moduleItemUpdates)
+    assessments: new FirestoreCollectionStore<AssessmentRecord>(firestore, collections.assessments),
+    courses: new FirestoreCollectionStore<CourseRecord>(firestore, collections.courses),
+    oauthTokens: new FirestoreCollectionStore<OAuthToken>(firestore, collections.oauthTokens)
   };
 }
 
@@ -79,13 +63,9 @@ export function createInMemoryRepositories(
   seed?: Partial<Record<keyof AppRepositories, Record<string, any>>>
 ): AppRepositories {
   return {
-    quizzes: new InMemoryCollectionStore<Quiz>(seed?.quizzes),
-    quizSebSettings: new InMemoryCollectionStore<QuizSebSetting>(seed?.quizSebSettings),
-    contentItems: new InMemoryCollectionStore<ContentItem>(seed?.contentItems),
-    contentSebSettings: new InMemoryCollectionStore<ContentSebSetting>(seed?.contentSebSettings),
-    courseSebDefaults: new InMemoryCollectionStore<CourseSebDefaults>(seed?.courseSebDefaults),
-    oauthTokens: new InMemoryCollectionStore<OAuthToken>(seed?.oauthTokens),
-    moduleItemUpdates: new InMemoryCollectionStore<ModuleItemUpdate>(seed?.moduleItemUpdates)
+    assessments: new InMemoryCollectionStore<AssessmentRecord>(seed?.assessments),
+    courses: new InMemoryCollectionStore<CourseRecord>(seed?.courses),
+    oauthTokens: new InMemoryCollectionStore<OAuthToken>(seed?.oauthTokens)
   };
 }
 

@@ -25,7 +25,7 @@ Cloud Run NestJS service
   -> React app shell hydrates workflow pages
 
 Firestore
-  -> quizzes, settings, content, OAuth tokens, module update audit data
+  -> assessments, course defaults, Canvas OAuth tokens
 ```
 
 ## Main Components
@@ -38,8 +38,7 @@ Firestore
 - `src/server/controllers/quiz.controller.ts`: instructor quiz APIs for refresh, enable, disable, regenerate, status, and structured SEB settings.
 - `src/server/controllers/seb.controller.ts`: student SEB routes, config downloads, proof/access-code APIs, validation, redirects, and exit pages.
 - `src/server/services/canvas-api.service.ts`: Canvas REST/New Quiz API calls and OAuth token usage.
-- `src/server/services/quiz.service.ts`: Classic Quiz persistence and SEB enable/disable behavior.
-- `src/server/services/content.service.ts`: New Quiz and non-classic Canvas content behavior.
+- `src/server/services/assessment.service.ts`: unified Classic Quiz/New Quiz assessment persistence, cached Canvas metadata, and SEB enable/disable behavior.
 - `src/server/services/seb-configuration.service.ts`: `.seb` plist generation and allowed-domain policy.
 - `src/server/services/seb-config-key.service.ts`: Config Key hashing and proof validation.
 - `src/server/services/seb-access-proof.service.ts`: short-lived one-time proof tokens.
@@ -49,27 +48,23 @@ Tooling and CI choices are documented separately in `docs/tooling.md`.
 
 ## Data Model
 
-Classic quiz settings are keyed by Canvas quiz ID. New Quiz settings and content items use:
-
-```text
-newquiz:{courseId}:{assignmentId}
-```
-
-Classic quiz LTI content IDs use:
+Assessment documents are keyed by the public content ID used in SEB and LTI routes. Classic Quiz assessment IDs use:
 
 ```text
 classicquiz_{quizId}
 ```
 
+New Quiz assessment IDs use:
+
+```text
+newquiz:{courseId}:{assignmentId}
+```
+
 Firestore collections:
 
-- `quizzes`: Classic Quiz metadata discovered from Canvas.
-- `sebSettings`: Classic Quiz SEB settings and generated access-code/config-key state.
-- `contentItems`: New Quiz/content metadata discovered from Canvas.
-- `contentSebSettings`: New Quiz/content SEB settings.
-- `courseSebDefaults`: course-level optional exam start password, default exit password, allowed URL rules, external tools, and setup completion state.
-- `oauthTokens`: Canvas OAuth access and refresh tokens per Canvas user.
-- `module_item_updates`: audit data for Canvas module rewrites.
+- `assessments`: one document per Canvas assessment/content item, including Canvas metadata plus SEB enforcement, access-code, Config Key, URL rule, and exam-tool state.
+- `courses`: one document per Canvas course, including setup completion and course-level SEB defaults.
+- `canvasOAuthTokens`: Canvas OAuth access and refresh tokens keyed by Canvas user ID.
 
 ## LTI Flow
 
@@ -91,7 +86,7 @@ LTI launch proves Canvas identity but does not provide the Canvas API token need
 1. `/api/oauth2authorize` creates an encrypted state and redirects to Canvas.
 2. Canvas redirects to `/api/oauth2callback`.
 3. The service exchanges the code for access/refresh tokens.
-4. Tokens are stored in Firestore in `oauthTokens`.
+4. Tokens are stored in Firestore in `canvasOAuthTokens`.
 5. `CanvasApiService` refreshes expiring access tokens with the stored refresh token before quiz, New Quiz, assignment, and module calls.
 6. If Canvas rejects an access token with `401`, the service refreshes once and retries the API call before asking the instructor to reauthorize.
 

@@ -3,8 +3,13 @@ import type { CourseSebDefaults } from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
-  defaultCourseSebDefaults,
-  normalizeCourseSebDefaults
+  assessmentToContentSebSetting,
+  assessmentToQuizSebSetting,
+  assessmentWithContentSebSetting,
+  assessmentWithQuizSebSetting,
+  canonicalAssessmentId,
+  courseDefaultsToRecord,
+  courseRecordToDefaults
 } from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
@@ -14,8 +19,8 @@ export class CourseSettingsService {
   constructor(private readonly repositories: RepositoryProvider) {}
 
   async getDefaults(courseId: string): Promise<CourseSebDefaults> {
-    const existing = await this.repositories.value.courseSebDefaults.get(courseId);
-    return normalizeCourseSebDefaults(existing || defaultCourseSebDefaults(courseId));
+    const existing = await this.repositories.value.courses.get(courseId);
+    return courseRecordToDefaults(existing, courseId);
   }
 
   async saveDefaults(
@@ -23,28 +28,26 @@ export class CourseSettingsService {
     defaults: Partial<CourseSebDefaults>,
     options: { propagate?: boolean } = {}
   ): Promise<CourseSebDefaults> {
-    const saved = await this.repositories.value.courseSebDefaults.save(
+    const existing = await this.repositories.value.courses.get(courseId);
+    const saved = await this.repositories.value.courses.save(
       courseId,
-      normalizeCourseSebDefaults({
-        ...defaultCourseSebDefaults(courseId),
-        ...defaults,
-        id: courseId,
-        courseId
-      })
+      courseDefaultsToRecord(courseId, defaults, existing)
     );
+    const normalized = courseRecordToDefaults(saved, courseId);
     if (options.propagate !== false) {
-      await this.propagateDefaults(courseId, saved);
+      await this.propagateDefaults(courseId, normalized);
     }
-    return saved;
+    return normalized;
   }
 
   async resetQuizToDefaults(courseId: string, quizId: string): Promise<unknown> {
     const defaults = await this.getDefaults(courseId);
-    if (quizId.startsWith("newquiz:")) {
-      const existing = await this.repositories.value.contentSebSettings.get(quizId);
-      if (!existing) {
-        return null;
-      }
+    const record = await this.repositories.value.assessments.get(canonicalAssessmentId(quizId));
+    if (!record) {
+      return null;
+    }
+    if (record.contentType !== "CLASSIC_QUIZ") {
+      const existing = assessmentToContentSebSetting(record);
       const withDefaults = applyCourseDefaultsToContentSetting(
         {
           ...existing,
@@ -54,12 +57,17 @@ export class CourseSettingsService {
         },
         defaults
       );
-      return this.repositories.value.contentSebSettings.save(existing.id || existing.contentId, {
+      const next = {
         ...normalizeSebStartPasswordState(existing, withDefaults),
         configKey: null
-      });
+      };
+      const saved = await this.repositories.value.assessments.save(
+        record.id,
+        assessmentWithContentSebSetting(record, next)
+      );
+      return assessmentToContentSebSetting(saved);
     }
-    const existing = await this.getQuizSetting(quizId);
+    const existing = assessmentToQuizSebSetting(record);
     if (!existing) {
       return null;
     }
@@ -72,41 +80,42 @@ export class CourseSettingsService {
       },
       defaults
     );
-    return this.repositories.value.quizSebSettings.save(existing.id || existing.quizId, {
+    const next = {
       ...normalizeSebStartPasswordState(existing, withDefaults),
       configKey: null
-    });
-  }
-
-  private async getQuizSetting(quizId: string) {
-    const direct = await this.repositories.value.quizSebSettings.get(quizId);
-    if (direct) {
-      return direct;
-    }
-    const matches = await this.repositories.value.quizSebSettings.find([{ field: "quizId", op: "==", value: quizId }]);
-    return matches[0] || null;
+    };
+    const saved = await this.repositories.value.assessments.save(record.id, assessmentWithQuizSebSetting(record, next));
+    return assessmentToQuizSebSetting(saved);
   }
 
   private async propagateDefaults(courseId: string, defaults: CourseSebDefaults): Promise<void> {
-    const [quizSettings, contentSettings] = await Promise.all([
-      this.repositories.value.quizSebSettings.find([{ field: "courseId", op: "==", value: courseId }]),
-      this.repositories.value.contentSebSettings.find([{ field: "courseId", op: "==", value: courseId }])
-    ]);
-    await Promise.all([
-      ...quizSettings.map((setting) => {
+    const records = await this.repositories.value.assessments.find([{ field: "courseId", op: "==", value: courseId }]);
+    await Promise.all(
+      records.map((record) => {
+        if (record.contentType !== "CLASSIC_QUIZ") {
+          const setting = assessmentToContentSebSetting(record);
+          const withDefaults = applyCourseDefaultsToContentSetting(setting, defaults);
+          return this.repositories.value.assessments.save(
+            record.id,
+            assessmentWithContentSebSetting(record, {
+              ...normalizeSebStartPasswordState(setting, withDefaults),
+              configKey: null
+            })
+          );
+        }
+        const setting = assessmentToQuizSebSetting(record);
+        if (!setting) {
+          return Promise.resolve(record);
+        }
         const withDefaults = applyCourseDefaultsToQuizSetting(setting, defaults);
-        return this.repositories.value.quizSebSettings.save(setting.id || setting.quizId, {
-          ...normalizeSebStartPasswordState(setting, withDefaults),
-          configKey: null
-        });
-      }),
-      ...contentSettings.map((setting) => {
-        const withDefaults = applyCourseDefaultsToContentSetting(setting, defaults);
-        return this.repositories.value.contentSebSettings.save(setting.id || setting.contentId, {
-          ...normalizeSebStartPasswordState(setting, withDefaults),
-          configKey: null
-        });
+        return this.repositories.value.assessments.save(
+          record.id,
+          assessmentWithQuizSebSetting(record, {
+            ...normalizeSebStartPasswordState(setting, withDefaults),
+            configKey: null
+          })
+        );
       })
-    ]);
+    );
   }
 }

@@ -4,7 +4,6 @@ import type { ContentItem, ContentSebSetting, StructuredSebConfigRequest } from 
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
-  defaultContentSebSetting,
   defaultQuizSebSetting,
   normalizeCourseSebDefaults,
   normalizeExternalTools,
@@ -15,24 +14,22 @@ import {
 import { AppConfig } from "../config/app-config.js";
 import { verifyActionToken } from "../http/action-token.js";
 import { apiError, noUserSession } from "../http/api-error.js";
+import { AssessmentService, generateAccessCode, generateBrowserExamKey } from "../services/assessment.service.js";
 import {
   type CanvasApiPermissionError,
   CanvasApiService,
   isCanvasApiAuthorizationError,
   isCanvasApiPermissionError
 } from "../services/canvas-api.service.js";
-import { ContentService } from "../services/content.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
 import { DeepLinkModuleService } from "../services/deep-link-module.service.js";
-import { generateAccessCode, generateBrowserExamKey, QuizService } from "../services/quiz.service.js";
 
 @Controller("/api/quizzes")
 export class QuizController {
   constructor(
     private readonly config: AppConfig,
-    private readonly quizService: QuizService,
+    private readonly assessments: AssessmentService,
     private readonly canvasApi: CanvasApiService,
-    private readonly contentService: ContentService,
     private readonly courseSettings: CourseSettingsService,
     private readonly deepLinkModules: DeepLinkModuleService
   ) {}
@@ -44,8 +41,7 @@ export class QuizController {
       return noUserSession();
     }
     try {
-      const quizzes = await this.quizService.getQuizzesForCourse(courseId, userId, true);
-      await this.contentService.getAllContentForCourse(courseId, userId);
+      const { classicQuizzes: quizzes } = await this.assessments.refreshCourseContent(courseId, userId);
       return {
         success: true,
         message: "Quiz data refreshed successfully",
@@ -111,7 +107,7 @@ export class QuizController {
     const required = !!body.required;
     try {
       if (required) {
-        const setting = await this.quizService.enableSebWithAccessCode(
+        const setting = await this.assessments.enableSebWithAccessCode(
           courseId,
           quizId,
           userId,
@@ -119,7 +115,7 @@ export class QuizController {
         );
         return { success: true, setting };
       }
-      const setting = await this.quizService.disableSebWithAccessCode(courseId, quizId, userId);
+      const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
       return { success: true, setting };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
@@ -154,7 +150,7 @@ export class QuizController {
     const defaults = courseId ? await this.courseSettings.getDefaults(courseId) : null;
     if (parsed) {
       const setting = await this.getOrCreateNewQuizSetting(contentId, parsed.courseId, parsed.assignmentId);
-      const saved = await this.contentService.saveSebSetting(
+      const saved = await this.assessments.saveContentSebSetting(
         applyCourseDefaultsToContentSetting(
           {
             ...setting,
@@ -178,9 +174,9 @@ export class QuizController {
       );
       return { success: true, setting: saved };
     }
-    const setting = body.quizId ? await this.quizService.getSebSettingForQuiz(body.quizId) : null;
+    const setting = body.quizId ? await this.assessments.getSebSettingForQuiz(body.quizId) : null;
     const saved = body.quizId
-      ? await this.quizService.saveSebSetting(
+      ? await this.assessments.saveQuizSebSetting(
           applyCourseDefaultsToQuizSetting(
             {
               ...defaultQuizSebSetting(body.quizId, courseId),
@@ -206,7 +202,7 @@ export class QuizController {
             defaults
           )
         )
-      : await this.quizService.updateSebConfigurationStructured(body, true);
+      : await this.assessments.updateSebConfigurationStructured(body, true);
     return { success: true, setting: saved };
   }
 
@@ -216,7 +212,7 @@ export class QuizController {
     if (!courseId) {
       return noUserSession(403);
     }
-    return this.quizService.getQuizzesForCourse(courseId);
+    return this.assessments.getQuizzesForCourse(courseId);
   }
 
   @Get("/seb-settings")
@@ -225,10 +221,10 @@ export class QuizController {
     if (!courseId) {
       return noUserSession(403);
     }
-    const quizzes = await this.quizService.getQuizzesForCourse(courseId);
+    const quizzes = await this.assessments.getQuizzesForCourse(courseId);
     const settings: Record<string, unknown> = {};
     for (const quiz of quizzes) {
-      const setting = await this.quizService.getSebSettingForQuiz(quiz.id);
+      const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
       if (setting) {
         settings[quiz.id] = setting;
       }
@@ -238,7 +234,7 @@ export class QuizController {
 
   @Get("/:quizId")
   async getQuiz(@Param("quizId") quizId: string): Promise<unknown> {
-    return this.quizService.getQuiz(quizId);
+    return this.assessments.getQuiz(quizId);
   }
 
   @Post("/:courseId/:quizId/seb/enable")
@@ -257,13 +253,13 @@ export class QuizController {
         const setting = await this.enableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
         return { success: true, message: "SEB enabled successfully with access code enforcement", setting };
       }
-      const setting = await this.quizService.enableSebWithAccessCode(
+      const setting = await this.assessments.enableSebWithAccessCode(
         courseId,
         quizId,
         userId,
         await this.courseSettings.getDefaults(courseId)
       );
-      const quiz = await this.quizService.getQuiz(quizId);
+      const quiz = await this.assessments.getQuiz(quizId);
       const moduleItemUpdated = quiz
         ? await this.deepLinkModules.createOrUpdateModuleItemForQuiz(courseId, quiz, userId, true)
         : false;
@@ -317,8 +313,8 @@ export class QuizController {
         const setting = await this.disableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
         return { success: true, message: "SEB disabled successfully", setting };
       }
-      const setting = await this.quizService.disableSebWithAccessCode(courseId, quizId, userId);
-      const quiz = await this.quizService.getQuiz(quizId);
+      const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
+      const quiz = await this.assessments.getQuiz(quizId);
       const moduleItemRestored = quiz
         ? await this.deepLinkModules.createOrUpdateModuleItemForQuiz(courseId, quiz, userId, false)
         : false;
@@ -357,23 +353,23 @@ export class QuizController {
       const accessCode = generateAccessCode();
       const parsed = parseNewQuizContentId(quizId);
       if (parsed) {
-        const setting = await this.contentService.getSebSetting(quizId);
+        const setting = await this.assessments.getContentSebSetting(quizId);
         if (!setting?.sebRequired) {
           return apiError(404, "SEB is not enabled for this quiz");
         }
         await this.canvasApi.setNewQuizAccessCode(courseId, parsed.assignmentId, accessCode, userId);
-        await this.contentService.saveSebSetting({ ...setting, accessCode, configKey: null });
+        await this.assessments.saveContentSebSetting({ ...setting, accessCode, configKey: null });
         return {
           success: true,
           message: "SEB access code regenerated. Students must download a fresh configuration file."
         };
       }
-      const setting = await this.quizService.getSebSettingForQuiz(quizId);
+      const setting = await this.assessments.getSebSettingForQuiz(quizId);
       if (!setting?.sebRequired) {
         return apiError(404, "SEB is not enabled for this quiz");
       }
       await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
-      await this.quizService.saveSebSetting({ ...setting, accessCode, configKey: null });
+      await this.assessments.saveQuizSebSetting({ ...setting, accessCode, configKey: null });
       return {
         success: true,
         message: "SEB access code regenerated. Students must download a fresh configuration file."
@@ -396,7 +392,7 @@ export class QuizController {
     }
     const parsed = parseNewQuizContentId(quizId);
     if (parsed) {
-      const setting = await this.contentService.getSebSetting(quizId);
+      const setting = await this.assessments.getContentSebSetting(quizId);
       return {
         authenticated: true,
         canvasDomain: this.config.getCanvasDomain().replace(/^https?:\/\//u, ""),
@@ -409,12 +405,12 @@ export class QuizController {
         externalTools: normalizeExternalTools(setting?.externalTools)
       };
     }
-    const setting = await this.quizService.getSebSettingForQuiz(quizId);
+    const setting = await this.assessments.getSebSettingForQuiz(quizId);
     return {
       authenticated: true,
       sebEnabled: !!setting?.sebRequired,
       hasAccessCode: !!setting?.accessCode,
-      configValid: await this.quizService.validateSebConfiguration(quizId),
+      configValid: await this.assessments.validateSebConfiguration(quizId),
       canvasDomain: setting?.canvasDomain || this.config.getCanvasDomain().replace(/^https?:\/\//u, ""),
       ssoDomains: setting?.ssoDomains || [],
       educationalToolDomains: setting?.educationalToolDomains || [],
@@ -433,7 +429,7 @@ export class QuizController {
     const accessCode = generateAccessCode();
     await this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId);
     const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
-    const saved = await this.contentService.saveSebSetting(
+    const saved = await this.assessments.saveContentSebSetting(
       applyCourseDefaultsToContentSetting(
         {
           ...setting,
@@ -466,7 +462,7 @@ export class QuizController {
     if (setting.accessCode) {
       await this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId);
     }
-    const saved = await this.contentService.saveSebSetting({
+    const saved = await this.assessments.saveContentSebSetting({
       ...setting,
       sebRequired: false,
       enabled: false,
@@ -488,27 +484,7 @@ export class QuizController {
     courseId: string,
     assignmentId: string
   ): Promise<ContentSebSetting> {
-    const existing = await this.contentService.getSebSetting(contentId);
-    if (existing) {
-      return {
-        ...existing,
-        id: existing.id || contentId,
-        contentId,
-        courseId: existing.courseId || courseId,
-        canvasId: existing.canvasId || assignmentId,
-        assignmentId: existing.assignmentId || assignmentId,
-        contentType: existing.contentType || "NEW_QUIZ",
-        ssoDomains: existing.ssoDomains || [],
-        educationalToolDomains: existing.educationalToolDomains || [],
-        customDomains: existing.customDomains || [],
-        urlRules: normalizeUrlRules(existing.urlRules),
-        externalTools: normalizeExternalTools(existing.externalTools)
-      };
-    }
-    return {
-      ...defaultContentSebSetting(contentId, courseId),
-      htmlUrl: `${this.config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentId}`
-    };
+    return this.assessments.getOrCreateContentSebSetting(contentId, courseId, assignmentId);
   }
 }
 
