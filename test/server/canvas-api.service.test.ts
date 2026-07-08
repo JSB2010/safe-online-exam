@@ -46,6 +46,87 @@ describe("CanvasApiService", () => {
     expect(params.get("quiz[quiz_settings][student_access_code]")).toBe("ACCESS42");
   });
 
+  it("discovers and hydrates New Quiz assignments from Canvas", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            id: 99,
+            name: "Assignment-backed New Quiz",
+            html_url: "https://canvas.example.com/courses/course-7/assignments/99",
+            external_tool_tag_attributes: { url: "https://canvas.example.com/courses/course-7/external_tools/99" },
+            is_quiz_assignment: true
+          },
+          {
+            id: 100,
+            name: "Plain Assignment",
+            html_url: "https://canvas.example.com/courses/course-7/assignments/100"
+          }
+        ])
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          title: "Hydrated New Quiz",
+          instructions: "<p>Instructions</p>",
+          canvas_launch_url: "https://canvas.example.com/courses/course-7/assignments/99/take",
+          resource_link_uuid: "resource-uuid",
+          lookup_uuid: "lookup-uuid"
+        })
+      );
+
+    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+      expect.objectContaining({
+        id: "newquiz:course-7:99",
+        assignmentId: "99",
+        contentType: "NEW_QUIZ",
+        title: "Hydrated New Quiz",
+        description: "<p>Instructions</p>",
+        canvasLaunchUrl: "https://canvas.example.com/courses/course-7/assignments/99/take",
+        resourceLinkUuid: "resource-uuid",
+        lookupUuid: "lookup-uuid",
+        quizTypeDisplay: "New Quiz"
+      })
+    ]);
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://canvas.example.com/api/v1/courses/course-7/assignments?per_page=100&new_quizzes=true",
+      expect.anything()
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://canvas.example.com/api/quiz/v1/courses/course-7/quizzes/99",
+      expect.anything()
+    );
+  });
+
+  it("keeps New Quiz assignment fallbacks when detail hydration fails", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            id: 99,
+            name: "Fallback New Quiz",
+            html_url: "https://canvas.example.com/courses/course-7/assignments/99",
+            external_tool_tag_attributes: { url: "https://canvas.example.com/new_quizzes/99" }
+          }
+        ])
+      )
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => "detail unavailable"
+      } as Response);
+
+    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+      expect.objectContaining({
+        id: "newquiz:course-7:99",
+        title: "Fallback New Quiz",
+        htmlUrl: "https://canvas.example.com/courses/course-7/assignments/99",
+        canvasLaunchUrl: "https://canvas.example.com/new_quizzes/99"
+      })
+    ]);
+  });
+
   it("stores OAuth token documents directly by Canvas user id", async () => {
     repositories = createInMemoryRepositories();
     service = new CanvasApiService(new AppConfig(), { value: repositories } as RepositoryProvider);
@@ -202,6 +283,20 @@ describe("CanvasApiService", () => {
     await expect(repositories.oauthTokens.get("user-1")).resolves.toMatchObject({
       userId: "user-1",
       accessToken: "token-1"
+    });
+  });
+
+  it("raises a request error for non-authorization Canvas API failures", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "Canvas unavailable"
+    } as Response);
+
+    await expect(service.getQuizzesForCourse("course-7", "user-1")).rejects.toMatchObject({
+      name: "CanvasApiRequestError",
+      status: 500,
+      responseBody: "Canvas unavailable"
     });
   });
 });

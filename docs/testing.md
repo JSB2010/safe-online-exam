@@ -18,7 +18,14 @@ The same non-browser gate is available as:
 npm run verify
 ```
 
-The coverage command enforces thresholds in `vite.config.ts`. The threshold intentionally covers shared models, config, data, HTTP helpers, and service logic. Controller behavior is verified through targeted service tests and local route smoke checks.
+The coverage command enforces thresholds in `vite.config.ts`. The measured surface includes shared models, config, controllers, data repositories, HTTP helpers, and service logic. Browser-only client code remains outside the Vitest coverage gate and is covered through Playwright smoke tests plus manual Canvas/SEB verification when those environments are required.
+
+Current global thresholds are intentionally set near the measured production-code baseline, not as a placeholder:
+
+- 80% statements
+- 80% lines
+- 87% functions
+- 66% branches
 
 ## Test Coverage Areas
 
@@ -40,6 +47,9 @@ The current automated tests cover:
 - Static detector script serving, safe base URL/debug injection, cache headers, and minified production asset selection.
 - Canvas detector jsdom behavior for quiz ID extraction, access-code proof/fill, final submit redirects, debug logging, server trace callbacks, and external exam tools.
 - App shell escaping, forwarded URL handling, CORS allow-listing, and API error bodies.
+- Controller contracts for LTI login/launch routing, Canvas OAuth authorization/callback behavior, quiz/defaults APIs, SEB enforcement/download/proof/exit routes, public health/JWKS routes, and debug trace gating.
+- Firestore adapter behavior through mocked Firestore collection, query, delete, and batch APIs.
+- Production-build Playwright smoke coverage for health, JWKS, LTI dynamic registration metadata, detector compatibility paths, built assets, launch fallback, SEB exit UI, defensive SEB config downloads, and proof/access-code error handling.
 
 ## Local Server Smoke Test
 
@@ -87,6 +97,7 @@ Minimum checks:
 
 - Desktop viewport: open `/seb/exit/course-1/classicquiz_quiz-1`, verify no console errors and no layout overlap.
 - Mobile viewport around 390x844: verify the same page remains readable and the quit button fits.
+- Verify `/health`, `/.well-known/jwks.json`, `/lti/config`, `/js/canvas-seb-detector.js`, `/api/seb/canvas-detector.js`, and `/assets/index.js` return the expected production-build responses.
 - Open a SEB download page route if seeded data is available.
 - Open the instructor dashboard from a real Canvas LTI launch in dev.
 - Verify the instructor setup wizard appears after first Canvas authorization for a course, then saves course defaults.

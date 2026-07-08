@@ -34,14 +34,15 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"],
       thresholds: {
-        lines: 70,
-        functions: 70,
-        branches: 65,
-        statements: 70
+        lines: 80,
+        functions: 87,
+        branches: 66,
+        statements: 80
       },
       include: [
         "src/shared/**/*.ts",
         "src/server/config/**/*.ts",
+        "src/server/controllers/**/*.ts",
         "src/server/data/**/*.ts",
         "src/server/http/**/*.ts",
         "src/server/services/**/*.ts"
@@ -50,7 +51,6 @@ export default defineConfig({
         "dist/**",
         "src/client/**",
         "src/server/assets/**",
-        "src/server/controllers/**",
         "src/server/app.module.ts",
         "test/**",
         "src/server/main.ts"

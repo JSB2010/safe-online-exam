@@ -1,15 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
   allowlistEntriesForExternalTools,
+  applyCourseDefaultsToContentSetting,
+  applyCourseDefaultsToQuizSetting,
+  assessmentToContentItem,
+  assessmentToContentSebSetting,
+  assessmentToQuiz,
+  assessmentToQuizSebSetting,
+  assessmentWithContentSebSetting,
+  assessmentWithQuizSebSetting,
   classicQuizContentId,
+  courseDefaultsToRecord,
+  courseRecordToDefaults,
+  defaultCourseSebDefaults,
+  defaultContentSebSetting,
+  defaultQuizSebSetting,
   enabledExternalTools,
   extractClassicQuizId,
   isInstructor,
+  isUnsafeBroadUrlPattern,
   isStudent,
+  legacyDomainsToUrlRules,
   normalizeExternalTools,
   normalizeUrlRules,
   newQuizContentId,
   parseNewQuizContentId,
+  quizToAssessmentRecord,
   quizToContentItem,
   urlRulesToAllowedEntries
 } from "../../src/shared/models.js";
@@ -38,6 +54,81 @@ describe("content id helpers", () => {
       canvasId: "42",
       contentType: "CLASSIC_QUIZ",
       quizTypeDisplay: "Classic Quiz"
+    });
+  });
+
+  it("round-trips Classic Quiz assessment records without losing SEB settings", () => {
+    const record = quizToAssessmentRecord(
+      {
+        id: "42",
+        courseId: "course-7",
+        title: "Classic Quiz",
+        htmlUrl: "https://canvas.example.com/courses/7/quizzes/42"
+      },
+      assessmentWithQuizSebSetting(null, {
+        quizId: "42",
+        courseId: "course-7",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "ACCESS",
+        ssoDomains: ["login.example.edu"],
+        educationalToolDomains: [],
+        customDomains: ["domain:docs.example.edu"],
+        urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+        externalTools: [{ id: "calc", label: "Calculator", url: "https://calc.example.edu", enabled: true }]
+      }),
+      "2026-01-01T00:00:00.000Z"
+    );
+
+    expect(assessmentToQuiz(record)).toMatchObject({
+      id: "42",
+      canvasQuizId: "42",
+      contentType: "CLASSIC_QUIZ",
+      quizTypeDisplay: "Classic Quiz"
+    });
+    expect(assessmentToContentItem(record)).toMatchObject({
+      id: "classicquiz_42",
+      contentType: "CLASSIC_QUIZ",
+      canvasId: "42"
+    });
+    expect(assessmentToQuizSebSetting(record)).toMatchObject({
+      quizId: "42",
+      sebRequired: true,
+      accessCode: "ACCESS",
+      customDomains: ["domain:docs.example.edu"],
+      externalTools: [expect.objectContaining({ id: "calc", url: "https://calc.example.edu/" })]
+    });
+  });
+
+  it("builds default New Quiz content settings from canonical IDs", () => {
+    const setting = defaultContentSebSetting("newquiz:course-7:99");
+    const record = assessmentWithContentSebSetting(null, {
+      ...setting,
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    });
+
+    expect(setting).toMatchObject({
+      courseId: "course-7",
+      canvasId: "99",
+      assignmentId: "99",
+      contentType: "NEW_QUIZ"
+    });
+    expect(record).toMatchObject({
+      id: "newquiz:course-7:99",
+      courseId: "course-7",
+      contentType: "NEW_QUIZ",
+      canvas: expect.objectContaining({ assignmentId: "99", quizTypeDisplay: "New Quiz" })
+    });
+    expect(assessmentToContentSebSetting(record)).toMatchObject({
+      contentId: "newquiz:course-7:99",
+      assignmentId: "99",
+      sebRequired: true
     });
   });
 
@@ -91,6 +182,15 @@ describe("content id helpers", () => {
     ]);
   });
 
+  it("normalizes legacy domain entries and rejects unsafe broad allowlists", () => {
+    expect(legacyDomainsToUrlRules(["domain:Docs.Example.Edu/path", "exact:tool.example.edu/start"])).toEqual([
+      { id: "domain-1", match: "domain", value: "docs.example.edu" },
+      { id: "domain-2", match: "exact", value: "https://tool.example.edu/start" }
+    ]);
+    expect(isUnsafeBroadUrlPattern("*.edu")).toBe(true);
+    expect(isUnsafeBroadUrlPattern("^https://cdn\\.example\\.edu/assets/.*$")).toBe(false);
+  });
+
   it("rejects broad regex URL rules before they are saved", () => {
     const rules = normalizeUrlRules([
       { id: "allow-all", match: "regex", value: "^https://.*$" },
@@ -99,6 +199,72 @@ describe("content id helpers", () => {
     ]);
 
     expect(urlRulesToAllowedEntries(rules)).toEqual(["regex:^https://cdn\\.example\\.edu/assets/.*$"]);
+  });
+
+  it("applies course defaults while preserving explicit override passwords", () => {
+    const defaults = {
+      ...defaultCourseSebDefaults("course-1"),
+      quitPassword: "default-exit",
+      startPassword: "default-start",
+      urlRules: [{ id: "docs", match: "domain" as const, value: "docs.example.edu" }],
+      externalTools: [{ id: "calc", label: "Calculator", url: "calc.example.edu", enabled: true }],
+      setupCompleted: true
+    };
+
+    expect(
+      applyCourseDefaultsToQuizSetting(
+        {
+          ...defaultQuizSebSetting("quiz-1", "course-1"),
+          sebRequired: true,
+          enabled: true,
+          quitPasswordOverride: true,
+          quitPassword: "custom-exit"
+        },
+        defaults
+      )
+    ).toMatchObject({
+      quitPassword: "custom-exit",
+      startPassword: "default-start",
+      customDomains: ["domain:docs.example.edu"],
+      externalTools: [expect.objectContaining({ id: "calc" })],
+      usesCourseDefaults: true
+    });
+
+    expect(
+      applyCourseDefaultsToContentSetting(
+        {
+          ...defaultContentSebSetting("newquiz:course-1:99"),
+          sebRequired: true,
+          enabled: true,
+          usesCourseDefaults: false,
+          urlRules: [{ id: "custom", match: "domain", value: "custom.example.edu" }],
+          externalTools: []
+        },
+        defaults
+      )
+    ).toMatchObject({
+      startPassword: "default-start",
+      customDomains: ["domain:custom.example.edu"],
+      externalTools: [],
+      usesCourseDefaults: false
+    });
+  });
+
+  it("round-trips course defaults through stored course records", () => {
+    const record = courseDefaultsToRecord("course-1", {
+      quitPassword: " exit ",
+      setupCompleted: true,
+      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+      externalTools: [{ id: "calc", label: "Calculator", url: "calc.example.edu", enabled: true }]
+    });
+
+    expect(courseRecordToDefaults(record, "course-1")).toMatchObject({
+      courseId: "course-1",
+      quitPassword: "exit",
+      setupCompleted: true,
+      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+      externalTools: [expect.objectContaining({ id: "calc", url: "https://calc.example.edu/" })]
+    });
   });
 });
 
@@ -134,5 +300,19 @@ describe("LTI role helpers", () => {
         custom: { canvas_membership_roles: "StudentEnrollment" }
       })
     ).toBe(true);
+  });
+
+  it("parses JSON custom role lists and legacy LTI role URNs", () => {
+    expect(
+      isInstructor({
+        roles: [],
+        custom: {
+          canvas_lis_membership_roles: JSON.stringify(["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"])
+        }
+      })
+    ).toBe(true);
+    expect(isInstructor({ roles: ["urn:lti:role:ims/lis/Instructor"] })).toBe(true);
+    expect(isStudent({ roles: ["urn:lti:ims/lis/Learner"] })).toBe(true);
+    expect(isStudent({ roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Student"] })).toBe(true);
   });
 });

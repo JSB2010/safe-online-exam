@@ -29,6 +29,39 @@ test("serves the detector script from both compatibility paths", async ({ reques
   }
 });
 
+test("serves health, JWKS, and Canvas LTI registration metadata", async ({ request }) => {
+  const health = await request.get("/health");
+  expect(health.status()).toBe(200);
+  await expect(health.json()).resolves.toEqual({ status: "UP" });
+
+  const jwks = await request.get("/.well-known/jwks.json");
+  expect(jwks.status()).toBe(200);
+  const jwksBody = (await jwks.json()) as { keys?: Array<Record<string, unknown>> };
+  expect(jwksBody.keys?.[0]).toEqual(
+    expect.objectContaining({
+      kty: "RSA",
+      use: "sig",
+      alg: "RS256"
+    })
+  );
+
+  const ltiConfig = await request.get("/lti/config");
+  expect(ltiConfig.status()).toBe(200);
+  const ltiBody = (await ltiConfig.json()) as Record<string, any>;
+  expect(ltiBody).toMatchObject({
+    title: "Safe Exam Browser Canvas Integration",
+    oidc_initiation_url: "http://localhost:8080/lti/login",
+    target_link_uri: "http://localhost:8080/lti/launch",
+    public_jwk_url: "http://localhost:8080/.well-known/jwks.json"
+  });
+  expect(ltiBody.extensions?.[0]?.settings?.placements?.[0]).toMatchObject({
+    placement: "course_navigation",
+    message_type: "LtiResourceLinkRequest",
+    target_link_uri: "http://localhost:8080/lti/launch",
+    visibility: "admins"
+  });
+});
+
 test("serves built app assets before API CORS restrictions", async ({ request }) => {
   const response = await request.get("/assets/index.js", {
     headers: {
@@ -39,6 +72,31 @@ test("serves built app assets before API CORS restrictions", async ({ request })
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("text/javascript");
   expect(await response.text()).toContain("createRoot");
+});
+
+test("keeps SEB config and proof endpoints defensive without seeded assessment data", async ({ request }) => {
+  const config = await request.get("/seb/config/course-1/classicquiz_quiz-1.seb");
+  expect(config.status()).toBe(400);
+  expect(await config.text()).toContain("SEB not enabled or access code missing");
+
+  const proof = await request.post("/api/seb/access-proof/course-1/quiz-1", {
+    data: {
+      configKeyHash: "a".repeat(64),
+      url: "https://canvas.example.edu/courses/course-1/quizzes/quiz-1/take"
+    }
+  });
+  expect(proof.status()).toBe(404);
+  await expect(proof.json()).resolves.toMatchObject({
+    success: false,
+    message: "No SEB setting found for this quiz"
+  });
+
+  const accessCode = await request.get("/api/seb/access-code/course-1/quiz-1");
+  expect(accessCode.status()).toBe(403);
+  await expect(accessCode.json()).resolves.toMatchObject({
+    success: false,
+    message: "Invalid or expired SEB access proof"
+  });
 });
 
 test("serves a Canvas launch fallback at /login", async ({ page }) => {
