@@ -43,7 +43,7 @@ describe("OAuthController", () => {
     vi.restoreAllMocks();
   });
 
-  it("redirects Canvas OAuth authorization requests with expected scope and state", () => {
+  it("redirects Canvas OAuth authorization requests with expected scope and state", async () => {
     const response = responseDouble();
     const request = {
       originalUrl: "/lti/launch",
@@ -56,7 +56,7 @@ describe("OAuthController", () => {
       }
     } as any;
 
-    controller.authorize(request, response, {
+    await controller.authorize(request, response, {
       user_id: "user-1",
       course_id: "course-1",
       redirect_url: "/custom-return"
@@ -79,18 +79,18 @@ describe("OAuthController", () => {
     );
   });
 
-  it("clears existing tokens before reauthorization", () => {
+  it("clears existing tokens before reauthorization", async () => {
     const response = responseDouble();
 
-    controller.reauthorize({ session: {} } as any, response, { user_id: "user-1", course_id: "course-1" });
+    await controller.reauthorize({ session: {} } as any, response, { user_id: "user-1", course_id: "course-1" });
 
     expect(canvasApi.clearAccessToken).toHaveBeenCalledWith("user-1");
     expect(response.redirect).toHaveBeenCalled();
   });
 
-  it("rejects authorization requests missing required query or configuration", () => {
+  it("rejects authorization requests missing required query or configuration", async () => {
     const missingQueryResponse = responseDouble();
-    controller.authorize({ session: {} } as any, missingQueryResponse, { user_id: "user-1" });
+    await controller.authorize({ session: {} } as any, missingQueryResponse, { user_id: "user-1" });
     expect(missingQueryResponse.status).toHaveBeenCalledWith(400);
     expect(missingQueryResponse.send).toHaveBeenCalledWith("Missing user_id or course_id");
 
@@ -103,7 +103,7 @@ describe("OAuthController", () => {
       ltiState as any
     );
     const missingConfigResponse = responseDouble();
-    missingConfig.authorize({ session: {} } as any, missingConfigResponse, {
+    await missingConfig.authorize({ session: {} } as any, missingConfigResponse, {
       user_id: "user-1",
       course_id: "course-1"
     });

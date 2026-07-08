@@ -61,6 +61,7 @@ Dev deployment expects:
 - `dev_tool_url`
 - `dev_lti_private_key`
 - `dev_admin_password`
+- `dev_state_encryption_key`
 - `dev_api_client_id`
 - `dev_api_client_secret`
 - `dev_seb_config_encryption_cert_pem`
@@ -82,7 +83,7 @@ Secret values are mounted as environment variables:
 - `TOOL_URL`
 - `LTI_PRIVATE_KEY`
 - `ADMIN_PASSWORD`
-- `STATE_ENCRYPTION_KEY` in prod
+- `STATE_ENCRYPTION_KEY`
 - `CANVAS_API_CLIENT_ID`
 - `CANVAS_API_CLIENT_SECRET`
 - `SEB_CONFIG_ENCRYPTION_CERT_PEM` or `SEB_CONFIG_ENCRYPTION_CERT_PATH` when certificate-encrypted `.seb` downloads are enabled
@@ -100,6 +101,18 @@ It needs access to:
 - Firestore for the configured database.
 - Secret Manager accessor for deployment-injected secrets.
 - Artifact Registry read access for deployed images.
+
+## Firestore Runtime State
+
+In addition to `assessments`, `courses`, and `canvasOAuthTokens`, the service uses these default collections for multi-instance Cloud Run behavior:
+
+- `sessions`
+- `transientStates`
+- `operationLocks`
+
+Create Firestore TTL policies on the `expiresAt` field for all three runtime collections. The app deletes expired entries opportunistically while handling requests, but Firestore TTL keeps abandoned sessions, OIDC/OAuth states, SEB proof tokens, and expired operation leases from accumulating.
+
+Do not set `USE_IN_MEMORY_STORE=true` on Cloud Run. The service refuses to start with the in-memory repository when `K_SERVICE` is present.
 
 ## Canvas URLs
 

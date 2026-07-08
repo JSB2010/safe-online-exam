@@ -33,16 +33,16 @@ The current automated tests cover:
 
 - TypeScript domain model parsing for Classic Quiz and New Quiz IDs.
 - App config profile, URL, Firestore database, and compatibility behavior.
-- LTI launch claim extraction and encrypted state replay protection.
+- LTI launch claim extraction, encrypted state replay protection, and cross-instance state consumption.
 - JWK generation and production private-key requirements.
 - Canvas API URL construction and access-code update behavior.
-- Firestore/in-memory repository semantics.
+- Firestore/in-memory repository semantics, runtime session storage, transient one-time state, and operation lock behavior.
 - Course-level SEB defaults and structured URL rule normalization.
 - Content discovery and New Quiz SEB setting behavior.
 - Quiz service enable/disable and access-code behavior.
 - SEB configuration plist generation, canonical URL filter keys, and allowed-domain policy.
 - SEB certificate-encrypted `pkhs` download wrapping, password-encrypted `pswd` wrapping, and plaintext fallback.
-- SEB Config Key and access-proof token behavior.
+- SEB Config Key, compare-and-set Config Key persistence, and cross-instance access-proof token behavior.
 - SEB request detection.
 - Static detector script serving, safe base URL/debug injection, cache headers, and minified production asset selection.
 - Canvas detector jsdom behavior for quiz ID extraction, access-code proof/fill, final submit redirects, debug logging, server trace callbacks, and external exam tools.

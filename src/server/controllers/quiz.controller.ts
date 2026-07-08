@@ -337,30 +337,32 @@ export class QuizController {
       return noUserSession();
     }
     try {
-      const accessCode = generateAccessCode();
-      const parsed = parseNewQuizContentId(quizId);
-      if (parsed) {
-        const setting = await this.assessments.getContentSebSetting(quizId);
+      return await this.assessments.withAssessmentLock(quizId, async () => {
+        const accessCode = generateAccessCode();
+        const parsed = parseNewQuizContentId(quizId);
+        if (parsed) {
+          const setting = await this.assessments.getContentSebSetting(quizId);
+          if (!setting?.sebRequired) {
+            return apiError(404, "SEB is not enabled for this quiz");
+          }
+          await this.canvasApi.setNewQuizAccessCode(courseId, parsed.assignmentId, accessCode, userId);
+          await this.assessments.saveContentSebSetting({ ...setting, accessCode, configKey: null });
+          return {
+            success: true,
+            message: "SEB access code regenerated. Students must download a fresh configuration file."
+          };
+        }
+        const setting = await this.assessments.getSebSettingForQuiz(quizId);
         if (!setting?.sebRequired) {
           return apiError(404, "SEB is not enabled for this quiz");
         }
-        await this.canvasApi.setNewQuizAccessCode(courseId, parsed.assignmentId, accessCode, userId);
-        await this.assessments.saveContentSebSetting({ ...setting, accessCode, configKey: null });
+        await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
+        await this.assessments.saveQuizSebSetting({ ...setting, accessCode, configKey: null });
         return {
           success: true,
           message: "SEB access code regenerated. Students must download a fresh configuration file."
         };
-      }
-      const setting = await this.assessments.getSebSettingForQuiz(quizId);
-      if (!setting?.sebRequired) {
-        return apiError(404, "SEB is not enabled for this quiz");
-      }
-      await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
-      await this.assessments.saveQuizSebSetting({ ...setting, accessCode, configKey: null });
-      return {
-        success: true,
-        message: "SEB access code regenerated. Students must download a fresh configuration file."
-      };
+      });
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
         return canvasAuthorizationRequired(courseId, userId);
@@ -412,22 +414,24 @@ export class QuizController {
     assignmentId: string,
     userId: string
   ): Promise<ContentSebSetting> {
-    const accessCode = generateAccessCode();
-    await this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId);
-    const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
-    const saved = await this.assessments.saveContentSebSetting(
-      applyCourseDefaultsToContentSetting(
-        {
-          ...setting,
-          sebRequired: true,
-          enabled: true,
-          accessCode,
-          configKey: null
-        },
-        await this.courseSettings.getDefaults(courseId)
-      )
-    );
-    return saved;
+    return this.assessments.withAssessmentLock(contentId, async () => {
+      const accessCode = generateAccessCode();
+      await this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId);
+      const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
+      const saved = await this.assessments.saveContentSebSetting(
+        applyCourseDefaultsToContentSetting(
+          {
+            ...setting,
+            sebRequired: true,
+            enabled: true,
+            accessCode,
+            configKey: null
+          },
+          await this.courseSettings.getDefaults(courseId)
+        )
+      );
+      return saved;
+    });
   }
 
   private async disableNewQuiz(
@@ -436,18 +440,20 @@ export class QuizController {
     assignmentId: string,
     userId: string
   ): Promise<ContentSebSetting> {
-    const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
-    if (setting.accessCode) {
-      await this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId);
-    }
-    const saved = await this.assessments.saveContentSebSetting({
-      ...setting,
-      sebRequired: false,
-      enabled: false,
-      accessCode: null,
-      configKey: null
+    return this.assessments.withAssessmentLock(contentId, async () => {
+      const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
+      if (setting.accessCode) {
+        await this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId);
+      }
+      const saved = await this.assessments.saveContentSebSetting({
+        ...setting,
+        sebRequired: false,
+        enabled: false,
+        accessCode: null,
+        configKey: null
+      });
+      return saved;
     });
-    return saved;
   }
 
   private async getOrCreateNewQuizSetting(

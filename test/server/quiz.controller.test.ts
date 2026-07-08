@@ -27,7 +27,8 @@ describe("QuizController", () => {
       saveContentSebSetting: vi.fn(),
       getQuiz: vi.fn(),
       getOrCreateContentSebSetting: vi.fn(),
-      validateSebConfiguration: vi.fn()
+      validateSebConfiguration: vi.fn(),
+      withAssessmentLock: vi.fn(async (_contentId: string, action: () => Promise<unknown>) => action())
     };
     canvasApi = {
       setQuizAccessCode: vi.fn(),

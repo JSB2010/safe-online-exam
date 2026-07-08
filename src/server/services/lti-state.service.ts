@@ -1,39 +1,39 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
-
-interface IssuedState {
-  payload: Record<string, string>;
-  expiresAt: number;
-}
+import { RepositoryProvider } from "../data/repositories.js";
 
 @Injectable()
 export class LtiStateService {
-  private readonly issued = new Map<string, IssuedState>();
   private readonly ttlMs = 600_000;
 
-  constructor(private readonly config: AppConfig) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly repositories: RepositoryProvider
+  ) {}
 
-  createState(payload: Record<string, string>): string {
+  async createState(payload: Record<string, string>): Promise<string> {
     const expiresAt = Date.now() + this.ttlMs;
     const encoded = encryptJson({ payload, expiresAt }, this.getKey());
-    this.issued.set(encoded, { payload, expiresAt });
-    this.cleanup();
+    await this.repositories.value.transientStates.save(stateDocumentId(encoded), {
+      kind: "lti-state",
+      payload,
+      expiresAt: new Date(expiresAt)
+    });
     return encoded;
   }
 
-  consumeState(state: string | undefined | null): Record<string, string> {
+  async consumeState(state: string | undefined | null): Promise<Record<string, string>> {
     if (!state) {
       throw new Error("Missing LTI state");
     }
-    const issued = this.issued.get(state);
+    const issued = await this.repositories.value.transientStates.consume(stateDocumentId(state));
     if (!issued) {
       throw new Error("Invalid or already consumed LTI state");
     }
-    this.issued.delete(state);
     const decrypted = decryptJson(state, this.getKey()) as { payload: Record<string, string>; expiresAt: number };
-    const payload = issued.payload;
-    const expiresAt = issued.expiresAt || decrypted.expiresAt;
+    const payload = issued.payload || {};
+    const expiresAt = Date.parse(String(issued.expiresAt)) || decrypted.expiresAt;
     if (!expiresAt || expiresAt < Date.now()) {
       throw new Error("Expired LTI state");
     }
@@ -52,15 +52,10 @@ export class LtiStateService {
       .update(configuredKey || "seb-canvas-dev-state-key")
       .digest();
   }
+}
 
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [state, issued] of this.issued.entries()) {
-      if (issued.expiresAt < now) {
-        this.issued.delete(state);
-      }
-    }
-  }
+export function stateDocumentId(state: string): string {
+  return createHash("sha256").update(`lti-state:${state}`, "utf8").digest("hex");
 }
 
 function encryptJson(value: unknown, key: Buffer): string {

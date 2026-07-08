@@ -44,8 +44,6 @@ const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class CanvasApiService {
-  private readonly tokenCache = new Map<string, OAuthToken>();
-
   constructor(
     private readonly config: AppConfig,
     private readonly repositories: RepositoryProvider
@@ -205,13 +203,10 @@ export class CanvasApiService {
       expiresAt: options.expiresAt || expiresAtFromSeconds(options.expiresIn),
       updatedAt: new Date().toISOString()
     };
-    const saved = await this.repositories.value.oauthTokens.save(userId, token);
-    this.tokenCache.set(userId, saved);
-    return saved;
+    return this.repositories.value.oauthTokens.save(userId, token);
   }
 
   async clearAccessToken(userId: string): Promise<void> {
-    this.tokenCache.delete(userId);
     await this.repositories.value.oauthTokens.delete(userId);
   }
 
@@ -263,15 +258,10 @@ export class CanvasApiService {
   }
 
   private async getStoredToken(userId: string): Promise<OAuthToken | null> {
-    const cached = this.tokenCache.get(userId);
-    if (cached?.accessToken) {
-      return cached;
-    }
     const token = await this.repositories.value.oauthTokens.get(userId);
     if (!token?.accessToken) {
       return null;
     }
-    this.tokenCache.set(userId, token);
     return token;
   }
 
@@ -283,9 +273,7 @@ export class CanvasApiService {
     if (!refreshed?.access_token) {
       return null;
     }
-    const saved = await this.saveRefreshedToken(userId, token, refreshed);
-    this.tokenCache.set(userId, saved);
-    return saved;
+    return this.saveRefreshedToken(userId, token, refreshed);
   }
 
   private async exchangeRefreshToken(refreshToken: string): Promise<CanvasOAuthTokenResponse | null> {

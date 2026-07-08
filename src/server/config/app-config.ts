@@ -11,6 +11,9 @@ export interface AppConfigSnapshot {
     assessments: string;
     courses: string;
     oauthTokens: string;
+    sessions: string;
+    transientStates: string;
+    operationLocks: string;
   };
   lti: {
     issuer: string;
@@ -113,7 +116,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
     firestoreCollections: {
       assessments: firstPresent(env.FIRESTORE_ASSESSMENTS_COLLECTION, "assessments")!,
       courses: firstPresent(env.FIRESTORE_COURSES_COLLECTION, "courses")!,
-      oauthTokens: firstPresent(env.FIRESTORE_OAUTH_TOKENS_COLLECTION, "canvasOAuthTokens")!
+      oauthTokens: firstPresent(env.FIRESTORE_OAUTH_TOKENS_COLLECTION, "canvasOAuthTokens")!,
+      sessions: firstPresent(env.FIRESTORE_SESSIONS_COLLECTION, "sessions")!,
+      transientStates: firstPresent(env.FIRESTORE_TRANSIENT_STATES_COLLECTION, "transientStates")!,
+      operationLocks: firstPresent(env.FIRESTORE_OPERATION_LOCKS_COLLECTION, "operationLocks")!
     },
     lti: {
       issuer: firstPresent(env.LTI_ISSUER, "https://canvas.instructure.com")!,

@@ -1,4 +1,4 @@
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import type {
   AssessmentRecord,
@@ -29,7 +29,7 @@ import {
 } from "../../shared/models.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { CanvasApiService } from "./canvas-api.service.js";
-import { invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
+import { hasSameSebConfigFingerprint, invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 
 export interface CourseAssessmentContent {
@@ -40,6 +40,8 @@ export interface CourseAssessmentContent {
 
 @Injectable()
 export class AssessmentService {
+  private readonly lockTtlMs = 30_000;
+
   constructor(
     private readonly repositories: RepositoryProvider,
     private readonly canvasApi: CanvasApiService
@@ -49,27 +51,32 @@ export class AssessmentService {
     const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId);
     const syncedAt = new Date().toISOString();
     const existingRecords = await this.getAssessmentRecordsForCourse(courseId);
-    const existing = new Map(existingRecords.map((record) => [record.id, record]));
-    const classicRecords = [
-      ...classicQuizzes.map((quiz) =>
-        quizToAssessmentRecord(quiz, existing.get(assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id)), syncedAt)
+    const classicRecords = (
+      await Promise.all(
+        classicQuizzes.map((quiz) =>
+          this.repositories.value.assessments.update(
+            assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id),
+            (existing) => quizToAssessmentRecord(quiz, existing, syncedAt)
+          )
+        )
       )
-    ];
+    ).filter((record): record is AssessmentRecord => !!record);
     let contentRecords: AssessmentRecord[];
     try {
       const newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId);
-      contentRecords = newQuizzes.map((item) => contentItemToAssessmentRecord(item, existing.get(item.id), syncedAt));
+      contentRecords = (
+        await Promise.all(
+          newQuizzes.map((item) =>
+            this.repositories.value.assessments.update(item.id, (existing) =>
+              contentItemToAssessmentRecord(item, existing, syncedAt)
+            )
+          )
+        )
+      ).filter((record): record is AssessmentRecord => !!record);
     } catch {
       contentRecords = existingRecords.filter((record) => record.contentType !== "CLASSIC_QUIZ");
     }
-    const records = [...classicRecords, ...contentRecords];
-    const saved = await this.repositories.value.assessments.saveMany(
-      records.map((value) => ({
-        id: value.id,
-        value
-      }))
-    );
-    return this.toCourseAssessmentContent(saved);
+    return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
   }
 
   async getAssessmentRecordsForCourse(courseId: string): Promise<AssessmentRecord[]> {
@@ -121,25 +128,26 @@ export class AssessmentService {
 
   async saveQuizSebSetting(setting: QuizSebSetting): Promise<QuizSebSetting> {
     const quizId = setting.quizId;
-    const existingRecord = await this.getAssessmentRecord(assessmentIdForClassicQuiz(quizId));
-    const existingSetting = existingRecord ? assessmentToQuizSebSetting(existingRecord) : null;
-    const normalized: QuizSebSetting = {
-      ...setting,
-      id: quizId,
-      quizId,
-      ssoDomains: setting.ssoDomains || [],
-      educationalToolDomains: setting.educationalToolDomains || [],
-      customDomains: setting.customDomains || [],
-      urlRules: normalizeUrlRules(setting.urlRules),
-      externalTools: normalizeExternalTools(setting.externalTools)
-    };
-    const withStartPassword = normalizeSebStartPasswordState(existingSetting, normalized);
-    const nextSetting = invalidateConfigKeyIfSebConfigChanged(existingSetting, withStartPassword);
-    const saved = await this.repositories.value.assessments.save(
+    const saved = await this.repositories.value.assessments.update(
       assessmentIdForClassicQuiz(quizId),
-      assessmentWithQuizSebSetting(existingRecord, nextSetting)
+      (existingRecord) => {
+        const existingSetting = existingRecord ? assessmentToQuizSebSetting(existingRecord) : null;
+        const normalized: QuizSebSetting = {
+          ...setting,
+          id: quizId,
+          quizId,
+          ssoDomains: setting.ssoDomains || [],
+          educationalToolDomains: setting.educationalToolDomains || [],
+          customDomains: setting.customDomains || [],
+          urlRules: normalizeUrlRules(setting.urlRules),
+          externalTools: normalizeExternalTools(setting.externalTools)
+        };
+        const withStartPassword = normalizeSebStartPasswordState(existingSetting, normalized);
+        const nextSetting = invalidateConfigKeyIfSebConfigChanged(existingSetting, withStartPassword);
+        return assessmentWithQuizSebSetting(existingRecord, nextSetting);
+      }
     );
-    const result = assessmentToQuizSebSetting(saved);
+    const result = saved ? assessmentToQuizSebSetting(saved) : null;
     if (!result) {
       throw new Error("Saved assessment is not a Classic Quiz");
     }
@@ -147,24 +155,25 @@ export class AssessmentService {
   }
 
   async saveContentSebSetting(setting: ContentSebSetting): Promise<ContentSebSetting> {
-    const existingRecord = await this.getAssessmentRecord(setting.contentId);
-    const existingSetting = existingRecord ? assessmentToContentSebSetting(existingRecord) : null;
-    const normalized: ContentSebSetting = {
-      ...setting,
-      id: setting.contentId,
-      contentId: setting.contentId,
-      ssoDomains: setting.ssoDomains || [],
-      educationalToolDomains: setting.educationalToolDomains || [],
-      customDomains: setting.customDomains || [],
-      urlRules: normalizeUrlRules(setting.urlRules),
-      externalTools: normalizeExternalTools(setting.externalTools)
-    };
-    const withStartPassword = normalizeSebStartPasswordState(existingSetting, normalized);
-    const nextSetting = invalidateConfigKeyIfSebConfigChanged(existingSetting, withStartPassword);
-    const saved = await this.repositories.value.assessments.save(
-      setting.contentId,
-      assessmentWithContentSebSetting(existingRecord, nextSetting)
-    );
+    const saved = await this.repositories.value.assessments.update(setting.contentId, (existingRecord) => {
+      const existingSetting = existingRecord ? assessmentToContentSebSetting(existingRecord) : null;
+      const normalized: ContentSebSetting = {
+        ...setting,
+        id: setting.contentId,
+        contentId: setting.contentId,
+        ssoDomains: setting.ssoDomains || [],
+        educationalToolDomains: setting.educationalToolDomains || [],
+        customDomains: setting.customDomains || [],
+        urlRules: normalizeUrlRules(setting.urlRules),
+        externalTools: normalizeExternalTools(setting.externalTools)
+      };
+      const withStartPassword = normalizeSebStartPasswordState(existingSetting, normalized);
+      const nextSetting = invalidateConfigKeyIfSebConfigChanged(existingSetting, withStartPassword);
+      return assessmentWithContentSebSetting(existingRecord, nextSetting);
+    });
+    if (!saved) {
+      throw new Error("Saved assessment is missing");
+    }
     return assessmentToContentSebSetting(saved);
   }
 
@@ -231,48 +240,137 @@ export class AssessmentService {
     userId: string,
     defaults?: CourseSebDefaults | null
   ): Promise<QuizSebSetting> {
-    const accessCode = generateAccessCode();
-    await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
-    const existing = await this.getSebSettingForQuiz(quizId);
-    return this.saveQuizSebSetting(
-      applyCourseDefaultsToQuizSetting(
-        {
-          ...defaultQuizSebSetting(quizId, courseId),
-          ...existing,
-          id: quizId,
-          quizId,
-          courseId,
-          sebRequired: true,
-          enabled: true,
-          accessCode,
-          configKey: null,
-          ssoDomains: existing?.ssoDomains || [],
-          educationalToolDomains: existing?.educationalToolDomains || [],
-          customDomains: existing?.customDomains || [],
-          urlRules: normalizeUrlRules(existing?.urlRules),
-          externalTools: normalizeExternalTools(existing?.externalTools)
-        },
-        defaults
-      )
-    );
+    return this.withAssessmentLock(quizId, async () => {
+      const accessCode = generateAccessCode();
+      await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
+      const existing = await this.getSebSettingForQuiz(quizId);
+      return this.saveQuizSebSetting(
+        applyCourseDefaultsToQuizSetting(
+          {
+            ...defaultQuizSebSetting(quizId, courseId),
+            ...existing,
+            id: quizId,
+            quizId,
+            courseId,
+            sebRequired: true,
+            enabled: true,
+            accessCode,
+            configKey: null,
+            ssoDomains: existing?.ssoDomains || [],
+            educationalToolDomains: existing?.educationalToolDomains || [],
+            customDomains: existing?.customDomains || [],
+            urlRules: normalizeUrlRules(existing?.urlRules),
+            externalTools: normalizeExternalTools(existing?.externalTools)
+          },
+          defaults
+        )
+      );
+    });
   }
 
   async disableSebWithAccessCode(courseId: string, quizId: string, userId: string): Promise<QuizSebSetting> {
-    const existing = await this.getSebSettingForQuiz(quizId);
-    if (existing?.accessCode) {
-      await this.canvasApi.removeQuizAccessCode(courseId, quizId, userId);
-    }
-    return this.saveQuizSebSetting({
-      ...defaultQuizSebSetting(quizId, courseId),
-      ...existing,
-      id: quizId,
-      quizId,
-      courseId,
-      sebRequired: false,
-      enabled: false,
-      accessCode: null,
-      configKey: null
+    return this.withAssessmentLock(quizId, async () => {
+      const existing = await this.getSebSettingForQuiz(quizId);
+      if (existing?.accessCode) {
+        await this.canvasApi.removeQuizAccessCode(courseId, quizId, userId);
+      }
+      return this.saveQuizSebSetting({
+        ...defaultQuizSebSetting(quizId, courseId),
+        ...existing,
+        id: quizId,
+        quizId,
+        courseId,
+        sebRequired: false,
+        enabled: false,
+        accessCode: null,
+        configKey: null
+      });
     });
+  }
+
+  async saveQuizConfigKeyIfUnchanged(setting: QuizSebSetting, configKey: string): Promise<QuizSebSetting | null> {
+    const saved = await this.repositories.value.assessments.update(
+      assessmentIdForClassicQuiz(setting.quizId),
+      (existingRecord) => {
+        if (!existingRecord) {
+          return null;
+        }
+        const existingSetting = assessmentToQuizSebSetting(existingRecord);
+        if (!existingSetting || !hasSameSebConfigFingerprint(existingSetting, setting)) {
+          return null;
+        }
+        return assessmentWithQuizSebSetting(existingRecord, { ...existingSetting, configKey });
+      }
+    );
+    return saved ? assessmentToQuizSebSetting(saved) : null;
+  }
+
+  async ensureQuizConfigKeySaltIfUnchanged(setting: QuizSebSetting): Promise<QuizSebSetting | null> {
+    const saved = await this.repositories.value.assessments.update(
+      assessmentIdForClassicQuiz(setting.quizId),
+      (existingRecord) => {
+        if (!existingRecord) {
+          return null;
+        }
+        const existingSetting = assessmentToQuizSebSetting(existingRecord);
+        if (!existingSetting || !hasSameSebConfigFingerprint(existingSetting, setting)) {
+          return null;
+        }
+        return assessmentWithQuizSebSetting(
+          existingRecord,
+          normalizeSebStartPasswordState(existingSetting, existingSetting)
+        );
+      }
+    );
+    return saved ? assessmentToQuizSebSetting(saved) : null;
+  }
+
+  async saveContentConfigKeyIfUnchanged(
+    setting: ContentSebSetting,
+    configKey: string
+  ): Promise<ContentSebSetting | null> {
+    const saved = await this.repositories.value.assessments.update(setting.contentId, (existingRecord) => {
+      if (!existingRecord) {
+        return null;
+      }
+      const existingSetting = assessmentToContentSebSetting(existingRecord);
+      if (!hasSameSebConfigFingerprint(existingSetting, setting)) {
+        return null;
+      }
+      return assessmentWithContentSebSetting(existingRecord, { ...existingSetting, configKey });
+    });
+    return saved ? assessmentToContentSebSetting(saved) : null;
+  }
+
+  async ensureContentConfigKeySaltIfUnchanged(setting: ContentSebSetting): Promise<ContentSebSetting | null> {
+    const saved = await this.repositories.value.assessments.update(setting.contentId, (existingRecord) => {
+      if (!existingRecord) {
+        return null;
+      }
+      const existingSetting = assessmentToContentSebSetting(existingRecord);
+      if (!hasSameSebConfigFingerprint(existingSetting, setting)) {
+        return null;
+      }
+      return assessmentWithContentSebSetting(
+        existingRecord,
+        normalizeSebStartPasswordState(existingSetting, existingSetting)
+      );
+    });
+    return saved ? assessmentToContentSebSetting(saved) : null;
+  }
+
+  async withAssessmentLock<T>(contentId: string, action: () => Promise<T>): Promise<T> {
+    const ownerId = randomUUID();
+    const lockId = `assessment:${canonicalAssessmentId(contentId)}`;
+    const acquired = await this.repositories.value.operationLocks.acquire(lockId, ownerId, this.lockTtlMs);
+    if (!acquired) {
+      throw new Error("Another SEB update is already in progress for this assessment. Try again shortly.");
+    }
+    try {
+      return await action();
+    } finally {
+      await this.repositories.value.operationLocks.release(lockId, ownerId);
+    }
   }
 
   async validateSebConfiguration(quizId: string): Promise<boolean> {

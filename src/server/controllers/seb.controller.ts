@@ -234,7 +234,7 @@ export class SebController {
     }
     return {
       success: true,
-      proofToken: this.proofService.mintProof(courseId, quizId),
+      proofToken: await this.proofService.mintProof(courseId, quizId),
       expiresInSeconds: this.proofService.getTokenTtlSeconds()
     };
   }
@@ -245,7 +245,7 @@ export class SebController {
     @Param("quizId") quizId: string,
     @Headers("x-seb-proof-token") proofToken?: string
   ): Promise<Record<string, unknown>> {
-    if (!this.proofService.consumeProof(proofToken, courseId, quizId)) {
+    if (!(await this.proofService.consumeProof(proofToken, courseId, quizId))) {
       return apiError(403, "Invalid or expired SEB access proof");
     }
     const setting = await this.resolveSebSetting(courseId, quizId);
@@ -331,7 +331,7 @@ export class SebController {
   ): Promise<void> {
     if (idToken) {
       try {
-        const consumed = this.ltiState.consumeState(state);
+        const consumed = await this.ltiState.consumeState(state);
         const launchData = await this.ltiService.validateToken(idToken, consumed.nonce);
         request.session!.launchData = launchData;
         request.session!.canvas_user_id = launchData.userId;
@@ -397,7 +397,10 @@ export class SebController {
         throw new Error("SEB not enabled or access code missing");
       }
       if (setting.startPassword && !setting.configKeySalt) {
-        setting = await this.assessments.saveQuizSebSetting(setting);
+        setting = await this.assessments.ensureQuizConfigKeySaltIfUnchanged(setting);
+        if (!setting) {
+          throw new Error("SEB settings changed while generating the configuration. Download a fresh configuration.");
+        }
       }
       const accessCode = setting.accessCode;
       if (!accessCode) {
@@ -415,7 +418,13 @@ export class SebController {
         startPassword: setting.startPassword,
         configKeySalt: setting.configKeySalt
       });
-      await this.assessments.saveQuizSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
+      const savedConfigKey = await this.assessments.saveQuizConfigKeyIfUnchanged(
+        setting,
+        this.configKey.computeConfigKey(generated)
+      );
+      if (!savedConfigKey) {
+        throw new Error("SEB settings changed while generating the configuration. Download a fresh configuration.");
+      }
       return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
     }
 
@@ -424,7 +433,10 @@ export class SebController {
       throw new Error("SEB not enabled or access code missing");
     }
     if (setting.startPassword && !setting.configKeySalt) {
-      setting = await this.assessments.saveContentSebSetting(setting);
+      setting = await this.assessments.ensureContentConfigKeySaltIfUnchanged(setting);
+      if (!setting) {
+        throw new Error("SEB settings changed while generating the configuration. Download a fresh configuration.");
+      }
     }
     const accessCode = setting.accessCode;
     if (!accessCode) {
@@ -441,7 +453,13 @@ export class SebController {
       startPassword: setting.startPassword,
       configKeySalt: setting.configKeySalt
     });
-    await this.assessments.saveContentSebSetting({ ...setting, configKey: this.configKey.computeConfigKey(generated) });
+    const savedConfigKey = await this.assessments.saveContentConfigKeyIfUnchanged(
+      setting,
+      this.configKey.computeConfigKey(generated)
+    );
+    if (!savedConfigKey) {
+      throw new Error("SEB settings changed while generating the configuration. Download a fresh configuration.");
+    }
     return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
   }
 

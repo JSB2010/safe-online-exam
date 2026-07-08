@@ -13,18 +13,27 @@ describe("AppConfig", () => {
     expect(loadConfigFromEnv({}).firestoreCollections).toEqual({
       assessments: "assessments",
       courses: "courses",
-      oauthTokens: "canvasOAuthTokens"
+      oauthTokens: "canvasOAuthTokens",
+      sessions: "sessions",
+      transientStates: "transientStates",
+      operationLocks: "operationLocks"
     });
     expect(
       loadConfigFromEnv({
         FIRESTORE_ASSESSMENTS_COLLECTION: "testAssessments",
         FIRESTORE_COURSES_COLLECTION: "testCourses",
-        FIRESTORE_OAUTH_TOKENS_COLLECTION: "testTokens"
+        FIRESTORE_OAUTH_TOKENS_COLLECTION: "testTokens",
+        FIRESTORE_SESSIONS_COLLECTION: "testSessions",
+        FIRESTORE_TRANSIENT_STATES_COLLECTION: "testTransient",
+        FIRESTORE_OPERATION_LOCKS_COLLECTION: "testLocks"
       }).firestoreCollections
     ).toEqual({
       assessments: "testAssessments",
       courses: "testCourses",
-      oauthTokens: "testTokens"
+      oauthTokens: "testTokens",
+      sessions: "testSessions",
+      transientStates: "testTransient",
+      operationLocks: "testLocks"
     });
   });
 

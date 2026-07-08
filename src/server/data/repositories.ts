@@ -12,15 +12,56 @@ export interface QueryFilter {
 export interface CollectionStore<T extends Record<string, any>> {
   get(id: string): Promise<T | null>;
   save(id: string, value: T): Promise<T>;
+  update(id: string, updater: (current: T | null) => T | null): Promise<T | null>;
   delete(id: string): Promise<void>;
   find(filters?: QueryFilter[]): Promise<T[]>;
   saveMany(values: Array<{ id: string; value: T }>): Promise<T[]>;
+}
+
+export interface SessionRecord extends Record<string, any> {
+  id?: string | null;
+  data: Record<string, unknown>;
+  expiresAt: Date | string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface TransientStateRecord extends Record<string, any> {
+  id?: string | null;
+  kind: "lti-state" | "seb-proof";
+  payload?: Record<string, string>;
+  courseId?: string | null;
+  contentId?: string | null;
+  expiresAt: Date | string;
+  consumedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface OperationLockRecord extends Record<string, any> {
+  id?: string | null;
+  ownerId: string;
+  expiresAt: Date | string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface TransientStateStore extends CollectionStore<TransientStateRecord> {
+  consume(id: string): Promise<TransientStateRecord | null>;
+}
+
+export interface OperationLockStore extends CollectionStore<OperationLockRecord> {
+  acquire(id: string, ownerId: string, ttlMs: number): Promise<boolean>;
+  release(id: string, ownerId: string): Promise<void>;
 }
 
 export interface AppRepositories {
   assessments: CollectionStore<AssessmentRecord>;
   courses: CollectionStore<CourseRecord>;
   oauthTokens: CollectionStore<OAuthToken>;
+  sessions: CollectionStore<SessionRecord>;
+  transientStates: TransientStateStore;
+  operationLocks: OperationLockStore;
 }
 
 @Injectable()
@@ -43,6 +84,9 @@ export class RepositoryProvider implements OnModuleInit {
 
 export function createRepositories(config: AppConfig): AppRepositories {
   if (process.env.USE_IN_MEMORY_STORE === "true" || config.profile === "test") {
+    if (process.env.K_SERVICE) {
+      throw new Error("USE_IN_MEMORY_STORE is local/test only and cannot be enabled on Cloud Run");
+    }
     return createInMemoryRepositories();
   }
 
@@ -55,7 +99,10 @@ export function createRepositories(config: AppConfig): AppRepositories {
   return {
     assessments: new FirestoreCollectionStore<AssessmentRecord>(firestore, collections.assessments),
     courses: new FirestoreCollectionStore<CourseRecord>(firestore, collections.courses),
-    oauthTokens: new FirestoreCollectionStore<OAuthToken>(firestore, collections.oauthTokens)
+    oauthTokens: new FirestoreCollectionStore<OAuthToken>(firestore, collections.oauthTokens),
+    sessions: new FirestoreCollectionStore<SessionRecord>(firestore, collections.sessions),
+    transientStates: new FirestoreTransientStateStore(firestore, collections.transientStates),
+    operationLocks: new FirestoreOperationLockStore(firestore, collections.operationLocks)
   };
 }
 
@@ -65,7 +112,10 @@ export function createInMemoryRepositories(
   return {
     assessments: new InMemoryCollectionStore<AssessmentRecord>(seed?.assessments),
     courses: new InMemoryCollectionStore<CourseRecord>(seed?.courses),
-    oauthTokens: new InMemoryCollectionStore<OAuthToken>(seed?.oauthTokens)
+    oauthTokens: new InMemoryCollectionStore<OAuthToken>(seed?.oauthTokens),
+    sessions: new InMemoryCollectionStore<SessionRecord>(seed?.sessions),
+    transientStates: new InMemoryTransientStateStore(seed?.transientStates),
+    operationLocks: new InMemoryOperationLockStore(seed?.operationLocks)
   };
 }
 
@@ -92,6 +142,15 @@ export class InMemoryCollectionStore<T extends Record<string, any>> implements C
     return structuredClone(next);
   }
 
+  async update(id: string, updater: (current: T | null) => T | null): Promise<T | null> {
+    const current = await this.get(id);
+    const updated = updater(current);
+    if (!updated) {
+      return null;
+    }
+    return this.save(id, updated);
+  }
+
   async delete(id: string): Promise<void> {
     this.documents.delete(id);
   }
@@ -113,8 +172,8 @@ export class InMemoryCollectionStore<T extends Record<string, any>> implements C
 
 export class FirestoreCollectionStore<T extends Record<string, any>> implements CollectionStore<T> {
   constructor(
-    private readonly firestore: Firestore,
-    private readonly collectionName: string
+    protected readonly firestore: Firestore,
+    protected readonly collectionName: string
   ) {}
 
   async get(id: string): Promise<T | null> {
@@ -130,6 +189,22 @@ export class FirestoreCollectionStore<T extends Record<string, any>> implements 
     const next = prepareDocument(id, value, now);
     await this.firestore.collection(this.collectionName).doc(id).set(next, { merge: true });
     return next;
+  }
+
+  async update(id: string, updater: (current: T | null) => T | null): Promise<T | null> {
+    const now = new Date().toISOString();
+    return this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      const current = snapshot.exists ? withDocumentId(snapshot.id, snapshot.data() as T) : null;
+      const updated = updater(current);
+      if (!updated) {
+        return null;
+      }
+      const next = prepareDocument(id, updated, now);
+      transaction.set(reference, next, { merge: true });
+      return next;
+    });
   }
 
   async delete(id: string): Promise<void> {
@@ -156,6 +231,115 @@ export class FirestoreCollectionStore<T extends Record<string, any>> implements 
     }
     await batch.commit();
     return saved;
+  }
+}
+
+export class InMemoryTransientStateStore
+  extends InMemoryCollectionStore<TransientStateRecord>
+  implements TransientStateStore
+{
+  async consume(id: string): Promise<TransientStateRecord | null> {
+    const existing = await this.get(id);
+    if (!existing || existing.consumedAt || isExpired(existing.expiresAt)) {
+      if (existing) {
+        await this.delete(id);
+      }
+      return null;
+    }
+    const consumedAt = new Date().toISOString();
+    await this.save(id, { ...existing, consumedAt });
+    return { ...existing, consumedAt };
+  }
+}
+
+export class FirestoreTransientStateStore
+  extends FirestoreCollectionStore<TransientStateRecord>
+  implements TransientStateStore
+{
+  async consume(id: string): Promise<TransientStateRecord | null> {
+    const consumedAt = new Date().toISOString();
+    return this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists) {
+        return null;
+      }
+      const record = withDocumentId(snapshot.id, snapshot.data() as TransientStateRecord);
+      if (record.consumedAt || isExpired(record.expiresAt)) {
+        transaction.delete(reference);
+        return null;
+      }
+      transaction.update(reference, { consumedAt, updatedAt: consumedAt });
+      return { ...record, consumedAt, updatedAt: consumedAt };
+    });
+  }
+}
+
+export class InMemoryOperationLockStore
+  extends InMemoryCollectionStore<OperationLockRecord>
+  implements OperationLockStore
+{
+  async acquire(id: string, ownerId: string, ttlMs: number): Promise<boolean> {
+    const existing = await this.get(id);
+    if (existing && existing.ownerId !== ownerId && !isExpired(existing.expiresAt)) {
+      return false;
+    }
+    await this.save(id, { id, ownerId, expiresAt: new Date(Date.now() + ttlMs) });
+    return true;
+  }
+
+  async release(id: string, ownerId: string): Promise<void> {
+    const existing = await this.get(id);
+    if (!existing || existing.ownerId === ownerId || isExpired(existing.expiresAt)) {
+      await this.delete(id);
+    }
+  }
+}
+
+export class FirestoreOperationLockStore
+  extends FirestoreCollectionStore<OperationLockRecord>
+  implements OperationLockStore
+{
+  async acquire(id: string, ownerId: string, ttlMs: number): Promise<boolean> {
+    const now = Date.now();
+    const expiresAt = new Date(now + ttlMs);
+    const nowIso = new Date(now).toISOString();
+    return this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      if (snapshot.exists) {
+        const existing = withDocumentId(snapshot.id, snapshot.data() as OperationLockRecord);
+        if (existing.ownerId !== ownerId && !isExpired(existing.expiresAt, now)) {
+          return false;
+        }
+      }
+      transaction.set(
+        reference,
+        stripUndefinedValues({
+          id,
+          ownerId,
+          expiresAt,
+          createdAt: snapshot.exists ? (snapshot.data() as OperationLockRecord).createdAt || nowIso : nowIso,
+          updatedAt: nowIso
+        }),
+        { merge: true }
+      );
+      return true;
+    });
+  }
+
+  async release(id: string, ownerId: string): Promise<void> {
+    await this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists) {
+        return;
+      }
+      const existing = withDocumentId(snapshot.id, snapshot.data() as OperationLockRecord);
+      if (existing.ownerId === ownerId || isExpired(existing.expiresAt)) {
+        transaction.delete(reference);
+      }
+    });
   }
 }
 
@@ -197,9 +381,32 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function withDocumentId<T extends Record<string, any>>(id: string, value: T): T {
   return {
-    ...structuredClone(value),
+    ...cloneDocumentValue(value),
     id: typeof value.id === "string" && value.id.trim() ? value.id : id
   };
+}
+
+function cloneDocumentValue<T>(value: T): T {
+  if (value instanceof Date) {
+    return new Date(value.getTime()) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => cloneDocumentValue(entry)) as T;
+  }
+  if (value && typeof value === "object") {
+    if (typeof (value as { toDate?: unknown }).toDate === "function") {
+      return value;
+    }
+    if (!isPlainRecord(value)) {
+      return value;
+    }
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      next[key] = cloneDocumentValue(entry);
+    }
+    return next as T;
+  }
+  return value;
 }
 
 function matchesFilter(value: Record<string, any>, filter: QueryFilter): boolean {
@@ -214,4 +421,30 @@ function matchesFilter(value: Record<string, any>, filter: QueryFilter): boolean
     default:
       throw new Error(`Unsupported in-memory query operator: ${filter.op}`);
   }
+}
+
+export function isExpired(expiresAt: unknown, now = Date.now()): boolean {
+  const expiresAtMs = toMillis(expiresAt);
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= now;
+}
+
+function toMillis(value: unknown): number {
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return Date.parse(String(value));
+  }
+  if (value && typeof value === "object" && typeof (value as { toDate?: unknown }).toDate === "function") {
+    return (value as { toDate: () => Date }).toDate().getTime();
+  }
+  if (value && typeof value === "object") {
+    const timestamp = value as { seconds?: unknown; nanoseconds?: unknown; _seconds?: unknown; _nanoseconds?: unknown };
+    const seconds = typeof timestamp.seconds === "number" ? timestamp.seconds : timestamp._seconds;
+    const nanos = typeof timestamp.nanoseconds === "number" ? timestamp.nanoseconds : timestamp._nanoseconds;
+    if (typeof seconds === "number") {
+      return seconds * 1000 + (typeof nanos === "number" ? Math.floor(nanos / 1_000_000) : 0);
+    }
+  }
+  return Number.NaN;
 }

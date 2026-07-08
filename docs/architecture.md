@@ -25,7 +25,7 @@ Cloud Run NestJS service
   -> React app shell hydrates workflow pages
 
 Firestore
-  -> assessments, course defaults, Canvas OAuth tokens
+  -> assessments, course defaults, Canvas OAuth tokens, runtime state
 ```
 
 ## Main Components
@@ -33,6 +33,7 @@ Firestore
 - `src/server/main.ts`: Nest bootstrap, session cookies, CORS, static React assets.
 - `src/server/config/app-config.ts`: environment normalization and compatibility with old Spring profile variables.
 - `src/server/data/repositories.ts`: Firestore-backed repositories plus in-memory stores for tests and local smoke checks.
+- `src/server/data/session-store.ts`: Express session store backed by the repository layer for Cloud Run multi-instance routing.
 - `src/server/controllers/lti.controller.ts`: Canvas LTI login, launch, config, and deep-link endpoints.
 - `src/server/controllers/oauth.controller.ts`: Canvas OAuth2 authorize/callback/status flow.
 - `src/server/controllers/quiz.controller.ts`: instructor quiz APIs for refresh, enable, disable, regenerate, status, and structured SEB settings.
@@ -65,15 +66,20 @@ Firestore collections:
 - `assessments`: one document per Canvas assessment/content item, including Canvas metadata plus SEB enforcement, access-code, Config Key, URL rule, and exam-tool state.
 - `courses`: one document per Canvas course, including setup completion and course-level SEB defaults.
 - `canvasOAuthTokens`: Canvas OAuth access and refresh tokens keyed by Canvas user ID.
+- `sessions`: Express `JSESSIONID` payloads keyed by hashed session ID.
+- `transientStates`: short-lived LTI/OAuth state and SEB proof records keyed by hashed token/state.
+- `operationLocks`: short-lived assessment update leases used while mutating Canvas access codes and matching Firestore state.
+
+The Cloud Run deployment is safe to run with multiple instances. Durable application data and short-lived runtime state are both shared through Firestore; `USE_IN_MEMORY_STORE=true` is rejected when the app detects Cloud Run.
 
 ## LTI Flow
 
 1. Canvas starts OIDC login at `/lti/login`.
-2. The service creates encrypted state and nonce using `LtiStateService`.
+2. The service creates encrypted state and nonce using `LtiStateService` and records a one-time state entry in Firestore.
 3. The browser is redirected to Canvas authorization.
 4. Canvas posts or redirects back to `/lti/launch`.
 5. `LtiService` validates the ID token against Canvas JWKS, issuer, audience, nonce, and deployment claims.
-6. Launch data is stored in the session.
+6. Launch data is stored in the Firestore-backed session.
 7. Instructor launches render with course/user context and quiz management actions.
 8. Student launches render a launch-only list of SEB-enabled assessments from cached course settings. Students do not see instructor settings or Canvas OAuth actions.
 
@@ -83,7 +89,7 @@ The public JWKS endpoint is `/.well-known/jwks.json`. In production the private 
 
 LTI launch proves Canvas identity but does not provide the Canvas API token needed to read course content or update quiz access codes. Instructor API actions use a separate Canvas OAuth2 flow:
 
-1. `/api/oauth2authorize` creates an encrypted state and redirects to Canvas.
+1. `/api/oauth2authorize` creates an encrypted one-time state in Firestore and redirects to Canvas.
 2. Canvas redirects to `/api/oauth2callback`.
 3. The service exchanges the code for access/refresh tokens.
 4. Tokens are stored in Firestore in `canvasOAuthTokens`.
@@ -103,7 +109,7 @@ LTI launch proves Canvas identity but does not provide the Canvas API token need
 7. Downloading the config uses a canonical Canvas start URL, generates the plaintext config, persists a Config Key from that plaintext, and returns a certificate-encrypted `pkhs` `.seb` file unless certificate wrapping is explicitly disabled.
 8. If an exam start password is configured, SEB prompts for that password before opening the exam config.
 9. SEB opens the configured Canvas URL.
-10. The detector script validates strict Config Key proof and retrieves the access code through a one-time proof token.
+10. The detector script validates strict Config Key proof and retrieves the access code through a Firestore-backed one-time proof token.
 
 Course defaults are stored per Canvas course. They include an optional exam start password, a default exit password, structured allowed URL rules, and external exam tools. Enabling SEB for a quiz applies those defaults unless the quiz already has an override. Per-quiz settings can reset to defaults. URL rules support exact URLs, whole-domain entries, and an advanced regex option while preserving legacy domain arrays for older settings.
 
@@ -113,12 +119,14 @@ Generated `.seb` downloads are certificate-encrypted by default using SEB macOS-
 
 Certificate and password encryption harden the file against casual editing, but the server-side security boundary remains strict Config Key proof before releasing the hidden Canvas access code. Any SEB-affecting setting change clears the stored Config Key so students must download a fresh config before access-code proof can succeed. Changing the exam start password rotates `configKeySalt`, which makes older passwordless or differently passworded configs fail Config Key validation. Broad allowlist patterns and effectively global regex rules are rejected before config generation.
 
+Config downloads persist Config Keys with a compare-and-set update: if instructor settings change while a config is being generated, the stale Config Key is not saved and the student must download again. Canvas access-code enable, disable, and regenerate operations use short Firestore leases per assessment so two instances do not race Canvas writes against Firestore writes.
+
 `APP_DEBUG_ENABLED` is the single debug/development toggle for the service. It enables detector console logging, sanitized detector trace callbacks to `/api/debug/canvas-detector-trace`, and no-store detector script serving. With debug disabled, the detector callback is dormant and the same public detector URLs serve the minified asset with cache headers.
 
 ## Security Notes
 
 - Production requires `STATE_ENCRYPTION_KEY`; dev has a fallback for local testing.
-- Sessions use `JSESSIONID` for legacy cookie compatibility.
+- Sessions use `JSESSIONID` for legacy cookie compatibility and are stored in Firestore by hashed session ID.
 - Secure cookies are used when the profile is prod or `TOOL_URL` is HTTPS.
 - CORS allows Canvas domains, the configured tool origin, and localhost only in non-production.
 - Access-code APIs return real HTTP 403/404/409 statuses for failed proof or missing SEB state.

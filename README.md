@@ -108,7 +108,7 @@ Required in Cloud Run:
 - `ADMIN_PASSWORD` or `SESSION_SECRET`
 - `CANVAS_API_CLIENT_ID`
 - `CANVAS_API_CLIENT_SECRET`
-- `STATE_ENCRYPTION_KEY` in production
+- `STATE_ENCRYPTION_KEY` in Cloud Run
 
 Useful optional variables:
 
@@ -122,9 +122,9 @@ Useful optional variables:
 - `SEB_CONFIG_ENCRYPTION_ENABLED`, default `true`. Set to `false` to disable certificate wrapping; instructor-configured exam start passwords still use SEB password encryption.
 - `SEB_CONFIG_ENCRYPTION_CERT_PEM` or `SEB_CONFIG_ENCRYPTION_CERT_PATH`, the public X.509 certificate used to encrypt generated `.seb` files. The server does not need the private key.
 - `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM` or `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH`, optional server-only RSA public key fallback when the public certificate is managed elsewhere.
-- Firestore collection overrides: `FIRESTORE_ASSESSMENTS_COLLECTION`, `FIRESTORE_COURSES_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`
+- Firestore collection overrides: `FIRESTORE_ASSESSMENTS_COLLECTION`, `FIRESTORE_COURSES_COLLECTION`, `FIRESTORE_OAUTH_TOKENS_COLLECTION`, `FIRESTORE_SESSIONS_COLLECTION`, `FIRESTORE_TRANSIENT_STATES_COLLECTION`, `FIRESTORE_OPERATION_LOCKS_COLLECTION`
 
-Production refuses to start without `LTI_PRIVATE_KEY` and `STATE_ENCRYPTION_KEY`.
+Production refuses to start without `LTI_PRIVATE_KEY` and `STATE_ENCRYPTION_KEY`. Dev Cloud Run also injects `STATE_ENCRYPTION_KEY` so LTI/OAuth state remains stable across instances.
 
 ## Firestore
 
@@ -138,8 +138,15 @@ Default collections:
 - `assessments`
 - `courses`
 - `canvasOAuthTokens`
+- `sessions`
+- `transientStates`
+- `operationLocks`
 
-The rewrite does not require Java model compatibility. The repository layer writes TypeScript-shaped documents with stable IDs and timestamps. Classic Quiz and New Quiz content share the `assessments` collection; course defaults live in `courses`; Canvas OAuth tokens live in `canvasOAuthTokens`.
+The rewrite does not require Java model compatibility. The repository layer writes TypeScript-shaped documents with stable IDs and timestamps. Classic Quiz and New Quiz content share the `assessments` collection; course defaults live in `courses`; Canvas OAuth tokens live in `canvasOAuthTokens`. Cloud Run multi-instance runtime state uses Firestore too: Express sessions live in `sessions`, OIDC/OAuth state and SEB proof tokens live in `transientStates`, and short assessment update leases live in `operationLocks`.
+
+`USE_IN_MEMORY_STORE=true` is only for local development and tests. The app refuses to start with the in-memory store when running on Cloud Run.
+
+Configure Firestore TTL policies on `expiresAt` for `sessions`, `transientStates`, and `operationLocks`.
 
 ## Canvas LTI Configuration
 

@@ -32,14 +32,18 @@ export class LtiController {
   ) {}
 
   @Get("/lti/login")
-  loginGet(@Req() request: Request, @Res() response: Response): void {
-    this.handleLogin(request, response, request.query as Record<string, string>);
+  async loginGet(@Req() request: Request, @Res() response: Response): Promise<void> {
+    await this.handleLogin(request, response, request.query as Record<string, string>);
   }
 
   @Post("/lti/login")
   @HttpCode(302)
-  loginPost(@Req() request: Request, @Res() response: Response, @Body() body: Record<string, string>): void {
-    this.handleLogin(request, response, body);
+  async loginPost(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Body() body: Record<string, string>
+  ): Promise<void> {
+    await this.handleLogin(request, response, body);
   }
 
   @Post("/lti/launch")
@@ -71,7 +75,7 @@ export class LtiController {
       return;
     }
     try {
-      const state = this.ltiState.consumeState(body.state);
+      const state = await this.ltiState.consumeState(body.state);
       const launchData = await this.ltiService.validateToken(body.id_token, state.nonce);
       storeLaunchData(request, launchData);
 
@@ -203,7 +207,7 @@ export class LtiController {
     };
   }
 
-  private handleLogin(request: Request, response: Response, params: Record<string, string>): void {
+  private async handleLogin(request: Request, response: Response, params: Record<string, string>): Promise<void> {
     const issuer = params.iss;
     const loginHint = params.login_hint;
     const targetLinkUri = params.target_link_uri;
@@ -219,7 +223,7 @@ export class LtiController {
       return;
     }
     const nonce = randomUUID();
-    const state = this.ltiState.createState({ nonce, targetLinkUri });
+    const state = await this.ltiState.createState({ nonce, targetLinkUri });
     const redirectUri = `${this.config.getRequiredToolUrl()}/lti/launch`;
     const authUrl = new URL(this.config.value.lti.authUrl);
     authUrl.searchParams.set("scope", "openid");

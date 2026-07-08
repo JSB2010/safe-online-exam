@@ -6,11 +6,16 @@ import session from "express-session";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { AppConfig } from "./config/app-config.js";
+import { RepositoryProvider } from "./data/repositories.js";
+import { RepositorySessionStore } from "./data/session-store.js";
 import { isAllowedCorsOrigin } from "./http/cors.js";
+
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bodyParser: true });
   const config = app.get(AppConfig);
+  const repositories = app.get(RepositoryProvider);
   const expressApp = app.getHttpAdapter().getInstance() as express.Express;
 
   expressApp.set("trust proxy", 1);
@@ -18,6 +23,7 @@ async function bootstrap(): Promise<void> {
   app.use(
     session({
       name: "JSESSIONID",
+      store: new RepositorySessionStore(repositories.value.sessions, SESSION_TTL_MS),
       secret: config.value.security.sessionSecret,
       resave: false,
       saveUninitialized: false,
@@ -25,7 +31,7 @@ async function bootstrap(): Promise<void> {
         httpOnly: true,
         secure: shouldUseSecureCookies(config),
         sameSite: shouldUseSecureCookies(config) ? "none" : "lax",
-        maxAge: 30 * 60 * 1000,
+        maxAge: SESSION_TTL_MS,
         path: "/"
       }
     })

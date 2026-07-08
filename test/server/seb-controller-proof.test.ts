@@ -2,6 +2,7 @@ import { HttpException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { SebController } from "../../src/server/controllers/seb.controller.js";
+import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import { SebAccessProofService } from "../../src/server/services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
@@ -48,7 +49,7 @@ describe("SEB access proof validation", () => {
           proofToken: expect.any(String)
         })
       );
-      expect(proofService.consumeProof(result.proofToken as string, "11825", "23455")).toBe(true);
+      await expect(proofService.consumeProof(result.proofToken as string, "11825", "23455")).resolves.toBe(true);
     });
   });
 
@@ -197,7 +198,7 @@ async function withConfig(run: () => Promise<void>): Promise<void> {
 }
 
 function controllerWithSetting(setting: Record<string, unknown>) {
-  const proofService = new SebAccessProofService();
+  const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
   const resolvedSetting = {
     sebRequired: true,
     enabled: true,

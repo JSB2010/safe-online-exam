@@ -70,7 +70,7 @@ describe("LtiController role routing", () => {
     expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
   });
 
-  it("redirects valid OIDC login requests to Canvas authorization", () => {
+  it("redirects valid OIDC login requests to Canvas authorization", async () => {
     const response = responseDouble();
     const request = {
       query: {
@@ -83,7 +83,7 @@ describe("LtiController role routing", () => {
       session: {}
     } as any;
 
-    controller.loginGet(request, response);
+    await controller.loginGet(request, response);
 
     const redirectUrl = new URL(response.redirect.mock.calls[0][0]);
     expect(redirectUrl.origin).toBe("https://canvas.example.test");
@@ -98,7 +98,7 @@ describe("LtiController role routing", () => {
 
   it("rejects malformed OIDC login and launch requests with fallback HTML", async () => {
     const loginResponse = responseDouble();
-    controller.loginGet({ query: {}, session: {} } as any, loginResponse);
+    await controller.loginGet({ query: {}, session: {} } as any, loginResponse);
     expect(loginResponse.status).toHaveBeenCalledWith(400);
     expect(loginResponse.send).toHaveBeenCalledWith(expect.stringContaining("LTI Login Error"));
 

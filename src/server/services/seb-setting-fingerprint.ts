@@ -14,7 +14,11 @@ export function invalidateConfigKeyIfSebConfigChanged<T extends SebConfigSetting
   return sebConfigFingerprint(existing) === sebConfigFingerprint(next) ? next : { ...next, configKey: null };
 }
 
-function sebConfigFingerprint(setting: SebConfigSetting): string {
+export function hasSameSebConfigFingerprint(left: SebConfigSetting, right: SebConfigSetting): boolean {
+  return sebConfigFingerprint(left) === sebConfigFingerprint(right);
+}
+
+export function sebConfigFingerprint(setting: SebConfigSetting): string {
   return JSON.stringify({
     courseId: setting.courseId || null,
     contentId: setting.contentId || null,

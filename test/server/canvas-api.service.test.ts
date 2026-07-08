@@ -140,6 +140,18 @@ describe("CanvasApiService", () => {
     });
   });
 
+  it("does not reuse OAuth tokens after another instance clears them", async () => {
+    const provider = { value: repositories } as RepositoryProvider;
+    const firstInstance = new CanvasApiService(new AppConfig(), provider);
+    const secondInstance = new CanvasApiService(new AppConfig(), provider);
+    await firstInstance.storeAccessToken("shared-user", "shared-token");
+
+    await expect(firstInstance.getAccessToken("shared-user")).resolves.toBe("shared-token");
+    await secondInstance.clearAccessToken("shared-user");
+
+    await expect(firstInstance.getAccessToken("shared-user")).resolves.toBeNull();
+  });
+
   it("stores refresh token metadata returned by Canvas OAuth", async () => {
     const before = Date.now();
 

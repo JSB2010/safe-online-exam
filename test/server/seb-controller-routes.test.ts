@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SebController } from "../../src/server/controllers/seb.controller.js";
+import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import { SebAccessProofService } from "../../src/server/services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
@@ -67,8 +68,8 @@ describe("SebController route contracts", () => {
   });
 
   it("gates access-code retrieval with one-time proof tokens", async () => {
-    const proofService = new SebAccessProofService();
-    const proofToken = proofService.mintProof("course-1", "quiz-1");
+    const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
+    const proofToken = await proofService.mintProof("course-1", "quiz-1");
     const { controller } = controllerWith({
       proofService,
       assessments: {
@@ -157,7 +158,8 @@ describe("SebController route contracts", () => {
 });
 
 function controllerWith(options: Record<string, any> = {}) {
-  const proofService = options.proofService || new SebAccessProofService();
+  const proofService =
+    options.proofService || new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
   const assessments = {
     getSebSettingForQuiz: vi.fn().mockResolvedValue(null),
     getContentSebSetting: vi.fn().mockResolvedValue(null),
@@ -165,6 +167,10 @@ function controllerWith(options: Record<string, any> = {}) {
     getQuiz: vi.fn().mockResolvedValue(null),
     saveQuizSebSetting: vi.fn(),
     saveContentSebSetting: vi.fn(),
+    saveQuizConfigKeyIfUnchanged: vi.fn(),
+    saveContentConfigKeyIfUnchanged: vi.fn(),
+    ensureQuizConfigKeySaltIfUnchanged: vi.fn(),
+    ensureContentConfigKeySaltIfUnchanged: vi.fn(),
     ...options.assessments
   };
   const sebDetector = {

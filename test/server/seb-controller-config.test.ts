@@ -4,6 +4,7 @@ import { gunzipSync } from "node:zlib";
 import * as plist from "plist";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { SebController } from "../../src/server/controllers/seb.controller.js";
+import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import { SebAccessProofService } from "../../src/server/services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
@@ -18,7 +19,7 @@ const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).
 describe("SEB config downloads", () => {
   it("uses canonical Canvas quiz URLs instead of student-specific canvas_url query values", async () => {
     await withConfig(async () => {
-      const saveSebSetting = vi.fn(async (setting) => setting);
+      const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
       const controller = new SebController(
         new AppConfig(),
         {} as any,
@@ -41,12 +42,12 @@ describe("SEB config downloads", () => {
             title: "Midterm",
             htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455?module_item_id=44`
           }),
-          saveQuizSebSetting: saveSebSetting
+          saveQuizConfigKeyIfUnchanged: saveConfigKey
         } as any,
         {} as any,
         new SebConfigurationService(new AppConfig()),
         new SebConfigKeyService(),
-        new SebAccessProofService()
+        proofService()
       );
 
       const generated = await downloadConfig(
@@ -57,17 +58,16 @@ describe("SEB config downloads", () => {
 
       expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
       expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
-      expect(saveSebSetting).toHaveBeenCalledWith(
-        expect.objectContaining({
-          configKey: new SebConfigKeyService().computeConfigKey(generated)
-        })
+      expect(saveConfigKey).toHaveBeenCalledWith(
+        expect.objectContaining({ quizId: "23455" }),
+        new SebConfigKeyService().computeConfigKey(generated)
       );
     });
   });
 
   it("uses canonical Canvas assignment take URLs for New Quiz configs", async () => {
     await withConfig(async () => {
-      const saveSebSetting = vi.fn(async (setting) => setting);
+      const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
       const controller = new SebController(
         new AppConfig(),
         {} as any,
@@ -96,12 +96,12 @@ describe("SEB config downloads", () => {
             title: "New Quiz",
             htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991?module_item_id=44`
           }),
-          saveContentSebSetting: saveSebSetting
+          saveContentConfigKeyIfUnchanged: saveConfigKey
         } as any,
         {} as any,
         new SebConfigurationService(new AppConfig()),
         new SebConfigKeyService(),
-        new SebAccessProofService()
+        proofService()
       );
 
       const generated = await downloadConfig(
@@ -113,10 +113,9 @@ describe("SEB config downloads", () => {
 
       expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991/take`);
       expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991/take`);
-      expect(saveSebSetting).toHaveBeenCalledWith(
-        expect.objectContaining({
-          configKey: new SebConfigKeyService().computeConfigKey(generated)
-        })
+      expect(saveConfigKey).toHaveBeenCalledWith(
+        expect.objectContaining({ contentId: "newquiz:11825:991" }),
+        new SebConfigKeyService().computeConfigKey(generated)
       );
     });
   });
@@ -124,7 +123,7 @@ describe("SEB config downloads", () => {
   it("encrypts downloaded configs while saving Config Keys from plaintext settings", async () => {
     await withConfig(
       async () => {
-        const saveSebSetting = vi.fn(async (setting) => setting);
+        const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
         const controller = new SebController(
           new AppConfig(),
           {} as any,
@@ -147,12 +146,12 @@ describe("SEB config downloads", () => {
               title: "Midterm",
               htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
             }),
-            saveQuizSebSetting: saveSebSetting
+            saveQuizConfigKeyIfUnchanged: saveConfigKey
           } as any,
           {} as any,
           new SebConfigurationService(new AppConfig()),
           new SebConfigKeyService(),
-          new SebAccessProofService()
+          proofService()
         );
 
         const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
@@ -168,10 +167,9 @@ describe("SEB config downloads", () => {
 
         expect(unzipped.subarray(0, 4).toString("utf8")).toBe("pkhs");
         expect(downloaded.toString("utf8")).not.toContain("<plist");
-        expect(saveSebSetting).toHaveBeenCalledWith(
-          expect.objectContaining({
-            configKey: new SebConfigKeyService().computeConfigKey(plaintext)
-          })
+        expect(saveConfigKey).toHaveBeenCalledWith(
+          expect.objectContaining({ quizId: "23455" }),
+          new SebConfigKeyService().computeConfigKey(plaintext)
         );
       },
       { encryptionEnabled: true }
@@ -180,7 +178,7 @@ describe("SEB config downloads", () => {
 
   it("password-protects downloads while saving Config Keys from salted plaintext settings", async () => {
     await withConfig(async () => {
-      const saveSebSetting = vi.fn(async (setting) => setting);
+      const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
       const configKeySalt = Buffer.alloc(32, 9).toString("base64");
       const controller = new SebController(
         new AppConfig(),
@@ -206,12 +204,12 @@ describe("SEB config downloads", () => {
             title: "Midterm",
             htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
           }),
-          saveQuizSebSetting: saveSebSetting
+          saveQuizConfigKeyIfUnchanged: saveConfigKey
         } as any,
         {} as any,
         new SebConfigurationService(new AppConfig()),
         new SebConfigKeyService(),
-        new SebAccessProofService()
+        proofService()
       );
 
       const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
@@ -228,14 +226,17 @@ describe("SEB config downloads", () => {
       });
 
       expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pswd");
-      expect(saveSebSetting).toHaveBeenCalledWith(
-        expect.objectContaining({
-          configKey: new SebConfigKeyService().computeConfigKey(plaintext)
-        })
+      expect(saveConfigKey).toHaveBeenCalledWith(
+        expect.objectContaining({ quizId: "23455" }),
+        new SebConfigKeyService().computeConfigKey(plaintext)
       );
     });
   });
 });
+
+function proofService(): SebAccessProofService {
+  return new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
+}
 
 async function downloadConfig(
   controller: SebController,

@@ -38,6 +38,43 @@ describe("AssessmentService", () => {
     });
   });
 
+  it("preserves SEB state during Canvas metadata refreshes", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getCanvasDomain: () => "https://canvas.example.edu",
+      getQuizzesForCourse: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "42", title: "Updated Classic Quiz", courseId: "course-7", htmlUrl: "https://canvas.example.edu/q/42" }
+        ]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    await service.saveQuizSebSetting({
+      quizId: "42",
+      courseId: "course-7",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      configKey: "config-key",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    });
+
+    await service.refreshCourseContent("course-7", "user-1");
+
+    await expect(service.getSebSettingForQuiz("42")).resolves.toMatchObject({
+      accessCode: "ACCESS",
+      configKey: "config-key"
+    });
+    await expect(service.getQuiz("42")).resolves.toMatchObject({
+      title: "Updated Classic Quiz",
+      htmlUrl: "https://canvas.example.edu/q/42"
+    });
+  });
+
   it("keeps cached New Quiz content when New Quiz discovery fails after Classic Quiz refresh", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const canvas = {
@@ -190,6 +227,173 @@ describe("AssessmentService", () => {
 
     expect(quizSaved.configKey).toBeNull();
     expect(contentSaved.configKey).toBeNull();
+  });
+
+  it("preserves Canvas metadata when saving SEB settings", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "quiz-1", title: "Canvas Title", courseId: "course-1", htmlUrl: "https://canvas.example.edu/q/1" }
+        ]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    await service.refreshCourseContent("course-1", "user-1");
+
+    await service.saveQuizSebSetting({
+      quizId: "quiz-1",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    });
+
+    await expect(service.getQuiz("quiz-1")).resolves.toMatchObject({
+      title: "Canvas Title",
+      htmlUrl: "https://canvas.example.edu/q/1"
+    });
+  });
+
+  it("saves Config Keys only when SEB settings are unchanged", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    const setting = await service.saveQuizSebSetting({
+      quizId: "quiz-1",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      urlRules: [],
+      externalTools: []
+    });
+
+    await expect(service.saveQuizConfigKeyIfUnchanged(setting, "config-key")).resolves.toMatchObject({
+      configKey: "config-key"
+    });
+    await service.saveQuizSebSetting({ ...setting, accessCode: "NEW-ACCESS", configKey: null });
+
+    await expect(service.saveQuizConfigKeyIfUnchanged(setting, "stale-config-key")).resolves.toBeNull();
+    await expect(service.getSebSettingForQuiz("quiz-1")).resolves.toMatchObject({
+      accessCode: "NEW-ACCESS",
+      configKey: null
+    });
+  });
+
+  it("saves New Quiz Config Keys only when SEB settings are unchanged", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    const setting = await service.saveContentSebSetting({
+      contentId: "newquiz:course-1:99",
+      courseId: "course-1",
+      assignmentId: "99",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      urlRules: [],
+      externalTools: []
+    });
+
+    await expect(service.saveContentConfigKeyIfUnchanged(setting, "content-config-key")).resolves.toMatchObject({
+      configKey: "content-config-key"
+    });
+    await service.saveContentSebSetting({ ...setting, accessCode: "NEW-ACCESS", configKey: null });
+
+    await expect(service.saveContentConfigKeyIfUnchanged(setting, "stale-content-config-key")).resolves.toBeNull();
+  });
+
+  it("initializes Config Key salts only when settings are unchanged", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    const quizSetting = await service.saveQuizSebSetting({
+      quizId: "quiz-1",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      startPassword: "start",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      urlRules: [],
+      externalTools: []
+    });
+    const contentSetting = await service.saveContentSebSetting({
+      contentId: "newquiz:course-1:99",
+      courseId: "course-1",
+      assignmentId: "99",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      startPassword: "start",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      urlRules: [],
+      externalTools: []
+    });
+
+    await expect(service.ensureQuizConfigKeySaltIfUnchanged(quizSetting)).resolves.toMatchObject({
+      configKeySalt: expect.any(String)
+    });
+    await expect(service.ensureContentConfigKeySaltIfUnchanged(contentSetting)).resolves.toMatchObject({
+      configKeySalt: expect.any(String)
+    });
+    await service.saveQuizSebSetting({ ...quizSetting, accessCode: "NEW-ACCESS" });
+    await expect(service.ensureQuizConfigKeySaltIfUnchanged(quizSetting)).resolves.toBeNull();
+  });
+
+  it("rejects concurrent assessment lock acquisition", async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new AssessmentService(
+      { value: repositories } as RepositoryProvider,
+      {
+        getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+        getNewQuizAssignments: vi.fn().mockResolvedValue([])
+      } as unknown as CanvasApiService
+    );
+    await repositories.operationLocks.acquire("assessment:classicquiz_quiz-1", "owner-1", 60_000);
+
+    await expect(service.withAssessmentLock("quiz-1", async () => "ok")).rejects.toThrow(
+      "Another SEB update is already in progress"
+    );
+  });
+
+  it("runs and releases successful assessment locks", async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new AssessmentService(
+      { value: repositories } as RepositoryProvider,
+      {
+        getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+        getNewQuizAssignments: vi.fn().mockResolvedValue([])
+      } as unknown as CanvasApiService
+    );
+
+    await expect(service.withAssessmentLock("quiz-1", async () => "ok")).resolves.toBe("ok");
+    await expect(repositories.operationLocks.get("assessment:classicquiz_quiz-1")).resolves.toBeNull();
   });
 
   it("rotates Config Key salt when the exam start password changes", async () => {

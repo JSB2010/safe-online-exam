@@ -16,15 +16,23 @@ export class OAuthController {
   ) {}
 
   @Get("/oauth2reauthorize")
-  reauthorize(@Req() request: Request, @Res() response: Response, @Query() query: Record<string, string>): void {
+  async reauthorize(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Query() query: Record<string, string>
+  ): Promise<void> {
     if (query.user_id) {
-      void this.canvasApi.clearAccessToken(query.user_id);
+      await this.canvasApi.clearAccessToken(query.user_id);
     }
-    this.authorize(request, response, query);
+    await this.authorize(request, response, query);
   }
 
   @Get("/oauth2authorize")
-  authorize(@Req() request: Request, @Res() response: Response, @Query() query: Record<string, string>): void {
+  async authorize(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Query() query: Record<string, string>
+  ): Promise<void> {
     const userId = query.user_id;
     const courseId = query.course_id;
     if (!userId || !courseId) {
@@ -55,7 +63,7 @@ export class OAuthController {
     if (launchData?.fullName) {
       statePayload.fullName = launchData.fullName;
     }
-    const state = this.ltiState.createState(statePayload);
+    const state = await this.ltiState.createState(statePayload);
     const authUrl = new URL(`${this.config.getCanvasDomain()}/login/oauth2/auth`);
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("response_type", "code");
@@ -82,7 +90,7 @@ export class OAuthController {
       return;
     }
     try {
-      const state = this.ltiState.consumeState(query.state);
+      const state = await this.ltiState.consumeState(query.state);
       const token = await this.exchangeCode(query.code, this.oauthRedirectUri());
       await this.canvasApi.storeAccessToken(state.userId, token.access_token, {
         refreshToken: token.refresh_token || null,
