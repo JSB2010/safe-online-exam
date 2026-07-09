@@ -10,12 +10,14 @@ import {
   KeyRound,
   Lock,
   LogOut,
+  PlayCircle,
   Plus,
   RefreshCw,
   Save,
   Search,
   Settings,
   Shield,
+  ShieldCheck,
   Trash2,
   Unlock,
   X
@@ -88,6 +90,8 @@ export function App() {
       );
     case "student":
       return <StudentDashboard data={bootstrap.data} />;
+    case "seb-check":
+      return <SebSetupCheckPage data={bootstrap.data} />;
     case "service-status":
       return <ServiceStatusPage />;
     default:
@@ -430,6 +434,7 @@ function PasswordPopoverRow({
 
 function StudentDashboard({ data }: { data: Record<string, any> }) {
   const quizzes: StudentQuizView[] = data.quizzes || [];
+  const [showSetupCheck, setShowSetupCheck] = useState(false);
   return (
     <main className="app-shell student-shell">
       <header className="topbar">
@@ -442,9 +447,14 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
             <p>{data.courseName || `Course ${data.courseId || ""}`}</p>
           </div>
         </div>
-        <div className="stat-pill active">
-          <span>Available</span>
-          <strong>{quizzes.length}</strong>
+        <div className="topbar-actions">
+          <div className="stat-pill active">
+            <span>Available</span>
+            <strong>{quizzes.length}</strong>
+          </div>
+          <button className="button secondary" onClick={() => setShowSetupCheck(true)}>
+            <ShieldCheck size={16} /> Setup check
+          </button>
         </div>
       </header>
 
@@ -479,7 +489,61 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
           )}
         </div>
       </section>
+      {showSetupCheck && (
+        <SebSetupCheckDialog
+          launchUrl={data.setupCheckLaunchUrl || data.setupCheckConfigUrl || "/seb/check/config.seb"}
+          onClose={() => setShowSetupCheck(false)}
+        />
+      )}
     </main>
+  );
+}
+
+function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClose: () => void }) {
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section
+        className="dialog setup-check-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="setup-check-title"
+      >
+        <header className="dialog-header">
+          <div>
+            <span className="section-kicker">Device setup</span>
+            <h2 id="setup-check-title">Safe Exam Browser setup check</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} title="Close setup check">
+            <X size={17} />
+          </button>
+        </header>
+        <div className="setup-check-intro">
+          <p>This opens a short SEB test on this computer before you take a real quiz.</p>
+          <div className="instruction-list">
+            <div>
+              <strong>1</strong>
+              <span>If macOS asks for your login keychain password, enter your Mac password.</span>
+            </div>
+            <div>
+              <strong>2</strong>
+              <span>Choose Always Allow so SEB can use the school configuration certificate next time.</span>
+            </div>
+            <div>
+              <strong>3</strong>
+              <span>Wait for the check page to say SEB is checked and working, then quit SEB.</span>
+            </div>
+          </div>
+        </div>
+        <footer className="dialog-actions">
+          <button className="button secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <a className="button primary" href={launchUrl}>
+            <PlayCircle size={16} /> Launch SEB check
+          </a>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1306,6 +1370,175 @@ function SebQuitPage({ data }: { data: Record<string, any> }) {
   );
 }
 
+type SetupCheckStatus = "pending" | "pass" | "fail";
+
+interface SetupCheckItem {
+  id: string;
+  label: string;
+  detail: string;
+  status: SetupCheckStatus;
+}
+
+function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
+  const [checks, setChecks] = useState<SetupCheckItem[]>([
+    {
+      id: "config-opened",
+      label: "SEB setup configuration opened",
+      detail: data.configEncryptionEnabled
+        ? "The certificate-protected setup file opened successfully."
+        : "The setup file opened successfully. Certificate encryption is disabled for this environment.",
+      status: "pending"
+    },
+    {
+      id: "seb-runtime",
+      label: "Safe Exam Browser detected",
+      detail: "Checking the SEB runtime and browser identity.",
+      status: "pending"
+    },
+    {
+      id: "storage",
+      label: "Browser storage is available",
+      detail: "Checking session storage used during exam redirects.",
+      status: "pending"
+    },
+    {
+      id: "connectivity",
+      label: "LTI service is reachable",
+      detail: "Checking secure connectivity to the SEB integration service.",
+      status: "pending"
+    },
+    {
+      id: "config-key",
+      label: "SEB Config Key verified",
+      detail: "Checking that this exact setup configuration can be verified by the server.",
+      status: "pending"
+    }
+  ]);
+
+  const updateCheck = (id: string, status: SetupCheckStatus, detail: string) => {
+    setChecks((current) => current.map((check) => (check.id === id ? { ...check, status, detail } : check)));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const update = (id: string, status: SetupCheckStatus, detail: string) => {
+      if (!cancelled) {
+        updateCheck(id, status, detail);
+      }
+    };
+
+    void (async () => {
+      update(
+        "config-opened",
+        "pass",
+        data.configEncryptionEnabled
+          ? "The certificate-protected setup file decrypted and loaded."
+          : "The setup file loaded. Certificate encryption is disabled for this environment."
+      );
+
+      const sebDetected = detectSebRuntime();
+      update(
+        "seb-runtime",
+        sebDetected ? "pass" : "fail",
+        sebDetected ? "SEB runtime signals are present." : "This page is not running inside Safe Exam Browser."
+      );
+
+      try {
+        const key = `seb-setup-check-${Date.now()}`;
+        sessionStorage.setItem(key, "ok");
+        const stored = sessionStorage.getItem(key);
+        sessionStorage.removeItem(key);
+        if (stored !== "ok") {
+          throw new Error("Session storage round trip failed.");
+        }
+        update("storage", "pass", "Session storage is working.");
+      } catch {
+        update("storage", "fail", "Session storage is unavailable in this SEB session.");
+      }
+
+      try {
+        const response = await fetch("/health", { credentials: "same-origin" });
+        const health = (await response.json()) as { status?: string };
+        if (!response.ok || health.status !== "UP") {
+          throw new Error("Health check failed.");
+        }
+        update("connectivity", "pass", "The SEB integration service responded normally.");
+      } catch {
+        update("connectivity", "fail", "The SEB integration service could not be reached from this session.");
+      }
+
+      try {
+        const configKeyHash = await readSebConfigKeyHash();
+        if (!configKeyHash) {
+          throw new Error("Config Key unavailable.");
+        }
+        const response = await fetch(data.proofUrl || "/api/seb/check-proof", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            configKeyHash,
+            url: window.location.href.split("#")[0]
+          })
+        });
+        if (!response.ok) {
+          throw new Error("Config Key proof rejected.");
+        }
+        update("config-key", "pass", "The server verified this exact SEB setup configuration.");
+      } catch {
+        update(
+          "config-key",
+          "fail",
+          "The server could not verify this setup configuration. Reopen the setup check from Canvas."
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data.configEncryptionEnabled, data.proofUrl]);
+
+  const complete = checks.every((check) => check.status !== "pending");
+  const passed = checks.every((check) => check.status === "pass");
+  const quitUrl = data.quitUrl || "/seb/check/quit";
+
+  return (
+    <main className="message-shell">
+      <section className="message-panel setup-check-panel">
+        <div className={clsx("message-icon", passed && "success", complete && !passed && "error")}>
+          <ShieldCheck size={22} />
+        </div>
+        <h1>{passed ? "SEB is checked and working" : "Checking Safe Exam Browser"}</h1>
+        <p>
+          {passed
+            ? "This computer can open encrypted SEB configurations and verify them with the Canvas SEB integration."
+            : "Keep this window open while the setup checks run."}
+        </p>
+        <div className="check-list" role="list">
+          {checks.map((check) => (
+            <div className={clsx("check-row", check.status)} role="listitem" key={check.id}>
+              <span className="check-status" aria-hidden="true" />
+              <div>
+                <strong>{check.label}</strong>
+                <span>{check.detail}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="message-actions">
+          <a className={clsx("button", passed ? "primary" : "secondary")} id="sebSetupCheckQuitLink" href={quitUrl}>
+            <LogOut size={16} /> Quit Safe Exam Browser
+          </a>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function MessagePage({
   icon,
   title,
@@ -1327,6 +1560,54 @@ function MessagePage({
       </section>
     </main>
   );
+}
+
+function detectSebRuntime(): boolean {
+  const userAgent = navigator.userAgent || "";
+  return (
+    /SafeExamBrowser|Safe Exam Browser|SEB[/; _-]|SEB$/iu.test(userAgent) ||
+    !!((window as any).SafeExamBrowser || (window as any).SEB)
+  );
+}
+
+async function readSebConfigKeyHash(): Promise<string | null> {
+  const seb = (window as any).SafeExamBrowser;
+  if (!seb?.security) {
+    return null;
+  }
+  if (typeof seb.security.updateKeys === "function") {
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const finish = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      };
+      try {
+        seb.security.updateKeys(finish);
+        window.setTimeout(finish, 1500);
+      } catch {
+        finish();
+      }
+    });
+  }
+  return readSebConfigKeyValue(seb.security.configKey);
+}
+
+function readSebConfigKeyValue(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  if (typeof value === "function") {
+    try {
+      const result = value();
+      return typeof result === "string" && result.length > 0 ? result : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function SectionHeading({

@@ -67,6 +67,8 @@ describe("LtiController role routing", () => {
     );
 
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student"'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("/seb/check/config.seb"));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("sebs://"));
     expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
   });
 

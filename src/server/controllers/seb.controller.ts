@@ -122,6 +122,84 @@ export class SebController {
       .send(certificate.der);
   }
 
+  @Get("/seb/check/config.seb")
+  downloadSetupCheckConfig(@Res() response: Response): void {
+    try {
+      const generated = this.generateSetupCheckConfig();
+      response
+        .status(200)
+        .type("application/octet-stream")
+        .setHeader("content-disposition", 'attachment; filename="seb-setup-check.seb"')
+        .setHeader("content-description", "Safe Exam Browser Setup Check Configuration")
+        .setHeader("x-content-type-options", "nosniff")
+        .setHeader("content-transfer-encoding", "binary")
+        .setHeader("accept-ranges", "bytes")
+        .send(generated);
+    } catch (error) {
+      response.status(400).send(`Error generating SEB setup check configuration: ${errorMessage(error)}`);
+    }
+  }
+
+  @Get("/seb/check")
+  setupCheckPage(@Req() request: Request, @Res() response: Response): void {
+    const quitUrl = absoluteUrl(request, "/seb/check/quit", this.config.getApplicationBaseUrl());
+    response.send(
+      renderAppShell({
+        title: "SEB Setup Check",
+        view: "seb-check",
+        initialData: {
+          proofUrl: "/api/seb/check-proof",
+          quitUrl,
+          legacyQuitUrl: quitUrl,
+          configEncryptionEnabled: !!this.sebConfig.getEncryptionCertificate(),
+          serverDetectedSeb: this.sebDetector.isRequestFromSeb(request)
+        }
+      })
+    );
+  }
+
+  @Post("/api/seb/check-proof")
+  verifySetupCheck(
+    @Req() request: Request,
+    @Body() body?: { configKeyHash?: string; url?: string }
+  ): Record<string, unknown> {
+    const expectedConfigKey = this.currentSetupCheckConfigKey();
+    const proofUrl = body?.url || "";
+    const validUrl = isExpectedSetupCheckUrl(this.config, proofUrl);
+    const validProof =
+      this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, proofUrl, expectedConfigKey) ||
+      this.configKey.validateConfigKeyHash(request, expectedConfigKey);
+    if (!validUrl || !validProof) {
+      return apiError(
+        403,
+        "This SEB setup check configuration could not be verified. Reopen the setup check from Canvas using the Safe Exam Browser button.",
+        { error_code: "INVALID_SEB_SETUP_CHECK_PROOF" }
+      );
+    }
+    return {
+      success: true,
+      checks: {
+        configKey: true,
+        expectedUrl: true
+      }
+    };
+  }
+
+  @Get("/seb/check/quit")
+  quitSetupCheck(@Req() request: Request, @Res() response: Response): void {
+    const quitUrl = absoluteUrl(request, "/seb/check/quit", this.config.getApplicationBaseUrl());
+    response
+      .setHeader("x-seb-quit", "true")
+      .setHeader("x-seb-exit", "setup-check")
+      .send(
+        renderAppShell({
+          title: "Safe Exam Browser Closing",
+          view: "seb-quit",
+          initialData: { quitUrl, legacyQuitUrl: quitUrl, courseId: "setup", quizId: "check" }
+        })
+      );
+  }
+
   @Get("/seb/config/:courseId/:quizId")
   redirectConfig(
     @Res() response: Response,
@@ -463,6 +541,27 @@ export class SebController {
     return this.sebConfig.prepareSebConfigurationDownload(generated, { startPassword: setting.startPassword });
   }
 
+  private generateSetupCheckConfig(): Buffer {
+    const plain = this.generatePlainSetupCheckConfig();
+    return this.sebConfig.prepareSebConfigurationDownload(plain);
+  }
+
+  private currentSetupCheckConfigKey(): string {
+    return this.configKey.computeConfigKey(this.generatePlainSetupCheckConfig());
+  }
+
+  private generatePlainSetupCheckConfig(): Buffer {
+    const configuredBaseUrl = this.config.getApplicationBaseUrl() || this.config.toolUrl;
+    if (!configuredBaseUrl) {
+      throw new Error("Application base URL is required to generate SEB setup check configuration");
+    }
+    const baseUrl = configuredBaseUrl.replace(/\/+$/u, "");
+    return this.sebConfig.generateSebSetupCheckConfiguration({
+      startUrl: `${baseUrl}/seb/check`,
+      quitUrl: `${baseUrl}/seb/check/quit`
+    });
+  }
+
   private async currentConfigKey(
     courseId: string,
     contentId: string,
@@ -648,6 +747,24 @@ function isExpectedQuizUrl(config: AppConfig, value: string, courseId: string, q
       return !!parsed && path.startsWith(`/courses/${courseId}/assignments/${parsed.assignmentId}`);
     }
     return path.startsWith(`/courses/${courseId}/quizzes/${quizId}`);
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedSetupCheckUrl(config: AppConfig, value: string): boolean {
+  try {
+    const configuredBaseUrl = config.getApplicationBaseUrl() || config.toolUrl;
+    if (!configuredBaseUrl) {
+      return false;
+    }
+    const url = new URL(value);
+    const expectedBaseUrl = new URL(configuredBaseUrl);
+    return (
+      url.protocol === expectedBaseUrl.protocol &&
+      url.host.toLowerCase() === expectedBaseUrl.host.toLowerCase() &&
+      url.pathname.replace(/\/+$/u, "") === "/seb/check"
+    );
   } catch {
     return false;
   }

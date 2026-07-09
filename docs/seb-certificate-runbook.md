@@ -87,7 +87,7 @@ Check the `x-seb-public-key-hash` header.
 
 ## Manual BYOD Install
 
-Install the `.p12` into the logged-in user's login keychain and pre-authorize SEB:
+Install the `.p12` into the logged-in user's login keychain:
 
 ```bash
 security import "/path/to/seb-config-encryption.p12" \
@@ -97,9 +97,9 @@ security import "/path/to/seb-config-encryption.p12" \
   -T "/Applications/Safe Exam Browser.app"
 ```
 
-The `-x` flag makes the imported private key non-extractable from that Mac. The `-T` flag allows Safe Exam Browser to use the key without prompting the user on first config open.
+The `-x` flag makes the imported private key non-extractable from that Mac. On current macOS versions, the `-T` flag alone is not always enough to suppress the first private-key access prompt. If prompted on first use, the user should enter their Mac login password and choose **Always Allow** for Safe Exam Browser.
 
-After install, open a current `sebs://.../seb/config/...` URL and verify that SEB opens the exam config without an "Opening Settings Failed" dialog or Keychain password prompt.
+After install, launch the student setup check from the LTI app before any real exam. The setup check opens `/seb/check/config.seb`, verifies the SEB Config Key against `/api/seb/check-proof`, and gives the user a low-stakes place to approve first-use Keychain access.
 
 ## Jamf Rollout
 
@@ -109,10 +109,10 @@ Preferred Jamf rollout:
 2. Create a user-level configuration profile with a Certificates payload containing the `.p12` identity and its passphrase.
 3. Set the profile to install automatically.
 4. Confirm the identity lands in the logged-in user's login keychain.
-5. Open a current SEB config URL and verify there is no first-use Keychain prompt.
+5. Launch the LTI setup check and confirm the encrypted setup config opens. If macOS prompts, choose **Always Allow**.
 6. Expand scope to the managed student Mac group.
 
-If Jamf's certificate profile still causes a first-use private-key prompt, use a Jamf policy/script to import the `.p12` into the logged-in user's login keychain with `security import -x -T "/Applications/Safe Exam Browser.app"`. Keep the `.p12` and password restricted to the policy package/script context, remove any temporary file after import, and scope the policy only to intended devices.
+If Jamf's certificate profile still causes a first-use private-key prompt, use a Jamf policy/script to import the `.p12` into the logged-in user's login keychain. The template at [scripts/install-seb-config-cert-login-keychain.sh](../scripts/install-seb-config-cert-login-keychain.sh) accepts Jamf parameter `$4` for the base64 `.p12`, `$5` for the `.p12` password, and optional `$6` for the user's login keychain password if your deployment has a supported way to provide it. Keep the `.p12` and password restricted to the policy package/script context, remove any temporary file after import, and scope the policy only to intended devices. The policy only has to install the identity once per user/key unless the identity is rotated or the Mac is wiped; it does not need to run after every reboot.
 
 ## Rotation
 

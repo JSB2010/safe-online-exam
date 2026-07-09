@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as plist from "plist";
 import { AppConfig } from "../../src/server/config/app-config.js";
-import { buildAllowlistRules, SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
+import {
+  buildAllowlistRules,
+  buildSetupCheckAllowlistRules,
+  SebConfigurationService
+} from "../../src/server/services/seb-configuration.service.js";
 
 describe("SebConfigurationService", () => {
   it("generates deterministic SEB config with Canvas start and quit URLs", () => {
@@ -136,5 +140,44 @@ describe("SebConfigurationService", () => {
     expect(expressions).toContain("^https://tool\\.example\\.edu/calculator(?:[?#].*)?$");
     expect(expressions).toContain("https://docs.example.edu/*");
     expect(expressions).toContain("^https://cdn\\.example\\.edu/assets/.*$");
+  });
+
+  it("generates a locked-down setup check configuration for the app host", () => {
+    process.env.TOOL_URL = "https://app.example.com";
+    process.env.CANVAS_BASE_URL = "https://canvas.example.com";
+    const service = new SebConfigurationService(new AppConfig());
+    const config = service.generateSebSetupCheckConfiguration({
+      startUrl: "https://app.example.com/seb/check",
+      quitUrl: "https://app.example.com/seb/check/quit"
+    });
+    const parsed = plist.parse(config.toString("utf8")) as Record<string, any>;
+    const expressions = parsed.URLFilterRules.map((rule: { expression: string }) => rule.expression);
+
+    expect(parsed.startURL).toBe("https://app.example.com/seb/check");
+    expect(parsed.restartExamURL).toBe("https://app.example.com/seb/check");
+    expect(parsed.quitURL).toBe("https://app.example.com/seb/check/quit");
+    expect(parsed.allowQuit).toBe(true);
+    expect(parsed.ignoreQuitPassword).toBe(true);
+    expect(parsed.browserWindowWebView).toBe(3);
+    expect(parsed.URLFilterEnable).toBe(true);
+    expect(expressions).toContain("https://app.example.com/*");
+    expect(expressions).toContain("^https://app\\.example\\.com/seb/check(?:[?#].*)?$");
+    expect(expressions).toContain("^https://app\\.example\\.com/seb/check/quit(?:[?#].*)?$");
+    expect(expressions.some((expression: string) => expression.includes("canvas.example.com"))).toBe(false);
+    expect(expressions.some((expression: string) => expression.includes("google"))).toBe(false);
+  });
+
+  it("keeps setup check allowlist scoped to generated app URLs", () => {
+    const expressions = buildSetupCheckAllowlistRules({
+      appBaseUrl: "https://tool.example.edu",
+      startUrl: "https://tool.example.edu/seb/check",
+      quitUrl: "https://tool.example.edu/seb/check/quit"
+    }).map((rule) => rule.expression);
+
+    expect(expressions).toEqual([
+      "^https://tool\\.example\\.edu/seb/check(?:[?#].*)?$",
+      "^https://tool\\.example\\.edu/seb/check/quit(?:[?#].*)?$",
+      "https://tool.example.edu/*"
+    ]);
   });
 });

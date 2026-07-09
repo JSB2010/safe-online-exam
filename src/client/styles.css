@@ -467,6 +467,49 @@ p {
   width: min(760px, calc(100vw - 40px));
 }
 
+.setup-check-dialog {
+  width: min(680px, calc(100vw - 40px));
+}
+
+.setup-check-intro {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.instruction-list {
+  display: grid;
+  gap: 10px;
+}
+
+.instruction-list div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+}
+
+.instruction-list strong {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: #0b63ce;
+  background: #e0f2fe;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.instruction-list span {
+  color: #475467;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .section-kicker {
   display: block;
   margin-bottom: 5px;
@@ -759,6 +802,18 @@ select:disabled {
   margin-bottom: 18px;
 }
 
+.message-icon.success {
+  color: #05603a;
+  background: #ecfdf3;
+  border-color: #abefc6;
+}
+
+.message-icon.error {
+  color: #b42318;
+  background: #fff1f0;
+  border-color: #fecdca;
+}
+
 .message-actions {
   width: 100%;
   display: flex;
@@ -772,6 +827,123 @@ select:disabled {
   display: grid;
   justify-items: start;
   gap: 12px;
+}
+
+.setup-check-panel {
+  display: grid;
+  gap: 0;
+  text-align: left;
+}
+
+.check-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 22px;
+}
+
+.check-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 14px;
+  background: #fbfcfe;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.check-row.pass {
+  background: #f6fef9;
+  border-color: #abefc6;
+}
+
+.check-row.fail {
+  background: #fff1f0;
+  border-color: #fecdca;
+}
+
+.check-status {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: #eef2f6;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+}
+
+.check-status::before {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  background: #98a2b3;
+  border-radius: 999px;
+}
+
+.check-row.pass .check-status {
+  background: #12b76a;
+  border-color: #12b76a;
+}
+
+.check-row.pass .check-status::before {
+  position: absolute;
+  top: 8px;
+  left: 7px;
+  width: 10px;
+  height: 6px;
+  background: transparent;
+  border-bottom: 2px solid #ffffff;
+  border-left: 2px solid #ffffff;
+  border-radius: 0;
+  transform: rotate(-45deg);
+}
+
+.check-row.fail .check-status {
+  background: #d92d20;
+  border-color: #d92d20;
+}
+
+.check-row.fail .check-status::before,
+.check-row.fail .check-status::after {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: 6px;
+  width: 12px;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 999px;
+}
+
+.check-row.fail .check-status::before {
+  transform: rotate(45deg);
+}
+
+.check-row.fail .check-status::after {
+  transform: rotate(-45deg);
+}
+
+.check-row strong,
+.check-row span {
+  display: block;
+}
+
+.check-row > div {
+  min-width: 0;
+}
+
+.check-row strong {
+  color: #182230;
+  font-size: 14px;
+}
+
+.check-row span {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .countdown-action {
@@ -936,5 +1108,23 @@ select:disabled {
 
   .dialog {
     padding: 16px;
+  }
+
+  .message-shell {
+    padding: 18px;
+  }
+
+  .setup-check-panel {
+    padding: 24px 20px;
+  }
+
+  .setup-check-panel .message-actions .button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .check-row {
+    gap: 10px;
+    padding: 12px;
   }
 }

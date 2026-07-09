@@ -146,6 +146,79 @@ describe("SebController route contracts", () => {
     expect(missingResponse.status).toHaveBeenCalledWith(404);
   });
 
+  it("serves a setup-check page and encrypted setup-check config download", () => {
+    const download = Buffer.from("downloaded-seb-config");
+    const sebConfig = {
+      getEncryptionCertificate: vi.fn().mockReturnValue(null),
+      generateSebSetupCheckConfiguration: vi.fn().mockReturnValue(Buffer.from("plain-seb-config")),
+      prepareSebConfigurationDownload: vi.fn().mockReturnValue(download)
+    };
+    const { controller } = controllerWith({ sebConfig });
+    const pageResponse = responseDouble();
+
+    controller.setupCheckPage(requestDouble("/seb/check"), pageResponse);
+
+    expect(pageResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-check"'));
+    expect(pageResponse.send).toHaveBeenCalledWith(expect.stringContaining("/api/seb/check-proof"));
+
+    const configResponse = responseDouble();
+    controller.downloadSetupCheckConfig(configResponse);
+
+    expect(sebConfig.generateSebSetupCheckConfiguration).toHaveBeenCalledWith({
+      startUrl: "https://tool.example.edu/seb/check",
+      quitUrl: "https://tool.example.edu/seb/check/quit"
+    });
+    expect(sebConfig.prepareSebConfigurationDownload).toHaveBeenCalledWith(Buffer.from("plain-seb-config"));
+    expect(configResponse.status).toHaveBeenCalledWith(200);
+    expect(configResponse.type).toHaveBeenCalledWith("application/octet-stream");
+    expect(configResponse.setHeader).toHaveBeenCalledWith(
+      "content-disposition",
+      'attachment; filename="seb-setup-check.seb"'
+    );
+    expect(configResponse.send).toHaveBeenCalledWith(download);
+  });
+
+  it("verifies setup-check Config Key proof for the generated check URL", () => {
+    const { controller } = controllerWith();
+    const configKey = new SebConfigKeyService().computeConfigKey(
+      new SebConfigurationService(configDouble() as any).generateSebSetupCheckConfiguration({
+        startUrl: "https://tool.example.edu/seb/check",
+        quitUrl: "https://tool.example.edu/seb/check/quit"
+      })
+    );
+
+    expect(
+      controller.verifySetupCheck(requestDouble("/api/seb/check-proof"), {
+        configKeyHash: configKey,
+        url: "https://tool.example.edu/seb/check"
+      })
+    ).toEqual({
+      success: true,
+      checks: {
+        configKey: true,
+        expectedUrl: true
+      }
+    });
+
+    expect(() =>
+      controller.verifySetupCheck(requestDouble("/api/seb/check-proof"), {
+        configKeyHash: "bad",
+        url: "https://tool.example.edu/seb/check"
+      })
+    ).toThrowError(/setup check configuration could not be verified/u);
+  });
+
+  it("serves setup-check quit headers", () => {
+    const { controller } = controllerWith();
+    const response = responseDouble();
+
+    controller.quitSetupCheck(requestDouble("/seb/check/quit"), response);
+
+    expect(response.setHeader).toHaveBeenCalledWith("x-seb-quit", "true");
+    expect(response.setHeader).toHaveBeenCalledWith("x-seb-exit", "setup-check");
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-quit"'));
+  });
+
   it("requires a Canvas launch session before serving SEB launch pages", async () => {
     const response = responseDouble();
     const { controller } = controllerWith();
@@ -194,7 +267,17 @@ function controllerWith(options: Record<string, any> = {}) {
 function configDouble() {
   return {
     getApplicationBaseUrl: () => "https://tool.example.edu",
-    getCanvasDomain: () => "https://canvas.example.edu"
+    getCanvasDomain: () => "https://canvas.example.edu",
+    toolUrl: "https://tool.example.edu",
+    value: {
+      seb: {
+        defaultQuitPassword: null,
+        requiredDomains: [],
+        configEncryption: {
+          enabled: false
+        }
+      }
+    }
   };
 }
 

@@ -219,7 +219,7 @@ SEB_CONFIG_ENCRYPTION_ENABLED=true
 SEB_CONFIG_ENCRYPTION_CERT_PATH=.local/seb-certs/seb-config-encryption-local.crt.pem
 ```
 
-Import the generated `.p12` into the macOS login keychain on the test machine before opening encrypted configs in SEB. The generated script prints a `security import` command. The `.p12` contains the private key and should be handled like a secret. See [seb-certificate-runbook.md](seb-certificate-runbook.md) for Jamf rollout, BYOD install, private-key storage, and rotation.
+Import the generated `.p12` into the macOS login keychain on the test machine before opening encrypted configs in SEB. The generated script prints a `security import` command. The `.p12` contains the private key and should be handled like a secret. After deployment, students should run the LTI setup check before any real exam; it opens an encrypted setup-only `.seb` file and gives macOS a low-stakes place to show the one-time Keychain `Always Allow` prompt. See [seb-certificate-runbook.md](seb-certificate-runbook.md) for Jamf rollout, BYOD install, private-key storage, and rotation.
 
 For Cloud Run, store the public certificate PEM in Secret Manager and inject it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`, or mount/provide a file path through `SEB_CONFIG_ENCRYPTION_CERT_PATH`. Distribute the matching `.p12` identity through Jamf or another managed channel. Do not deploy the private key or `.p12` to Cloud Run, and do not serve the `.p12` from this app.
 

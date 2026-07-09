@@ -361,6 +361,8 @@ export class LtiController {
         courseName: launchData.courseName,
         studentName: launchData.fullName,
         launchData,
+        setupCheckConfigUrl: "/seb/check/config.seb",
+        setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
         quizzes: courseId ? await this.enabledStudentQuizzes(courseId, request) : []
       }
     });
