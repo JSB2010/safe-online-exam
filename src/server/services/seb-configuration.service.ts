@@ -329,8 +329,21 @@ function canvasResourceRules(canvasBaseUrl: string, courseId: string, contentId:
   if (assignmentId) {
     const assignment = escapeRegex(assignmentId);
     rules.push(`^https://${host}/courses/${course}/assignments/${assignment}(?:/.*)?(?:[?#].*)?$`);
+    const tenant = canvasTenant(canvas.hostname);
+    if (tenant) {
+      rules.push(`^https://${escapeRegex(tenant)}\\.quiz-(?:lti|api)-[a-z0-9-]+\\.instructure\\.com/(?:.*)$`);
+    }
   }
   return rules;
+}
+
+function canvasTenant(hostname: string): string | null {
+  const normalized = hostname.toLowerCase();
+  if (!normalized.endsWith(".instructure.com")) {
+    return null;
+  }
+  const [tenant] = normalized.split(".");
+  return tenant && tenant !== "canvas" ? tenant : null;
 }
 
 function ssoHelperResourceRules(): string[] {

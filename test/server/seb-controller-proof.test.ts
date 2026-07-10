@@ -106,14 +106,36 @@ describe("SEB access proof validation", () => {
         courseId: "11825",
         configKey: storedConfigKey
       });
-      const hash = configKey.hashForUrl(`${CANVAS_URL}/courses/11825/assignments/991/take`, storedConfigKey);
+      const hash = configKey.hashForUrl(`${CANVAS_URL}/courses/11825/assignments/991/taking/31299`, storedConfigKey);
 
       const result = await controller.createAccessProof(requestWithHeaders(), "11825", contentId, {
         configKeyHash: hash,
-        url: `${CANVAS_URL}/courses/11825/assignments/991/take?user_id=7288`
+        url: `${CANVAS_URL}/courses/11825/assignments/991/taking/31299`
       });
 
       expect(result).toEqual(expect.objectContaining({ success: true, proofToken: expect.any(String) }));
+    });
+  });
+
+  it("rejects a different New Quiz assignment whose ID only shares a prefix", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const contentId = "newquiz:11825:991";
+      const storedConfigKey = newQuizConfigKey(contentId);
+      const { controller } = controllerWithSetting({
+        contentId,
+        courseId: "11825",
+        configKey: storedConfigKey
+      });
+      const wrongUrl = `${CANVAS_URL}/courses/11825/assignments/9910/taking/31299`;
+
+      await expectApiError(
+        controller.createAccessProof(requestWithHeaders(), "11825", contentId, {
+          configKeyHash: configKey.hashForUrl(wrongUrl, storedConfigKey),
+          url: wrongUrl
+        }),
+        403
+      );
     });
   });
 
@@ -245,7 +267,7 @@ function newQuizConfigKey(contentId: string, courseId = "11825", accessCode = "A
   const generated = new SebConfigurationService(new AppConfig()).generateSebConfiguration({
     courseId,
     contentId,
-    startUrl: `${CANVAS_URL}/courses/${courseId}/assignments/${assignmentId}/take`,
+    startUrl: `${CANVAS_URL}/courses/${courseId}/assignments/${assignmentId}`,
     accessCode,
     allowedDomains: [],
     quitPassword: null

@@ -45,7 +45,7 @@ The current automated tests cover:
 - SEB Config Key, compare-and-set Config Key persistence, and cross-instance access-proof token behavior.
 - SEB request detection.
 - Static detector script serving, safe base URL/debug injection, cache headers, and minified production asset selection.
-- Canvas detector jsdom behavior for quiz ID extraction, access-code proof/fill, final submit redirects, debug logging, server trace callbacks, and external exam tools.
+- Canvas detector jsdom behavior for quiz ID extraction, Classic and New Quiz access-code proof/fill, New Quiz attempt isolation, two-step submission confirmation, Canvas results-page detection, timed completion, failed-submission handling, final redirects, debug logging, server trace callbacks, and external exam tools.
 - App shell escaping, forwarded URL handling, CORS allow-listing, and API error bodies.
 - Controller contracts for LTI login/launch routing, Canvas OAuth authorization/callback behavior, quiz/defaults APIs, SEB enforcement/download/proof/exit routes, public health/JWKS routes, and debug trace gating.
 - Firestore adapter behavior through mocked Firestore collection, query, delete, and batch APIs.

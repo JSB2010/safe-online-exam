@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ArrowLeft,
   BookOpen,
   Calculator,
   Check,
@@ -1261,16 +1262,16 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
     <MessagePage
       icon={<Shield />}
       title="Safe Exam Browser Required"
-      message="Opening SEB now. If prompted, allow your browser to open Safe Exam Browser."
+      message="Open this assessment in Safe Exam Browser when you are ready. If prompted, allow your browser to open the app."
       action={
-        <AutoRedirectAction
-          url={launchUrl}
-          label="Open SEB"
-          icon={<ExternalLink size={16} />}
-          seconds={2}
-          statusLabel="Opening automatically"
-          doneLabel="Opening now"
-        />
+        <>
+          <button className="button secondary" type="button" onClick={() => window.history.back()}>
+            <ArrowLeft size={16} /> Back
+          </button>
+          <a className="button primary" href={launchUrl}>
+            <ExternalLink size={16} /> Open SEB
+          </a>
+        </>
       }
     />
   );
@@ -1333,8 +1334,6 @@ function AutoRedirectAction({
     };
   }, [seconds, url]);
 
-  const progress = ((seconds - remaining) / seconds) * 100;
-
   return (
     <div className="countdown-action">
       <div className="countdown-status" aria-live="polite">
@@ -1348,7 +1347,7 @@ function AutoRedirectAction({
           </a>
         </div>
         <div className="countdown-track" aria-hidden="true">
-          <span style={{ width: `${progress}%` }} />
+          <span style={{ animationDuration: `${seconds}s` }} />
         </div>
       </div>
     </div>

@@ -283,8 +283,9 @@ export class SebController {
       );
     }
     const expectedConfigKey = await this.currentConfigKey(courseId, quizId, setting);
+    const validBodyUrl = !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, quizId);
     const valid =
-      this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey) ||
+      (validBodyUrl && this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey)) ||
       this.configKey.validateConfigKeyHash(request, expectedConfigKey);
     if (!valid) {
       console.warn(
@@ -300,7 +301,7 @@ export class SebController {
             "x-safeexambrowser-requesthash"
           ]),
           canvasUrl: !!body?.url && isConfiguredCanvasUrl(this.config, body.url),
-          quizUrl: !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, quizId),
+          quizUrl: validBodyUrl,
           sebUserAgent: /SafeExamBrowser|SEB\/|SEB;/iu.test(request.header("user-agent") || "")
         })
       );
@@ -654,14 +655,17 @@ export class SebController {
     const candidates = [content?.htmlUrl, setting.htmlUrl, content?.canvasLaunchUrl, setting.canvasLaunchUrl];
     for (const candidate of candidates) {
       if (candidate && isConfiguredCanvasUrl(this.config, candidate)) {
-        return canonicalCanvasAssignmentTakeUrl(this.config, courseId, candidate);
+        const canonical = canonicalCanvasAssignmentUrl(this.config, courseId, candidate);
+        if (canonical) {
+          return canonical;
+        }
       }
     }
     const assignmentId = setting.assignmentId || setting.canvasId || parseNewQuizContentId(contentId)?.assignmentId;
     if (!assignmentId) {
       throw new Error("Unable to determine Canvas start URL");
     }
-    return `${this.config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentId}/take`;
+    return `${this.config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentId}`;
   }
 
   private async resolveSebSetting(
@@ -689,16 +693,13 @@ function resolveClassicCanvasUrl(
   return `${config.getCanvasDomain()}/courses/${courseId}/quizzes/${quizId}/take`;
 }
 
-function canonicalCanvasAssignmentTakeUrl(config: AppConfig, courseId: string, value: string): string {
+function canonicalCanvasAssignmentUrl(config: AppConfig, courseId: string, value: string): string | null {
   const url = new URL(value);
-  const assignmentMatch = url.pathname.match(/^\/courses\/([^/]+)\/assignments\/([^/?#]+)(?:\/take)?\/?$/u);
+  const assignmentMatch = url.pathname.match(/^\/courses\/([^/]+)\/assignments\/([^/?#]+)(?:\/.*)?$/u);
   if (!assignmentMatch) {
-    url.hash = "";
-    url.searchParams.delete("user_id");
-    url.searchParams.delete("attempt");
-    return url.toString();
+    return null;
   }
-  return `${config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentMatch[2]}/take`;
+  return `${config.getCanvasDomain()}/courses/${courseId}/assignments/${assignmentMatch[2]}`;
 }
 
 function isConfiguredCanvasUrl(config: AppConfig, value: string): boolean {
@@ -744,12 +745,16 @@ function isExpectedQuizUrl(config: AppConfig, value: string, courseId: string, q
     const path = url.pathname.replace(/\/+$/u, "");
     if (quizId.startsWith("newquiz:")) {
       const parsed = parseNewQuizContentId(quizId);
-      return !!parsed && path.startsWith(`/courses/${courseId}/assignments/${parsed.assignmentId}`);
+      return !!parsed && matchesPathFamily(path, `/courses/${courseId}/assignments/${parsed.assignmentId}`);
     }
-    return path.startsWith(`/courses/${courseId}/quizzes/${quizId}`);
+    return matchesPathFamily(path, `/courses/${courseId}/quizzes/${quizId}`);
   } catch {
     return false;
   }
+}
+
+function matchesPathFamily(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
 }
 
 function isExpectedSetupCheckUrl(config: AppConfig, value: string): boolean {

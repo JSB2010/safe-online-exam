@@ -12,11 +12,14 @@
     const DETECTOR_TRACE_ENDPOINT = `${SEB_DOWNLOAD_BASE_URL}/api/debug/canvas-detector-trace`;
     const DETECTOR_TRACE_BATCH_SIZE = 15;
     const FINAL_SUBMIT_DIRECT_REDIRECT_DELAY_MS = 1000;
+    const LATE_ACCESS_CODE_CHECK_DELAY_MS = 300;
+    const PENDING_REDIRECT_TTL_MS = 10 * 60 * 1000;
     const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
     const SENSITIVE_TRACE_KEY_PATTERN = /(?:access.?code|authorization|config.?key|cookie|encryption.?key|id.?token|password|private.?key|proof(?:.?token)?|secret|token|(?:^|[_-])state(?:$|[_-]))/iu;
     const ACCESS_CODE_PROGRESS_OVERLAY_ID = 'seb-access-code-progress-overlay';
     const ACCESS_CODE_PROGRESS_CARD_ID = 'seb-access-code-progress-card';
     const ACCESS_CODE_PROGRESS_STYLE_ID = 'seb-access-code-progress-style';
+    const SEB_LAUNCH_PROMPT_ID = 'seb-launch-prompt';
     const EXAM_TOOLS_SIDEBAR_ID = 'seb-exam-tools-sidebar';
     const EXAM_TOOLS_STYLE_ID = 'seb-exam-tools-style';
 
@@ -59,6 +62,7 @@
         'sso'
     ];
     const ACCESS_CODE_SUBMIT_SELECTORS = [
+        '[data-automation="sdk-submit-access-code-button"]',
         'button[type="submit"]',
         'input[type="submit"]',
         'button[name*="submit"]',
@@ -67,6 +71,7 @@
         '[data-testid*="submit"]'
     ];
     const ACCESS_CODE_CONTAINER_SELECTOR = '.quiz-access, .access-code-container, .modal-body, .form-container';
+    const NEW_QUIZ_BEGIN_SELECTOR = '[data-automation="sdk-start-resume-button"]';
 
     const COMPLETION_TEXT_INDICATORS = [
         'your quiz has been submitted',
@@ -86,12 +91,17 @@
         'submission confirmed',
         'thank you for your submission'
     ];
+    const COMPLETION_PAGE_SELECTORS = [
+        '[aria-label="Assessment results page"]',
+        '[data-automation="sdk-result-list-title"]'
+    ];
     const POST_SUBMIT_URL_PATTERNS = [
         /\/quizzes\/\d+\/submissions\b/,
         /\/quizzes\/\d+\/results\b/,
         /\/quizzes\/\d+\/history\b/,
         /\/assignments\/\d+\/submissions\b/,
         /\/assignments\/\d+\/results\b/,
+        /\/assignments\/\d+\/taking\/[^/?#]+\/(?:results?|summary|completed?)\b/,
         /\/courses\/\d+\/quizzes(?:[?#]|$)/,
         /\/courses\/\d+\/assignments(?:[?#]|$)/,
         /submitted=true\b/,
@@ -168,6 +178,14 @@
         accessCodeProgressHideTimer: null,
         accessCodeRequestKey: null,
         accessCodeRequestPromise: null,
+        accessCodeAutomationKey: null,
+        accessCodeSubmitClickKey: null,
+        accessCodeChallengeHandledKey: null,
+        dismissedLaunchPromptKey: null,
+        newQuizBeginObserver: null,
+        newQuizBeginObserverTimer: null,
+        newQuizBeginClickKey: null,
+        lateAccessCodeCheckTimer: null,
         pendingRedirectKey: null,
         pendingRedirectMarkedAt: 0,
         finalSubmitDirectRedirectTimer: null,
@@ -185,7 +203,7 @@
         loadDebugStatus();
 
         debugLog('Canvas SEB Detector Script Loaded!', 'success');
-        debugLog('Version: 3.0 hardened detector');
+        debugLog('Version: 3.5 dismissible New Quiz launch prompt');
         debugLog('Debug Mode: ' + (state.debugMode ? 'ENABLED' : 'DISABLED'));
         debugLog('User Agent: ' + navigator.userAgent);
         debugLog('Current URL: ' + debugSafeUrl(window.location.href));
@@ -278,7 +296,7 @@
         const payload = {
             traceId: getDetectorTraceId(),
             source: 'canvas-seb-detector',
-            version: '3.0 hardened detector',
+            version: '3.5 dismissible New Quiz launch prompt',
             pageUrl: debugSafeUrl(window.location.href),
             events
         };
@@ -354,6 +372,8 @@
         const payload = {
             courseId: quizInfo.courseId,
             quizId: quizInfo.quizId,
+            contentType: quizInfo.contentType,
+            attemptId: quizInfo.attemptId || null,
             ts: now
         };
         try {
@@ -385,7 +405,7 @@
                 return null;
             }
             const data = JSON.parse(raw);
-            if (!data || !data.courseId || !data.quizId || !data.ts || Date.now() - data.ts > 10 * 60 * 1000) {
+            if (!data || !data.courseId || !data.quizId || !data.ts || Date.now() - data.ts > PENDING_REDIRECT_TTL_MS) {
                 clearPendingRedirect();
                 return null;
             }
@@ -396,14 +416,35 @@
         }
     }
 
-    function isOnTakePage() {
-        return /\/courses\/\d+\/quizzes\/\d+\/take\b/.test(location.pathname);
+    function isOnTakePage(quizInfo = extractQuizInfo()) {
+        if (!quizInfo) {
+            return false;
+        }
+
+        if (quizInfo.contentType === 'NEW_QUIZ') {
+            return new RegExp(
+                '^/courses/' + escapeRegexValue(quizInfo.courseId) +
+                '/assignments/' + escapeRegexValue(quizInfo.assignmentId) +
+                '/taking/[^/]+/take/?$'
+            ).test(location.pathname);
+        }
+
+        return new RegExp(
+            '^/courses/' + escapeRegexValue(quizInfo.courseId) +
+            '/quizzes/' + escapeRegexValue(quizInfo.quizId) +
+            '/take(?:/|$)'
+        ).test(location.pathname);
     }
 
     function looksLikePostSubmitPage() {
         const url = location.href;
         if (POST_SUBMIT_URL_PATTERNS.some((pattern) => pattern.test(url))) {
             debugLog('Post-submit page detected via URL pattern', 'success');
+            return true;
+        }
+
+        if (hasCompletionPageIndicator()) {
+            debugLog('Post-submit page detected via Canvas results marker', 'success');
             return true;
         }
 
@@ -421,7 +462,14 @@
     function maybeRedirectAfterSubmission() {
         const pending = getPendingRedirect();
         const postSubmit = looksLikePostSubmitPage();
-        const leftTakePage = !isOnTakePage();
+        const currentQuizInfo = extractQuizInfo();
+        if (pending && currentQuizInfo && !pendingMatchesQuizContext(pending, currentQuizInfo)) {
+            detectorTrace('pending-redirect-context-mismatch', { pending, currentQuizInfo }, 'warn');
+            clearPendingRedirect();
+            return;
+        }
+        const pendingQuizInfo = pending ? quizInfoFromPending(pending) : currentQuizInfo;
+        const leftTakePage = pendingQuizInfo ? !isOnTakePage(pendingQuizInfo) : false;
 
         detectorTrace('redirect-check', () => ({
             pending: pending ? { courseId: pending.courseId, quizId: pending.quizId, ageMs: Date.now() - pending.ts } : null,
@@ -431,7 +479,7 @@
         }));
 
         if (!pending) {
-            if (postSubmit && isSafeBrowser()) {
+            if (postSubmit && isSafeBrowser() && !isAccessCodeChallengePage()) {
                 const quizInfo = extractQuizInfo();
                 if (quizInfo) {
                     debugLog('Post-submit page detected in SEB without pending flag; redirecting to exit page', 'warn');
@@ -442,7 +490,7 @@
         }
 
         debugLog('Checking for post-submission redirect...');
-        debugLog('On take page: ' + isOnTakePage() + ', Looks like post-submit: ' + postSubmit);
+        debugLog('On take page: ' + isOnTakePage(pendingQuizInfo) + ', Looks like post-submit: ' + postSubmit);
 
         if (!postSubmit && !leftTakePage) {
             debugLog('Post-submission conditions not yet met, waiting...');
@@ -465,7 +513,7 @@
     }
 
     function scheduleFinalSubmitDirectRedirect(quizInfo, source) {
-        if (!isSafeBrowser() || !isVerifiedSubmitEventSource(source)) {
+        if (quizInfo.contentType === 'NEW_QUIZ' || !isSafeBrowser() || !isVerifiedSubmitEventSource(source)) {
             return;
         }
 
@@ -621,6 +669,7 @@
         const retryButton = document.getElementById('seb-access-code-retry-button');
         if (retryButton) {
             retryButton.addEventListener('click', () => {
+                resetAccessCodeAutomation();
                 hideAccessCodeProgressOverlay();
                 autoFillAccessCode();
             });
@@ -705,11 +754,12 @@
             };
         }
 
-        const assignmentMatch = url.match(/\/courses\/(\d+)\/assignments\/(\d+)/u);
+        const assignmentMatch = url.match(/\/courses\/(\d+)\/assignments\/(\d+)(?:\/taking\/([^/?#]+))?/u);
         if (assignmentMatch) {
             return {
                 courseId: assignmentMatch[1],
                 assignmentId: assignmentMatch[2],
+                attemptId: assignmentMatch[3] || null,
                 quizId: `newquiz:${assignmentMatch[1]}:${assignmentMatch[2]}`,
                 contentType: 'NEW_QUIZ'
             };
@@ -749,16 +799,83 @@
 
     function findAccessCodeField() {
         for (const selector of ACCESS_CODE_FIELD_SELECTORS) {
-            const field = document.querySelector(selector);
-            debugLog('Trying selector: ' + selector + ' - Found: ' + (field ? 'YES' : 'NO'));
+            const fields = document.querySelectorAll(selector);
+            debugLog('Trying selector: ' + selector + ' - Found: ' + (fields.length > 0 ? 'YES' : 'NO'));
 
-            if (field && isAccessCodeField(field)) {
-                debugLog('Found valid access code field with selector: ' + selector, 'success');
-                return field;
+            for (const field of fields) {
+                if (isAccessCodeField(field)) {
+                    debugLog('Found valid access code field with selector: ' + selector, 'success');
+                    return field;
+                }
             }
         }
 
+        const contextualField = findContextualAccessCodeField(document);
+        if (contextualField) {
+            debugLog('Found Canvas access code field from challenge context', 'success');
+            detectorTrace('contextual-access-code-field-detected', summarizeTraceInput(contextualField), 'success');
+            return contextualField;
+        }
+
         return null;
+    }
+
+    function findContextualAccessCodeField(root) {
+        if (!root || !hasCanvasAccessCodePrompt()) {
+            return null;
+        }
+
+        const candidates = Array.from(root.querySelectorAll('input[type="password"], input[type="text"]'))
+            .filter((field) => !field.disabled && !isDetectorOwnedElement(field) && isAccessCodeField(field));
+        if (!candidates.length) {
+            return null;
+        }
+
+        const passwordCandidates = candidates.filter((field) => field.type === 'password');
+        if (passwordCandidates.length === 1) {
+            return passwordCandidates[0];
+        }
+        if (candidates.length === 1) {
+            return candidates[0];
+        }
+
+        const contextMatches = candidates.filter((field) => {
+            const container = field.closest('form, [role="dialog"], section, article, main');
+            const summary = normalizeElementText(container);
+            return ACCESS_CODE_TEXT_INDICATORS.some((indicator) => summary.includes(indicator));
+        });
+        const contextualPasswords = contextMatches.filter((field) => field.type === 'password');
+        if (contextualPasswords.length === 1) {
+            return contextualPasswords[0];
+        }
+        return contextMatches.length === 1 ? contextMatches[0] : null;
+    }
+
+    function hasCanvasAccessCodePrompt() {
+        if (!document.body) {
+            return false;
+        }
+
+        const snapshot = document.body.cloneNode(true);
+        [SEB_LAUNCH_PROMPT_ID, ACCESS_CODE_PROGRESS_OVERLAY_ID, EXAM_TOOLS_SIDEBAR_ID].forEach((id) => {
+            const detectorElement = snapshot.querySelector('#' + id);
+            if (detectorElement) {
+                detectorElement.remove();
+            }
+        });
+        const text = (snapshot.textContent || '').toLowerCase();
+        return ACCESS_CODE_TEXT_INDICATORS.some((indicator) => text.includes(indicator));
+    }
+
+    function isDetectorOwnedElement(element) {
+        if (!element || typeof element.closest !== 'function') {
+            return false;
+        }
+        return Boolean(element.closest(
+            '#' + SEB_LAUNCH_PROMPT_ID +
+            ', #' + ACCESS_CODE_PROGRESS_OVERLAY_ID +
+            ', #' + EXAM_TOOLS_SIDEBAR_ID
+        ));
     }
 
     function isAccessCodeChallengePage() {
@@ -787,23 +904,34 @@
             return false;
         }
 
-        if (looksLikePostSubmitPage()) {
-            return false;
-        }
-
         return isAccessCodeChallengePage();
     }
 
     function redirectToSebDownload(courseId, quizId) {
+        if (document.getElementById(SEB_LAUNCH_PROMPT_ID)) {
+            return;
+        }
+        const quizInfo = extractQuizInfo();
+        const promptKey = quizInfo ? quizKey(quizInfo) : courseId + ':' + quizId;
+        const isNewQuiz = quizInfo
+            ? quizInfo.contentType === 'NEW_QUIZ'
+            : typeof quizId === 'string' && quizId.startsWith('newquiz:');
+        if (isNewQuiz && state.dismissedLaunchPromptKey === promptKey) {
+            debugLog('New Quiz SEB launch prompt was dismissed for this attempt');
+            return;
+        }
         const currentUrl = encodeURIComponent(window.location.href);
         const appBaseUrl = SEB_DOWNLOAD_BASE_URL.replace(/\/+$/, '');
         const configFileUrl = `${appBaseUrl}/seb/config/${encodeURIComponent(courseId)}/${encodeURIComponent(quizId)}.seb?canvas_url=${currentUrl}`;
         const sebLaunchUrl = configFileUrl
             .replace(/^https:\/\//i, 'sebs://')
             .replace(/^http:\/\//i, 'seb://');
-        const countdownSeconds = 2;
 
         const message = document.createElement('div');
+        message.id = SEB_LAUNCH_PROMPT_ID;
+        message.setAttribute('role', 'dialog');
+        message.setAttribute('aria-modal', 'true');
+        message.setAttribute('aria-labelledby', 'seb-launch-dialog-title');
         message.style.cssText = `
             position: fixed;
             top: 0;
@@ -830,58 +958,64 @@
                 <p style="margin: 0 0 6px; color: #0b63ce; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0;">
                     Secure assessment
                 </p>
-                <h2 style="color: #182230; margin: 0 0 12px; font-size: 24px; line-height: 1.15; font-weight: 800;">
+                <h2 id="seb-launch-dialog-title" style="color: #182230; margin: 0 0 12px; font-size: 24px; line-height: 1.15; font-weight: 800;">
                     Safe Exam Browser Required
                 </h2>
-                <p style="margin: 0 0 18px; font-size: 15px; line-height: 1.45; color: #667085;">
-                    Opening SEB now. If prompted, allow your browser to open Safe Exam Browser.
+                <p style="margin: 0; font-size: 15px; line-height: 1.45; color: #667085;">
+                    ${isNewQuiz
+                        ? 'Open this assessment in Safe Exam Browser to begin a new attempt, or view this page to review previous attempts.'
+                        : 'Open this assessment in Safe Exam Browser when you are ready. If prompted, allow your browser to open the app.'}
                 </p>
                 </div>
-                <div style="display: grid; gap: 12px; padding: 14px 32px 18px; background: #f8fafc; border-top: 1px solid #dbe2ea;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
-                        <div style="min-width: 180px;">
-                            <strong style="display: block; color: #182230; font-size: 13px;">Opening automatically</strong>
-                            <span id="seb-launch-countdown-text" style="display: block; margin-top: 2px; color: #667085; font-size: 12px; font-weight: 700;">${countdownSeconds}s remaining</span>
-                        </div>
-                        <a href="${escapeHtml(sebLaunchUrl)}" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">
+                <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 14px 32px 18px; background: #f8fafc; border-top: 1px solid #dbe2ea; flex-wrap: wrap;">
+                        ${isNewQuiz
+                            ? '<button id="seb-launch-view-page-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">View quiz page</button>'
+                            : '<button id="seb-launch-back-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">Back</button>'}
+                        <a id="seb-launch-open-link" href="${escapeHtml(sebLaunchUrl)}" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">
                         Open SEB
                         </a>
-                    </div>
-                    <div style="height: 7px; overflow: hidden; background: #e7ecf2; border-radius: 999px;">
-                        <span id="seb-launch-countdown-bar" style="width: 0%; height: 100%; display: block; background: #0b63ce; border-radius: inherit; transition: width 220ms ease;"></span>
-                    </div>
                 </div>
             </div>
         `;
 
+        const previousFocus = document.activeElement;
         document.body.appendChild(message);
-
-        let remaining = countdownSeconds;
-        const countdownText = document.getElementById('seb-launch-countdown-text');
-        const countdownBar = document.getElementById('seb-launch-countdown-bar');
-        const updateCountdown = () => {
-            const elapsed = countdownSeconds - remaining;
-            if (countdownBar) {
-                countdownBar.style.width = `${Math.min(100, (elapsed / countdownSeconds) * 100)}%`;
+        const dismissPrompt = (rememberForAttempt = false) => {
+            if (rememberForAttempt) {
+                state.dismissedLaunchPromptKey = promptKey;
             }
-            if (countdownText) {
-                countdownText.textContent = remaining > 0 ? `${remaining}s remaining` : 'Opening now';
+            message.remove();
+            if (previousFocus && typeof previousFocus.focus === 'function') {
+                previousFocus.focus();
             }
         };
-        updateCountdown();
-        const interval = setInterval(() => {
-            remaining = Math.max(0, remaining - 1);
-            updateCountdown();
-            if (remaining === 0) {
-                clearInterval(interval);
+        const backButton = document.getElementById('seb-launch-back-button');
+        const viewPageButton = document.getElementById('seb-launch-view-page-button');
+        const openLink = document.getElementById('seb-launch-open-link');
+        if (backButton) {
+            backButton.addEventListener('click', () => {
+                if (window.history && typeof window.history.back === 'function') {
+                    window.history.back();
+                    return;
+                }
+                dismissPrompt();
+            });
+        }
+        if (viewPageButton) {
+            viewPageButton.addEventListener('click', () => {
+                debugLog('New Quiz launch prompt dismissed to view the quiz page');
+                detectorTrace('new-quiz-launch-prompt-dismissed', { quizInfo }, 'success');
+                dismissPrompt(true);
+            });
+        }
+        message.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                dismissPrompt(isNewQuiz);
             }
-        }, 1000);
-        setTimeout(() => {
-            if (countdownBar) {
-                countdownBar.style.width = '100%';
-            }
-            window.location.assign(sebLaunchUrl);
-        }, countdownSeconds * 1000);
+        });
+        if (openLink) {
+            openLink.focus();
+        }
     }
 
     async function setupExamToolsSidebar(quizInfo) {
@@ -1273,7 +1407,7 @@
             return;
         }
 
-        if (looksLikePostSubmitPage()) {
+        if (looksLikePostSubmitPage() && !isAccessCodeChallengePage()) {
             debugLog('Post-submit page detected, skipping auto-fill');
             return;
         }
@@ -1287,13 +1421,20 @@
 
         const key = quizKey(quizInfo);
         const shouldShowAccessCodeErrors = checkForAccessCodeRequirement() || isAccessCodeChallengePage();
-        if (shouldShowAccessCodeErrors) {
-            showAccessCodeProgressOverlay();
+
+        if (state.accessCodeAutomationKey === key) {
+            debugLog('Access-code automation already active for this quiz');
+            return;
         }
 
         if (state.accessCodeRequestKey === key && state.accessCodeRequestPromise) {
             debugLog('Access-code request already in flight for this quiz');
             return;
+        }
+
+        state.accessCodeAutomationKey = key;
+        if (shouldShowAccessCodeErrors) {
+            showAccessCodeProgressOverlay();
         }
 
         state.accessCodeRequestKey = key;
@@ -1310,6 +1451,7 @@
             const proofResult = await requestAccessProofToken(quizInfo.courseId, quizInfo.quizId);
             if (!proofResult.proofToken) {
                 debugLog('No SEB access proof available', 'warn');
+                releaseAccessCodeAutomation(quizInfo);
                 showAutoFillError(
                     proofResult.errorMessage ||
                         'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.',
@@ -1325,6 +1467,7 @@
                 attemptAutoFillWithRetry(accessCode, 0, shouldShowAccessCodeErrors);
             } else {
                 debugLog('No access code available for auto-fill', 'warn');
+                releaseAccessCodeAutomation(quizInfo);
                 showAutoFillError(
                     'The quiz access code could not be retrieved. Reload the quiz in SEB, or ask your instructor for help.',
                     shouldShowAccessCodeErrors
@@ -1332,6 +1475,7 @@
             }
         } catch (error) {
             debugLog('Error fetching access code: ' + errorMessage(error), 'warn');
+            releaseAccessCodeAutomation(quizInfo);
             showAutoFillError(
                 'The quiz access code could not be retrieved. Check your connection, reload the quiz in SEB, or ask your instructor for help.',
                 shouldShowAccessCodeErrors
@@ -1548,19 +1692,36 @@
         }
 
         showAccessCodeProgressOverlay();
-        field.value = accessCode;
+        setNativeInputValue(field, accessCode);
         debugLog('Access code field value set');
         field.dispatchEvent(new Event('input', { bubbles: true }));
         field.dispatchEvent(new Event('change', { bubbles: true }));
         field.dispatchEvent(new Event('blur', { bubbles: true }));
 
         debugLog('Access code auto-filled successfully!', 'success');
-        if (autoSubmitAccessCode(field)) {
+        const quizInfo = extractQuizInfo();
+        if (autoSubmitAccessCode(field, quizInfo)) {
             hideAccessCodeProgressOverlay(8000);
         } else {
             hideAccessCodeProgressOverlay(700);
         }
         return true;
+    }
+
+    function setNativeInputValue(field, value) {
+        const ownSetter = Object.getOwnPropertyDescriptor(field, 'value')?.set;
+        const prototype = Object.getPrototypeOf(field);
+        const prototypeSetter = prototype ? Object.getOwnPropertyDescriptor(prototype, 'value')?.set : null;
+
+        if (prototypeSetter && ownSetter !== prototypeSetter) {
+            prototypeSetter.call(field, value);
+            return;
+        }
+        if (ownSetter) {
+            ownSetter.call(field, value);
+            return;
+        }
+        field.value = value;
     }
 
     function isAccessCodeField(field) {
@@ -1591,17 +1752,13 @@
         return true;
     }
 
-    function autoSubmitAccessCode(accessCodeField) {
+    function autoSubmitAccessCode(accessCodeField, quizInfo) {
         const form = accessCodeField.closest('form');
         if (form) {
             for (const selector of ACCESS_CODE_SUBMIT_SELECTORS) {
                 const submitButton = form.querySelector(selector);
                 if (submitButton) {
-                    debugLog('Auto-submitting access code form', 'success');
-                    setTimeout(() => {
-                        renderAccessCodeOverlayContent('success');
-                        submitButton.click();
-                    }, 500);
+                    scheduleAccessCodeSubmit(accessCodeField, submitButton, quizInfo, 'form');
                     return true;
                 }
             }
@@ -1611,17 +1768,172 @@
         for (const selector of ACCESS_CODE_SUBMIT_SELECTORS) {
             const submitButton = container.querySelector(selector);
             if (submitButton) {
-                debugLog('Auto-submitting access code using nearby button', 'success');
-                setTimeout(() => {
-                    renderAccessCodeOverlayContent('success');
-                    submitButton.click();
-                }, 500);
+                scheduleAccessCodeSubmit(accessCodeField, submitButton, quizInfo, 'nearby-control');
                 return true;
             }
         }
 
         debugLog('No submit button found for auto-submission');
         return false;
+    }
+
+    function scheduleAccessCodeSubmit(accessCodeField, initialSubmitButton, quizInfo, source) {
+        const key = quizInfo ? quizKey(quizInfo) : state.currentQuizKey;
+        debugLog('Access-code Submit control found; waiting until Canvas enables it', 'success');
+
+        if (quizInfo && quizInfo.contentType === 'NEW_QUIZ') {
+            setupNewQuizBeginObserver(quizInfo);
+        }
+
+        const trySubmit = (attempt) => {
+            if (key && state.currentQuizKey && state.currentQuizKey !== key) {
+                return;
+            }
+            if (key && state.newQuizBeginClickKey === key) {
+                return;
+            }
+
+            const currentSubmitButton = findAccessCodeSubmitButton(accessCodeField) || initialSubmitButton;
+            const buttonReady = currentSubmitButton
+                && currentSubmitButton.isConnected
+                && !currentSubmitButton.disabled
+                && currentSubmitButton.getAttribute('aria-disabled') !== 'true'
+                && isVisibleElement(currentSubmitButton);
+
+            if (!buttonReady) {
+                if (attempt < 40) {
+                    setTimeout(() => trySubmit(attempt + 1), 250);
+                    return;
+                }
+
+                debugLog('Canvas access-code Submit control did not become available', 'warn');
+                detectorTrace('access-code-submit-timeout', () => ({
+                    source,
+                    quizInfo,
+                    submitButton: summarizeTraceElement(currentSubmitButton)
+                }), 'warn');
+                releaseAccessCodeAutomation(quizInfo);
+                showAccessCodeErrorOverlay('The Canvas Submit button could not be activated. Try again, or reload the quiz in Safe Exam Browser.');
+                return;
+            }
+
+            if (key && state.accessCodeSubmitClickKey === key) {
+                return;
+            }
+            state.accessCodeSubmitClickKey = key;
+            debugLog('Clicking the Canvas access-code Submit control', 'success');
+            detectorTrace('access-code-submit-clicked', () => ({
+                source,
+                quizInfo,
+                submitButton: summarizeTraceElement(currentSubmitButton)
+            }), 'success');
+            renderAccessCodeOverlayContent('success');
+            currentSubmitButton.click();
+        };
+
+        setTimeout(() => trySubmit(0), 500);
+    }
+
+    function findAccessCodeSubmitButton(accessCodeField) {
+        const form = accessCodeField && accessCodeField.closest('form');
+        if (form) {
+            for (const selector of ACCESS_CODE_SUBMIT_SELECTORS) {
+                const submitButton = form.querySelector(selector);
+                if (submitButton) {
+                    return submitButton;
+                }
+            }
+        }
+
+        const container = accessCodeField && accessCodeField.closest(ACCESS_CODE_CONTAINER_SELECTOR) || document;
+        for (const selector of ACCESS_CODE_SUBMIT_SELECTORS) {
+            const submitButton = container.querySelector(selector);
+            if (submitButton) {
+                return submitButton;
+            }
+        }
+        return null;
+    }
+
+    function setupNewQuizBeginObserver(quizInfo) {
+        disconnectNewQuizBeginObserver();
+        if (clickNewQuizBeginIfReady(quizInfo)) {
+            return;
+        }
+
+        const observer = new MutationObserver(() => {
+            if (clickNewQuizBeginIfReady(quizInfo)) {
+                disconnectNewQuizBeginObserver();
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        state.newQuizBeginObserver = observer;
+        state.newQuizBeginObserverTimer = setTimeout(() => {
+            if (state.newQuizBeginObserver !== observer) {
+                return;
+            }
+
+            disconnectNewQuizBeginObserver();
+            if (state.newQuizBeginClickKey !== quizKey(quizInfo)) {
+                debugLog('Canvas did not show the New Quiz Begin control after access-code submission', 'warn');
+                detectorTrace('new-quiz-begin-timeout', { quizInfo }, 'warn');
+                releaseAccessCodeAutomation(quizInfo);
+                showAccessCodeErrorOverlay('The access code was entered, but Canvas did not show the Begin button. Try again, or reload the quiz in Safe Exam Browser.');
+            }
+        }, 30000);
+    }
+
+    function clickNewQuizBeginIfReady(quizInfo) {
+        const key = quizKey(quizInfo);
+        if (state.newQuizBeginClickKey === key) {
+            return true;
+        }
+
+        const beginButton = document.querySelector(NEW_QUIZ_BEGIN_SELECTOR);
+        if (!beginButton
+            || beginButton.disabled
+            || beginButton.getAttribute('aria-disabled') === 'true'
+            || !isVisibleElement(beginButton)) {
+            return false;
+        }
+
+        state.newQuizBeginClickKey = key;
+        debugLog('Clicking the Canvas New Quiz Begin control', 'success');
+        detectorTrace('new-quiz-begin-clicked', () => ({
+            quizInfo,
+            beginButton: summarizeTraceElement(beginButton)
+        }), 'success');
+        renderAccessCodeOverlayContent('success');
+        beginButton.click();
+        hideAccessCodeProgressOverlay(700);
+        return true;
+    }
+
+    function disconnectNewQuizBeginObserver() {
+        if (state.newQuizBeginObserver) {
+            state.newQuizBeginObserver.disconnect();
+            state.newQuizBeginObserver = null;
+        }
+        if (state.newQuizBeginObserverTimer) {
+            clearTimeout(state.newQuizBeginObserverTimer);
+            state.newQuizBeginObserverTimer = null;
+        }
+    }
+
+    function releaseAccessCodeAutomation(quizInfo) {
+        const key = quizInfo ? quizKey(quizInfo) : state.currentQuizKey;
+        if (!key || state.accessCodeAutomationKey === key) {
+            state.accessCodeAutomationKey = null;
+            state.accessCodeSubmitClickKey = null;
+            disconnectNewQuizBeginObserver();
+        }
+    }
+
+    function resetAccessCodeAutomation() {
+        state.accessCodeAutomationKey = null;
+        state.accessCodeSubmitClickKey = null;
+        state.newQuizBeginClickKey = null;
+        disconnectNewQuizBeginObserver();
     }
 
     function setupQuizCompletionHandler() {
@@ -1796,10 +2108,12 @@
     }
 
     function markPendingRedirectForFinalSubmit(submitButton, form, quizInfo, source) {
+        const newQuizConfirmationSubmit = isNewQuizConfirmationSubmit(submitButton, quizInfo);
         const likelyFinalSubmit = isLikelyFinalQuizSubmit(submitButton, form);
         const likelyQuizSubmissionForm = isLikelyQuizSubmissionForm(form);
         detectorTrace('final-submit-evaluation', () => ({
             source,
+            newQuizConfirmationSubmit,
             likelyFinalSubmit,
             likelyQuizSubmissionForm,
             form: summarizeTraceForm(form),
@@ -1807,7 +2121,12 @@
             quizInfo
         }));
 
-        if (!likelyFinalSubmit && !likelyQuizSubmissionForm) {
+        if (quizInfo.contentType === 'NEW_QUIZ' && !newQuizConfirmationSubmit) {
+            debugLog('Ignoring New Quiz submit control outside the final confirmation dialog');
+            return false;
+        }
+
+        if (quizInfo.contentType !== 'NEW_QUIZ' && !likelyFinalSubmit && !likelyQuizSubmissionForm) {
             return false;
         }
 
@@ -1819,9 +2138,45 @@
         return true;
     }
 
+    function isNewQuizConfirmationSubmit(submitButton, quizInfo) {
+        if (!submitButton || quizInfo.contentType !== 'NEW_QUIZ' || typeof submitButton.closest !== 'function') {
+            return false;
+        }
+
+        const buttonSummary = normalizeElementText(submitButton);
+        const automation = submitButton.getAttribute('data-automation') || '';
+        const stableConfirmControl = automation === 'sdk-confirmation-modal-confirm';
+        if ((!stableConfirmControl && !/(?:^|\s)submit(?:\s|$)/u.test(buttonSummary)) || NON_FINAL_SUBMIT_SIGNALS.some((signal) => buttonSummary.includes(signal))) {
+            return false;
+        }
+
+        const dialog = submitButton.closest('[data-automation="sdk-confirmation-modal"], [role="dialog"], [aria-modal="true"], dialog');
+        if (!dialog || !isVisibleElement(dialog)) {
+            return false;
+        }
+
+        const dialogSummary = normalizeElementText(dialog);
+        return dialogSummary.includes('confirm submission')
+            || dialogSummary.includes('are you ready to submit')
+            || dialogSummary.includes('upon submission you will not be able to change your answers');
+    }
+
+    function isVisibleElement(element) {
+        if (!element || element.hidden || element.getAttribute('aria-hidden') === 'true') {
+            return false;
+        }
+        const style = element.style || {};
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    }
+
     function isAccessCodeForm(form) {
         if (!form) {
             return false;
+        }
+
+        const contextualField = findContextualAccessCodeField(form);
+        if (contextualField) {
+            return true;
         }
 
         const fields = form.querySelectorAll(ACCESS_CODE_FIELD_SELECTORS.join(','));
@@ -1910,6 +2265,7 @@
             className,
             typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') : null,
             typeof element.getAttribute === 'function' ? element.getAttribute('data-testid') : null,
+            typeof element.getAttribute === 'function' ? element.getAttribute('data-automation') : null,
             typeof element.getAttribute === 'function' ? element.getAttribute('title') : null
         ];
 
@@ -1945,6 +2301,7 @@
             readyState: document.readyState,
             bodyTextSample: traceSafeString(pageText().slice(0, 300)),
             isCanvasQuizPage: isCanvasQuizPage(),
+            isOnTakePage: isOnTakePage(quizInfo),
             looksLikePostSubmitPage: looksLikePostSubmitPage(),
             accessCodeRequirement: checkForAccessCodeRequirement(),
             accessCodeChallenge: isAccessCodeChallengePage(),
@@ -2006,6 +2363,7 @@
             name: traceSafeString(element.name || ''),
             className: traceSafeString(typeof element.className === 'string' ? element.className : ''),
             role: traceSafeString(typeof element.getAttribute === 'function' ? element.getAttribute('role') || '' : ''),
+            automation: traceSafeString(typeof element.getAttribute === 'function' ? element.getAttribute('data-automation') || '' : ''),
             text: traceSafeString(normalizeElementText(element)),
             disabled: element.disabled === true
         };
@@ -2014,6 +2372,12 @@
     function watchForCompletionIndicators(quizInfo) {
         debugLog('Setting up completion indicator watcher');
         const observer = new MutationObserver((mutations) => {
+            if (hasCompletionPageIndicator()) {
+                debugLog('Canvas assessment results page detected', 'success');
+                markPendingRedirect(quizInfo);
+                setTimeout(maybeRedirectAfterSubmission, 300);
+                return;
+            }
             for (const mutation of mutations) {
                 for (const node of mutation.addedNodes) {
                     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.TEXT_NODE) {
@@ -2044,6 +2408,10 @@
                 state.completionObserver = null;
             }
         }, 600000);
+    }
+
+    function hasCompletionPageIndicator() {
+        return COMPLETION_PAGE_SELECTORS.some((selector) => document.querySelector(selector));
     }
 
     function monitorUrlForCompletion(quizInfo) {
@@ -2105,6 +2473,10 @@
         const sebDetected = isSafeBrowser();
         const debugOverrideAllowed = isNonSebDebugBehaviorAllowed();
 
+        if (hasAccessCodeRequirement || hasAccessCodeChallenge) {
+            state.accessCodeChallengeHandledKey = quizKey(quizInfo);
+        }
+
         if (sebDetected) {
             debugLog('SEB DETECTED! Proceeding with auto-fill and completion handler', 'success');
 
@@ -2152,10 +2524,55 @@
             return;
         }
 
+        resetAccessCodeAutomation();
+        state.dismissedLaunchPromptKey = null;
         state.currentQuizKey = key;
         disconnectAccessCodeObserver();
         state.accessCodeRequestKey = null;
         state.accessCodeRequestPromise = null;
+        state.accessCodeChallengeHandledKey = null;
+    }
+
+    function scheduleLateAccessCodeCheck() {
+        if (state.lateAccessCodeCheckTimer) {
+            return;
+        }
+
+        state.lateAccessCodeCheckTimer = setTimeout(() => {
+            state.lateAccessCodeCheckTimer = null;
+            handleLateAccessCodeChallenge();
+        }, LATE_ACCESS_CODE_CHECK_DELAY_MS);
+    }
+
+    function handleLateAccessCodeChallenge() {
+        if (!isCanvasQuizPage() || !checkForAccessCodeRequirement()) {
+            return;
+        }
+
+        const quizInfo = extractQuizInfo();
+        if (!quizInfo) {
+            return;
+        }
+
+        trackQuizContext(quizInfo);
+        const key = quizKey(quizInfo);
+        if (state.accessCodeChallengeHandledKey === key) {
+            return;
+        }
+
+        state.accessCodeChallengeHandledKey = key;
+        debugLog('Late-rendered access code requirement detected', 'success');
+        detectorTrace('late-access-code-requirement-detected', { quizInfo }, 'success');
+
+        if (!isSafeBrowser()) {
+            debugLog('Redirecting late-rendered access code requirement to SEB download');
+            redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+            return;
+        }
+
+        debugLog('Late-rendered access code challenge detected in SEB; starting auto-fill');
+        removeExamToolsSidebar();
+        autoFillAccessCode();
     }
 
     function setupAccessCodeObserver(accessCode, shouldShowMissingFieldError) {
@@ -2173,11 +2590,12 @@
                         continue;
                     }
 
-                    const selectorList = ACCESS_CODE_FIELD_SELECTORS.join(', ');
+                    const selectorList = ACCESS_CODE_FIELD_SELECTORS
+                        .concat(['input[type="password"]', 'input[type="text"]'])
+                        .join(', ');
                     const nodeMatches = typeof node.matches === 'function' && node.matches(selectorList);
-                    const accessCodeField = nodeMatches
-                        ? node
-                        : (node.querySelector ? node.querySelector(selectorList) : null);
+                    const hasCandidate = nodeMatches || (node.querySelector ? node.querySelector(selectorList) : null);
+                    const accessCodeField = hasCandidate ? findAccessCodeField() : null;
 
                     if (accessCodeField && isAccessCodeField(accessCodeField)) {
                         debugLog('Access code field detected via mutation observer', 'success');
@@ -2200,8 +2618,10 @@
                 disconnectAccessCodeObserver();
             }
             if (!completed && (shouldShowMissingFieldError || shouldAttemptAccessCodeAutofill())) {
+                releaseAccessCodeAutomation();
                 showAccessCodeErrorOverlay('The Canvas access-code field could not be found. Reload the quiz in SEB, or ask your instructor for help.');
             } else {
+                releaseAccessCodeAutomation();
                 hideAccessCodeProgressOverlay();
             }
             debugLog('Mutation observer stopped after timeout');
@@ -2285,18 +2705,18 @@
         let lastUrl = location.href;
         state.spaObserver = new MutationObserver(() => {
             const url = location.href;
-            if (url === lastUrl) {
-                return;
-            }
+            scheduleLateAccessCodeCheck();
 
-            lastUrl = url;
-            if (state.spaRerunTimer) {
-                clearTimeout(state.spaRerunTimer);
+            if (url !== lastUrl) {
+                lastUrl = url;
+                if (state.spaRerunTimer) {
+                    clearTimeout(state.spaRerunTimer);
+                }
+                state.spaRerunTimer = setTimeout(() => {
+                    enforceSebRequirement();
+                    setTimeout(maybeRedirectAfterSubmission, 200);
+                }, 1000);
             }
-            state.spaRerunTimer = setTimeout(() => {
-                enforceSebRequirement();
-                setTimeout(maybeRedirectAfterSubmission, 200);
-            }, 1000);
         });
         state.spaObserver.observe(document, { subtree: true, childList: true });
     }
@@ -2306,7 +2726,36 @@
     }
 
     function quizKey(quizInfo) {
-        return quizInfo.courseId + ':' + quizInfo.quizId;
+        return quizInfo.courseId + ':' + quizInfo.quizId + ':' + (quizInfo.attemptId || 'no-attempt');
+    }
+
+    function pendingMatchesQuizContext(pending, quizInfo) {
+        if (pending.courseId !== quizInfo.courseId || pending.quizId !== quizInfo.quizId) {
+            return false;
+        }
+        return !pending.attemptId || !quizInfo.attemptId || pending.attemptId === quizInfo.attemptId;
+    }
+
+    function quizInfoFromPending(pending) {
+        const parsedNewQuiz = /^newquiz:([^:]+):([^:]+)$/u.exec(pending.quizId);
+        if (pending.contentType === 'NEW_QUIZ' || parsedNewQuiz) {
+            return {
+                courseId: pending.courseId,
+                assignmentId: parsedNewQuiz ? parsedNewQuiz[2] : null,
+                attemptId: pending.attemptId || null,
+                quizId: pending.quizId,
+                contentType: 'NEW_QUIZ'
+            };
+        }
+        return {
+            courseId: pending.courseId,
+            quizId: pending.quizId,
+            contentType: 'CLASSIC_QUIZ'
+        };
+    }
+
+    function escapeRegexValue(value) {
+        return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     function errorMessage(error) {

@@ -261,7 +261,10 @@ After installing the LTI app and applying the theme:
 7. Open the quiz-taking page in a normal browser and confirm the browser console loads `${TOOL_URL}/js/canvas-seb-detector.js`.
 8. Download the generated `.seb` file from the app.
 9. Open the quiz through SEB and confirm the access-code field is filled only after SEB launches with the generated configuration.
-10. Confirm the exit route works after quiz completion.
+10. For a New Quiz, confirm Canvas moves from `/assignments/:assignmentId/taking/:attemptId` to `/taking/:attemptId/take` after access-code validation.
+11. Select the first New Quiz Submit control and confirm SEB stays on Canvas while the confirmation dialog is open.
+12. Cancel once and confirm the quiz remains open, then submit again and confirm the SEB exit page opens only after Canvas renders the assessment results.
+13. Confirm the exit route closes SEB.
 
 Useful service checks:
 

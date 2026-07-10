@@ -20,6 +20,17 @@ test("automatically navigates the SEB exit page to the quit endpoint without bro
   expect(browserErrors).toEqual([]);
 });
 
+test("preserves a New Quiz content ID through the SEB exit and quit flow", async ({ page }) => {
+  await page.goto("/seb/exit/course-1/newquiz:course-1:assignment-9");
+
+  await expect(page).toHaveURL(/\/seb\/exit\/quit\/course-1\/newquiz:course-1:assignment-9$/u);
+  await expect(page.getByRole("heading", { name: "Safe Exam Browser Closing" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Quit again" })).toHaveAttribute(
+    "href",
+    /\/seb\/exit\/quit\/course-1\/newquiz:course-1:assignment-9$/
+  );
+});
+
 test("serves the detector script from both compatibility paths", async ({ request }) => {
   for (const path of ["/js/canvas-seb-detector.js", "/api/seb/canvas-detector.js"]) {
     const response = await request.get(path);

@@ -65,7 +65,7 @@ describe("SEB config downloads", () => {
     });
   });
 
-  it("uses canonical Canvas assignment take URLs for New Quiz configs", async () => {
+  it("uses stable Canvas assignment entry URLs for New Quiz configs", async () => {
     await withConfig(async () => {
       const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
       const controller = new SebController(
@@ -94,7 +94,7 @@ describe("SEB config downloads", () => {
             assignmentId: "991",
             contentType: "NEW_QUIZ",
             title: "New Quiz",
-            htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991?module_item_id=44`
+            htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991/taking/8888/take?module_item_id=44`
           }),
           saveContentConfigKeyIfUnchanged: saveConfigKey
         } as any,
@@ -106,13 +106,13 @@ describe("SEB config downloads", () => {
 
       const generated = await downloadConfig(
         controller,
-        `${CANVAS_URL}/courses/11825/assignments/991/take?user_id=7288`,
+        `${CANVAS_URL}/courses/11825/assignments/991/taking/31299/take`,
         "newquiz:11825:991"
       );
       const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
 
-      expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991/take`);
-      expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991/take`);
+      expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
+      expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
       expect(saveConfigKey).toHaveBeenCalledWith(
         expect.objectContaining({ contentId: "newquiz:11825:991" }),
         new SebConfigKeyService().computeConfigKey(generated)

@@ -992,11 +992,21 @@ select:disabled {
 }
 
 .countdown-track span {
+  width: 100%;
   height: 100%;
   display: block;
   background: #0b63ce;
   border-radius: inherit;
-  transition: width 220ms ease;
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: countdown-progress linear forwards;
+  will-change: transform;
+}
+
+@keyframes countdown-progress {
+  to {
+    transform: scaleX(1);
+  }
 }
 
 .countdown-button {
@@ -1016,6 +1026,13 @@ select:disabled {
 .backup-link:hover {
   color: #0b63ce;
   text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-track span {
+    animation: none;
+    transform: scaleX(1);
+  }
 }
 
 @media (max-width: 980px) {

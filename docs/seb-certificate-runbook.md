@@ -114,6 +114,8 @@ Preferred Jamf rollout:
 
 If Jamf's certificate profile still causes a first-use private-key prompt, use a Jamf policy/script to import the `.p12` into the logged-in user's login keychain. The template at [scripts/install-seb-config-cert-login-keychain.sh](../scripts/install-seb-config-cert-login-keychain.sh) accepts Jamf parameter `$4` for the base64 `.p12`, `$5` for the `.p12` password, and optional `$6` for the user's login keychain password if your deployment has a supported way to provide it. Keep the `.p12` and password restricted to the policy package/script context, remove any temporary file after import, and scope the policy only to intended devices. The policy only has to install the identity once per user/key unless the identity is rotated or the Mac is wiped; it does not need to run after every reboot.
 
+The script can run before Safe Exam Browser is installed. In that case it imports the identity into the logged-in user's login keychain and skips app-path trust entries. If `$6` is provided, the script still applies the Team ID key partition list for SEB's signing team, so the later app install can use the key without requiring the app to exist at script time. If `$6` is not provided and SEB is not installed yet, run the policy again after SEB is installed or expect the student to approve the one-time **Always Allow** prompt during the setup check. The script still requires a normal logged-in user because this rollout stores the identity in that user's login keychain.
+
 ## Rotation
 
 Use this order to avoid breaking active exams:
@@ -145,6 +147,8 @@ If SEB shows "Opening Settings Failed":
 3. Confirm the matching identity exists in the user's login keychain.
 4. Confirm Safe Exam Browser is installed at `/Applications/Safe Exam Browser.app`.
 5. Re-import the `.p12` with `-x -T "/Applications/Safe Exam Browser.app"`.
+
+If the Jamf script exits before import, check the Jamf policy log for the `[SEB cert install]` prefix. Common expected timing failures are: no normal console user is logged in yet, the login keychain does not exist yet, the base64 `.p12` parameter is missing/truncated, or the provided login keychain password is wrong. Missing Safe Exam Browser is logged but is no longer fatal.
 
 Useful local checks:
 

@@ -200,7 +200,9 @@ Then verify in Canvas:
 7. Downloading a `.seb` file stores a Config Key.
 8. If an exam start password is configured, SEB prompts for it before opening Canvas.
 9. SEB can retrieve the access code through the proof flow.
-10. The exit page renders and the quit link works in SEB.
+10. A New Quiz config starts from `/courses/:courseId/assignments/:assignmentId` and Canvas creates or resumes its `/taking/:attemptId` route.
+11. The first New Quiz Submit control opens Canvas's confirmation dialog without leaving the quiz; the confirmed submission reaches Canvas results before the SEB exit page opens.
+12. The exit page renders and the quit link works in SEB.
 
 ## SEB Config Encryption
 
