@@ -683,7 +683,9 @@ describe("Canvas SEB detector script", () => {
 
     context.document.querySelector<HTMLButtonElement>("#confirm-submit")?.click();
     expect(context.sessionStorage.getItem("seb_pending_redirect")).toContain('"quizId":"newquiz:11825:437577"');
-    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Submitting quiz");
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain(
+      "Submitting your quiz"
+    );
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(context.location.assign).not.toHaveBeenCalled();
@@ -697,7 +699,11 @@ describe("Canvas SEB detector script", () => {
     expect(context.location.assign).toHaveBeenCalledWith(
       `${APP_BASE_URL}/seb/exit/session/11825/newquiz%3A11825%3A437577/${exitGrant}`
     );
-    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Quiz submitted");
+    // The overlay stays in its submitting state through the redirect — there
+    // is no separate "redirecting" step for the student to read.
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain(
+      "Submitting your quiz"
+    );
 
     context.document.body.appendChild(context.document.createElement("span"));
     await vi.advanceTimersByTimeAsync(5_000);
@@ -723,13 +729,22 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
     context.document.querySelector<HTMLButtonElement>("#confirm-submit")?.click();
-    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Submitting quiz");
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain(
+      "Submitting your quiz"
+    );
     context.document.body.appendChild(
       context.document.createTextNode("We could not submit your assessment. Please try again.")
     );
     await vi.advanceTimersByTimeAsync(12_500);
 
     expect(context.location.assign).not.toHaveBeenCalled();
+    // With no confirmed completion, the overlay surfaces a recoverable error
+    // with a way back to the quiz rather than silently vanishing.
+    const overlay = context.document.getElementById("seb-classic-submission-overlay");
+    expect(overlay?.textContent).toContain("Submission not confirmed yet");
+    const dismiss = context.document.getElementById("seb-submission-dismiss-button");
+    expect(dismiss?.textContent).toContain("Return to quiz");
+    dismiss?.click();
     expect(context.document.getElementById("seb-classic-submission-overlay")).toBeNull();
   });
 
@@ -1074,7 +1089,9 @@ describe("Canvas SEB detector script", () => {
         body: expect.anything()
       })
     );
-    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Quiz submitted");
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain(
+      "Submitting your quiz"
+    );
     expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
   });
 
@@ -1163,7 +1180,7 @@ describe("Canvas SEB detector script", () => {
 
     expect(context.location.assign).not.toHaveBeenCalled();
     expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain(
-      "Submission not confirmed"
+      "We could not confirm your submission"
     );
     expect(context.sessionStorage.removeItem).toHaveBeenCalledWith("seb_pending_redirect");
   });

@@ -27,6 +27,7 @@
     const ACCESS_CODE_PROGRESS_CARD_ID = 'seb-access-code-progress-card';
     const ACCESS_CODE_PROGRESS_STYLE_ID = 'seb-access-code-progress-style';
     const CLASSIC_SUBMISSION_OVERLAY_ID = 'seb-classic-submission-overlay';
+    const SUBMISSION_OVERLAY_STYLE_ID = 'seb-submission-overlay-style';
     const SEB_LAUNCH_PROMPT_ID = 'seb-launch-prompt';
     const EXAM_TOOLS_SIDEBAR_ID = 'seb-exam-tools-sidebar';
     const EXAM_TOOLS_STYLE_ID = 'seb-exam-tools-style';
@@ -522,7 +523,9 @@
         clearPendingRedirect();
         if (pending.contentType === 'NEW_QUIZ') {
             clearNewQuizOverlayHideTimer();
-            showSubmissionOverlay('success');
+            // Keep the "Submitting your quiz" overlay up through the short
+            // redirect delay; the exit page takes over from there.
+            showSubmissionOverlay('loading', NEW_QUIZ_SUBMISSION_LOADING);
             redirectToSebExitPage(pending.courseId, pending.quizId, 300);
             return;
         }
@@ -564,7 +567,9 @@
         debugLog('New Quiz completion detected for the active SEB exam session; redirecting to exit page', 'success');
         detectorTrace('new-quiz-unflagged-completion-redirect', { quizInfo }, 'warn');
         clearNewQuizOverlayHideTimer();
-        showSubmissionOverlay('success');
+        // A missed submit click means no overlay is showing yet; briefly show
+        // the submitting state so the exit is never a jarring blank jump.
+        showSubmissionOverlay('loading', NEW_QUIZ_SUBMISSION_LOADING);
         redirectToSebExitPage(quizInfo.courseId, quizInfo.quizId, 300);
     }
 
@@ -2482,7 +2487,7 @@
 
             state.classicSubmitInFlight = true;
             markPendingRedirect(quizInfo);
-            showSubmissionOverlay('loading');
+            showSubmissionOverlay('loading', CLASSIC_SUBMISSION_LOADING);
             void submitClassicQuizAndRedirect(form, submitButton, quizInfo, action);
         });
         return true;
@@ -2512,7 +2517,7 @@
 
         state.classicSubmitInFlight = true;
         markPendingRedirect(quizInfo);
-        showSubmissionOverlay('loading');
+        showSubmissionOverlay('loading', CLASSIC_SUBMISSION_LOADING);
         void submitClassicQuizAndRedirect(form, submitButton, quizInfo, action);
     }
 
@@ -2560,7 +2565,8 @@
             }
 
             detectorTrace('classic-submit-response-confirmed', { quizInfo }, 'success');
-            showSubmissionOverlay('success');
+            // Canvas confirmed the submission; keep the "Submitting your quiz"
+            // overlay up and go straight to the exit page — no extra step.
             clearPendingRedirect();
             redirectToSebExitPage(quizInfo.courseId, quizInfo.quizId, 0);
         } catch (error) {
@@ -2568,7 +2574,13 @@
             clearPendingRedirect();
             detectorTrace('classic-submit-response-unconfirmed', { quizInfo }, 'warn');
             debugLog('Canvas did not confirm the Classic Quiz submission', 'warn');
-            showSubmissionOverlay('error');
+            // A submission may still have reached Canvas, so do not invite a
+            // blind retry; let the student return to the quiz and get help.
+            showSubmissionOverlay('error', {
+                title: 'We could not confirm your submission',
+                message: 'Safe Exam Browser is still open. Do not submit again — return to your quiz and ask your proctor or instructor for help.',
+                dismissLabel: 'Return to quiz'
+            });
         }
     }
 
@@ -2596,16 +2608,32 @@
         }
     }
 
+    const NEW_QUIZ_SUBMISSION_LOADING = {
+        title: 'Submitting your quiz',
+        message: 'Waiting for Canvas to confirm your submission. Safe Exam Browser will close automatically once it finishes.'
+    };
+    const CLASSIC_SUBMISSION_LOADING = {
+        title: 'Submitting your quiz',
+        message: 'Please wait while your answers are sent to Canvas. Do not close Safe Exam Browser.'
+    };
+
     function showNewQuizSubmissionProgress() {
-        showSubmissionOverlay('loading');
+        showSubmissionOverlay('loading', NEW_QUIZ_SUBMISSION_LOADING);
         clearNewQuizOverlayHideTimer();
-        // Canvas owns the New Quiz submission request, so if no confirmed
-        // completion arrives, release the page and keep any Canvas error
-        // dialog reachable instead of trapping the student behind an overlay.
+        // Canvas owns the New Quiz submission request. If no confirmed
+        // completion arrives, surface a recoverable message instead of
+        // trapping the student, so they can read any Canvas error and retry.
         state.newQuizOverlayHideTimer = setTimeout(() => {
             state.newQuizOverlayHideTimer = null;
-            hideSubmissionOverlay();
-        }, 8000);
+            if (state.exitRedirectScheduledKey || hasCompletionPageIndicator()) {
+                return;
+            }
+            showSubmissionOverlay('error', {
+                title: 'Submission not confirmed yet',
+                message: 'Safe Exam Browser is still open. Return to your quiz to check for a message from Canvas, then submit again if you need to.',
+                dismissLabel: 'Return to quiz'
+            });
+        }, 10000);
     }
 
     function clearNewQuizOverlayHideTimer() {
@@ -2622,42 +2650,71 @@
         }
     }
 
-    function showSubmissionOverlay(mode) {
+    function ensureSubmissionOverlayStyle() {
+        if (document.getElementById(SUBMISSION_OVERLAY_STYLE_ID)) {
+            return;
+        }
+        const style = document.createElement('style');
+        style.id = SUBMISSION_OVERLAY_STYLE_ID;
+        style.textContent = '@keyframes sebSubmissionSpin { to { transform: rotate(360deg); } }';
+        (document.head || document.body).appendChild(style);
+    }
+
+    function showSubmissionOverlay(mode, options = {}) {
         if (!document.body) {
             return;
         }
+        ensureSubmissionOverlayStyle();
 
         let overlay = document.getElementById(CLASSIC_SUBMISSION_OVERLAY_ID);
         if (!overlay) {
             overlay = document.createElement('div');
             overlay.id = CLASSIC_SUBMISSION_OVERLAY_ID;
-            overlay.setAttribute('role', 'alert');
-            overlay.setAttribute('aria-live', 'assertive');
-            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.72);font-family:Arial,sans-serif;';
+            overlay.style.cssText = `
+                position: fixed;
+                inset: 0;
+                z-index: 2147483647;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                background: rgba(12, 18, 32, 0.72);
+                color: #182230;
+                font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            `;
             document.body.appendChild(overlay);
         }
 
-        const content = mode === 'success'
-            ? {
-                title: 'Quiz submitted',
-                message: 'Canvas confirmed your submission. Opening the Safe Exam Browser exit page.'
-            }
-            : mode === 'error'
-                ? {
-                    title: 'Submission not confirmed',
-                    message: 'Canvas did not return a confirmed results page. Do not submit again or close Safe Exam Browser; ask your instructor or proctor for help.'
-                }
-                : {
-                    title: 'Submitting quiz',
-                    message: 'Waiting for Canvas to confirm your submission.'
-                };
+        const isError = mode === 'error';
+        overlay.setAttribute('role', isError ? 'alertdialog' : 'status');
+        overlay.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+
+        const iconColor = isError ? '#b42318' : '#075985';
+        const iconBackground = isError ? '#fff1f0' : '#e0f2fe';
+        const iconBorder = isError ? '#fecdca' : '#bae6fd';
+        const title = options.title || (isError ? 'Something went wrong' : 'Working');
+        const message = options.message || '';
+        const iconInner = isError
+            ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; border: 2px solid #b42318; border-radius: 999px; font-size: 15px; font-weight: 900; line-height: 1;">!</div>'
+            : '<div style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #075985; border-radius: 999px; animation: sebSubmissionSpin 0.8s linear infinite;"></div>';
+        const dismissButton = isError && options.dismissLabel
+            ? `<button type="button" id="seb-submission-dismiss-button" style="margin-top: 18px; min-height: 38px; padding: 0 14px; border: 1px solid #cfd6e4; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 700; cursor: pointer;">${escapeHtml(options.dismissLabel)}</button>`
+            : '';
 
         overlay.innerHTML = `
-            <div style="width:min(460px,100%);border-radius:12px;background:#fff;padding:28px;box-shadow:0 24px 70px rgba(0,0,0,.35);color:#172033;">
-                <h2 style="margin:0 0 10px;font-size:24px;line-height:1.25;">${content.title}</h2>
-                <p style="margin:0;font-size:16px;line-height:1.5;">${content.message}</p>
+            <div style="width: min(440px, 100%); background: #ffffff; border: 1px solid #dbe2ea; border-radius: 8px; box-shadow: 0 16px 34px rgba(24,36,56,0.16); padding: 28px; text-align: left;">
+                <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: ${iconColor}; background: ${iconBackground}; border: 1px solid ${iconBorder}; border-radius: 8px;">
+                    ${iconInner}
+                </div>
+                <h2 style="margin: 0 0 10px; color: #182230; font-size: 24px; line-height: 1.15; font-weight: 800;">${escapeHtml(title)}</h2>
+                <p style="margin: 0; color: #667085; font-size: 15px; line-height: 1.45;">${escapeHtml(message)}</p>
+                ${dismissButton}
             </div>
         `;
+
+        const dismiss = document.getElementById('seb-submission-dismiss-button');
+        if (dismiss) {
+            dismiss.addEventListener('click', hideSubmissionOverlay);
+        }
     }
 
     function handlePotentialFinalSubmitClick(event) {
