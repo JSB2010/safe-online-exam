@@ -1,9 +1,20 @@
 import { Injectable } from "@nestjs/common";
 import type { Request } from "express";
+import { SebConfigKeyService } from "./seb-config-key.service.js";
+
+type SebProofSetting = {
+  configKey?: string | null;
+};
 
 @Injectable()
 export class SebDetector {
-  isRequestFromSeb(request: Request, _setting?: unknown): boolean {
+  constructor(private readonly configKey: SebConfigKeyService = new SebConfigKeyService()) {}
+
+  isRequestFromSeb(request: Request, setting?: SebProofSetting | null): boolean {
+    if (setting) {
+      return this.configKey.validateConfigKeyHash(request, setting.configKey);
+    }
+
     const userAgent = request.header("user-agent") || "";
     const sebHeader = firstHeader(request, [
       "x-safeexambrowser-requesthash",
