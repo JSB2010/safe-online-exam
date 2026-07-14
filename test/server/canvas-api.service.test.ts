@@ -187,6 +187,31 @@ describe("CanvasApiService", () => {
     });
   });
 
+  it("creates a Canvas session URL only for a return target on the configured Canvas origin", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        session_url:
+          "https://canvas.example.com/login/session_token?return_to=https%3A%2F%2Fcanvas.example.com%2Fcourses%2F7"
+      })
+    );
+
+    await expect(
+      service.getSessionToken("user-1", "https://canvas.example.com/courses/7/quizzes/42/take")
+    ).resolves.toBe(
+      "https://canvas.example.com/login/session_token?return_to=https%3A%2F%2Fcanvas.example.com%2Fcourses%2F7"
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://canvas.example.com/api/v1/login/session_token?return_to=https%3A%2F%2Fcanvas.example.com%2Fcourses%2F7%2Fquizzes%2F42%2Ftake",
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer token-1" }) })
+    );
+  });
+
+  it("rejects a Canvas session handoff that would leave the configured Canvas origin", async () => {
+    await expect(service.getSessionToken("user-1", "https://attacker.example/courses/7")).rejects.toMatchObject({
+      name: "CanvasApiRequestError"
+    });
+  });
+
   it("does not reuse OAuth tokens after another instance clears them", async () => {
     const provider = { value: repositories } as RepositoryProvider;
     const firstInstance = new CanvasApiService(new AppConfig(), provider);
@@ -228,6 +253,19 @@ describe("CanvasApiService", () => {
     await expect(repositories.oauthTokens.get("user-without-scope")).resolves.toMatchObject({
       scope: null
     });
+  });
+
+  it("does not treat an explicitly non-session-scoped token as a student session connection", async () => {
+    await service.storeAccessToken("scoped-user", "scoped-token", {
+      scope: "url:GET|/api/v1/courses/:course_id/quizzes"
+    });
+
+    await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(false);
+
+    await service.storeAccessToken("scoped-user", "session-token", {
+      scope: "url:GET|/api/v1/login/session_token"
+    });
+    await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(true);
   });
 
   it("refreshes expired OAuth access tokens before calling Canvas APIs", async () => {
@@ -338,6 +376,15 @@ describe("CanvasApiService", () => {
       userId: "user-1",
       accessToken: "token-1"
     });
+  });
+
+  it("clears a student credential when Canvas rejects the session-token scope", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(textResponse("scope denied", 403));
+
+    await expect(
+      service.getSessionToken("user-1", "https://canvas.example.com/courses/7/quizzes/42/take")
+    ).rejects.toMatchObject({ name: "CanvasApiPermissionError", status: 403 });
+    await expect(repositories.oauthTokens.get("user-1")).resolves.toBeNull();
   });
 
   it("raises a request error for non-authorization Canvas API failures", async () => {

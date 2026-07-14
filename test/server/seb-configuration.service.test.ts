@@ -87,13 +87,13 @@ describe("SebConfigurationService", () => {
         expect.objectContaining({ regex: false, expression: "https://www.desmos.com/assets/build/*" })
       ])
     );
-    expect(expressions).toContain("https://accounts.google.com/*");
+    expect(expressions).not.toContain("https://accounts.google.com/*");
     expect(expressions).not.toContain("https://*.google.com/*");
-    expect(expressions).toContain("^https://accounts\\.google\\.com/(?:.*)$");
-    expect(expressions).toContain("^https://www\\.google\\.com/accounts/(?:.*)$");
-    expect(expressions).toContain("^https://accounts\\.youtube\\.com/accounts/(?:.*)$");
-    expect(expressions).toContain("^https://fonts\\.googleapis\\.com/(?:.*)$");
-    expect(expressions).toContain("^https://sso\\.canvaslms\\.com/(?:.*)$");
+    expect(expressions).not.toContain("^https://accounts\\.google\\.com/(?:.*)$");
+    expect(expressions).not.toContain("^https://www\\.google\\.com/accounts/(?:.*)$");
+    expect(expressions).not.toContain("^https://accounts\\.youtube\\.com/accounts/(?:.*)$");
+    expect(expressions).not.toContain("^https://fonts\\.googleapis\\.com/(?:.*)$");
+    expect(expressions).not.toContain("^https://sso\\.canvaslms\\.com/(?:.*)$");
     expect(expressions).not.toContain("https://du11hjcvx0uqb.cloudfront.net/*");
     expect(expressions).not.toContain("https://d2l3jyjp24noqc.cloudfront.net/*");
     expect(expressions).not.toContain("https://canvas-static.s3.amazonaws.com/*");
@@ -121,7 +121,7 @@ describe("SebConfigurationService", () => {
     expect(expressions).not.toContain("https://www.desmos.com/*");
     expect(expressions).not.toContain("https://canvas.example.com/courses/course-1/*");
     expect(expressions).toContain(
-      "^https://canvas\\.example\\.com/(dist|assets|images|fonts|javascripts|stylesheets|login)(?:/.*)?(?:[?#].*)?$"
+      "^https://canvas\\.example\\.com/(dist|assets|images|fonts|javascripts|stylesheets)(?:/.*)?(?:[?#].*)?$"
     );
     expect(expressions).not.toContain("^https://canvas\\.example\\.com/courses/course-1/files(?:/.*)?(?:[?#].*)?$");
     expect(parsed.urlFilterRules).toBeUndefined();

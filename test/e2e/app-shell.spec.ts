@@ -60,15 +60,16 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
     target_link_uri: "http://localhost:8080/lti/launch",
     public_jwk_url: "http://localhost:8080/.well-known/jwks.json"
   });
-  expect(ltiBody.extensions?.[0]?.settings?.placements?.[0]).toMatchObject({
+  const placement = ltiBody.extensions?.[0]?.settings?.placements?.[0];
+  expect(placement).toMatchObject({
     placement: "course_navigation",
     message_type: "LtiResourceLinkRequest",
     target_link_uri: "http://localhost:8080/lti/launch",
     visibility: "members",
     default: "enabled",
-    enabled: true,
-    windowTarget: "_blank"
+    enabled: true
   });
+  expect(placement).not.toHaveProperty("windowTarget");
 });
 
 test("serves built app assets before API CORS restrictions", async ({ request }) => {

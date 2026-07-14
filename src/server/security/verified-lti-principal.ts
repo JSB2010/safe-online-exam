@@ -1,6 +1,6 @@
 import type { Request } from "express";
 import type { LtiLaunchData } from "../../shared/models.js";
-import { isInstructor } from "../../shared/models.js";
+import { isInstructor, isStudent } from "../../shared/models.js";
 
 export interface VerifiedLtiPrincipal {
   version: 1;
@@ -69,4 +69,8 @@ export function verifiedLtiPrincipal(request: Request): VerifiedLtiPrincipal | n
 
 export function isVerifiedInstructor(principal: VerifiedLtiPrincipal): boolean {
   return isInstructor({ roles: principal.roles, custom: principal.custom });
+}
+
+export function isVerifiedStudent(principal: VerifiedLtiPrincipal): boolean {
+  return isStudent({ roles: principal.roles, custom: principal.custom });
 }

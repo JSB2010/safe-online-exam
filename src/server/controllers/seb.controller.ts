@@ -16,7 +16,12 @@ import { createSebConfigGrantActionToken } from "../http/action-token.js";
 import { absoluteUrl, sebSchemeUrl } from "../http/request-url.js";
 import { requireSebConfigGrantRequestIntegrity } from "../http/request-integrity.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
-import { createVerifiedLtiPrincipal, verifiedLtiPrincipal } from "../security/verified-lti-principal.js";
+import {
+  createVerifiedLtiPrincipal,
+  isVerifiedInstructor,
+  isVerifiedStudent,
+  verifiedLtiPrincipal
+} from "../security/verified-lti-principal.js";
 import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
 import { consumePublicBudget } from "../security/public-admission.js";
 import { DistributedAdmissionService, hasBoundedLtiValidationEnvelope } from "../security/distributed-admission.js";
@@ -38,6 +43,12 @@ import {
 import { SebConfigKeyService } from "../services/seb-config-key.service.js";
 import { SebConfigurationService } from "../services/seb-configuration.service.js";
 import { SebDetector } from "../services/seb-detector.service.js";
+import {
+  CanvasApiAuthorizationError,
+  CanvasApiPermissionError,
+  CanvasApiService
+} from "../services/canvas-api.service.js";
+import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
 
 interface SebLaunchContentView {
   id: string;
@@ -64,7 +75,9 @@ export class SebController {
     private readonly configKey: SebConfigKeyService,
     private readonly proofService: SebAccessProofService,
     private readonly configGrants: SebConfigGrantService,
-    private readonly distributedAdmission: DistributedAdmissionService
+    private readonly distributedAdmission: DistributedAdmissionService,
+    private readonly canvasApi?: CanvasApiService,
+    private readonly sessionHandoff?: SebSessionHandoffService
   ) {}
 
   @Get("/seb/quiz/:courseId/:quizId")
@@ -121,6 +134,13 @@ export class SebController {
       return apiError(403, "Verified Canvas launch required", { error_code: "LTI_PRINCIPAL_REQUIRED" });
     }
     requireSebConfigGrantRequestIntegrity(request, this.config, principal);
+    if (requiresStudentSessionHandoff(principal)) {
+      if (!this.canvasApi || !(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
+        return apiError(403, "Canvas connection is required before opening Safe Exam Browser.", {
+          error_code: "CANVAS_SESSION_AUTHORIZATION_REQUIRED"
+        });
+      }
+    }
     const target = await this.resolveConfigGrantTarget(courseId, contentId);
     if (!target) {
       return apiError(404, "SEB configuration is unavailable");
@@ -144,6 +164,34 @@ export class SebController {
         return apiError(429, "Too many configuration requests", { error_code: "RATE_LIMITED" });
       }
       throw error;
+    }
+  }
+
+  @Post("/api/seb/session-readiness")
+  async verifyStudentSessionReadiness(@Req() request: Request): Promise<Record<string, unknown>> {
+    const principal = verifiedLtiPrincipal(request);
+    if (!principal || !requiresStudentSessionHandoff(principal)) {
+      return apiError(403, "Verified student Canvas launch required", { error_code: "LTI_STUDENT_REQUIRED" });
+    }
+    requireSebConfigGrantRequestIntegrity(request, this.config, principal);
+    if (!this.canvasApi) {
+      return apiError(503, "Canvas session handoff is unavailable", { error_code: "CANVAS_SESSION_UNAVAILABLE" });
+    }
+    try {
+      // Do not expose or retain the returned URL. A successful response proves
+      // the student token can create the same Canvas session link used at exam
+      // configuration download time.
+      await this.canvasApi.getSessionToken(principal.canvasUserId, this.canvasCourseHomeUrl(principal.courseId));
+      return { success: true, checks: { canvasSessionAuthorization: true } };
+    } catch (error) {
+      if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
+        return apiError(403, "Canvas connection must be completed again before using Safe Exam Browser.", {
+          error_code: "CANVAS_SESSION_AUTHORIZATION_REQUIRED"
+        });
+      }
+      return apiError(502, "Canvas could not verify the student session connection.", {
+        error_code: "CANVAS_SESSION_READINESS_FAILED"
+      });
     }
   }
 
@@ -182,7 +230,13 @@ export class SebController {
         response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
         return;
       }
-      const generated = await this.generateConfig(courseId, canonicalContentId);
+      const generated = await this.generateConfigForGrant(
+        courseId,
+        canonicalContentId,
+        target,
+        consumedGrant.canvasUserId,
+        consumedGrant.requiresSessionHandoff
+      );
       // The encrypted bytes may come from the short single-flight cache. Check
       // certificate time again immediately before serving them so a long-lived
       // process cannot issue a config after NotAfter.
@@ -200,7 +254,14 @@ export class SebController {
         .setHeader("referrer-policy", "no-referrer")
         .setHeader("content-transfer-encoding", "binary")
         .send(generated);
-    } catch {
+    } catch (error) {
+      if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
+        response
+          .status(403)
+          .setHeader("cache-control", "no-store")
+          .send("Canvas connection is no longer available. Reopen Safe Exam Browser Quizzes from Canvas to continue.");
+        return;
+      }
       response
         .status(400)
         .setHeader("cache-control", "no-store")
@@ -460,23 +521,38 @@ export class SebController {
     ) {
       return apiError(429, "Too many SEB proof requests", { error_code: "RATE_LIMITED" });
     }
-    const setting = await this.resolveSebSetting(courseId, normalizedContentId);
+    const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
+    const target = canonicalContentId ? await this.resolveConfigGrantTarget(courseId, canonicalContentId) : null;
+    const setting = target?.setting || null;
     if (
+      !target ||
       !setting ||
       !setting.sebRequired ||
       !setting.enabled ||
       !setting.accessCode ||
       !this.effectiveQuitPassword(setting) ||
       (setting.startPassword && !setting.configKeySalt) ||
-      !(await this.matchesAssessmentObject(courseId, normalizedContentId))
+      !canonicalContentId
     ) {
       return apiError(404, "No SEB setting found for this quiz");
     }
     const expectedConfigKey = await this.currentConfigKey(courseId, normalizedContentId, setting);
     const validBodyUrl = !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, normalizedContentId);
-    const valid =
+    const staticValid =
       (validBodyUrl && this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey)) ||
       this.configKey.validateConfigKeyHash(request, expectedConfigKey);
+    const handoffConfigKey =
+      validBodyUrl && this.sessionHandoff
+        ? await this.sessionHandoff.resolveConfigKey(
+            courseId,
+            canonicalContentId,
+            target.settingsFingerprint,
+            body?.configKeyHash,
+            body?.url
+          )
+        : null;
+    const configKey = staticValid ? expectedConfigKey : handoffConfigKey;
+    const valid = !!configKey;
     if (!valid) {
       console.warn(
         "SEB access proof rejected",
@@ -506,7 +582,8 @@ export class SebController {
       proofToken: await this.proofService.mintProof(
         courseId,
         normalizedContentId,
-        proofGenerationDigest(courseId, normalizedContentId, expectedConfigKey, setting.accessCode)
+        proofGenerationDigest(courseId, normalizedContentId, configKey, setting.accessCode),
+        target.settingsFingerprint
       ),
       expiresInSeconds: this.proofService.getTokenTtlSeconds()
     };
@@ -531,13 +608,16 @@ export class SebController {
     ) {
       return apiError(429, "Too many SEB access-code requests", { error_code: "RATE_LIMITED" });
     }
-    const setting = await this.resolveSebSetting(courseId, normalizedContentId);
+    const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
+    const target = canonicalContentId ? await this.resolveConfigGrantTarget(courseId, canonicalContentId) : null;
+    const setting = target?.setting || null;
     if (
+      !target ||
       !setting ||
       setting.courseId !== courseId ||
       !this.effectiveQuitPassword(setting) ||
       (setting.startPassword && !setting.configKeySalt) ||
-      !(await this.matchesAssessmentObject(courseId, normalizedContentId))
+      !canonicalContentId
     ) {
       return apiError(404, "No SEB setting found for this quiz");
     }
@@ -547,9 +627,13 @@ export class SebController {
     if (!setting.accessCode) {
       return { success: false, message: "No access code configured for this quiz" };
     }
-    const expectedConfigKey = await this.currentConfigKey(courseId, normalizedContentId, setting);
-    const digest = proofGenerationDigest(courseId, normalizedContentId, expectedConfigKey, setting.accessCode);
-    if (!(await this.proofService.consumeProof(proofToken, courseId, normalizedContentId, digest))) {
+    const digest = await this.proofService.consumeProof(
+      proofToken,
+      courseId,
+      normalizedContentId,
+      target.settingsFingerprint
+    );
+    if (!digest) {
       return apiError(403, "Invalid or expired SEB access proof");
     }
     const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, digest);
@@ -740,9 +824,7 @@ export class SebController {
     ) {
       return null;
     }
-    const expectedConfigKey = await this.currentConfigKey(courseId, grantContentId, setting);
-    const digest = proofGenerationDigest(courseId, grantContentId, expectedConfigKey, setting.accessCode);
-    return (await this.proofService.validateExitGrant(grant, courseId, grantContentId, digest))
+    return (await this.proofService.getExitGrant(grant, courseId, grantContentId))
       ? { grantContentId, configContentId, setting }
       : null;
   }
@@ -847,6 +929,13 @@ export class SebController {
       return;
     }
     const directLaunch = consumePendingSebLaunch(request, principal, resolved.content.courseId, canonicalContentId);
+    if (!directLaunch && isDirectLtiLaunchReplay(request, this.config, resolved.content.courseId, canonicalContentId)) {
+      response
+        .setHeader("cache-control", "private, no-store")
+        .setHeader("referrer-policy", "no-referrer")
+        .redirect(303, this.canvasCourseHomeUrl(resolved.content.courseId));
+      return;
+    }
     if (!resolved.setting?.sebRequired || this.sebDetector.isRequestFromSeb(request, resolved.setting)) {
       response.redirect(resolved.launchTarget);
       return;
@@ -870,6 +959,11 @@ export class SebController {
           target.canonicalContentId,
           target.settingsFingerprint
         );
+        request.session!.completedSebLaunch = {
+          courseId: resolved.content.courseId,
+          contentId: canonicalContentId,
+          issuedAt: Date.now()
+        };
         await saveSebSession(request);
         const configPath = sebConfigPath(resolved.content.courseId, target.canonicalContentId, grant);
         response
@@ -912,7 +1006,15 @@ export class SebController {
     );
   }
 
-  private async generateConfig(courseId: string, contentId: string, canvasUrl?: string): Promise<Buffer> {
+  private async generateConfig(
+    courseId: string,
+    contentId: string,
+    canvasUrl?: string,
+    startUrlOverride?: string
+  ): Promise<Buffer> {
+    if (startUrlOverride) {
+      return this.generateConfigUncached(courseId, contentId, canvasUrl, startUrlOverride);
+    }
     const record = await this.assessments.getAssessmentRecord(contentId);
     if (!record || record.courseId !== courseId) {
       throw new Error("Assessment not found");
@@ -947,6 +1049,36 @@ export class SebController {
       this.configDownloadCache.delete(key);
       throw error;
     }
+  }
+
+  private async generateConfigForGrant(
+    courseId: string,
+    contentId: string,
+    target: { setting: QuizSebSetting | ContentSebSetting; settingsFingerprint: string },
+    canvasUserId: string,
+    requiresSessionHandoff: boolean
+  ): Promise<Buffer> {
+    if (!requiresSessionHandoff) {
+      return this.generateConfig(courseId, contentId);
+    }
+    if (!this.canvasApi || !this.sessionHandoff) {
+      throw new Error("Canvas session handoff services are unavailable");
+    }
+    const returnTo = await this.resolveCanvasStartUrl(courseId, contentId);
+    const sessionUrl = await this.canvasApi.getSessionToken(canvasUserId, returnTo);
+    const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, sessionUrl);
+    const dynamicConfigKey = this.configKey.computeConfigKey(plain);
+    await this.sessionHandoff.registerConfig(
+      courseId,
+      contentId,
+      target.settingsFingerprint,
+      dynamicConfigKey,
+      returnTo
+    );
+    return this.sebConfig.prepareSebConfigurationDownload(plain, {
+      startPassword: target.setting.startPassword,
+      requireCertificateEncryption: true
+    });
   }
 
   private configGrantActionToken(request: Request, principal: VerifiedLtiPrincipal): string {
@@ -1059,7 +1191,26 @@ export class SebController {
       .digest("base64url");
   }
 
-  private async generateConfigUncached(courseId: string, contentId: string, canvasUrl?: string): Promise<Buffer> {
+  private async generateConfigUncached(
+    courseId: string,
+    contentId: string,
+    canvasUrl?: string,
+    startUrlOverride?: string
+  ): Promise<Buffer> {
+    const plain = await this.generatePlainConfigUncached(courseId, contentId, canvasUrl, startUrlOverride);
+    const setting = await this.resolveSebSetting(courseId, contentId);
+    return this.sebConfig.prepareSebConfigurationDownload(plain, {
+      startPassword: setting?.startPassword,
+      requireCertificateEncryption: true
+    });
+  }
+
+  private async generatePlainConfigUncached(
+    courseId: string,
+    contentId: string,
+    canvasUrl?: string,
+    startUrlOverride?: string
+  ): Promise<Buffer> {
     const classicId = extractClassicQuizId(contentId);
     if (classicId) {
       const setting = await this.assessments.getSebSettingForQuiz(classicId);
@@ -1077,8 +1228,9 @@ export class SebController {
       if (!quiz || quiz.courseId !== courseId) {
         throw new Error("Assessment not found");
       }
-      const startUrl = resolveClassicCanvasUrl(this.config, courseId, classicId, canvasUrl, quiz?.htmlUrl);
-      const generated = this.sebConfig.generateSebConfiguration({
+      const startUrl =
+        startUrlOverride || resolveClassicCanvasUrl(this.config, courseId, classicId, canvasUrl, quiz?.htmlUrl);
+      return this.sebConfig.generateSebConfiguration({
         courseId,
         contentId: contentId.startsWith("classicquiz_") ? contentId : classicQuizContentId(classicId),
         startUrl,
@@ -1087,10 +1239,6 @@ export class SebController {
         quitPassword: setting.quitPassword,
         startPassword: setting.startPassword,
         configKeySalt: setting.configKeySalt
-      });
-      return this.sebConfig.prepareSebConfigurationDownload(generated, {
-        startPassword: setting.startPassword,
-        requireCertificateEncryption: true
       });
     }
 
@@ -1114,8 +1262,8 @@ export class SebController {
     if (!accessCode) {
       throw new Error("SEB not enabled or access code missing");
     }
-    const startUrl = await this.resolveNewQuizStartUrl(courseId, contentId, setting);
-    const generated = this.sebConfig.generateSebConfiguration({
+    const startUrl = startUrlOverride || (await this.resolveNewQuizStartUrl(courseId, contentId, setting));
+    return this.sebConfig.generateSebConfiguration({
       courseId,
       contentId,
       startUrl,
@@ -1125,10 +1273,19 @@ export class SebController {
       startPassword: setting.startPassword,
       configKeySalt: setting.configKeySalt
     });
-    return this.sebConfig.prepareSebConfigurationDownload(generated, {
-      startPassword: setting.startPassword,
-      requireCertificateEncryption: true
-    });
+  }
+
+  private async resolveCanvasStartUrl(courseId: string, contentId: string): Promise<string> {
+    const classicId = extractClassicQuizId(contentId);
+    if (classicId) {
+      const quiz = await this.assessments.getQuiz(classicId);
+      return resolveClassicCanvasUrl(this.config, courseId, classicId, undefined, quiz?.htmlUrl);
+    }
+    const setting = await this.assessments.getContentSebSetting(contentId);
+    if (!setting) {
+      throw new Error("Assessment not found");
+    }
+    return this.resolveNewQuizStartUrl(courseId, contentId, setting);
   }
 
   private generateSetupCheckConfig(): Buffer {
@@ -1385,7 +1542,9 @@ function allowedDomains(setting: QuizSebSetting | ContentSebSetting): string[] {
   const customEntries = urlRulesToAllowedEntries(setting.urlRules);
   return Array.from(
     new Set([
-      ...(setting.ssoDomains || []),
+      // Legacy SSO entries are intentionally excluded. Student Canvas session
+      // handoff starts the assessment without granting the identity provider
+      // access inside the locked SEB session.
       ...(setting.educationalToolDomains || []),
       ...customEntries,
       ...allowlistEntriesForExternalTools(setting.externalTools)
@@ -1482,6 +1641,10 @@ function normalizedPublicSebContentId(contentId: string | undefined | null): str
   return extractClassicQuizId(canonicalContentId);
 }
 
+function requiresStudentSessionHandoff(principal: VerifiedLtiPrincipal): boolean {
+  return isVerifiedStudent(principal) && !isVerifiedInstructor(principal);
+}
+
 function isSafeConfigNavigation(request: Request): boolean {
   const fetchSite = request.header("sec-fetch-site")?.toLowerCase();
   return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
@@ -1518,6 +1681,31 @@ function consumePendingSebLaunch(
     pending.subject === principal.subject &&
     pending.deploymentId === principal.deploymentId
   );
+}
+
+function isDirectLtiLaunchReplay(request: Request, config: AppConfig, courseId: string, contentId: string): boolean {
+  const completed = request.session?.completedSebLaunch;
+  if (
+    !completed ||
+    completed.courseId !== courseId ||
+    completed.contentId !== contentId ||
+    Date.now() - completed.issuedAt < 0 ||
+    Date.now() - completed.issuedAt > 86_400_000
+  ) {
+    return false;
+  }
+  const targetLinkUri = request.session?.launchData?.targetLinkUri;
+  try {
+    const target = new URL(targetLinkUri || "");
+    const tool = new URL(config.getRequiredToolUrl());
+    if (target.origin !== tool.origin || target.search || target.hash) {
+      return false;
+    }
+    const match = target.pathname.match(/^\/seb\/launch\/([^/]{1,300})$/u);
+    return !!match && canonicalSebConfigContentId(decodeURIComponent(match[1])) === contentId;
+  } catch {
+    return false;
+  }
 }
 
 async function saveSebSession(request: Request): Promise<void> {

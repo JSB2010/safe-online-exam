@@ -193,6 +193,7 @@
         accessCodeAutomationKey: null,
         newQuizPrimeAttemptCounts: new Map(),
         newQuizPrimeTimers: new Map(),
+        newQuizProofFailureKeys: new Set(),
         accessCodeSubmitClickKey: null,
         accessCodeChallengeHandledKey: null,
         dismissedLaunchPromptKey: null,
@@ -706,9 +707,17 @@
         const retryButton = document.getElementById('seb-access-code-retry-button');
         if (retryButton) {
             retryButton.addEventListener('click', () => {
+                const quizInfo = extractQuizInfo();
+                if (quizInfo && quizInfo.contentType === 'NEW_QUIZ') {
+                    resumeNewQuizAccessCodePrime(quizInfo);
+                }
                 resetAccessCodeAutomation();
                 hideAccessCodeProgressOverlay();
-                autoFillAccessCode();
+                if (quizInfo && quizInfo.contentType === 'NEW_QUIZ') {
+                    primeNewQuizAccessCode(quizInfo);
+                } else {
+                    autoFillAccessCode();
+                }
             });
         }
     }
@@ -1718,6 +1727,10 @@
             return;
         }
         const key = quizKey(quizInfo);
+        if (state.newQuizProofFailureKeys.has(key)) {
+            debugLog('New Quiz access-code priming is paused after a failed verification');
+            return;
+        }
         const currentQuizInfo = extractQuizInfo();
         if (!currentQuizInfo || quizKey(currentQuizInfo) !== key) {
             return;
@@ -1740,6 +1753,9 @@
             return;
         }
         const key = quizKey(quizInfo);
+        if (state.newQuizProofFailureKeys.has(key)) {
+            return;
+        }
         if (state.newQuizPrimeTimers.has(key)) {
             return;
         }
@@ -1750,12 +1766,42 @@
         state.newQuizPrimeTimers.set(key, timer);
     }
 
+    function pauseNewQuizAccessCodePrime(quizInfo) {
+        if (!quizInfo || quizInfo.contentType !== 'NEW_QUIZ') {
+            return;
+        }
+        const key = quizKey(quizInfo);
+        state.newQuizProofFailureKeys.add(key);
+        const timer = state.newQuizPrimeTimers.get(key);
+        if (timer) {
+            clearTimeout(timer);
+            state.newQuizPrimeTimers.delete(key);
+        }
+    }
+
+    function resumeNewQuizAccessCodePrime(quizInfo) {
+        if (!quizInfo || quizInfo.contentType !== 'NEW_QUIZ') {
+            return;
+        }
+        const key = quizKey(quizInfo);
+        state.newQuizProofFailureKeys.delete(key);
+        state.newQuizPrimeAttemptCounts.delete(key);
+        const timer = state.newQuizPrimeTimers.get(key);
+        if (timer) {
+            clearTimeout(timer);
+            state.newQuizPrimeTimers.delete(key);
+        }
+    }
+
     async function requestAndFillAccessCode(quizInfo, shouldShowAccessCodeErrors) {
         try {
             debugLog('Requesting SEB access proof...');
             const proofResult = await requestAccessProofToken(quizInfo.courseId, quizInfo.quizId);
             if (!proofResult.proofToken) {
                 debugLog('No SEB access proof available', 'warn');
+                if (proofResult.retryable !== true) {
+                    pauseNewQuizAccessCodePrime(quizInfo);
+                }
                 releaseAccessCodeAutomation(quizInfo);
                 showAutoFillError(
                     proofResult.errorMessage ||
@@ -1772,6 +1818,7 @@
                 attemptAutoFillWithRetry(accessCode, 0, shouldShowAccessCodeErrors);
             } else {
                 debugLog('No access code available for auto-fill', 'warn');
+                pauseNewQuizAccessCodePrime(quizInfo);
                 releaseAccessCodeAutomation(quizInfo);
                 showAutoFillError(
                     'The quiz access code could not be retrieved. Reload the quiz in SEB, or ask your instructor for help.',
@@ -1780,6 +1827,7 @@
             }
         } catch (error) {
             debugLog('Error fetching access code: ' + errorMessage(error), 'warn');
+            pauseNewQuizAccessCodePrime(quizInfo);
             releaseAccessCodeAutomation(quizInfo);
             showAutoFillError(
                 'The quiz access code could not be retrieved. Check your connection, reload the quiz in SEB, or ask your instructor for help.',
@@ -1877,6 +1925,7 @@
             debugLog('No SEB Config Key hash available from SEB security API', 'warn');
             return {
                 proofToken: null,
+                retryable: true,
                 errorMessage:
                     'Safe Exam Browser could not read the Config Key for this quiz. Reopen the quiz from Canvas using the Safe Exam Browser link.'
             };

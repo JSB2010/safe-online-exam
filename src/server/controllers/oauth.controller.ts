@@ -5,7 +5,12 @@ import { AppConfig } from "../config/app-config.js";
 import { renderAppShell } from "../http/app-shell.js";
 import { discardResponseBody, readBoundedUtf8Response } from "../http/bounded-response.js";
 import { isUpstreamRequestTimeout, withUpstreamDeadline } from "../http/upstream-deadline.js";
-import { isCanvasRestUserId, isVerifiedInstructor, verifiedLtiPrincipal } from "../security/verified-lti-principal.js";
+import {
+  isCanvasRestUserId,
+  isVerifiedInstructor,
+  isVerifiedStudent,
+  verifiedLtiPrincipal
+} from "../security/verified-lti-principal.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
 
@@ -57,30 +62,32 @@ export class OAuthController {
       response.status(403).send("OAuth identity does not match the validated Canvas launch");
       return;
     }
-    const clientId = this.config.value.canvas.oauthClientId;
-    if (!clientId) {
-      response.status(500).send("Canvas API OAuth client id is not configured");
+    await this.beginAuthorization(request, response, principal, "canvas-oauth-v2", canvasScopes(), query.redirect_url);
+  }
+
+  @Get("/student-session-authorize")
+  async studentSessionAuthorize(@Req() request: Request, @Res() response: Response): Promise<void> {
+    const principal = verifiedLtiPrincipal(request);
+    if (!principal) {
+      response.status(401).send("A validated Canvas launch is required");
       return;
     }
-    const redirectUri = this.oauthRedirectUri();
-    const statePayload: Record<string, string> = {
-      purpose: "canvas-oauth-v2",
-      canvasUserId: userId,
-      ltiSubject: principal.subject,
-      courseId,
-      issuer: principal.issuer,
-      deploymentId: principal.deploymentId,
-      sessionBinding: oauthSessionBinding(request.sessionID),
-      redirectUrl: safeLocalRedirect(query.redirect_url)
-    };
-    const state = await this.ltiState.createState(statePayload);
-    const authUrl = new URL(`${this.config.getCanvasDomain()}/login/oauth2/auth`);
-    authUrl.searchParams.set("client_id", clientId);
-    authUrl.searchParams.set("response_type", "code");
-    authUrl.searchParams.set("redirect_uri", redirectUri);
-    authUrl.searchParams.set("state", state);
-    authUrl.searchParams.set("scope", canvasScopes().join(" "));
-    response.redirect(authUrl.toString());
+    if (!isVerifiedStudent(principal) || isVerifiedInstructor(principal)) {
+      response.status(403).send("Student access is required");
+      return;
+    }
+    if (!request.sessionID) {
+      response.status(401).send("A validated Canvas session is required");
+      return;
+    }
+    await this.beginAuthorization(
+      request,
+      response,
+      principal,
+      "canvas-student-session-oauth-v1",
+      studentSessionScopes(),
+      "/lti/launch"
+    );
   }
 
   @Get("/oauth2callback")
@@ -102,10 +109,17 @@ export class OAuthController {
     try {
       const state = this.ltiState.peekState(query.state);
       const principal = verifiedLtiPrincipal(request);
+      if (!principal) {
+        throw new Error("OAuth callback does not match the initiating Canvas session");
+      }
+      const expectedRole =
+        state.purpose === "canvas-oauth-v2"
+          ? isVerifiedInstructor(principal)
+          : state.purpose === "canvas-student-session-oauth-v1"
+            ? isVerifiedStudent(principal) && !isVerifiedInstructor(principal)
+            : false;
       if (
-        state.purpose !== "canvas-oauth-v2" ||
-        !principal ||
-        !isVerifiedInstructor(principal) ||
+        !expectedRole ||
         !request.sessionID ||
         state.sessionBinding !== oauthSessionBinding(request.sessionID) ||
         state.canvasUserId !== principal.canvasUserId ||
@@ -127,6 +141,16 @@ export class OAuthController {
         scope: token.scope || null,
         expiresIn: token.expires_in
       });
+      if (state.purpose === "canvas-student-session-oauth-v1") {
+        response.send(
+          renderAppShell({
+            title: "Canvas Connected",
+            view: "student-session-connected",
+            initialData: { returnUrl: safeLocalRedirect(state.redirectUrl) }
+          })
+        );
+        return;
+      }
       response.redirect(safeLocalRedirect(state.redirectUrl));
     } catch {
       response.status(400).send(
@@ -155,6 +179,39 @@ export class OAuthController {
 
   private oauthRedirectUri(): string {
     return this.config.value.canvas.redirectUri || `${this.config.getRequiredToolUrl()}/api/oauth2callback`;
+  }
+
+  private async beginAuthorization(
+    request: Request,
+    response: Response,
+    principal: NonNullable<ReturnType<typeof verifiedLtiPrincipal>>,
+    purpose: "canvas-oauth-v2" | "canvas-student-session-oauth-v1",
+    scopes: string[],
+    redirectUrl?: string
+  ): Promise<void> {
+    const clientId = this.config.value.canvas.oauthClientId;
+    if (!clientId || !request.sessionID) {
+      response.status(500).send("Canvas API OAuth client id is not configured");
+      return;
+    }
+    const redirectUri = this.oauthRedirectUri();
+    const state = await this.ltiState.createState({
+      purpose,
+      canvasUserId: principal.canvasUserId,
+      ltiSubject: principal.subject,
+      courseId: principal.courseId,
+      issuer: principal.issuer,
+      deploymentId: principal.deploymentId,
+      sessionBinding: oauthSessionBinding(request.sessionID),
+      redirectUrl: safeLocalRedirect(redirectUrl)
+    });
+    const authUrl = new URL(`${this.config.getCanvasDomain()}/login/oauth2/auth`);
+    authUrl.searchParams.set("client_id", clientId);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("redirect_uri", redirectUri);
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("scope", scopes.join(" "));
+    response.redirect(authUrl.toString());
   }
 
   private async exchangeCode(
@@ -293,4 +350,8 @@ export function canvasScopes(): string[] {
     "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
     "url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id"
   ];
+}
+
+export function studentSessionScopes(): string[] {
+  return ["url:GET|/api/v1/login/session_token"];
 }

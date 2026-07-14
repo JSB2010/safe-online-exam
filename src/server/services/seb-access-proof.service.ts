@@ -9,7 +9,12 @@ export class SebAccessProofService {
 
   constructor(private readonly repositories: RepositoryProvider) {}
 
-  async mintProof(courseId: string, contentId: string, generationDigest: string): Promise<string> {
+  async mintProof(
+    courseId: string,
+    contentId: string,
+    generationDigest: string,
+    settingsFingerprint: string
+  ): Promise<string> {
     const token = randomBytes(32).toString("base64url");
     await this.repositories.value.transientStates.save(proofDocumentId(token), {
       kind: "seb-proof-v2",
@@ -19,6 +24,7 @@ export class SebAccessProofService {
       courseId,
       contentId,
       generationDigest,
+      settingsFingerprint,
       expiresAt: new Date(Date.now() + this.ttlSeconds * 1000)
     });
     return token;
@@ -28,27 +34,28 @@ export class SebAccessProofService {
     token: string | undefined | null,
     courseId: string,
     contentId: string,
-    generationDigest: string
-  ): Promise<boolean> {
+    settingsFingerprint: string
+  ): Promise<string | null> {
     if (!token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
-      return false;
+      return null;
     }
     const record = await this.repositories.value.transientStates.consume(proofDocumentId(token));
     if (!record) {
-      return false;
+      return null;
     }
-    return (
-      record.kind === "seb-proof-v2" &&
+    return record.kind === "seb-proof-v2" &&
       record.version === 2 &&
       record.audience === "seb-access-code" &&
       record.action === "release" &&
       !!record.courseId &&
       !!record.contentId &&
       !!record.generationDigest &&
+      !!record.settingsFingerprint &&
       safeEqual(record.courseId, courseId) &&
       safeEqual(record.contentId, contentId) &&
-      safeEqual(record.generationDigest, generationDigest)
-    );
+      safeEqual(record.settingsFingerprint, settingsFingerprint)
+      ? record.generationDigest
+      : null;
   }
 
   getTokenTtlSeconds(): number {
@@ -95,6 +102,27 @@ export class SebAccessProofService {
       safeEqual(record.contentId, contentId) &&
       safeEqual(record.generationDigest, generationDigest)
     );
+  }
+
+  async getExitGrant(token: string | undefined | null, courseId: string, contentId: string): Promise<string | null> {
+    if (!token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      return null;
+    }
+    const record = await this.repositories.value.transientStates.get(exitGrantDocumentId(token));
+    if (!record || isExpired(record.expiresAt)) {
+      return null;
+    }
+    return record.kind === "seb-exit-grant" &&
+      record.version === 1 &&
+      record.audience === "seb-exit" &&
+      record.action === "show-quit-link" &&
+      typeof record.courseId === "string" &&
+      typeof record.contentId === "string" &&
+      typeof record.generationDigest === "string" &&
+      safeEqual(record.courseId, courseId) &&
+      safeEqual(record.contentId, contentId)
+      ? record.generationDigest
+      : null;
   }
 
   getExitGrantTtlSeconds(): number {

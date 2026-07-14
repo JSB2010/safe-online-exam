@@ -4,7 +4,7 @@ import { sebPasswordPolicyViolation } from "../services/seb-password-policy.js";
 export type AppProfile = "dev" | "prod" | "test";
 
 const LOCAL_CANVAS_DOMAIN = "https://canvas.example.test";
-const DEFAULT_SEB_REQUIRED_DOMAINS = "accounts.google.com,ssl.gstatic.com,www.gstatic.com,fonts.gstatic.com";
+const DEFAULT_SEB_REQUIRED_DOMAINS = "";
 
 export interface AppConfigSnapshot {
   profile: AppProfile;
@@ -319,6 +319,8 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
   for (const domain of snapshot.seb.requiredDomains) {
     if (!isConcreteHostname(domain)) {
       errors.push(`SEB_REQUIRED_DOMAINS contains an unsafe hostname: ${domain}`);
+    } else if (isBlockedIdentityProviderHostname(domain)) {
+      errors.push(`SEB_REQUIRED_DOMAINS must not include an identity-provider hostname: ${domain}`);
     }
   }
 
@@ -421,6 +423,18 @@ function isConcreteHostname(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isBlockedIdentityProviderHostname(value: string): boolean {
+  const hostname = value.toLowerCase();
+  return (
+    hostname === "accounts.google.com" ||
+    hostname === "accounts.youtube.com" ||
+    hostname === "sso.canvaslms.com" ||
+    hostname === "www.google.com" ||
+    hostname === "www.youtube.com" ||
+    hostname === "www.googleapis.com"
+  );
 }
 
 export function resolveProfile(env: NodeJS.ProcessEnv): AppProfile {

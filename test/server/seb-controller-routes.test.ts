@@ -256,6 +256,44 @@ describe("SebController route contracts", () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it("does not mint a student config grant without the mandatory Canvas session connection", async () => {
+    const { controller, canvasApi, configGrants } = controllerWith({
+      canvasApi: { hasSessionTokenAccess: vi.fn().mockResolvedValue(false) }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({
+      status: 403,
+      response: expect.objectContaining({ error_code: "CANVAS_SESSION_AUTHORIZATION_REQUIRED" })
+    });
+    expect(canvasApi.hasSessionTokenAccess).toHaveBeenCalledWith("student-1");
+    expect(configGrants.mintGrant).not.toHaveBeenCalled();
+  });
+
+  it("uses the same scoped Canvas session request in the student readiness check", async () => {
+    const { controller, canvasApi } = controllerWith();
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    await expect(
+      controller.verifyStudentSessionReadiness(requestDouble("/api/seb/session-readiness", token))
+    ).resolves.toEqual({ success: true, checks: { canvasSessionAuthorization: true } });
+    expect(canvasApi.getSessionToken).toHaveBeenCalledWith("student-1", "https://canvas.example.edu/courses/course-1");
+  });
+
   it("does not mint a learner config grant for stale or missing cached Canvas state", async () => {
     const { controller, configGrants } = controllerWith({
       assessments: {
@@ -590,7 +628,7 @@ describe("SebController route contracts", () => {
     expect(response.redirect).toHaveBeenCalledWith("https://canvas.example.edu/courses/course-1/quizzes/23455/take");
   });
 
-  it("consumes a signed one-time handoff and redirects straight to the one-time SEB URL", async () => {
+  it("consumes a signed one-time handoff and returns a replayed direct LTI launch to its Canvas course", async () => {
     const setting = {
       quizId: "23455",
       courseId: "course-1",
@@ -612,6 +650,7 @@ describe("SebController route contracts", () => {
       }
     });
     const request = requestDouble("/seb/launch/classicquiz_23455");
+    request.session.launchData.targetLinkUri = "https://tool.example.edu/seb/launch/classicquiz_23455";
     request.session.pendingSebLaunch = {
       courseId: "course-1",
       contentId: "classicquiz_23455",
@@ -645,8 +684,33 @@ describe("SebController route contracts", () => {
     const replayResponse = responseDouble();
     await controller.launchGet(request, replayResponse, "classicquiz_23455");
     expect(configGrants.mintGrant).toHaveBeenCalledTimes(1);
-    expect(replayResponse.redirect).not.toHaveBeenCalledWith(303, expect.stringMatching(/^sebs:/u));
-    expect(replayResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-download"'));
+    expect(replayResponse.redirect).toHaveBeenCalledWith(303, "https://canvas.example.edu/courses/course-1");
+    expect(replayResponse.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps the course-navigation compatibility launch page available", async () => {
+    const setting = {
+      quizId: "23455",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      urlRules: [],
+      externalTools: []
+    };
+    const { controller } = controllerWith({
+      assessments: {
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" }),
+        getSebSettingForQuiz: vi.fn().mockResolvedValue(setting)
+      }
+    });
+    const request = requestDouble("/seb/launch/classicquiz_23455");
+    const response = responseDouble();
+
+    await controller.launchGet(request, response, "classicquiz_23455");
+
+    expect(response.redirect).not.toHaveBeenCalled();
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-download"'));
   });
 
   it("keeps compatibility GETs non-mutating and rejects cross-site navigation", async () => {
@@ -716,6 +780,12 @@ function controllerWith(options: Record<string, any> = {}) {
     consumeLtiStateValidationAttempt: vi.fn().mockResolvedValue(true),
     ...options.distributedAdmission
   };
+  const canvasApi = {
+    hasAccessToken: vi.fn().mockResolvedValue(true),
+    hasSessionTokenAccess: vi.fn().mockResolvedValue(true),
+    getSessionToken: vi.fn().mockResolvedValue("https://canvas.example.edu/login/session_token?opaque=secret"),
+    ...options.canvasApi
+  };
   const ltiService = {
     validateToken: vi.fn().mockResolvedValue({
       ltiSubject: "opaque-student-1",
@@ -752,9 +822,10 @@ function controllerWith(options: Record<string, any> = {}) {
     new SebConfigKeyService(),
     proofService,
     configGrants as any,
-    distributedAdmission as any
+    distributedAdmission as any,
+    canvasApi as any
   );
-  return { controller, assessments, sebDetector, configGrants, ltiService, ltiState, distributedAdmission };
+  return { controller, assessments, sebDetector, configGrants, ltiService, ltiState, distributedAdmission, canvasApi };
 }
 
 function configDouble() {

@@ -647,6 +647,50 @@ describe("Canvas SEB detector script", () => {
     expect(context.document.getElementById("seb-exam-tools-sidebar")).toBeNull();
   });
 
+  it("pauses New Quiz priming after a proof rejection until the student explicitly retries", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31358",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": {
+          __status: 403,
+          success: false,
+          error_code: "INVALID_SEB_CONFIG_PROOF"
+        }
+      },
+      body: `
+        <main>
+          <h1>New Quiz for SEB</h1>
+          <p>An access code is required to start.</p>
+          <input id="access-code-entry" type="text" />
+          <button type="button" data-automation="sdk-submit-access-code-button">Submit</button>
+          <section><h2>Attempt History</h2><a href="#">Attempt 1</a></section>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(8_000);
+    await flushPromises();
+
+    const proofCalls = () =>
+      context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-proof/")).length;
+    expect(proofCalls()).toBe(1);
+    expect(context.document.body.textContent).toContain("Something went wrong");
+    expect(context.document.getElementById("seb-access-code-retry-button")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(proofCalls()).toBe(1);
+
+    context.document.querySelector<HTMLButtonElement>("#seb-access-code-retry-button")?.click();
+    await flushPromises();
+    expect(proofCalls()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(proofCalls()).toBe(2);
+  });
+
   it("exits a confirmed New Quiz when Canvas renders results without changing the take URL", async () => {
     const exitGrant = "e".repeat(43);
     const context = createDetectorContext({

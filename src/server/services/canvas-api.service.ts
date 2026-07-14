@@ -58,6 +58,8 @@ const CANVAS_DISCOVERY_PAGE_SIZE = 100;
 const CANVAS_DISCOVERY_MAX_PAGES = 100;
 export const CANVAS_API_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 export const CANVAS_OAUTH_RESPONSE_MAX_BYTES = 64 * 1024;
+export const CANVAS_API_USER_AGENT = "SEB-CanvasLTI/1.0";
+export const CANVAS_SESSION_TOKEN_SCOPE = "url:GET|/api/v1/login/session_token";
 
 @Injectable()
 export class CanvasApiService {
@@ -199,6 +201,18 @@ export class CanvasApiService {
     return !!(await this.getAccessToken(userId));
   }
 
+  async hasSessionTokenAccess(userId: string): Promise<boolean> {
+    const accessToken = await this.getAccessToken(userId);
+    if (!accessToken) {
+      return false;
+    }
+    const token = await this.getStoredToken(userId);
+    // Some Canvas installations omit scope from an OAuth response. In that
+    // case the readiness request verifies the endpoint rather than rejecting
+    // a potentially valid credential based on incomplete metadata alone.
+    return !token?.scope || token.scope.split(/\s+/u).includes(CANVAS_SESSION_TOKEN_SCOPE);
+  }
+
   async getAccessToken(userId: string, signal?: AbortSignal): Promise<string | null> {
     const token = await this.getStoredToken(userId);
     if (!token?.accessToken) {
@@ -231,6 +245,30 @@ export class CanvasApiService {
 
   async clearAccessToken(userId: string): Promise<void> {
     await this.repositories.value.oauthTokens.delete(userId);
+  }
+
+  async getSessionToken(userId: string, returnTo: string): Promise<string> {
+    const validatedReturnTo = this.validateCanvasUrl(returnTo, "Canvas session return URL");
+    const endpoint = new URL(`${this.getCanvasApiBaseUrl()}/login/session_token`);
+    endpoint.searchParams.set("return_to", validatedReturnTo);
+    let response: unknown;
+    try {
+      response = await this.request<unknown>(userId, endpoint.toString());
+    } catch (error) {
+      // A student token that Canvas rejects or cannot use for this scoped
+      // endpoint must not leave the student appearing connected on the next
+      // launch. The mandatory onboarding screen will request a replacement.
+      if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
+        await this.clearAccessToken(userId);
+      }
+      throw error;
+    }
+    const sessionUrl =
+      response && typeof response === "object" ? (response as Record<string, unknown>).session_url : null;
+    if (typeof sessionUrl !== "string" || !sessionUrl) {
+      throw new CanvasApiRequestError("Canvas did not return a session URL.", userId, endpoint.toString(), 502);
+    }
+    return this.validateCanvasUrl(sessionUrl, "Canvas session URL");
   }
 
   async request<T = unknown>(userId: string, url: string, init: RequestInit = {}): Promise<T> {
@@ -375,7 +413,10 @@ export class CanvasApiService {
       const exchange = async (signal: AbortSignal): Promise<CanvasOAuthTokenResponse | null> => {
         const response = await fetch(`${this.getCanvasDomain()}/login/oauth2/token`, {
           method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "user-agent": CANVAS_API_USER_AGENT
+          },
           body,
           signal
         });
@@ -428,9 +469,25 @@ export class CanvasApiService {
       signal,
       headers: {
         ...Object.fromEntries(new Headers(init.headers).entries()),
-        authorization: `Bearer ${accessToken}`
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": CANVAS_API_USER_AGENT
       }
     });
+  }
+
+  private validateCanvasUrl(value: string, label: string): string {
+    let url: URL;
+    let canvas: URL;
+    try {
+      url = new URL(value);
+      canvas = new URL(this.getCanvasDomain());
+    } catch {
+      throw new CanvasApiRequestError(`${label} is invalid.`, "", value, 502);
+    }
+    if (url.protocol !== "https:" || url.origin !== canvas.origin || url.username || url.password || url.hash) {
+      throw new CanvasApiRequestError(`${label} must stay on the configured Canvas origin.`, "", value, 502);
+    }
+    return url.toString();
   }
 
   private async hydrateNewQuiz(

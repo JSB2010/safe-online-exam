@@ -3,13 +3,13 @@ import { join } from "node:path";
 import cookieParser from "cookie-parser";
 import express from "express";
 import session from "express-session";
-import { ForbiddenException } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
+import type { CorsOptionsCallback } from "@nestjs/common/interfaces/external/cors-options.interface.js";
 import { AppModule } from "./app.module.js";
 import { AppConfig } from "./config/app-config.js";
 import { RepositoryProvider } from "./data/repositories.js";
 import { RepositorySessionStore } from "./data/session-store.js";
-import { isAllowedCorsOrigin } from "./http/cors.js";
+import { corsOptionsForRequest } from "./http/cors.js";
 import { applySecurityHeaders } from "./http/security-headers.js";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -56,18 +56,9 @@ async function bootstrap(): Promise<void> {
     })
   );
 
-  app.enableCors({
-    origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
-      if (isAllowedCorsOrigin(origin, config)) {
-        callback(null, true);
-        return;
-      }
-      callback(new ForbiddenException("Origin not allowed by CORS"));
-    },
-    credentials: false,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["content-type", "x-seb-proof-token", "x-safeexambrowser-configkeyhash", "x-seb-config-key-hash"]
-  });
+  app.enableCors((request: express.Request, callback: CorsOptionsCallback) =>
+    callback(null, corsOptionsForRequest(request, config))
+  );
 
   await app.listen(config.port, process.env.HOST || "0.0.0.0");
 }

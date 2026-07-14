@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OAuthController, canvasScopes } from "../../src/server/controllers/oauth.controller.js";
+import { OAuthController, canvasScopes, studentSessionScopes } from "../../src/server/controllers/oauth.controller.js";
 import { UpstreamRequestTimeoutError } from "../../src/server/http/upstream-deadline.js";
 
 const instructorRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor";
@@ -15,6 +15,10 @@ describe("canvasScopes", () => {
       "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
       "url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id"
     ]);
+  });
+
+  it("uses a separate least-privilege scope for student session handoff", () => {
+    expect(studentSessionScopes()).toEqual(["url:GET|/api/v1/login/session_token"]);
   });
 });
 
@@ -115,6 +119,35 @@ describe("OAuthController", () => {
     expect(canvasApi.clearAccessToken).not.toHaveBeenCalled();
   });
 
+  it("binds student session authorization to the active learner and requests only the session-token scope", async () => {
+    const studentController = new OAuthController(configDouble() as any, canvasApi as any, ltiState as any);
+    const response = responseDouble();
+
+    await studentController.studentSessionAuthorize(verifiedRequest({ roles: [learnerRole] }), response);
+
+    const redirectUrl = new URL(response.redirect.mock.calls[0][0]);
+    expect(redirectUrl.searchParams.get("scope")).toBe(studentSessionScopes().join(" "));
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purpose: "canvas-student-session-oauth-v1",
+        canvasUserId: "1",
+        courseId: "course-1",
+        redirectUrl: "/lti/launch"
+      })
+    );
+  });
+
+  it("allows every verified learner to begin required student session authorization", async () => {
+    const response = responseDouble();
+
+    await controller.studentSessionAuthorize(verifiedRequest({ roles: [learnerRole] }), response);
+
+    expect(response.redirect).toHaveBeenCalledOnce();
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({ purpose: "canvas-student-session-oauth-v1" })
+    );
+  });
+
   it("does not create a shared empty-session binding when the Express session id is absent", async () => {
     const request = verifiedRequest();
     delete request.sessionID;
@@ -199,6 +232,22 @@ describe("OAuthController", () => {
     });
     expect(request.session).toEqual(originalSession);
     expect(response.redirect).toHaveBeenCalledWith("/lti/launch");
+  });
+
+  it("renders a popup completion page after student session authorization", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      tokenResponse({ access_token: "student-token", scope: studentSessionScopes().join(" "), user: { id: 1 } })
+    );
+    ltiState.peekState.mockReturnValue(validState({ purpose: "canvas-student-session-oauth-v1" }));
+    const response = responseDouble();
+
+    await controller.callback(verifiedRequest({ roles: [learnerRole] }), response, {
+      code: "oauth-code",
+      state: "state"
+    });
+
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student-session-connected"'));
+    expect(response.redirect).not.toHaveBeenCalled();
   });
 
   it("rejects a callback completed in a different session before token exchange", async () => {

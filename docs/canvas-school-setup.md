@@ -93,6 +93,75 @@ If Canvas does not enforce scopes on this key, the OAuth token can use any endpo
 
 If an API key already exists, open it and confirm the redirect URI exactly matches `${TOOL_URL}/api/oauth2callback`, then confirm the scopes above are enabled. After changing redirect URIs or scopes, instructors who already authorized the app may need to reauthorize from the app.
 
+### Required student Canvas-session handoff
+
+Students cannot use this tool until the API OAuth Developer Key includes this exact scoped permission:
+
+```text
+url:GET|/api/v1/login/session_token
+```
+
+On the first visit to **Safe Exam Browser Quizzes**, the student sees only **Connect Canvas** and completes Canvas OAuth once. The app requests only this session-token scope for that student, stores the resulting OAuth credential server-side, and obtains a fresh short-lived Canvas session URL only when SEB creates an assessment configuration. It never reads or copies the student's Chrome cookies. The Canvas authorization opens from a user-initiated popup so the course-navigation tool remains in Canvas's iframe.
+
+There is no dashboard reconnect button. A credential issued before this scope was added, or one Canvas later revokes, is cleared when the scoped session request fails. The next Canvas launch returns the student to **Connect Canvas**. This is a one-time authorization per student unless Canvas revokes it or the app later requests a newly added scope.
+
+#### If the scope is missing from the Canvas editor
+
+Some Canvas-hosted instances do not display `url:GET|/api/v1/login/session_token` in the Developer Key scope picker even when the instance accepts it through the Developer Keys API. Do not substitute a similarly named `Logins` scope. A root-account administrator can add the exact endpoint scope through Canvas's documented [Developer Keys API](https://canvas.instructure.com/doc/api/developer_keys.html). Canvas documents both `GET /api/v1/accounts/:account_id/developer_keys` and `PUT /api/v1/developer_keys/:id`, including the `developer_key[scopes]` array.
+
+Run the following in `zsh` as a root-account administrator. It requires `curl` and `jq`, reads the current scope list, adds the required scope only when absent, and sends the complete resulting list back to Canvas. It intentionally prints only non-secret key metadata and scopes. Do not paste the root-admin token into the shell history, a ticket, or this repository.
+
+```zsh
+export CANVAS_BASE_URL="https://school.instructure.com"
+export CANVAS_ACCOUNT_ID="1"
+export CANVAS_DEVELOPER_KEY_ID="1234"
+read -r -s "CANVAS_ROOT_ADMIN_TOKEN?Canvas root-admin token: "
+printf '\n'
+export CANVAS_ROOT_ADMIN_TOKEN
+
+key_payload="$(
+  curl --fail --silent --show-error \
+    -H "Authorization: Bearer ${CANVAS_ROOT_ADMIN_TOKEN}" \
+    "${CANVAS_BASE_URL}/api/v1/accounts/${CANVAS_ACCOUNT_ID}/developer_keys?per_page=100" |
+    jq -ce --argjson key_id "${CANVAS_DEVELOPER_KEY_ID}" \
+      '[.[] | select(.id == $key_id)] | if length == 1 then .[0] else error("Developer Key not found in this root account") end'
+)"
+
+scope_args=()
+while IFS= read -r scope; do
+  scope_args+=(--data-urlencode "developer_key[scopes][]=${scope}")
+done < <(
+  printf '%s' "${key_payload}" |
+    jq -r --arg required 'url:GET|/api/v1/login/session_token' '
+      (.scopes // []) as $existing |
+      if ($existing | index($required)) then
+        $existing[]
+      else
+        ($existing + [$required])[]
+      end
+    '
+)
+
+curl --fail --silent --show-error --request PUT \
+  -H "Authorization: Bearer ${CANVAS_ROOT_ADMIN_TOKEN}" \
+  "${scope_args[@]}" \
+  "${CANVAS_BASE_URL}/api/v1/developer_keys/${CANVAS_DEVELOPER_KEY_ID}" |
+  jq '{id, name, workflow_state, require_scopes, scopes}'
+
+unset key_payload scope_args CANVAS_ROOT_ADMIN_TOKEN
+```
+
+The final command must show `url:GET|/api/v1/login/session_token` in `scopes` and preserve every previously configured scope. If it does not, stop. Do not save the visual Developer Key form while it does not display this scope; use the API procedure again and verify the resulting scope array after any later edit.
+
+Then complete the rollout in this order:
+
+1. Deploy the service after the Developer Key update.
+2. Have a test student open **Safe Exam Browser Quizzes** in a normal browser and select **Connect Canvas**. A student previously connected to the app opens the tool again and is automatically routed to the connection screen only when the stored credential is no longer valid.
+3. Download a fresh `.seb` file and launch a Classic Quiz and a New Quiz. The app obtains the Canvas session URL at config-download time; it never stores or injects the normal-browser cookie.
+4. Keep the Developer Keys API response and the student authorization result out of logs and support tickets. They can contain credentials or personal information.
+
+Canvas does not add newly granted scopes to existing OAuth tokens. Reauthorization in step 2 is therefore required after this scope is added. If the scope is later removed, Canvas invalidates tokens issued from that Developer Key; restore the scope and have affected users authorize again. See Canvas's [Developer Key scope-change behavior](https://canvas.instructure.com/doc/api/file.developer_keys.html) for the platform rules.
+
 ## Create the LTI Developer Key
 
 1. In Canvas Global Navigation, select `Admin`, then open the root account or target school sub-account.
@@ -123,7 +192,7 @@ Canvas also supports `Paste JSON` and `Manual Entry` for LTI keys. If the JSON U
 - `custom_fields.canvas_lis_membership_roles`: `$com.Instructure.membership.roles`
 - `custom_fields.canvas_membership_permissions`: `$Canvas.membership.permissions<...>`
 
-After changing `${TOOL_URL}/lti/config`, update and save the existing Canvas LTI Developer Key from that URL. Deploying the service does not by itself rewrite the configuration Canvas stored when the key was created. Confirm a fresh launch contains a numeric `canvas_user_id`; anonymous launches intentionally fail closed before Canvas API OAuth. If Canvas requires recreating and reinstalling the key, record the new Deployment ID and update `LTI_DEPLOYMENT_ID` before relaunching the tool.
+After changing `${TOOL_URL}/lti/config`, update and save the existing Canvas LTI Developer Key from that URL. Deploying the service does not by itself rewrite the configuration Canvas stored when the key was created. The Course Navigation placement deliberately omits `windowTarget`, which [Canvas documents as the in-frame launch behavior](https://developerdocs.instructure.com/services/canvas/external-tools/lti/placements/file.navigation_tools); do not add `_blank` unless a separate new-tab workflow is intended. Confirm a fresh launch contains a numeric `canvas_user_id`; anonymous launches intentionally fail closed before Canvas API OAuth. If Canvas requires recreating and reinstalling the key, record the new Deployment ID and update `LTI_DEPLOYMENT_ID` before relaunching the tool.
 
 ## Install the App for the Entire School
 
@@ -256,11 +325,13 @@ After installing the LTI app and applying the theme:
 6. Enable SEB for a Classic Quiz or New Quiz.
 7. Open the quiz-taking page in a normal browser and confirm the browser console loads `${TOOL_URL}/js/canvas-seb-detector.js`.
 8. Download the generated `.seb` file from the app.
-9. Open the quiz through SEB and confirm the access-code field is filled only after SEB launches with the generated configuration. Confirm the Exam tools sidebar is not shown on this access-code gate.
-10. For a New Quiz, confirm Canvas moves from `/assignments/:assignmentId/taking/:attemptId` to `/taking/:attemptId/take` after access-code validation. For both quiz types, confirm the approved Exam tools sidebar appears immediately on the active quiz-taking page and never on an attempt-history page.
-11. For both quiz types, cancel the final Canvas confirmation once and confirm the quiz remains open without a submission request or exit redirect.
-12. Submit again. For a Classic Quiz, confirm the detector waits for Canvas's completed-attempt response; for a New Quiz, confirm it waits for Canvas's authoritative results UI. In both cases, the SEB exit page must open only after that confirmation.
-13. Confirm the validated exit page shows a two-second countdown and closes SEB without an additional SEB warning or native quit-password prompt. Confirm its button closes SEB immediately, and that native quit before submission still requires the configured password.
+9. As a student, open **Safe Exam Browser Quizzes** in a normal browser and complete the required **Connect Canvas** step. Confirm the tool returns to the Canvas iframe and does not show a reconnect control. Download a fresh `.seb` file after the connection succeeds.
+10. Open the quiz through SEB and confirm the access-code field is filled only after SEB launches with the generated configuration. Confirm the Exam tools sidebar is not shown on this access-code gate.
+11. For a New Quiz, confirm Canvas moves from `/assignments/:assignmentId/taking/:attemptId` to `/taking/:attemptId/take` after access-code validation. For both quiz types, confirm the approved Exam tools sidebar appears immediately on the active quiz-taking page and never on an attempt-history page.
+12. For a New Quiz Config Key failure, confirm the error remains idle until the student selects **Try again**. It must not retry in the background. Correct the configuration or download a fresh `.seb` file before retrying.
+13. For both quiz types, cancel the final Canvas confirmation once and confirm the quiz remains open without a submission request or exit redirect.
+14. Submit again. For a Classic Quiz, confirm the detector waits for Canvas's completed-attempt response; for a New Quiz, confirm it waits for Canvas's authoritative results UI. In both cases, the SEB exit page must open only after that confirmation.
+15. Confirm the validated exit page shows a two-second countdown and closes SEB without an additional SEB warning or native quit-password prompt. Confirm its button closes SEB immediately, and that native quit before submission still requires the configured password.
 
 Useful service checks:
 

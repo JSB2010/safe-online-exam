@@ -3,7 +3,7 @@ import { HttpException } from "@nestjs/common";
 import type { AppConfig } from "../../src/server/config/app-config.js";
 import { apiError, noUserSession } from "../../src/server/http/api-error.js";
 import { renderAppShell, renderFallbackHtml } from "../../src/server/http/app-shell.js";
-import { isAllowedCorsOrigin } from "../../src/server/http/cors.js";
+import { corsOptionsForRequest, isAllowedCorsOrigin, isBrowserDocumentNavigation } from "../../src/server/http/cors.js";
 import { absoluteUrl, requestBaseUrl, sebSchemeUrl } from "../../src/server/http/request-url.js";
 import { securityHeaders } from "../../src/server/http/security-headers.js";
 
@@ -103,6 +103,59 @@ describe("HTTP helpers", () => {
 
     expect(isAllowedCorsOrigin("http://localhost:8080", config)).toBe(false);
     expect(isAllowedCorsOrigin("https://canvas-seb-prod.run.app", config)).toBe(true);
+  });
+
+  it("does not apply CORS to top-level browser navigations after OAuth", () => {
+    const config = {
+      profile: "dev",
+      toolUrl: "https://canvas-seb-dev.run.app",
+      getCanvasDomain: () => "https://canvas.example.edu"
+    } as AppConfig;
+    const documentNavigation = {
+      method: "GET",
+      header(name: string) {
+        return {
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-dest": "document",
+          origin: "https://accounts.example.edu"
+        }[name.toLowerCase()];
+      }
+    } as any;
+
+    expect(isBrowserDocumentNavigation(documentNavigation)).toBe(true);
+    expect(corsOptionsForRequest(documentNavigation, config)).toEqual({ origin: false });
+  });
+
+  it("continues to apply strict CORS to cross-origin fetch requests", () => {
+    const config = {
+      profile: "dev",
+      toolUrl: "https://canvas-seb-dev.run.app",
+      getCanvasDomain: () => "https://canvas.example.edu"
+    } as AppConfig;
+    const crossOriginFetch = {
+      method: "GET",
+      header(name: string) {
+        return {
+          "sec-fetch-mode": "cors",
+          "sec-fetch-dest": "empty",
+          origin: "https://attacker.example"
+        }[name.toLowerCase()];
+      }
+    } as any;
+
+    expect(isBrowserDocumentNavigation(crossOriginFetch)).toBe(false);
+    const options = corsOptionsForRequest(crossOriginFetch, config);
+    expect(options.origin).toBeTypeOf("function");
+    if (typeof options.origin !== "function") {
+      throw new Error("Expected a dynamic CORS origin policy");
+    }
+
+    let rejectedOriginError: Error | null = null;
+    options.origin("https://attacker.example", (error) => {
+      rejectedOriginError = error;
+    });
+    expect(rejectedOriginError).toBeInstanceOf(HttpException);
+    expect((rejectedOriginError as HttpException).getStatus()).toBe(403);
   });
 
   it("throws API errors with legacy-compatible response bodies", () => {

@@ -15,7 +15,7 @@ const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
 describe("LtiController role routing", () => {
   let controller: LtiController;
-  let canvasApi: { hasAccessToken: ReturnType<typeof vi.fn> };
+  let canvasApi: { hasAccessToken: ReturnType<typeof vi.fn>; hasSessionTokenAccess: ReturnType<typeof vi.fn> };
   let ltiService: { validateToken: ReturnType<typeof vi.fn> };
   let ltiState: {
     createState: ReturnType<typeof vi.fn>;
@@ -38,7 +38,10 @@ describe("LtiController role routing", () => {
   };
 
   beforeEach(() => {
-    canvasApi = { hasAccessToken: vi.fn().mockResolvedValue(true) };
+    canvasApi = {
+      hasAccessToken: vi.fn().mockResolvedValue(true),
+      hasSessionTokenAccess: vi.fn().mockResolvedValue(true)
+    };
     ltiService = { validateToken: vi.fn() };
     ltiState = {
       createState: vi.fn().mockResolvedValue("encoded-state"),
@@ -107,7 +110,25 @@ describe("LtiController role routing", () => {
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student"'));
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining("/seb/check/config.seb"));
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining("sebs://"));
-    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
+    expect(canvasApi.hasSessionTokenAccess).toHaveBeenCalledWith("student-1");
+  });
+
+  it("requires Canvas session authorization before rendering the student tool", async () => {
+    canvasApi.hasSessionTokenAccess.mockResolvedValue(false);
+    const response = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      response
+    );
+
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student-session-authorization"'));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"view":"student"'));
+    expect(assessments.getQuizzesForCourse).not.toHaveBeenCalled();
   });
 
   it("redirects valid OIDC login requests to Canvas authorization", async () => {
@@ -299,23 +320,10 @@ describe("LtiController role routing", () => {
         canvas_user_id: "$Canvas.user.id"
       })
     });
-    expect(metadata).toMatchObject({
-      extensions: [
-        {
-          settings: {
-            placements: [
-              expect.objectContaining({
-                placement: "course_navigation",
-                visibility: "members",
-                default: "enabled",
-                enabled: true,
-                windowTarget: "_blank"
-              })
-            ]
-          }
-        }
-      ]
-    });
+    const placement = metadata.extensions[0].settings.placements.find(
+      (candidate: { placement?: string }) => candidate.placement === "course_navigation"
+    );
+    expect(placement).not.toHaveProperty("windowTarget");
   });
 
   it("accepts a cross-site signed POST and returns removed deep-linking guidance", async () => {
@@ -479,6 +487,38 @@ describe("LtiController role routing", () => {
     expect(response.send).not.toHaveBeenCalled();
   });
 
+  it("requires Canvas session authorization before a direct SEB assessment launch", async () => {
+    const targetLinkUri = "https://tool.example.test/seb/launch/classicquiz_23455";
+    canvasApi.hasSessionTokenAccess.mockResolvedValue(false);
+    ltiState.peekState.mockReturnValue({
+      nonce: "nonce-1",
+      issuer: "https://canvas.example.test",
+      deploymentId: "deployment-1",
+      targetLinkUri,
+      [LTI_OIDC_TRANSACTION_ID_FIELD]: BROWSER_TRANSACTION.transactionId,
+      [LTI_OIDC_BROWSER_BINDING_FIELD]: BROWSER_TRANSACTION.bindingHash
+    });
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-student-1",
+      canvasUserId: "43",
+      issuer: "https://canvas.example.test",
+      userId: "43",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+      deploymentId: "deployment-1",
+      targetLinkUri,
+      messageType: "LtiResourceLinkRequest"
+    });
+    const request = emptySessionRequest();
+    const response = responseDouble();
+
+    await controller.launchPost(request, response, { id_token: "token", state: "state" });
+
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student-session-authorization"'));
+    expect(response.redirect).not.toHaveBeenCalled();
+    expect(request.session.pendingSebLaunch).toBeUndefined();
+  });
+
   it("fails closed with Canvas configuration guidance when the signed numeric user id is absent", async () => {
     ltiService.validateToken.mockResolvedValue({
       ltiSubject: "opaque-teacher-1",
@@ -594,7 +634,7 @@ describe("LtiController role routing", () => {
     await controller.launchGet(request, response);
 
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student"'));
-    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
+    expect(canvasApi.hasSessionTokenAccess).toHaveBeenCalledWith("student-1");
   });
 
   it("rejects cross-site iframe GET launches before reusing an authenticated session", async () => {

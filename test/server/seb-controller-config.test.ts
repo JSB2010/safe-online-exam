@@ -17,6 +17,83 @@ const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).
 }) as string;
 
 describe("SEB config downloads", () => {
+  it("uses a fresh Canvas session URL only while creating a connected student's SEB config", async () => {
+    await withConfig(async () => {
+      const sebConfig = new SebConfigurationService(new AppConfig());
+      vi.spyOn(sebConfig, "prepareSebConfigurationDownload").mockImplementation((plaintext) => plaintext);
+      const canvasApi = {
+        hasAccessToken: vi.fn().mockResolvedValue(true),
+        getSessionToken: vi.fn().mockResolvedValue("https://canvas.example.edu/login/session_token?opaque=secret")
+      };
+      const sessionHandoff = { registerConfig: vi.fn().mockResolvedValue(undefined) };
+      const controller = new SebController(
+        new AppConfig(),
+        {} as any,
+        {} as any,
+        {
+          isAssessmentAvailableForLearner: async () => true,
+          getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
+          getSebSettingForQuiz: async () => ({
+            quizId: "23455",
+            courseId: "11825",
+            sebRequired: true,
+            enabled: true,
+            accessCode: "ACCESS-CODE",
+            ssoDomains: [],
+            educationalToolDomains: [],
+            customDomains: [],
+            externalTools: []
+          }),
+          getQuiz: async () => ({
+            id: "23455",
+            courseId: "11825",
+            title: "Midterm",
+            htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
+          })
+        } as any,
+        {} as any,
+        sebConfig,
+        new SebConfigKeyService(),
+        proofService(),
+        configGrantDouble(),
+        admissionDouble(),
+        canvasApi as any,
+        sessionHandoff as any
+      );
+      const setting = {
+        quizId: "23455",
+        courseId: "11825",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "ACCESS-CODE",
+        ssoDomains: ["accounts.google.com"],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      };
+
+      const generated = await (controller as any).generateConfigForGrant(
+        "11825",
+        "classicquiz_23455",
+        { setting, settingsFingerprint: "settings-fingerprint" },
+        "7288",
+        true
+      );
+      const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
+
+      expect(canvasApi.getSessionToken).toHaveBeenCalledWith("7288", `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+      expect(parsed.startURL).toBe("https://canvas.example.edu/login/session_token?opaque=secret");
+      expect(JSON.stringify(parsed.URLFilterRules)).not.toContain("accounts.google.com");
+      expect(sessionHandoff.registerConfig).toHaveBeenCalledWith(
+        "11825",
+        "classicquiz_23455",
+        "settings-fingerprint",
+        expect.stringMatching(/^[a-f0-9]{64}$/u),
+        `${CANVAS_URL}/courses/11825/quizzes/23455/take`
+      );
+    });
+  });
+
   it("uses canonical Canvas quiz URLs instead of student-specific canvas_url query values", async () => {
     await withConfig(
       async () => {

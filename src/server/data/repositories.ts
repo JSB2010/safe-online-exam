@@ -28,7 +28,14 @@ export interface SessionRecord extends Record<string, any> {
 
 export interface TransientStateRecord extends Record<string, any> {
   id?: string | null;
-  kind: "lti-state" | "seb-proof" | "seb-proof-v2" | "seb-exit-grant" | "seb-config-grant" | "admission-budget";
+  kind:
+    | "lti-state"
+    | "seb-proof"
+    | "seb-proof-v2"
+    | "seb-exit-grant"
+    | "seb-config-grant"
+    | "seb-session-handoff-config"
+    | "admission-budget";
   payload?: Record<string, string>;
   courseId?: string | null;
   contentId?: string | null;

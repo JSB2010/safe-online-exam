@@ -446,7 +446,8 @@ describe("AppConfig", () => {
     expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual(
       expect.arrayContaining([
         "SEB_CONFIG_ENCRYPTION_ENABLED must be true in Cloud Run",
-        "SEB_REQUIRED_DOMAINS contains an unsafe hostname: *.example.edu"
+        "SEB_REQUIRED_DOMAINS contains an unsafe hostname: *.example.edu",
+        "SEB_REQUIRED_DOMAINS must not include an identity-provider hostname: accounts.google.com"
       ])
     );
   });

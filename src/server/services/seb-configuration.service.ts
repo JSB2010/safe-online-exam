@@ -406,9 +406,6 @@ export function buildAllowlistRules(input: {
   for (const expression of canvasResourceRules(input.canvasBaseUrl, input.courseId, input.contentId, input.startUrl)) {
     addRule({ active: true, regex: true, expression, action: 1 });
   }
-  for (const expression of ssoHelperResourceRules()) {
-    addRule({ active: true, regex: true, expression, action: 1 });
-  }
   for (const domain of input.requiredDomains) {
     add(domain);
   }
@@ -477,7 +474,7 @@ function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   if (value.startsWith("exact:")) {
     try {
       const url = new URL(value.slice("exact:".length));
-      if (!isSafeHttpsUrl(url)) {
+      if (!isSafeHttpsUrl(url) || isBlockedIdentityProviderUrl(url)) {
         return [];
       }
       return [{ active: true, regex: true, expression: exactUrlRegex(url), action: 1 }];
@@ -487,7 +484,9 @@ function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   }
   if (value.startsWith("domain:")) {
     const domain = normalizeConcreteHostname(value.slice("domain:".length));
-    return domain ? [{ active: true, regex: false, expression: `https://${domain}/*`, action: 1 }] : [];
+    return domain && !isBlockedIdentityProviderHostname(domain)
+      ? [{ active: true, regex: false, expression: `https://${domain}/*`, action: 1 }]
+      : [];
   }
   if (value.includes("://")) {
     try {
@@ -498,7 +497,9 @@ function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   }
   const withoutPath = value.replace(/\/+$/u, "");
   const domain = normalizeConcreteHostname(withoutPath);
-  return domain ? [{ active: true, regex: false, expression: `https://${domain}/*`, action: 1 }] : [];
+  return domain && !isBlockedIdentityProviderHostname(domain)
+    ? [{ active: true, regex: false, expression: `https://${domain}/*`, action: 1 }]
+    : [];
 }
 
 function urlAllowRule(value: string): UrlFilterRule {
@@ -507,13 +508,13 @@ function urlAllowRule(value: string): UrlFilterRule {
       throw new Error("Unsafe URL wildcard");
     }
     const base = new URL(value.slice(0, -1));
-    if (!isSafeHttpsUrl(base)) {
+    if (!isSafeHttpsUrl(base) || isBlockedIdentityProviderUrl(base)) {
       throw new Error("Unsafe URL");
     }
     return { active: true, regex: false, expression: `${base.toString()}*`, action: 1 };
   }
   const parsed = new URL(value);
-  if (!isSafeServerUrl(parsed)) {
+  if (!isSafeServerUrl(parsed) || isBlockedIdentityProviderUrl(parsed)) {
     throw new Error("Unsafe URL");
   }
   if (parsed.pathname && parsed.pathname !== "/") {
@@ -575,10 +576,7 @@ function canvasResourceRules(canvasBaseUrl: string, courseId: string, contentId:
   const classicQuizId = contentId.startsWith("classicquiz_") ? contentId.slice("classicquiz_".length) : contentId;
   const newQuizParts = contentId.startsWith("newquiz:") ? contentId.split(":", 3) : [];
   const assignmentId = newQuizParts.length === 3 ? newQuizParts[2] : null;
-  // Canvas redirects a fresh SEB cookie jar through its own login endpoint
-  // before returning to the assessment. Keep this scoped to the configured
-  // Canvas host; removing it leaves SEB running with a blank blocked page.
-  const staticPaths = ["dist", "assets", "images", "fonts", "javascripts", "stylesheets", "login"];
+  const staticPaths = ["dist", "assets", "images", "fonts", "javascripts", "stylesheets"];
   const rules = [
     `^https://${host}/?(?:[?#].*)?$`,
     dynamicUrlPathRegex(new URL(startUrl)),
@@ -609,20 +607,20 @@ function canvasTenant(hostname: string): string | null {
   return tenant && tenant !== "canvas" ? tenant : null;
 }
 
-function ssoHelperResourceRules(): string[] {
-  return [
-    "^https://accounts\\.google\\.com/(?:.*)$",
-    "^https://www\\.google\\.com/accounts/(?:.*)$",
-    "^https://accounts\\.youtube\\.com/accounts/(?:.*)$",
-    "^https://www\\.youtube\\.com/accounts/(?:.*)$",
-    "^https://www\\.google\\.com/recaptcha/(?:.*)$",
-    "^https://www\\.gstatic\\.com/recaptcha/(?:.*)$",
-    "^https://fonts\\.googleapis\\.com/(?:.*)$",
-    "^https://clients[0-9]\\.google\\.com/generate_204(?:[?#].*)?$",
-    "^https://play\\.google\\.com/log(?:[?#].*)?$",
-    "^https://www\\.googleapis\\.com/oauth2/(?:.*)$",
-    "^https://sso\\.canvaslms\\.com/(?:.*)$"
-  ];
+function isBlockedIdentityProviderHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "accounts.google.com" ||
+    normalized === "accounts.youtube.com" ||
+    normalized === "sso.canvaslms.com" ||
+    normalized === "www.google.com" ||
+    normalized === "www.youtube.com" ||
+    normalized === "www.googleapis.com"
+  );
+}
+
+function isBlockedIdentityProviderUrl(url: URL): boolean {
+  return isBlockedIdentityProviderHostname(url.hostname);
 }
 
 function exactUrlRegex(url: URL): string {

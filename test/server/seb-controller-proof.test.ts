@@ -1,5 +1,5 @@
 import { HttpException } from "@nestjs/common";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { SebController } from "../../src/server/controllers/seb.controller.js";
 import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
@@ -140,6 +140,38 @@ describe("SEB access proof validation", () => {
     });
   });
 
+  it("accepts a session-handoff Config Key on Canvas's New Quiz attempt route", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const contentId = "newquiz:11825:991";
+      const handoffConfigKey = "d".repeat(64);
+      const attemptUrl = `${CANVAS_URL}/courses/11825/assignments/991/taking/31299`;
+      const sessionHandoff = { resolveConfigKey: vi.fn().mockResolvedValue(handoffConfigKey) };
+      const { controller } = controllerWithSetting(
+        {
+          contentId,
+          courseId: "11825",
+          configKey: null
+        },
+        sessionHandoff
+      );
+
+      await expect(
+        controller.createAccessProof(requestWithHeaders(), "11825", contentId, {
+          configKeyHash: configKey.hashForUrl(attemptUrl, handoffConfigKey),
+          url: attemptUrl
+        })
+      ).resolves.toEqual(expect.objectContaining({ success: true, proofToken: expect.any(String) }));
+      expect(sessionHandoff.resolveConfigKey).toHaveBeenCalledWith(
+        "11825",
+        contentId,
+        expect.any(String),
+        configKey.hashForUrl(attemptUrl, handoffConfigKey),
+        attemptUrl
+      );
+    });
+  });
+
   it("rejects a different New Quiz assignment whose ID only shares a prefix", async () => {
     await withConfig(async () => {
       const configKey = new SebConfigKeyService();
@@ -269,7 +301,10 @@ async function withConfig(run: () => Promise<void>): Promise<void> {
   }
 }
 
-function controllerWithSetting(setting: Record<string, unknown>) {
+function controllerWithSetting(
+  setting: Record<string, unknown>,
+  sessionHandoff?: { resolveConfigKey: () => Promise<string> }
+) {
   const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
   const resolvedSetting = {
     sebRequired: true,
@@ -309,7 +344,9 @@ function controllerWithSetting(setting: Record<string, unknown>) {
     new SebConfigKeyService(),
     proofService,
     {} as any,
-    { consumeRequestIp: async () => true } as any
+    { consumeRequestIp: async () => true } as any,
+    undefined,
+    sessionHandoff as any
   );
   return { controller, proofService, resolvedSetting };
 }

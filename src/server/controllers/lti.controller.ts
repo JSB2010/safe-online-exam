@@ -156,6 +156,10 @@ export class LtiController {
         );
         const principal = verifiedLtiPrincipal(request);
         if (directContentId && principal && principal.courseId === launchData.courseId) {
+          if (!(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
+            response.send(this.renderStudentSessionAuthorizationView());
+            return;
+          }
           request.session!.pendingSebLaunch = {
             courseId: principal.courseId,
             contentId: directContentId,
@@ -287,7 +291,6 @@ export class LtiController {
                 visibility: "members",
                 default: "enabled",
                 enabled: true,
-                windowTarget: "_blank",
                 custom_fields: { ...customFields }
               }
             ]
@@ -466,6 +469,9 @@ export class LtiController {
         "<h1>Canvas Launch Required</h1><p>Please reopen this assessment from Canvas.</p>"
       );
     }
+    if (!(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
+      return this.renderStudentSessionAuthorizationView();
+    }
     const targetContentId =
       launchData.custom?.quiz_id ||
       launchData.custom?.content_id ||
@@ -498,8 +504,19 @@ export class LtiController {
         launchData,
         setupCheckConfigUrl: "/seb/check/config.seb",
         setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+        sessionReadinessUrl: "/api/seb/session-readiness",
         configGrantToken,
         quizzes: courseId ? await this.enabledStudentQuizzes(courseId, request, principal) : []
+      }
+    });
+  }
+
+  private renderStudentSessionAuthorizationView(): string {
+    return renderAppShell({
+      title: "Connect Canvas",
+      view: "student-session-authorization",
+      initialData: {
+        authUrl: "/api/student-session-authorize"
       }
     });
   }

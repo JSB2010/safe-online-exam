@@ -23,7 +23,7 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode, SetStateAction } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import type { CourseSebDefaults, ExternalToolConfig, SebUrlRule, SebUrlRuleMatch } from "../shared/models.js";
 import {
@@ -84,6 +84,10 @@ export function App() {
       return <TeacherDashboard data={bootstrap.data} />;
     case "api-authorization":
       return <AuthorizationPage data={bootstrap.data} />;
+    case "student-session-authorization":
+      return <StudentSessionAuthorizationPage data={bootstrap.data} />;
+    case "student-session-connected":
+      return <StudentSessionConnectedPage data={bootstrap.data} />;
     case "seb-required":
     case "seb-download":
       return <SebDownloadPage data={bootstrap.data} />;
@@ -466,6 +470,8 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
       {showSetupCheck && (
         <SebSetupCheckDialog
           launchUrl={data.setupCheckLaunchUrl || data.setupCheckConfigUrl || "/seb/check/config.seb"}
+          readinessUrl={data.sessionReadinessUrl || "/api/seb/session-readiness"}
+          authToken={data.configGrantToken}
           onClose={() => setShowSetupCheck(false)}
         />
       )}
@@ -473,7 +479,43 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
   );
 }
 
-function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClose: () => void }) {
+function SebSetupCheckDialog({
+  launchUrl,
+  readinessUrl,
+  authToken,
+  onClose
+}: {
+  launchUrl: string;
+  readinessUrl: string;
+  authToken?: string;
+  onClose: () => void;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+
+  const launchCheck = async () => {
+    if (checking) return;
+    setChecking(true);
+    setError("");
+    try {
+      const result = await requestJson(readinessUrl, {
+        method: "POST",
+        headers: actionHeaders(authToken)
+      });
+      if (!result.success) {
+        throw new Error(result.message || "Canvas connection could not be verified.");
+      }
+      window.location.assign(launchUrl);
+    } catch (launchError) {
+      if ((launchError as { code?: unknown }).code === "CANVAS_SESSION_AUTHORIZATION_REQUIRED") {
+        window.location.assign("/lti/launch");
+        return;
+      }
+      setError(launchError instanceof Error ? launchError.message : "Canvas connection could not be verified.");
+      setChecking(false);
+    }
+  };
+
   return (
     <div className="dialog-backdrop" role="presentation">
       <section
@@ -492,7 +534,7 @@ function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClos
           </button>
         </header>
         <div className="setup-check-intro">
-          <p>This opens a short SEB test on this computer before you take a real quiz.</p>
+          <p>This confirms your Canvas connection, then opens a short SEB test on this computer.</p>
           <div className="instruction-list">
             <div>
               <strong>1</strong>
@@ -512,10 +554,11 @@ function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClos
           <button className="button secondary" onClick={onClose}>
             Cancel
           </button>
-          <a className="button primary" href={launchUrl}>
-            <PlayCircle size={16} /> Launch SEB check
-          </a>
+          <button className="button primary" type="button" disabled={checking} onClick={() => void launchCheck()}>
+            <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch SEB check"}
+          </button>
         </footer>
+        {error && <p className="field-error">{error}</p>}
       </section>
     </div>
   );
@@ -1286,6 +1329,82 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
   );
 }
 
+const STUDENT_SESSION_CONNECTED_MESSAGE = "seb-canvas-session-connected";
+
+function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }) {
+  const [connecting, setConnecting] = useState(false);
+  const popupRef = useRef<Window | null>(null);
+  const authUrl = typeof data.authUrl === "string" ? data.authUrl : "/api/student-session-authorize";
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (
+        event.origin !== window.location.origin ||
+        event.source !== popupRef.current ||
+        !event.data ||
+        typeof event.data !== "object" ||
+        (event.data as { type?: unknown }).type !== STUDENT_SESSION_CONNECTED_MESSAGE
+      ) {
+        return;
+      }
+      popupRef.current?.close();
+      window.location.reload();
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  useEffect(() => {
+    if (!connecting) return;
+    const timer = window.setInterval(() => {
+      if (popupRef.current?.closed) {
+        popupRef.current = null;
+        setConnecting(false);
+      }
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [connecting]);
+
+  const connect = () => {
+    const popup = window.open(authUrl, "seb_canvas_session_authorization", "popup,width=560,height=720");
+    if (!popup) {
+      window.location.assign(authUrl);
+      return;
+    }
+    popupRef.current = popup;
+    popup.focus();
+    setConnecting(true);
+  };
+
+  return (
+    <MessagePage
+      icon={<KeyRound />}
+      title="Connect Canvas"
+      message="Connect Canvas once to open Safe Exam Browser quizzes without signing in again."
+      action={
+        <button className="button primary" type="button" disabled={connecting} onClick={connect}>
+          <KeyRound size={16} /> {connecting ? "Connecting…" : "Connect Canvas"}
+        </button>
+      }
+    />
+  );
+}
+
+function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
+  const returnUrl = typeof data.returnUrl === "string" ? data.returnUrl : "/lti/launch";
+
+  useEffect(() => {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: STUDENT_SESSION_CONNECTED_MESSAGE }, window.location.origin);
+      window.setTimeout(() => window.close(), 100);
+      return;
+    }
+    window.location.replace(returnUrl);
+  }, [returnUrl]);
+
+  return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Exam Browser Quizzes." />;
+}
+
 function SebDownloadPage({ data }: { data: Record<string, any> }) {
   return (
     <MessagePage
@@ -1802,7 +1921,11 @@ async function requestJson(url: string, init?: RequestInit): Promise<Record<stri
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("application/json") ? await response.json() : {};
   if (!response.ok) {
-    throw new Error(body.message || body.error || `Request failed with status ${response.status}.`);
+    const error = new Error(body.message || body.error || `Request failed with status ${response.status}.`) as Error & {
+      code?: unknown;
+    };
+    error.code = body.error_code;
+    throw error;
   }
   return body;
 }

@@ -128,9 +128,17 @@ The remaining optional runtime variables can be set with `--set-env-vars` or add
 - `CANVAS_API_BASE_URL`: defaults to `${CANVAS_DOMAIN}/api/v1`. On Cloud Run it must remain that exact HTTPS origin and path so instructor bearer tokens cannot be sent to another host.
 - `APP_DEBUG_ENABLED`: defaults false and must remain false on Cloud Run.
 - `APP_DETECTOR_DIAGNOSTICS_ENABLED`: defaults false. When true on a non-production profile (for example the dev service), the Canvas detector posts sanitized trace details (page URLs, iframe origins, button summaries, redirect gate decisions) to `/api/debug/canvas-detector-trace`, and the endpoint records them to Cloud Logging under `CanvasSebDetectorTrace`. Startup validation rejects it when `APP_ENV` resolves to `prod`, so production and school deployments cannot enable it.
-- `SEB_REQUIRED_DOMAINS`: school-reviewed concrete hostnames needed by every generated `.seb` config. Wildcards are rejected.
+- `SEB_REQUIRED_DOMAINS`: school-reviewed concrete resource hostnames needed by every generated `.seb` config. Wildcards and identity-provider hosts are rejected.
 - `SEB_QUIT_PASSWORD`: managed default quit password applied when a course or quiz does not supply one. Every enabled assessment must have an effective quit password from one of these sources. Hardened runtimes require 8–128 characters with at least five different letters or numbers. Letters-only and numbers-only values are allowed, while common, sequential, repetitive, low-diversity, and control-character values are rejected. Never reuse it as an exam start password. The managed value cannot be revealed through the instructor UI.
 - `SEB_CONFIG_ENCRYPTION_ENABLED`: defaults `true` and must remain true on Cloud Run.
+
+### Student Canvas Session Handoff
+
+Before any student can use the tool, a Canvas root-account administrator must add `url:GET|/api/v1/login/session_token` to the same API OAuth Developer Key used by `CANVAS_API_CLIENT_ID`. Use the API procedure in [Canvas School Setup Guide](canvas-school-setup.md#required-student-canvas-session-handoff) when the scope is not present in Canvas's visual Developer Key editor.
+
+There is no runtime feature flag. After the Developer Key update is verified and the service is deployed, a student’s first course-navigation launch opens **Connect Canvas**. The server stores the scoped OAuth credential server-side, and later launches use it to obtain a new short-lived Canvas session URL. Existing credentials from before this requirement are replaced by opening the tool again; the dashboard intentionally has no reconnect control.
+
+The server stores the user-scoped OAuth credential and requests a fresh Canvas session URL only while it creates an SEB configuration. It never imports the student's Chrome cookie. For New Quizzes, Canvas may redirect from the stable assignment route to a student-specific attempt route; the deployed handoff verifier recognizes that route family while still validating the SEB Config Key for the exact destination URL.
 
 ## IAM
 

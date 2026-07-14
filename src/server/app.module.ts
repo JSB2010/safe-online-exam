@@ -22,6 +22,7 @@ import { SebConfigKeyService } from "./services/seb-config-key.service.js";
 import { SebConfigurationService } from "./services/seb-configuration.service.js";
 import { SebDetector } from "./services/seb-detector.service.js";
 import { SebConfigGrantService } from "./services/seb-config-grant.service.js";
+import { SebSessionHandoffService } from "./services/seb-session-handoff.service.js";
 import { DistributedAdmissionService } from "./security/distributed-admission.js";
 
 @Module({
@@ -48,6 +49,7 @@ import { DistributedAdmissionService } from "./security/distributed-admission.js
     LtiStateService,
     SebAccessProofService,
     SebConfigGrantService,
+    SebSessionHandoffService,
     SebConfigKeyService,
     SebConfigurationService,
     SebDetector,

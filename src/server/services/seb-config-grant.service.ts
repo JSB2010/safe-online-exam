@@ -5,7 +5,11 @@ import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
 import { classicQuizContentId, extractClassicQuizId, parseNewQuizContentId } from "../../shared/models.js";
 import { RepositoryProvider, type TransientStateRecord } from "../data/repositories.js";
 import { DistributedAdmissionService } from "../security/distributed-admission.js";
-import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
+import {
+  isVerifiedInstructor,
+  isVerifiedStudent,
+  type VerifiedLtiPrincipal
+} from "../security/verified-lti-principal.js";
 import { sebConfigFingerprint } from "./seb-setting-fingerprint.js";
 
 const GRANT_TTL_SECONDS = 120;
@@ -16,9 +20,11 @@ export interface ConsumedSebConfigGrant {
   issuer: string;
   subject: string;
   deploymentId: string;
+  canvasUserId: string;
   courseId: string;
   contentId: string;
   settingsFingerprint: string;
+  requiresSessionHandoff: boolean;
 }
 
 export class SebConfigGrantRateLimitError extends Error {
@@ -72,9 +78,11 @@ export class SebConfigGrantService {
         issuer: principal.issuer,
         deploymentId: principal.deploymentId,
         subject: principal.subject,
+        canvasUserId: principal.canvasUserId,
         courseId,
         contentId: canonicalContentId,
         settingsFingerprint,
+        requiresSessionHandoff: isVerifiedStudent(principal) && !isVerifiedInstructor(principal),
         expiresAt: new Date(Date.now() + GRANT_TTL_SECONDS * 1000)
       });
       if (claimed) {
@@ -104,9 +112,11 @@ export class SebConfigGrantService {
       issuer: record.issuer,
       subject: record.subject,
       deploymentId: record.deploymentId,
+      canvasUserId: record.canvasUserId,
       courseId: record.courseId,
       contentId: record.contentId,
-      settingsFingerprint: record.settingsFingerprint
+      settingsFingerprint: record.settingsFingerprint,
+      requiresSessionHandoff: record.requiresSessionHandoff
     };
   }
 
@@ -150,9 +160,11 @@ function isConfigGrantRecord(record: TransientStateRecord | null): record is Tra
   issuer: string;
   deploymentId: string;
   subject: string;
+  canvasUserId: string;
   courseId: string;
   contentId: string;
   settingsFingerprint: string;
+  requiresSessionHandoff: boolean;
 } {
   return (
     record?.kind === "seb-config-grant" &&
@@ -165,12 +177,15 @@ function isConfigGrantRecord(record: TransientStateRecord | null): record is Tra
     !!record.deploymentId &&
     typeof record.subject === "string" &&
     !!record.subject &&
+    typeof record.canvasUserId === "string" &&
+    /^[0-9]+$/u.test(record.canvasUserId) &&
     typeof record.courseId === "string" &&
     !!record.courseId &&
     typeof record.contentId === "string" &&
     !!record.contentId &&
     typeof record.settingsFingerprint === "string" &&
-    !!record.settingsFingerprint
+    !!record.settingsFingerprint &&
+    typeof record.requiresSessionHandoff === "boolean"
   );
 }
 

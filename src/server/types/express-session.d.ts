@@ -21,5 +21,10 @@ declare module "express-session" {
       deploymentId: string;
       issuedAt: number;
     };
+    completedSebLaunch?: {
+      courseId: string;
+      contentId: string;
+      issuedAt: number;
+    };
   }
 }

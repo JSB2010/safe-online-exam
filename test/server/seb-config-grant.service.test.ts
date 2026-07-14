@@ -18,9 +18,11 @@ describe("SebConfigGrantService", () => {
       issuer: "https://canvas.example.edu",
       deploymentId: "deployment-1",
       subject: "opaque-student-1",
+      canvasUserId: "12345",
       courseId: "course-1",
       contentId: "classicquiz_101",
-      settingsFingerprint: fingerprint
+      settingsFingerprint: fingerprint,
+      requiresSessionHandoff: true
     });
     await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toBeNull();
   });
@@ -85,7 +87,7 @@ function principal(): VerifiedLtiPrincipal {
     issuer: "https://canvas.example.edu",
     deploymentId: "deployment-1",
     subject: "opaque-student-1",
-    canvasUserId: "student-1",
+    canvasUserId: "12345",
     courseId: "course-1",
     roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
     custom: {},
