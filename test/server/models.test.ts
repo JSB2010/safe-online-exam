@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AssessmentRecord } from "../../src/shared/models.js";
 import {
   allowlistEntriesForExternalTools,
   applyCourseDefaultsToContentSetting,
@@ -9,6 +10,7 @@ import {
   assessmentToQuizSebSetting,
   assessmentWithContentSebSetting,
   assessmentWithQuizSebSetting,
+  canEnableSebAssessment,
   classicQuizContentId,
   courseDefaultsToRecord,
   courseRecordToDefaults,
@@ -30,6 +32,17 @@ import {
   urlRulesToAllowedEntries
 } from "../../src/shared/models.js";
 
+describe("secret-free SEB client policy", () => {
+  it("lets the client enable SEB only from a secret-free effective-password signal", () => {
+    expect(canEnableSebAssessment({ hasEffectiveQuitPassword: true }, null)).toBe(true);
+    expect(canEnableSebAssessment(null, { hasEffectiveQuitPassword: true })).toBe(true);
+    expect(canEnableSebAssessment({ hasEffectiveQuitPassword: false }, { hasEffectiveQuitPassword: false })).toBe(
+      false
+    );
+    expect(canEnableSebAssessment(undefined, undefined)).toBe(false);
+  });
+});
+
 describe("content id helpers", () => {
   it("preserves classic quiz and New Quiz id conventions", () => {
     expect(classicQuizContentId("42")).toBe("classicquiz_42");
@@ -38,6 +51,20 @@ describe("content id helpers", () => {
     expect(extractClassicQuizId("classicquiz_42")).toBe("42");
     expect(extractClassicQuizId("42")).toBe("42");
     expect(extractClassicQuizId("assignment_42")).toBeNull();
+  });
+
+  it("rejects malformed and ambiguous New Quiz content IDs", () => {
+    for (const contentId of [
+      "newquiz:course-7:99:extra",
+      "newquiz:course-7:../99",
+      "newquiz:course-7:%2f",
+      "newquiz:*.*:99",
+      "newquiz:course 7:99",
+      "newquiz::99",
+      "newquiz:course-7:"
+    ]) {
+      expect(parseNewQuizContentId(contentId), contentId).toBeNull();
+    }
   });
 
   it("maps Canvas quizzes to canonical Classic Quiz content items", () => {
@@ -132,15 +159,59 @@ describe("content id helpers", () => {
     });
   });
 
+  it("drops legacy raw Canvas metadata before returning or rewriting New Quiz records", () => {
+    const record: AssessmentRecord = {
+      id: "newquiz:course-7:99",
+      courseId: "course-7",
+      contentType: "NEW_QUIZ",
+      canvas: {
+        id: "99",
+        assignmentId: "99",
+        title: "New Quiz",
+        metadata: {
+          quiz_settings: { student_access_code: "CANVAS-ACCESS-SECRET" },
+          config_key: "CANVAS-CONFIG-SECRET"
+        }
+      },
+      seb: {
+        required: true,
+        enabled: true,
+        accessCode: "INTERNAL-ACCESS-CODE",
+        usesCourseDefaults: true,
+        quitPasswordOverride: false,
+        startPasswordOverride: false,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        urlRules: [],
+        externalTools: []
+      }
+    };
+
+    const content = assessmentToContentItem(record);
+    const setting = assessmentToContentSebSetting(record);
+    const rewritten = assessmentWithContentSebSetting(record, setting);
+
+    expect(JSON.stringify(content)).not.toContain("CANVAS-ACCESS-SECRET");
+    expect(JSON.stringify(content)).not.toContain("CANVAS-CONFIG-SECRET");
+    expect(content).not.toHaveProperty("metadata");
+    expect(JSON.stringify(setting)).not.toContain("CANVAS-ACCESS-SECRET");
+    expect(JSON.stringify(setting)).not.toContain("CANVAS-CONFIG-SECRET");
+    expect(setting).not.toHaveProperty("metadata");
+    expect(rewritten.canvas.metadata).toBeNull();
+  });
+
   it("normalizes enabled external exam tools and derives allowlist domains", () => {
     const tools = normalizeExternalTools([
       {
         id: "Desmos Calculator",
-        label: "Desmos",
-        url: "www.desmos.com/calculator",
+        label: "Attacker-controlled label",
+        url: "https://evil.example.edu/cheat",
         enabled: true,
         preset: "desmos-calculator",
-        allowedDomains: ["www.desmos.com", "desmos.com", "*.desmos.com", "www.desmos.com"]
+        allowedDomains: ["regex:^https://.+$", "domain:evil.example.edu"],
+        matchType: "regex",
+        allowedPattern: "^https://.+$"
       },
       { id: "bad", label: "Bad", url: "http://example.com", enabled: true }
     ]);
@@ -148,8 +219,8 @@ describe("content id helpers", () => {
     expect(tools).toEqual([
       {
         id: "desmos-calculator",
-        label: "Desmos",
-        url: "https://www.desmos.com/calculator",
+        label: "Desmos Test Mode",
+        url: "https://www.desmos.com/testing/digital-act/graphing",
         enabled: true,
         preset: "desmos-calculator",
         allowedDomains: [
@@ -161,29 +232,36 @@ describe("content id helpers", () => {
     ]);
     expect(enabledExternalTools(tools)).toHaveLength(1);
     expect(allowlistEntriesForExternalTools(tools)).toEqual([
-      "https://www.desmos.com/calculator",
+      "https://www.desmos.com/testing/digital-act/graphing",
       "https://www.desmos.com/assets/build/*",
       "https://www.desmos.com/assets/img/apps/graphing/*",
       "https://www.desmos.com/assets/pwa/*"
     ]);
   });
 
-  it("normalizes structured URL rules for exact, domain, and regex allowlists", () => {
+  it("normalizes only canonical exact and domain URL rules", () => {
     const rules = normalizeUrlRules([
       { id: "exact", match: "exact", value: "https://example.edu/tool" },
-      { id: "domain", match: "domain", value: "docs.example.edu/path-is-ignored" },
+      { id: "domain", match: "domain", value: "Docs.Example.Edu" },
+      { id: "domain-with-path", match: "domain", value: "docs.example.edu/path" },
+      { id: "wildcard-domain", match: "domain", value: "*.example.edu" },
+      { id: "insecure-exact", match: "exact", value: "http://example.edu/tool" },
       { id: "regex", match: "regex", value: "^https://cdn\\.example\\.edu/assets/.*$" }
     ]);
 
-    expect(urlRulesToAllowedEntries(rules)).toEqual([
-      "exact:https://example.edu/tool",
-      "domain:docs.example.edu",
-      "regex:^https://cdn\\.example\\.edu/assets/.*$"
-    ]);
+    expect(urlRulesToAllowedEntries(rules)).toEqual(["exact:https://example.edu/tool", "domain:docs.example.edu"]);
   });
 
   it("normalizes legacy domain entries and rejects unsafe broad allowlists", () => {
-    expect(legacyDomainsToUrlRules(["domain:Docs.Example.Edu/path", "exact:tool.example.edu/start"])).toEqual([
+    expect(
+      legacyDomainsToUrlRules([
+        "domain:Docs.Example.Edu",
+        "exact:tool.example.edu/start",
+        "domain:docs.example.edu/path",
+        "regex:^https://cdn\\.example\\.edu/assets/.*$",
+        "domain:*.*"
+      ])
+    ).toEqual([
       { id: "domain-1", match: "domain", value: "docs.example.edu" },
       { id: "domain-2", match: "exact", value: "https://tool.example.edu/start" }
     ]);
@@ -191,14 +269,62 @@ describe("content id helpers", () => {
     expect(isUnsafeBroadUrlPattern("^https://cdn\\.example\\.edu/assets/.*$")).toBe(false);
   });
 
-  it("rejects broad regex URL rules before they are saved", () => {
+  it("rejects all caller-authored regex and wildcard URL rules before they are saved", () => {
     const rules = normalizeUrlRules([
       { id: "allow-all", match: "regex", value: "^https://.*$" },
       { id: "allow-any", match: "regex", value: ".*" },
-      { id: "cdn", match: "regex", value: "^https://cdn\\.example\\.edu/assets/.*$" }
+      { id: "allow-nonempty", match: "regex", value: "^https://.+$" },
+      { id: "allow-any-character", match: "regex", value: "^https://[\\s\\S]+$" },
+      { id: "cdn", match: "regex", value: "^https://cdn\\.example\\.edu/assets/.*$" },
+      { id: "wildcard", match: "domain", value: "*.*" }
     ]);
 
-    expect(urlRulesToAllowedEntries(rules)).toEqual(["regex:^https://cdn\\.example\\.edu/assets/.*$"]);
+    expect(rules).toEqual([]);
+    expect(urlRulesToAllowedEntries(rules)).toEqual([]);
+  });
+
+  it("fails closed when normalizing unsafe persisted course policy", () => {
+    const defaults = courseRecordToDefaults(
+      {
+        id: "course-1",
+        courseId: "course-1",
+        setupCompleted: true,
+        sebDefaults: {
+          urlRules: [
+            { id: "regex", match: "regex", value: "^https://.+$" },
+            { id: "wildcard", match: "domain", value: "*.*" },
+            { id: "docs", match: "domain", value: "Docs.Example.Edu" }
+          ],
+          externalTools: [
+            {
+              id: "desmos-calculator",
+              label: "Changed",
+              url: "https://evil.example.edu/",
+              enabled: true,
+              preset: "desmos-calculator",
+              allowedDomains: ["regex:^https://.+$"]
+            }
+          ]
+        }
+      },
+      "course-1"
+    );
+
+    expect(defaults.urlRules).toEqual([{ id: "docs", match: "domain", value: "docs.example.edu" }]);
+    expect(defaults.externalTools).toEqual([
+      {
+        id: "desmos-calculator",
+        label: "Desmos Test Mode",
+        url: "https://www.desmos.com/testing/digital-act/graphing",
+        enabled: true,
+        preset: "desmos-calculator",
+        allowedDomains: [
+          "https://www.desmos.com/assets/build/*",
+          "https://www.desmos.com/assets/img/apps/graphing/*",
+          "https://www.desmos.com/assets/pwa/*"
+        ]
+      }
+    ]);
   });
 
   it("applies course defaults while preserving explicit override passwords", () => {
@@ -281,28 +407,28 @@ describe("LTI role helpers", () => {
     expect(isStudent(launchData)).toBe(true);
   });
 
-  it("prefers Canvas course membership custom fields when Canvas provides them", () => {
+  it("keeps standard LTI roles authoritative over custom Canvas substitutions", () => {
     expect(
       isInstructor({
         roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
         custom: { canvas_membership_roles: "TeacherEnrollment" }
       })
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isInstructor({
-        roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Instructor"],
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+        custom: { canvas_membership_roles: "StudentEnrollment" }
+      })
+    ).toBe(true);
+    expect(
+      isStudent({
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
         custom: { canvas_membership_roles: "StudentEnrollment" }
       })
     ).toBe(false);
-    expect(
-      isStudent({
-        roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Instructor"],
-        custom: { canvas_membership_roles: "StudentEnrollment" }
-      })
-    ).toBe(true);
   });
 
-  it("parses JSON custom role lists and legacy LTI role URNs", () => {
+  it("does not elevate JSON custom role lists and still supports legacy standard LTI role URNs", () => {
     expect(
       isInstructor({
         roles: [],
@@ -310,7 +436,7 @@ describe("LTI role helpers", () => {
           canvas_lis_membership_roles: JSON.stringify(["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"])
         }
       })
-    ).toBe(true);
+    ).toBe(false);
     expect(isInstructor({ roles: ["urn:lti:role:ims/lis/Instructor"] })).toBe(true);
     expect(isStudent({ roles: ["urn:lti:ims/lis/Learner"] })).toBe(true);
     expect(isStudent({ roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Student"] })).toBe(true);

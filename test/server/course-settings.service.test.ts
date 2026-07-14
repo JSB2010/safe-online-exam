@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
 import { CourseSettingsService } from "../../src/server/services/course-settings.service.js";
 import {
@@ -8,7 +8,138 @@ import {
   assessmentWithQuizSebSetting
 } from "../../src/shared/models.js";
 
+const originalServerQuitPassword = process.env.SEB_QUIT_PASSWORD;
+const originalLegacyServerQuitPassword = process.env.DEFAULT_SEB_QUIT_PASSWORD;
+
+beforeEach(() => {
+  process.env.SEB_QUIT_PASSWORD = "managed-server-exit";
+});
+
+afterEach(() => {
+  if (originalServerQuitPassword === undefined) {
+    delete process.env.SEB_QUIT_PASSWORD;
+  } else {
+    process.env.SEB_QUIT_PASSWORD = originalServerQuitPassword;
+  }
+  if (originalLegacyServerQuitPassword === undefined) {
+    delete process.env.DEFAULT_SEB_QUIT_PASSWORD;
+  } else {
+    process.env.DEFAULT_SEB_QUIT_PASSWORD = originalLegacyServerQuitPassword;
+  }
+});
+
 describe("CourseSettingsService", () => {
+  it("rejects course-default and managed-fallback start/exit password collisions", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+
+    await expect(
+      service.saveDefaults("course-1", {
+        quitPassword: "shared-course-passphrase",
+        startPassword: "shared-course-passphrase",
+        setupCompleted: true
+      })
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ error_code: "SEB_PASSWORD_REUSE" }),
+      status: 400
+    });
+    await expect(
+      service.saveDefaults("course-1", {
+        quitPassword: null,
+        startPassword: "managed-server-exit",
+        setupCompleted: true
+      })
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ error_code: "SEB_PASSWORD_REUSE" }),
+      status: 400
+    });
+    await expect(repos.value.courses.get("course-1")).resolves.toBeNull();
+  });
+
+  it("treats blank write-only course password updates as no change while preserving explicit removal", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    await service.saveDefaults(
+      "course-1",
+      {
+        quitPassword: "unique-quit-passphrase",
+        startPassword: "unique-start-passphrase",
+        setupCompleted: true
+      },
+      { propagate: false }
+    );
+
+    await expect(
+      service.saveDefaults(
+        "course-1",
+        { quitPassword: "   ", startPassword: "\t", setupCompleted: true },
+        { propagate: false }
+      )
+    ).resolves.toMatchObject({
+      quitPassword: "unique-quit-passphrase",
+      startPassword: "unique-start-passphrase"
+    });
+    await expect(
+      service.saveDefaults(
+        "course-1",
+        { quitPassword: null, startPassword: null, setupCompleted: true },
+        { propagate: false }
+      )
+    ).resolves.toMatchObject({ quitPassword: null, startPassword: null });
+  });
+
+  it("rejects newly supplied weak course start and exit passwords without persisting them", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+
+    for (const defaults of [{ quitPassword: "password1234" }, { startPassword: "password1" }]) {
+      await expect(service.saveDefaults("course-1", { ...defaults, setupCompleted: true })).rejects.toMatchObject({
+        response: expect.objectContaining({ error_code: "SEB_PASSWORD_POLICY_VIOLATION" }),
+        status: 400
+      });
+    }
+    await expect(repos.value.courses.get("course-1")).resolves.toBeNull();
+  });
+
+  it("rejects clearing defaults when propagation would leave an enabled assessment passwordless", async () => {
+    delete process.env.SEB_QUIT_PASSWORD;
+    delete process.env.DEFAULT_SEB_QUIT_PASSWORD;
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    await repos.value.assessments.save(
+      "classicquiz_defaulted",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "defaulted",
+        courseId: "course-1",
+        sebRequired: true,
+        enabled: true,
+        quitPassword: "current-exit",
+        quitPasswordOverride: false,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: [],
+        usesCourseDefaults: true
+      })
+    );
+    const service = new CourseSettingsService(repos);
+
+    await expect(
+      service.saveDefaults("course-1", {
+        quitPassword: null,
+        setupCompleted: true,
+        urlRules: [],
+        externalTools: []
+      })
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ error_code: "SEB_QUIT_PASSWORD_REQUIRED" }),
+      status: 400
+    });
+    await expect(repos.value.courses.get("course-1")).resolves.toBeNull();
+    await expect(repos.value.assessments.get("classicquiz_defaulted")).resolves.toMatchObject({
+      seb: { quitPassword: "current-exit", required: true, enabled: true }
+    });
+  });
+
   it("propagates course defaults only to settings still using defaults", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     await repos.value.assessments.save(
@@ -112,6 +243,76 @@ describe("CourseSettingsService", () => {
     });
   });
 
+  it("persists and propagates only canonical course URL policy", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    await repos.value.assessments.save(
+      "classicquiz_defaulted",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "defaulted",
+        courseId: "course-1",
+        sebRequired: true,
+        enabled: true,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: [],
+        usesCourseDefaults: true,
+        configKey: "stale-config-key"
+      })
+    );
+    const service = new CourseSettingsService(repos);
+
+    const saved = await service.saveDefaults("course-1", {
+      setupCompleted: true,
+      urlRules: [
+        { id: "regex", match: "regex", value: "^https://.+$" },
+        { id: "wildcard", match: "domain", value: "*.*" },
+        { id: "exact", match: "exact", value: "https://tool.example.edu/start" },
+        { id: "docs", match: "domain", value: "Docs.Example.Edu" }
+      ],
+      externalTools: [
+        {
+          id: "regex-tool",
+          label: "Unsafe tool",
+          url: "https://evil.example.edu/",
+          enabled: true,
+          matchType: "regex",
+          allowedPattern: "^https://.+$",
+          allowedDomains: ["regex:^https://.+$"]
+        },
+        {
+          id: "desmos-calculator",
+          label: "Changed",
+          url: "https://evil.example.edu/",
+          enabled: true,
+          preset: "desmos-calculator",
+          allowedDomains: ["regex:^https://.+$"]
+        }
+      ]
+    });
+
+    expect(saved.urlRules).toEqual([
+      { id: "exact", match: "exact", value: "https://tool.example.edu/start" },
+      { id: "docs", match: "domain", value: "docs.example.edu" }
+    ]);
+    expect(saved.externalTools).toEqual([
+      expect.objectContaining({
+        id: "desmos-calculator",
+        label: "Desmos Test Mode",
+        url: "https://www.desmos.com/testing/digital-act/graphing",
+        preset: "desmos-calculator"
+      })
+    ]);
+
+    const setting = assessmentToQuizSebSetting((await repos.value.assessments.get("classicquiz_defaulted"))!);
+    expect(setting).toMatchObject({
+      customDomains: ["exact:https://tool.example.edu/start", "domain:docs.example.edu"],
+      urlRules: saved.urlRules,
+      externalTools: saved.externalTools,
+      configKey: null
+    });
+  });
+
   it("resets New Quiz settings to current course defaults and invalidates Config Keys", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);
@@ -144,7 +345,7 @@ describe("CourseSettingsService", () => {
         usesCourseDefaults: false,
         quitPasswordOverride: true,
         startPasswordOverride: true,
-        quitPassword: "custom-exit",
+        quitPassword: "custom-exit-secret",
         startPassword: "custom-start",
         configKey: "stored-config-key"
       })
@@ -165,6 +366,96 @@ describe("CourseSettingsService", () => {
     });
     expect(stored).toMatchObject(reset as Record<string, unknown>);
     expect(Buffer.from(stored.configKeySalt || "", "base64")).toHaveLength(32);
+  });
+
+  it("fails closed when stored course ownership or canonical quiz identity does not match the reset target", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+
+    await repos.value.assessments.save(
+      "classicquiz_77",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "77",
+        courseId: "course-2",
+        sebRequired: true,
+        enabled: true,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: [],
+        usesCourseDefaults: false,
+        configKey: "classic-wrong-course"
+      })
+    );
+    await repos.value.assessments.save(
+      "classicquiz_78",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "different-quiz",
+        courseId: "course-1",
+        sebRequired: true,
+        enabled: true,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: [],
+        usesCourseDefaults: false,
+        configKey: "classic-wrong-identity"
+      })
+    );
+    await repos.value.assessments.save(
+      "newquiz:course-1:99",
+      assessmentWithContentSebSetting(null, {
+        contentId: "newquiz:course-1:99",
+        courseId: "course-2",
+        assignmentId: "99",
+        canvasId: "99",
+        contentType: "NEW_QUIZ",
+        sebRequired: true,
+        enabled: true,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: [],
+        usesCourseDefaults: false,
+        configKey: "new-quiz-wrong-course"
+      })
+    );
+    await repos.value.assessments.save(
+      "newquiz:course-1:100",
+      assessmentWithContentSebSetting(null, {
+        contentId: "newquiz:course-1:100",
+        courseId: "course-1",
+        assignmentId: "different-assignment",
+        canvasId: "different-assignment",
+        contentType: "NEW_QUIZ",
+        sebRequired: true,
+        enabled: true,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: [],
+        usesCourseDefaults: false,
+        configKey: "new-quiz-wrong-identity"
+      })
+    );
+
+    await expect(service.resetQuizToDefaults("course-1", "77")).resolves.toBeNull();
+    await expect(service.resetQuizToDefaults("course-1", "78")).resolves.toBeNull();
+    await expect(service.resetQuizToDefaults("course-1", "newquiz:course-1:99")).resolves.toBeNull();
+    await expect(service.resetQuizToDefaults("course-1", "newquiz:course-1:100")).resolves.toBeNull();
+
+    await expect(repos.value.assessments.get("classicquiz_77")).resolves.toMatchObject({
+      seb: { configKey: "classic-wrong-course", usesCourseDefaults: false }
+    });
+    await expect(repos.value.assessments.get("classicquiz_78")).resolves.toMatchObject({
+      seb: { configKey: "classic-wrong-identity", usesCourseDefaults: false }
+    });
+    await expect(repos.value.assessments.get("newquiz:course-1:99")).resolves.toMatchObject({
+      seb: { configKey: "new-quiz-wrong-course", usesCourseDefaults: false }
+    });
+    await expect(repos.value.assessments.get("newquiz:course-1:100")).resolves.toMatchObject({
+      seb: { configKey: "new-quiz-wrong-identity", usesCourseDefaults: false }
+    });
   });
 
   it("returns null when resetting defaults for unknown assessments", async () => {

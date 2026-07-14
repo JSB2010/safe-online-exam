@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
@@ -14,32 +14,42 @@ export class LtiStateService {
 
   async createState(payload: Record<string, string>): Promise<string> {
     const expiresAt = Date.now() + this.ttlMs;
-    const encoded = encryptJson({ payload, expiresAt }, this.getKey());
-    await this.repositories.value.transientStates.save(stateDocumentId(encoded), {
-      kind: "lti-state",
-      payload,
-      expiresAt: new Date(expiresAt)
-    });
-    return encoded;
+    return encryptJson({ payload, expiresAt }, this.getKey());
   }
 
-  async consumeState(state: string | undefined | null): Promise<Record<string, string>> {
+  peekState(state: string | undefined | null): Record<string, string> {
     if (!state) {
       throw new Error("Missing LTI state");
     }
-    const issued = await this.repositories.value.transientStates.consume(stateDocumentId(state));
-    if (!issued) {
-      throw new Error("Invalid or already consumed LTI state");
-    }
     const decrypted = decryptJson(state, this.getKey()) as { payload: Record<string, string>; expiresAt: number };
-    const payload = issued.payload || {};
-    const expiresAt = Date.parse(String(issued.expiresAt)) || decrypted.expiresAt;
-    if (!expiresAt || expiresAt < Date.now()) {
+    if (!decrypted.expiresAt || decrypted.expiresAt < Date.now()) {
       throw new Error("Expired LTI state");
     }
-    if (!constantJsonEqual(payload, decrypted.payload)) {
+    if (!decrypted.payload || typeof decrypted.payload !== "object" || Array.isArray(decrypted.payload)) {
       throw new Error("Invalid LTI state");
     }
+    return decrypted.payload;
+  }
+
+  async claimState(state: string | undefined | null): Promise<void> {
+    if (!state) {
+      throw new Error("Missing LTI state");
+    }
+    const payload = this.peekState(state);
+    const claimed = await this.repositories.value.transientStates.claim(stateDocumentId(state), {
+      kind: "lti-state",
+      payload,
+      expiresAt: new Date(Date.now() + this.ttlMs),
+      consumedAt: new Date().toISOString()
+    });
+    if (!claimed) {
+      throw new Error("Invalid or already consumed LTI state");
+    }
+  }
+
+  async consumeState(state: string | undefined | null): Promise<Record<string, string>> {
+    const payload = this.peekState(state);
+    await this.claimState(state);
     return payload;
   }
 
@@ -78,26 +88,4 @@ function decryptJson(state: string, key: Buffer): unknown {
   decipher.setAuthTag(tag);
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
   return JSON.parse(plaintext) as unknown;
-}
-
-function constantJsonEqual(left: unknown, right: unknown): boolean {
-  const leftBuffer = Buffer.from(stableJson(left));
-  const rightBuffer = Buffer.from(stableJson(right));
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

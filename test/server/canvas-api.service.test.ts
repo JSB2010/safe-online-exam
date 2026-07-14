@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
-import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
+import { UpstreamRequestTimeoutError } from "../../src/server/http/upstream-deadline.js";
+import {
+  CANVAS_API_RESPONSE_MAX_BYTES,
+  CANVAS_OAUTH_RESPONSE_MAX_BYTES,
+  CanvasApiService
+} from "../../src/server/services/canvas-api.service.js";
 
 describe("CanvasApiService", () => {
   let service: CanvasApiService;
@@ -21,17 +26,53 @@ describe("CanvasApiService", () => {
 
   it("fetches classic quizzes from Canvas", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse([{ id: 42, title: "Classic Quiz", html_url: "https://canvas.example.com/quizzes/42" }])
+      jsonResponse([
+        {
+          id: 42,
+          title: "Classic Quiz",
+          html_url: "https://canvas.example.com/quizzes/42",
+          published: true,
+          unlock_at: "2026-01-01T00:00:00Z",
+          lock_at: "2026-12-31T00:00:00Z"
+        }
+      ])
     );
 
     await expect(service.getQuizzesForCourse("course-7", "user-1")).resolves.toEqual([
-      expect.objectContaining({ id: "42", quizTypeDisplay: "Classic Quiz" })
+      expect.objectContaining({
+        id: "42",
+        quizTypeDisplay: "Classic Quiz",
+        published: true,
+        unlockAt: "2026-01-01T00:00:00Z",
+        lockAt: "2026-12-31T00:00:00Z"
+      })
     ]);
     expect(fetch).toHaveBeenCalledWith(
       "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
       expect.objectContaining({
         headers: expect.objectContaining({ authorization: "Bearer token-1" })
       })
+    );
+  });
+
+  it("reads every bounded Canvas discovery page before treating the collection as complete", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      title: `Quiz ${index + 1}`,
+      published: true
+    }));
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(firstPage))
+      .mockResolvedValueOnce(jsonResponse([{ id: 101, title: "Quiz 101", published: true }]));
+
+    const quizzes = await service.getQuizzesForCourse("course-7", "user-1");
+
+    expect(quizzes).toHaveLength(101);
+    expect(quizzes[100]).toMatchObject({ id: "101", published: true });
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100&page=2",
+      expect.anything()
     );
   });
 
@@ -70,11 +111,18 @@ describe("CanvasApiService", () => {
           instructions: "<p>Instructions</p>",
           canvas_launch_url: "https://canvas.example.com/courses/course-7/assignments/99/take",
           resource_link_uuid: "resource-uuid",
-          lookup_uuid: "lookup-uuid"
+          lookup_uuid: "lookup-uuid",
+          quiz_settings: {
+            require_student_access_code: true,
+            student_access_code: "CANVAS-ACCESS-SECRET"
+          },
+          config_key: "CANVAS-CONFIG-SECRET"
         })
       );
 
-    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+    const assignments = await service.getNewQuizAssignments("course-7", "user-1");
+
+    expect(assignments).toEqual([
       expect.objectContaining({
         id: "newquiz:course-7:99",
         assignmentId: "99",
@@ -87,6 +135,9 @@ describe("CanvasApiService", () => {
         quizTypeDisplay: "New Quiz"
       })
     ]);
+    expect(JSON.stringify(assignments)).not.toContain("CANVAS-ACCESS-SECRET");
+    expect(JSON.stringify(assignments)).not.toContain("CANVAS-CONFIG-SECRET");
+    expect(assignments[0]).not.toHaveProperty("metadata");
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       "https://canvas.example.com/api/v1/courses/course-7/assignments?per_page=100&new_quizzes=true",
@@ -111,11 +162,7 @@ describe("CanvasApiService", () => {
           }
         ])
       )
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        text: async () => "detail unavailable"
-      } as Response);
+      .mockResolvedValueOnce(textResponse("detail unavailable", 500));
 
     await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
       expect.objectContaining({
@@ -226,11 +273,7 @@ describe("CanvasApiService", () => {
       expiresAt: new Date(Date.now() + 3_600_000).toISOString()
     });
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        text: async () => '{"errors":[{"message":"Invalid access token."}]}'
-      } as Response)
+      .mockResolvedValueOnce(textResponse('{"errors":[{"message":"Invalid access token."}]}', 401))
       .mockResolvedValueOnce(oauthResponse({ access_token: "new-token", expires_in: 3600 }))
       .mockResolvedValueOnce(jsonResponse([{ id: 42, title: "Classic Quiz" }]));
 
@@ -268,11 +311,9 @@ describe("CanvasApiService", () => {
       oauthTokens: { "legacy-user": { id: "legacy-user", userId: "legacy-user", accessToken: "bad-token" } }
     });
     service = new CanvasApiService(new AppConfig(), { value: repositories } as RepositoryProvider);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: false,
-      status: 401,
-      text: async () => '{"errors":[{"message":"Invalid access token."}]}'
-    } as Response);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      textResponse('{"errors":[{"message":"Invalid access token."}]}', 401)
+    );
 
     await expect(service.getQuizzesForCourse("course-7", "legacy-user")).rejects.toMatchObject({
       name: "CanvasApiAuthorizationError"
@@ -281,17 +322,18 @@ describe("CanvasApiService", () => {
   });
 
   it("keeps OAuth tokens and raises a permission error when Canvas denies a scoped request", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: false,
-      status: 403,
-      text: async () => '{"errors":[{"message":"Insufficient scopes"}]}'
-    } as Response);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      textResponse('{"errors":[{"message":"Insufficient scopes SECRET_SCOPE_BODY"}]}', 403)
+    );
 
-    await expect(service.setQuizAccessCode("course-7", "42", "ACCESS42", "user-1")).rejects.toMatchObject({
+    const error = await service.setQuizAccessCode("course-7", "42", "ACCESS42", "user-1").catch((caught) => caught);
+    expect(error).toMatchObject({
       name: "CanvasApiPermissionError",
       status: 403,
-      responseBody: '{"errors":[{"message":"Insufficient scopes"}]}'
+      responseBody: ""
     });
+    expect(String(error)).not.toContain("SECRET_SCOPE_BODY");
+    expect(JSON.stringify(error)).not.toContain("SECRET_SCOPE_BODY");
     await expect(repositories.oauthTokens.get("user-1")).resolves.toMatchObject({
       userId: "user-1",
       accessToken: "token-1"
@@ -299,32 +341,143 @@ describe("CanvasApiService", () => {
   });
 
   it("raises a request error for non-authorization Canvas API failures", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: false,
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(textResponse("Canvas unavailable SECRET_UPSTREAM_SENTINEL", 500));
+
+    const error = await service.getQuizzesForCourse("course-7", "user-1").catch((caught) => caught);
+    expect(error).toMatchObject({
+      name: "CanvasApiRequestError",
+      message: "Canvas API request failed with status 500.",
       status: 500,
-      text: async () => "Canvas unavailable"
-    } as Response);
+      responseBody: ""
+    });
+    expect(String(error)).not.toContain("SECRET_UPSTREAM_SENTINEL");
+    expect(JSON.stringify(error)).not.toContain("SECRET_UPSTREAM_SENTINEL");
+  });
+
+  it("rejects oversized and malformed successful Canvas responses with sanitized errors", async () => {
+    const responses = [
+      new Response("SECRET_OVERSIZED_BODY", {
+        status: 200,
+        headers: { "content-length": String(CANVAS_API_RESPONSE_MAX_BYTES + 1) }
+      }),
+      textResponse("SECRET_INVALID_JSON", 200)
+    ];
+
+    for (const response of responses) {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response);
+      const error = await service.getQuizzesForCourse("course-7", "user-1").catch((caught) => caught);
+
+      expect(error).toMatchObject({ name: "CanvasApiRequestError", status: 502, responseBody: "" });
+      expect(String(error)).not.toMatch(/SECRET_(?:OVERSIZED_BODY|INVALID_JSON)/u);
+      expect(JSON.stringify(error)).not.toMatch(/SECRET_(?:OVERSIZED_BODY|INVALID_JSON)/u);
+    }
+  });
+
+  it("sanitizes Canvas fetch and response-stream failures", async () => {
+    const streamFailure = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("SECRET_STREAM_FAILURE"));
+        }
+      }),
+      { status: 200 }
+    );
+    const failures: Array<() => Promise<Response>> = [
+      () => Promise.reject(new Error("SECRET_NETWORK_FAILURE")),
+      () => Promise.resolve(streamFailure)
+    ];
+
+    for (const failure of failures) {
+      vi.spyOn(globalThis, "fetch").mockImplementationOnce(failure);
+      const error = await service.getQuizzesForCourse("course-7", "user-1").catch((caught) => caught);
+
+      expect(error).toMatchObject({ name: "CanvasApiRequestError", status: 502, responseBody: "" });
+      expect(String(error)).not.toMatch(/SECRET_(?:NETWORK|STREAM)_FAILURE/u);
+      expect(JSON.stringify(error)).not.toMatch(/SECRET_(?:NETWORK|STREAM)_FAILURE/u);
+    }
+  });
+
+  it("does not parse or store oversized OAuth refresh responses", async () => {
+    await service.storeAccessToken("oversized-refresh-user", "old-token", {
+      refreshToken: "refresh-token",
+      expiresAt: new Date(Date.now() - 1000).toISOString()
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response('{"access_token":"SECRET_OVERSIZED_OAUTH_TOKEN"}', {
+          status: 200,
+          headers: { "content-length": String(CANVAS_OAUTH_RESPONSE_MAX_BYTES + 1) }
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse([{ id: 42, title: "Classic Quiz" }]));
+
+    await expect(service.getQuizzesForCourse("course-7", "oversized-refresh-user")).resolves.toEqual([
+      expect.objectContaining({ id: "42" })
+    ]);
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer old-token" })
+      })
+    );
+    await expect(repositories.oauthTokens.get("oversized-refresh-user")).resolves.toMatchObject({
+      accessToken: "old-token",
+      refreshToken: "refresh-token"
+    });
+    expect(JSON.stringify(await repositories.oauthTokens.get("oversized-refresh-user"))).not.toContain(
+      "SECRET_OVERSIZED_OAUTH_TOKEN"
+    );
+  });
+
+  it("passes an abort deadline to Canvas and maps timeouts to a safe request error", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return Promise.reject(new UpstreamRequestTimeoutError());
+    });
 
     await expect(service.getQuizzesForCourse("course-7", "user-1")).rejects.toMatchObject({
       name: "CanvasApiRequestError",
-      status: 500,
-      responseBody: "Canvas unavailable"
+      message: "Canvas API request timed out.",
+      status: 504,
+      responseBody: ""
     });
+  });
+
+  it("never refreshes or replays a mutation after Canvas rejects its access token", async () => {
+    await service.storeAccessToken("mutation-user", "old-token", {
+      refreshToken: "refresh-token",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString()
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      textResponse('{"errors":[{"message":"Invalid access token."}]}', 401)
+    );
+
+    await expect(service.setQuizAccessCode("course-7", "42", "ACCESS42", "mutation-user")).rejects.toMatchObject({
+      name: "CanvasApiAuthorizationError",
+      status: 401
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes/42",
+      expect.objectContaining({ method: "PUT", signal: expect.any(AbortSignal) })
+    );
+    await expect(repositories.oauthTokens.get("mutation-user")).resolves.toBeNull();
   });
 });
 
 function jsonResponse(value: unknown): Response {
-  return {
-    ok: true,
+  return new Response(JSON.stringify(value), {
     status: 200,
-    text: async () => JSON.stringify(value)
-  } as Response;
+    headers: { "content-type": "application/json" }
+  });
 }
 
 function oauthResponse(value: unknown): Response {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => value
-  } as Response;
+  return jsonResponse(value);
+}
+
+function textResponse(value: string, status: number): Response {
+  return new Response(value, { status });
 }

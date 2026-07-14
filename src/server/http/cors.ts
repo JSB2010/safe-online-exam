@@ -10,16 +10,7 @@ export function isAllowedCorsOrigin(origin: string | undefined, config: AppConfi
     return false;
   }
 
-  if (sameOrigin(originUrl, config.toolUrl) || sameOrigin(originUrl, config.getCanvasDomain())) {
-    return true;
-  }
-
-  const host = originUrl.hostname.toLowerCase();
-  if (isCanvasHost(host)) {
-    return true;
-  }
-
-  return config.profile !== "prod" && isLocalhost(host);
+  return sameOrigin(originUrl, config.toolUrl) || sameOrigin(originUrl, config.getCanvasDomain());
 }
 
 function sameOrigin(originUrl: URL, configuredUrl?: string): boolean {
@@ -36,18 +27,4 @@ function parseUrl(value?: string): URL | null {
   } catch {
     return null;
   }
-}
-
-function isCanvasHost(host: string): boolean {
-  return (
-    host.endsWith(".instructure.com") ||
-    host.endsWith(".canvaslms.com") ||
-    host.endsWith(".insops.net") ||
-    host.endsWith(".inscloudgate.net") ||
-    host === "canvas.instructure.com"
-  );
-}
-
-function isLocalhost(host: string): boolean {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }

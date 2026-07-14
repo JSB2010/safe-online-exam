@@ -89,14 +89,22 @@ describe("StaticJsController", () => {
     const script = await controller.canvasDetector(request);
 
     expect(script).toContain("setupExamToolsSidebar(quizInfo);");
-    expect(script).toContain("/api/seb/tools/");
+    expect(script).toContain("/api/seb/access-code/");
+    expect(script).toContain("method: 'POST'");
+    expect(script).toContain("cache: 'no-store'");
+    expect(script).toContain("'X-SEB-Proof-Token': proofToken");
+    expect(script).toContain("const tools = Array.isArray(data.tools) ? data.tools.filter(isUsableExamTool) : [];");
+    expect(script).toContain("state.authorizedExamTools.get(");
+    expect(script).toContain("state.authorizedExamTools.set(");
+    expect(script).not.toContain("/api/seb/tools/");
     expect(script).toContain("seb-exam-tools-sidebar");
     expect(script).toContain("makeExamToolsDraggable");
     expect(script).toContain("examToolWindows: new Map()");
     expect(script).toContain("focusExamToolWindow(existingWindow)");
-    expect(script).toContain("window.open(tool.url, windowName)");
+    expect(script).toContain("window.open('about:blank', windowName)");
     expect(script).toContain("openedWindow.opener = null");
-    expect(script).not.toContain("window.open(tool.url, '_blank', 'noopener,noreferrer')");
+    expect(script).toContain("openedWindow.location.replace(tool.url)");
+    expect(script).toContain("window.open(tool.url, '_blank', 'noopener,noreferrer')");
   });
 
   it("uses the configured app base URL for detector API calls when available", async () => {
@@ -179,14 +187,18 @@ describe("StaticJsController", () => {
     expect(script).toContain("/api/debug/canvas-detector-trace");
   });
 
-  it("serves a cacheable detector when app debug mode is disabled", async () => {
+  it("requires revalidation of the stable detector URL when app debug mode is disabled", async () => {
     const controller = new StaticJsController(createConfig(false));
     const response = createResponse();
+    response.setHeader("vary", "Origin");
 
     const script = await controller.canvasDetector(createRequest(), response as any);
 
-    expect(response.headers.get("cache-control")).toBe("public, max-age=3600, stale-while-revalidate=86400");
-    expect(response.headers.get("vary")).toBe("X-Forwarded-Host, X-Forwarded-Proto, X-Forwarded-Port");
+    expect(response.headers.get("cache-control")).toBe("no-cache, must-revalidate");
+    expect(response.headers.get("pragma")).toBe("no-cache");
+    expect(response.headers.get("expires")).toBe("0");
+    expect(response.headers.get("vary")).toBe("Origin, X-Forwarded-Host, X-Forwarded-Proto, X-Forwarded-Port");
+    expect(response.headers.get("vary")?.match(/Origin/gu)).toHaveLength(1);
     expect(script).toContain("const SERVER_DEBUG_ENABLED = false;");
     expect(script).not.toContain("__SEB_DEBUG_ENABLED__");
   });
@@ -221,11 +233,36 @@ function createConfig(debugEnabled: boolean): AppConfig {
   } as AppConfig;
 }
 
-function createResponse(): { headers: Map<string, string>; setHeader(name: string, value: string): void } {
+function createResponse(): {
+  headers: Map<string, string>;
+  setHeader(name: string, value: string): void;
+  vary(value: string): void;
+} {
+  const headers = new Map<string, string>();
   return {
-    headers: new Map<string, string>(),
+    headers,
     setHeader(name: string, value: string) {
-      this.headers.set(name.toLowerCase(), value);
+      headers.set(name.toLowerCase(), value);
+    },
+    vary(value: string) {
+      const fields = `${headers.get("vary") || ""},${value}`
+        .split(",")
+        .map((field) => field.trim())
+        .filter(Boolean);
+      const seen = new Set<string>();
+      headers.set(
+        "vary",
+        fields
+          .filter((field) => {
+            const normalized = field.toLowerCase();
+            if (seen.has(normalized)) {
+              return false;
+            }
+            seen.add(normalized);
+            return true;
+          })
+          .join(", ")
+      );
     }
   };
 }

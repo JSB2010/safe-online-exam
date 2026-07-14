@@ -12,6 +12,12 @@ playwright-report
 .DS_Store
 .env
 .env.*
+.local/
+*.p12
+*.pfx
+*.key
+*.key.pem
+*.private.pem
 target
 *.log
 seb-exit-*.png

@@ -6,14 +6,16 @@ substitutions:
 
 steps:
   - name: "gcr.io/cloud-builders/docker"
-    entrypoint: "bash"
     args:
-      - "-c"
-      - "docker pull ${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG} || exit 0"
+      - "pull"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+    allowFailure: true
 
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
+      - "-t"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
       - "-t"
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
       - "--cache-from"
@@ -21,28 +23,35 @@ steps:
       - "."
 
   - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
+    args:
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
+      - "/workspace/canvas-seb-dev.digest"
+
+  - name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
 
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    entrypoint: "gcloud"
+    entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
-      - "run"
-      - "deploy"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
+      - "/workspace/canvas-seb-dev.digest"
       - "canvas-seb-dev"
-      - "--image=${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
       - "--region=${_LOCATION}"
       - "--execution-environment=gen2"
       - "--platform=managed"
-      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev"
-      - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:latest,LTI_CLIENT_ID=dev_lti_client_id:latest,TOOL_URL=dev_tool_url:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest,SESSION_SECRET=dev_admin_password:latest,STATE_ENCRYPTION_KEY=dev_state_encryption_key:latest,CANVAS_API_CLIENT_ID=dev_api_client_id:latest,CANVAS_API_CLIENT_SECRET=dev_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:latest"
+      - "--allow-unauthenticated"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=true,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev"
+      - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:latest,LTI_CLIENT_ID=dev_lti_client_id:latest,LTI_DEPLOYMENT_ID=dev_lti_deployment_id:latest,TOOL_URL=dev_tool_url:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest,SESSION_SECRET=dev_session_secret:latest,STATE_ENCRYPTION_KEY=dev_state_encryption_key:latest,CANVAS_API_CLIENT_ID=dev_api_client_id:latest,CANVAS_API_CLIENT_SECRET=dev_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:latest"
       - "--memory=2Gi"
       - "--cpu=2"
       - "--min-instances=0"
       - "--max-instances=2"
       - "--timeout=600s"
-      - "--service-account=seb-canvas@$PROJECT_ID.iam.gserviceaccount.com"
+      - "--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com"
 
 images:
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
   - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"

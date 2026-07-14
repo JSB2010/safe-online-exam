@@ -8,7 +8,10 @@ export function renderAppShell(options: AppShellOptions): string {
   const payload = JSON.stringify({
     view: options.view,
     data: options.initialData || {}
-  }).replace(/</gu, "\\u003c");
+  })
+    .replace(/</gu, "\\u003c")
+    .replace(/\u2028/gu, "\\u2028")
+    .replace(/\u2029/gu, "\\u2029");
   const appScriptPath = versionedAssetPath("/assets/index.js");
   const appStylesheetPath = versionedAssetPath("/assets/index.css");
 
@@ -18,7 +21,7 @@ export function renderAppShell(options: AppShellOptions): string {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(options.title)}</title>
-    <script>window.__SEB_BOOTSTRAP__=${payload};</script>
+    <script id="seb-bootstrap" type="application/json">${payload}</script>
     <script type="module" src="${appScriptPath}"></script>
     <link rel="stylesheet" href="${appStylesheetPath}">
   </head>

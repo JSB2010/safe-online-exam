@@ -12,6 +12,9 @@ export interface Quiz {
   quizEngine?: string | null;
   quizTypeDisplay?: string | null;
   contentType?: ContentType | null;
+  published?: boolean | null;
+  unlockAt?: string | null;
+  lockAt?: string | null;
 }
 
 export interface ContentItem {
@@ -30,7 +33,9 @@ export interface ContentItem {
   externalToolUrl?: string | null;
   quizEngine?: string | null;
   quizTypeDisplay?: string | null;
-  metadata?: Record<string, unknown>;
+  published?: boolean | null;
+  unlockAt?: string | null;
+  lockAt?: string | null;
 }
 
 export interface AssessmentCanvasState {
@@ -47,7 +52,14 @@ export interface AssessmentCanvasState {
   externalToolUrl?: string | null;
   quizEngine?: string | null;
   quizTypeDisplay?: string | null;
-  metadata?: Record<string, unknown>;
+  published?: boolean | null;
+  unlockAt?: string | null;
+  lockAt?: string | null;
+  /**
+   * Legacy records may contain a raw Canvas API response here. It is never
+   * returned across an application boundary and is cleared on the next write.
+   */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AssessmentSebState {
@@ -68,6 +80,20 @@ export interface AssessmentSebState {
   externalTools: ExternalToolConfig[];
 }
 
+export type AssessmentCanvasVerificationStatus = "verified" | "missing" | "stale";
+
+export interface AssessmentCanvasVerification {
+  /**
+   * `verified` means the assessment was present in the most recent successful,
+   * complete Canvas discovery for its content type. `missing` is an
+   * authoritative tombstone. `stale` means discovery was attempted but failed.
+   * Legacy records without this object are intentionally unverified.
+   */
+  status: AssessmentCanvasVerificationStatus;
+  checkedAt: string;
+  lastVerifiedAt?: string | null;
+}
+
 export interface AssessmentRecord {
   id: string;
   courseId: string;
@@ -77,6 +103,7 @@ export interface AssessmentRecord {
   createdAt?: string | null;
   updatedAt?: string | null;
   lastSyncedAt?: string | null;
+  canvasVerification?: AssessmentCanvasVerification | null;
 }
 
 export interface QuizSebSetting {
@@ -131,7 +158,6 @@ export interface ContentSebSetting {
   usesCourseDefaults?: boolean | null;
   quitPasswordOverride?: boolean | null;
   startPasswordOverride?: boolean | null;
-  metadata?: Record<string, unknown>;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -152,8 +178,21 @@ export interface CourseSebDefaults {
   urlRules: SebUrlRule[];
   externalTools: ExternalToolConfig[];
   setupCompleted: boolean;
+  /** Secret-free response hint; never persisted as configuration. */
+  hasEffectiveQuitPassword?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface SebQuitPasswordAvailability {
+  hasEffectiveQuitPassword?: boolean;
+}
+
+export function canEnableSebAssessment(
+  setting?: SebQuitPasswordAvailability | null,
+  defaults?: SebQuitPasswordAvailability | null
+): boolean {
+  return setting?.hasEffectiveQuitPassword === true || defaults?.hasEffectiveQuitPassword === true;
 }
 
 export interface CourseRecord {
@@ -182,6 +221,11 @@ export interface OAuthToken {
 }
 
 export interface LtiLaunchData {
+  /** The opaque LTI subject from the validated id_token. */
+  ltiSubject?: string | null;
+  /** The signed Canvas REST user id from custom.canvas_user_id. */
+  canvasUserId?: string | null;
+  issuer?: string | null;
   userId: string;
   fullName?: string | null;
   email?: string | null;
@@ -231,8 +275,8 @@ export interface ExternalToolConfig {
 export const EXTERNAL_TOOL_PRESETS: ExternalToolConfig[] = [
   {
     id: "desmos-calculator",
-    label: "Desmos",
-    url: "https://www.desmos.com/calculator",
+    label: "Desmos Test Mode",
+    url: "https://www.desmos.com/testing/digital-act/graphing",
     enabled: false,
     preset: "desmos-calculator",
     allowedDomains: [
@@ -257,8 +301,14 @@ export function parseNewQuizContentId(
   if (!contentId?.startsWith("newquiz:")) {
     return null;
   }
-  const parts = contentId.split(":", 3);
-  if (parts.length !== 3 || !parts[1] || !parts[2]) {
+  const parts = contentId.split(":");
+  if (
+    parts.length !== 3 ||
+    !parts[1] ||
+    !parts[2] ||
+    !/^[a-z0-9_-]{1,128}$/iu.test(parts[1]) ||
+    !/^[a-z0-9_-]{1,128}$/iu.test(parts[2])
+  ) {
     return null;
   }
   return { courseId: parts[1], assignmentId: parts[2] };
@@ -315,7 +365,10 @@ export function quizToContentItem(quiz: Quiz): ContentItem {
     description: quiz.description,
     htmlUrl: quiz.htmlUrl,
     quizEngine: quiz.quizEngine || "classic",
-    quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz"
+    quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz",
+    published: quiz.published ?? null,
+    unlockAt: quiz.unlockAt || null,
+    lockAt: quiz.lockAt || null
   };
 }
 
@@ -339,10 +392,16 @@ export function quizToAssessmentRecord(
       description: quiz.description,
       htmlUrl: quiz.htmlUrl,
       quizEngine: quiz.quizEngine || "classic",
-      quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz"
+      quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz",
+      published: quiz.published ?? null,
+      unlockAt: quiz.unlockAt || null,
+      lockAt: quiz.lockAt || null
     },
     seb: normalizeAssessmentSebState(existing?.seb),
     lastSyncedAt: syncedAt || existing?.lastSyncedAt || null,
+    canvasVerification: syncedAt
+      ? { status: "verified", checkedAt: syncedAt, lastVerifiedAt: syncedAt }
+      : existing?.canvasVerification || null,
     createdAt: existing?.createdAt,
     updatedAt: existing?.updatedAt
   };
@@ -375,10 +434,16 @@ export function contentItemToAssessmentRecord(
       externalToolUrl: item.externalToolUrl,
       quizEngine: item.quizEngine,
       quizTypeDisplay: item.quizTypeDisplay,
-      metadata: item.metadata
+      published: item.published ?? null,
+      unlockAt: item.unlockAt || null,
+      lockAt: item.lockAt || null,
+      metadata: null
     },
     seb: normalizeAssessmentSebState(existing?.seb),
     lastSyncedAt: syncedAt || existing?.lastSyncedAt || null,
+    canvasVerification: syncedAt
+      ? { status: "verified", checkedAt: syncedAt, lastVerifiedAt: syncedAt }
+      : existing?.canvasVerification || null,
     createdAt: existing?.createdAt,
     updatedAt: existing?.updatedAt
   };
@@ -399,6 +464,9 @@ export function assessmentToQuiz(record: AssessmentRecord): Quiz | null {
     quizEngine: record.canvas.quizEngine || "classic",
     quizTypeDisplay: record.canvas.quizTypeDisplay || "Classic Quiz",
     contentType: "CLASSIC_QUIZ",
+    published: record.canvas.published ?? null,
+    unlockAt: record.canvas.unlockAt || null,
+    lockAt: record.canvas.lockAt || null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   };
@@ -423,7 +491,9 @@ export function assessmentToContentItem(record: AssessmentRecord): ContentItem {
     quizTypeDisplay:
       record.canvas.quizTypeDisplay ||
       (record.contentType === "CLASSIC_QUIZ" ? "Classic Quiz" : record.contentType === "NEW_QUIZ" ? "New Quiz" : null),
-    metadata: record.canvas.metadata
+    published: record.canvas.published ?? null,
+    unlockAt: record.canvas.unlockAt || null,
+    lockAt: record.canvas.lockAt || null
   };
 }
 
@@ -488,7 +558,6 @@ export function assessmentToContentSebSetting(record: AssessmentRecord): Content
     usesCourseDefaults: seb.usesCourseDefaults,
     quitPasswordOverride: seb.quitPasswordOverride,
     startPasswordOverride: seb.startPasswordOverride,
-    metadata: record.canvas.metadata,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   };
@@ -546,7 +615,7 @@ export function assessmentWithContentSebSetting(
       externalToolUrl: setting.externalToolUrl || existing?.canvas.externalToolUrl || null,
       quizEngine: existing?.canvas.quizEngine || (parsed ? "new_quiz" : null),
       quizTypeDisplay: existing?.canvas.quizTypeDisplay || (parsed ? "New Quiz" : null),
-      metadata: setting.metadata || existing?.canvas.metadata
+      metadata: null
     },
     seb: contentSebSettingToAssessmentSebState(setting),
     createdAt: existing?.createdAt,
@@ -662,25 +731,33 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
     return [];
   }
   const seen = new Set<string>();
-  return input.flatMap((tool, index) => {
+  return input.slice(0, 16).flatMap((tool, index) => {
+    const requestedId = sanitizeToolId(tool.id || tool.preset || `tool-${index + 1}`);
+    const preset = EXTERNAL_TOOL_PRESETS.find((entry) => entry.id === requestedId || entry.preset === tool.preset);
+    if (preset) {
+      if (seen.has(preset.id)) {
+        return [];
+      }
+      seen.add(preset.id);
+      return [{ ...preset, enabled: !!tool.enabled, allowedDomains: [...(preset.allowedDomains || [])] }];
+    }
     const label = tool.label?.trim();
     const url = normalizeToolUrl(tool.url);
     if (!label || !url) {
       return [];
     }
-    const id = sanitizeToolId(tool.id || tool.preset || label || `tool-${index + 1}`);
+    const id = sanitizeToolId(tool.id || label || `tool-${index + 1}`);
     const uniqueId = seen.has(id) ? `${id}-${index + 1}` : id;
-    const preset = EXTERNAL_TOOL_PRESETS.find((entry) => entry.id === id || entry.preset === tool.preset);
     const matchType = normalizeUrlRuleMatch(tool.matchType);
-    const allowedDomains = normalizeToolDomains(preset ? preset.allowedDomains : tool.allowedDomains);
+    if (matchType === "regex") {
+      return [];
+    }
+    const allowedDomains: string[] = [];
     if (matchType === "domain") {
       const domain = domainFromUrl(url);
       if (domain) {
         allowedDomains.push(`domain:${domain}`);
       }
-    }
-    if (matchType === "regex" && tool.allowedPattern?.trim()) {
-      allowedDomains.push(`regex:${tool.allowedPattern.trim()}`);
     }
     seen.add(uniqueId);
     return [
@@ -689,10 +766,9 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
         label,
         url,
         enabled: !!tool.enabled,
-        preset: tool.preset?.trim() || null,
+        preset: null,
         allowedDomains: uniqueStrings(allowedDomains),
-        ...(matchType ? { matchType } : {}),
-        ...(tool.allowedPattern?.trim() ? { allowedPattern: tool.allowedPattern.trim() } : {})
+        ...(matchType === "exact" || matchType === "domain" ? { matchType } : {})
       }
     ];
   });
@@ -718,7 +794,7 @@ export function normalizeUrlRules(input?: SebUrlRule[] | string[] | null): SebUr
     return [];
   }
   const seen = new Set<string>();
-  return input.flatMap((entry, index) => {
+  return input.slice(0, 32).flatMap((entry, index) => {
     const candidate = normalizeUrlRule(entry, index);
     if (!candidate) {
       return [];
@@ -769,26 +845,30 @@ export function legacyDomainsToUrlRules(input?: string[] | null): SebUrlRule[] {
   if (!Array.isArray(input)) {
     return [];
   }
-  const rules: SebUrlRule[] = input.map((entry, index) => ({
-    id: `domain-${index + 1}`,
-    value: stripRulePrefix(entry),
-    match: entry.trim().startsWith("regex:") ? "regex" : entry.trim().startsWith("exact:") ? "exact" : "domain"
-  }));
+  const rules: SebUrlRule[] = input
+    .filter((entry) => !entry.trim().startsWith("regex:"))
+    .map((entry, index) => ({
+      id: `domain-${index + 1}`,
+      value: stripRulePrefix(entry),
+      match: entry.trim().startsWith("exact:") ? "exact" : "domain"
+    }));
   return normalizeUrlRules(rules);
 }
 
 export function urlRulesToAllowedEntries(input?: SebUrlRule[] | null): string[] {
-  return normalizeUrlRules(input).map((rule) => {
-    switch (rule.match) {
-      case "exact":
-        return `exact:${normalizeRuleUrl(rule.value) || rule.value}`;
-      case "regex":
-        return `regex:${rule.value}`;
-      case "domain":
-      default:
-        return `domain:${normalizeDomainRule(rule.value) || rule.value}`;
-    }
-  });
+  return normalizeUrlRules(input)
+    .map((rule) => {
+      switch (rule.match) {
+        case "exact":
+          return `exact:${normalizeRuleUrl(rule.value) || rule.value}`;
+        case "regex":
+          return "";
+        case "domain":
+        default:
+          return `domain:${normalizeDomainRule(rule.value) || rule.value}`;
+      }
+    })
+    .filter(Boolean);
 }
 
 export function settingUsesCourseDefaults(
@@ -921,6 +1001,9 @@ function contentSebSettingToAssessmentSebState(setting: ContentSebSetting): Asse
 }
 
 function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null): AssessmentSebState {
+  const urlRules = normalizeUrlRules(
+    input?.urlRules?.length ? input.urlRules : legacyDomainsToUrlRules(input?.customDomains)
+  );
   return {
     ...defaultAssessmentSebState(),
     ...input,
@@ -934,10 +1017,10 @@ function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null)
     usesCourseDefaults: input?.usesCourseDefaults !== false,
     quitPasswordOverride: input?.quitPasswordOverride === true,
     startPasswordOverride: input?.startPasswordOverride === true,
-    ssoDomains: input?.ssoDomains || [],
-    educationalToolDomains: input?.educationalToolDomains || [],
-    customDomains: input?.customDomains || [],
-    urlRules: normalizeUrlRules(input?.urlRules),
+    ssoDomains: normalizeConcreteDomains(input?.ssoDomains),
+    educationalToolDomains: normalizeConcreteDomains(input?.educationalToolDomains),
+    customDomains: urlRulesToAllowedEntries(urlRules),
+    urlRules,
     externalTools: normalizeExternalTools(input?.externalTools)
   };
 }
@@ -950,7 +1033,13 @@ function normalizeToolUrl(value?: string | null): string | null {
   const candidate = /^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
     const parsed = new URL(candidate);
-    if (parsed.protocol !== "https:") {
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      !normalizeConcreteHostname(parsed.hostname)
+    ) {
       return null;
     }
     return parsed.toString();
@@ -959,27 +1048,23 @@ function normalizeToolUrl(value?: string | null): string | null {
   }
 }
 
-function normalizeToolDomains(value?: string[] | null): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return uniqueStrings(value.map((entry) => entry.trim()).filter(Boolean));
-}
-
 function normalizeUrlRule(entry: SebUrlRule | string, index: number): SebUrlRule | null {
   if (typeof entry === "string") {
     const stripped = stripRulePrefix(entry);
-    return stripped
-      ? {
-          id: `rule-${index + 1}`,
-          value: stripped,
-          match: entry.startsWith("regex:") ? "regex" : entry.startsWith("exact:") ? "exact" : "domain"
-        }
+    return stripped && !entry.trim().startsWith("regex:")
+      ? normalizeUrlRule(
+          {
+            id: `rule-${index + 1}`,
+            value: stripped,
+            match: entry.startsWith("exact:") ? "exact" : "domain"
+          },
+          index
+        )
       : null;
   }
   const value = entry.value?.trim();
   const match = normalizeUrlRuleMatch(entry.match) || "domain";
-  if (!value) {
+  if (!value || match === "regex" || value.includes("*")) {
     return null;
   }
   if (isUnsafeBroadUrlPattern(value)) {
@@ -1010,7 +1095,14 @@ function normalizeRuleUrl(value: string): string | null {
   const candidate = /^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
     const parsed = new URL(candidate);
-    if (parsed.protocol !== "https:") {
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      parsed.toString().length > 2048 ||
+      !normalizeConcreteHostname(parsed.hostname)
+    ) {
       return null;
     }
     return parsed.toString();
@@ -1020,12 +1112,39 @@ function normalizeRuleUrl(value: string): string | null {
 }
 
 function normalizeDomainRule(value: string): string | null {
-  const stripped = stripRulePrefix(value).replace(/^https?:\/\//iu, "");
-  const domain = stripped.split("/")[0]?.trim().toLowerCase();
-  if (!domain || domain.includes(" ") || domain === "*" || domain.startsWith(".")) {
+  const stripped = stripRulePrefix(value).trim().toLowerCase();
+  return normalizeConcreteHostname(stripped);
+}
+
+export function normalizeConcreteDomains(value?: string[] | null): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return uniqueStrings(
+    value
+      .slice(0, 32)
+      .map((entry) => normalizeDomainRule(entry))
+      .filter((entry): entry is string => !!entry)
+  );
+}
+
+function normalizeConcreteHostname(value: string): string | null {
+  const hostname = value.trim().toLowerCase();
+  if (!hostname || hostname.length > 253 || hostname.includes("*") || !hostname.includes(".")) {
     return null;
   }
-  return domain;
+  if (
+    !hostname
+      .split(".")
+      .every((label) => !!label && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(label))
+  ) {
+    return null;
+  }
+  try {
+    return new URL(`https://${hostname}`).hostname === hostname ? hostname : null;
+  } catch {
+    return null;
+  }
 }
 
 function stripRulePrefix(value: string): string {
@@ -1076,24 +1195,6 @@ export function isInstructor(launchData?: RoleAwareLaunchData | null): boolean {
   if (!launchData) {
     return false;
   }
-  const canvasMembershipRoles = customValues(launchData.custom, ["canvas_membership_roles"]);
-  if (canvasMembershipRoles.some(isCanvasInstructorEnrollment)) {
-    return true;
-  }
-  if (canvasMembershipRoles.some(isCanvasStudentEnrollment)) {
-    return false;
-  }
-  const lisMembershipRoles = customValues(launchData.custom, [
-    "canvas_lis_membership_roles",
-    "com_instructure_membership_roles"
-  ]);
-  if (lisMembershipRoles.some(isContextInstructorRole)) {
-    return true;
-  }
-  const permissions = customValues(launchData.custom, ["canvas_membership_permissions"]);
-  if (permissions.some((permission) => instructorPermissions.has(permission.toLowerCase()))) {
-    return true;
-  }
   return launchData.roles.some(isContextInstructorRole);
 }
 
@@ -1101,20 +1202,36 @@ export function isStudent(launchData?: RoleAwareLaunchData | null): boolean {
   if (!launchData) {
     return false;
   }
+  return launchData.roles.some(isContextStudentRole) || launchData.roles.some(isInstitutionStudentRole);
+}
+
+/**
+ * Canvas custom substitutions are signed, but they are deployment-configurable and are not the
+ * interoperable LTI authorization claim. Keep the standard LTI roles claim authoritative and fail
+ * closed when a configured custom field contradicts it.
+ */
+export function assertLtiRoleClaimsConsistent(launchData: RoleAwareLaunchData): void {
+  const standardInstructor = launchData.roles.some(isContextInstructorRole);
+  const standardStudent =
+    launchData.roles.some(isContextStudentRole) || launchData.roles.some(isInstitutionStudentRole);
   const canvasMembershipRoles = customValues(launchData.custom, ["canvas_membership_roles"]);
-  if (canvasMembershipRoles.some(isCanvasStudentEnrollment)) {
-    return true;
-  }
   const lisMembershipRoles = customValues(launchData.custom, [
     "canvas_lis_membership_roles",
     "com_instructure_membership_roles"
   ]);
-  return (
+  const permissions = customValues(launchData.custom, ["canvas_membership_permissions"]);
+  const customInstructor =
+    canvasMembershipRoles.some(isCanvasInstructorEnrollment) ||
+    lisMembershipRoles.some(isContextInstructorRole) ||
+    permissions.some((permission) => instructorPermissions.has(permission.toLowerCase()));
+  const customStudent =
+    canvasMembershipRoles.some(isCanvasStudentEnrollment) ||
     lisMembershipRoles.some(isContextStudentRole) ||
-    lisMembershipRoles.some(isInstitutionStudentRole) ||
-    launchData.roles.some(isContextStudentRole) ||
-    launchData.roles.some(isInstitutionStudentRole)
-  );
+    lisMembershipRoles.some(isInstitutionStudentRole);
+
+  if ((customInstructor && !standardInstructor) || (customStudent && !standardStudent)) {
+    throw new Error("Conflicting LTI role claims");
+  }
 }
 
 function isCanvasInstructorEnrollment(role: string): boolean {

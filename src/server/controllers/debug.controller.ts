@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, Ip, Post } from "@nestjs/common";
+import { Body, Controller, Headers, Post } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
 import { DetectorTraceService } from "../services/detector-trace.service.js";
 
@@ -10,17 +10,13 @@ export class DebugController {
   ) {}
 
   @Post("/canvas-detector-trace")
-  canvasDetectorTrace(
-    @Body() payload: unknown,
-    @Headers("origin") origin?: string,
-    @Headers("user-agent") userAgent?: string,
-    @Ip() ip?: string
-  ): Record<string, unknown> {
-    if (!this.config.value.security.debugEnabled) {
+  canvasDetectorTrace(@Body() payload: unknown, @Headers("origin") origin?: string): Record<string, unknown> {
+    const diagnosticsEnabled = this.config.value.security.detectorDiagnosticsEnabled;
+    if (!this.config.value.security.debugEnabled && !diagnosticsEnabled) {
       return { enabled: false };
     }
 
-    this.detectorTrace.recordEvent(payload, { ip, origin, userAgent });
+    this.detectorTrace.recordEvent(payload, { origin, includeDetails: diagnosticsEnabled });
     return { enabled: true };
   }
 }

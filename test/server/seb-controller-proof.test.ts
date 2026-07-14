@@ -29,27 +29,40 @@ describe("SEB access proof validation", () => {
     });
   });
 
-  it("accepts a direct Config Key value exposed by the SEB JavaScript API", async () => {
+  it("does not reveal an access code from spoofed SEB headers without a minted one-time proof", async () => {
+    await withConfig(async () => {
+      const { controller } = controllerWithSetting({
+        quizId: "23455",
+        courseId: "11825",
+        configKey: classicConfigKey()
+      });
+      const spoofedSebRequest = requestWithHeaders({
+        "user-agent": "Mozilla/5.0 SafeExamBrowser/3.6.1",
+        "x-safeexambrowser-configkeyhash": "a".repeat(64),
+        "x-safeexambrowser-requesthash": "b".repeat(64)
+      });
+
+      await expectApiError(controller.accessCode("11825", "23455", undefined, spoofedSebRequest), 403);
+      await expectApiError(controller.accessCode("11825", "23455", "x".repeat(43), spoofedSebRequest), 403);
+    });
+  });
+
+  it("rejects a raw Config Key because proof must be bound to the claimed URL", async () => {
     await withConfig(async () => {
       const storedConfigKey = classicConfigKey();
-      const { controller, proofService } = controllerWithSetting({
+      const { controller } = controllerWithSetting({
         quizId: "23455",
         courseId: "11825",
         configKey: storedConfigKey
       });
 
-      const result = await controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
-        configKeyHash: storedConfigKey,
-        url: `${CANVAS_URL}/courses/11825/quizzes/23455/take?user_id=7288`
-      });
-
-      expect(result).toEqual(
-        expect.objectContaining({
-          success: true,
-          proofToken: expect.any(String)
-        })
+      await expectApiError(
+        controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+          configKeyHash: storedConfigKey,
+          url: `${CANVAS_URL}/courses/11825/quizzes/23455/take?user_id=7288`
+        }),
+        403
       );
-      await expect(proofService.consumeProof(result.proofToken as string, "11825", "23455")).resolves.toBe(true);
     });
   });
 
@@ -70,6 +83,16 @@ describe("SEB access proof validation", () => {
       });
 
       expect(result).toEqual(expect.objectContaining({ success: true, proofToken: expect.any(String) }));
+      await expect(
+        controller.accessCode("11825", "23455", result.proofToken as string, requestWithHeaders())
+      ).resolves.toEqual(
+        expect.objectContaining({
+          success: true,
+          accessCode: "ACCESS-CODE",
+          exitGrant: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+          tools: []
+        })
+      );
     });
   });
 
@@ -139,20 +162,44 @@ describe("SEB access proof validation", () => {
     });
   });
 
-  it("requires a fresh config download after stored Config Key invalidation", async () => {
+  it("derives the current Config Key without requiring it to be persisted", async () => {
     await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
       const { controller } = controllerWithSetting({
         quizId: "23455",
         courseId: "11825",
         configKey: null
       });
+      const generatedConfigKey = classicConfigKey();
+      const url = `${CANVAS_URL}/courses/11825/quizzes/23455/take`;
+
+      await expect(
+        controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+          configKeyHash: configKey.hashForUrl(url, generatedConfigKey),
+          url
+        })
+      ).resolves.toEqual(expect.objectContaining({ success: true, proofToken: expect.any(String) }));
+    });
+  });
+
+  it("invalidates a minted proof when the assessment generation changes before release", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const { controller, resolvedSetting } = controllerWithSetting({
+        quizId: "23455",
+        courseId: "11825"
+      });
+      const url = `${CANVAS_URL}/courses/11825/quizzes/23455/take`;
+      const result = await controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+        configKeyHash: configKey.hashForUrl(url, classicConfigKey()),
+        url
+      });
+
+      resolvedSetting.accessCode = "ROTATED-ACCESS-CODE";
 
       await expectApiError(
-        controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
-          configKeyHash: "c".repeat(64),
-          url: `${CANVAS_URL}/courses/11825/quizzes/23455/take`
-        }),
-        409
+        controller.accessCode("11825", "23455", result.proofToken as string, requestWithHeaders()),
+        403
       );
     });
   });
@@ -190,7 +237,7 @@ describe("SEB access proof validation", () => {
         quizId: "23455",
         courseId: "11825",
         configKey: staleConfigKey,
-        startPassword: "exam-start",
+        startPassword: "unique-start-passphrase",
         configKeySalt: Buffer.alloc(32, 5).toString("base64")
       });
       const staleHash = configKey.hashForUrl(`${CANVAS_URL}/courses/11825/quizzes/23455/take`, staleConfigKey);
@@ -209,13 +256,16 @@ describe("SEB access proof validation", () => {
 async function withConfig(run: () => Promise<void>): Promise<void> {
   const previousCanvasBaseUrl = process.env.CANVAS_BASE_URL;
   const previousToolUrl = process.env.TOOL_URL;
+  const previousQuitPassword = process.env.SEB_QUIT_PASSWORD;
   process.env.CANVAS_BASE_URL = CANVAS_URL;
   process.env.TOOL_URL = TOOL_URL;
+  process.env.SEB_QUIT_PASSWORD = "managed-server-exit";
   try {
     await run();
   } finally {
     restoreEnv("CANVAS_BASE_URL", previousCanvasBaseUrl);
     restoreEnv("TOOL_URL", previousToolUrl);
+    restoreEnv("SEB_QUIT_PASSWORD", previousQuitPassword);
   }
 }
 
@@ -225,6 +275,7 @@ function controllerWithSetting(setting: Record<string, unknown>) {
     sebRequired: true,
     enabled: true,
     accessCode: "ACCESS-CODE",
+    ...(typeof setting.contentId === "string" ? { assignmentId: setting.contentId.split(":")[2] } : {}),
     ...setting
   };
   const controller = new SebController(
@@ -232,9 +283,21 @@ function controllerWithSetting(setting: Record<string, unknown>) {
     {} as any,
     {} as any,
     {
+      isAssessmentAvailableForLearner: async () => true,
       getSebSettingForQuiz: async () => resolvedSetting,
       getContentSebSetting: async () => resolvedSetting,
-      getContentItem: async () => null,
+      getContentItem: async () =>
+        typeof setting.contentId === "string"
+          ? {
+              id: setting.contentId,
+              courseId: setting.courseId || "11825",
+              canvasId: setting.contentId.split(":")[2],
+              assignmentId: setting.contentId.split(":")[2],
+              contentType: "NEW_QUIZ",
+              title: "New Quiz",
+              htmlUrl: `${CANVAS_URL}/courses/${setting.courseId || "11825"}/assignments/${setting.contentId.split(":")[2]}`
+            }
+          : null,
       getQuiz: async () => ({
         id: setting.quizId || "23455",
         courseId: setting.courseId || "11825",
@@ -244,9 +307,11 @@ function controllerWithSetting(setting: Record<string, unknown>) {
     {} as any,
     new SebConfigurationService(new AppConfig()),
     new SebConfigKeyService(),
-    proofService
+    proofService,
+    {} as any,
+    { consumeRequestIp: async () => true } as any
   );
-  return { controller, proofService };
+  return { controller, proofService, resolvedSetting };
 }
 
 function classicConfigKey(courseId = "11825", quizId = "23455", accessCode = "ACCESS-CODE"): string {
@@ -278,6 +343,8 @@ function newQuizConfigKey(contentId: string, courseId = "11825", accessCode = "A
 function requestWithHeaders(headers: Record<string, string> = {}) {
   const normalized = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
   return {
+    ip: "192.0.2.25",
+    socket: { remoteAddress: "192.0.2.25" },
     protocol: "https",
     hostname: "tool.example.edu",
     originalUrl: "/api/seb/access-proof/11825/23455",

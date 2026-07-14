@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDecipheriv, createHash, createHmac, generateKeyPairSync, pbkdf2Sync } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { AppConfig } from "../../src/server/config/app-config.js";
@@ -10,6 +10,66 @@ import {
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
 
 describe("SEB config certificate encryption", () => {
+  it("rejects RSA keys below the minimum security strength", () => {
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
+    const publicKeyPem = publicKey.export({ type: "pkcs1", format: "pem" }) as string;
+
+    expect(() => keyMaterialFromPem(publicKeyPem)).toThrow(/at least 2048 bits/u);
+  });
+
+  it("requires a current end-entity certificate with RSA encryption Key Usage", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(() =>
+        keyMaterialFromPem(TEST_ENCRYPTION_CERTIFICATE, "test certificate", Date.parse("2026-07-13T14:00:00Z"))
+      ).not.toThrow();
+      expect(() =>
+        keyMaterialFromPem(TEST_ENCRYPTION_CERTIFICATE, "test certificate", Date.parse("2026-07-15T00:00:00Z"))
+      ).toThrow(/expired/u);
+      expect(warning).toHaveBeenCalledWith(
+        "SEB config encryption certificate expires within 30 days",
+        expect.any(String)
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("revalidates a cached certificate before every assessment download", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-13T14:00:00Z"));
+    try {
+      const service = new SebConfigurationService({
+        value: {
+          seb: {
+            configEncryption: {
+              enabled: true,
+              certificatePem: TEST_ENCRYPTION_CERTIFICATE
+            }
+          }
+        }
+      } as AppConfig);
+      const plainConfig = Buffer.from("<plist><dict /></plist>");
+
+      expect(() =>
+        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
+      ).not.toThrow();
+
+      now.mockReturnValue(Date.parse("2026-07-13T12:00:00Z"));
+      expect(() =>
+        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
+      ).toThrow(/certificate is not yet valid/u);
+
+      now.mockReturnValue(Date.parse("2026-07-15T00:00:00Z"));
+      expect(() =>
+        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
+      ).toThrow(/certificate has expired/u);
+    } finally {
+      now.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
   it("wraps plaintext settings in SEB macOS pkhs certificate-encrypted format", () => {
     const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const publicKeyPem = publicKey.export({ type: "pkcs1", format: "pem" }) as string;
@@ -90,7 +150,7 @@ describe("SEB config certificate encryption", () => {
     expect(gunzipSync(decryptRncryptor(innerBlock.subarray(4), "exam-start"))).toEqual(plainConfig);
   });
 
-  it("returns plaintext downloads when certificate encryption is disabled", () => {
+  it("allows plaintext only when the caller does not require assessment certificate encryption", () => {
     const previous = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
     process.env.SEB_CONFIG_ENCRYPTION_ENABLED = "false";
     try {
@@ -98,23 +158,28 @@ describe("SEB config certificate encryption", () => {
       const plainConfig = Buffer.from("<plist><dict /></plist>");
 
       expect(service.prepareSebConfigurationDownload(plainConfig)).toBe(plainConfig);
+      expect(() =>
+        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
+      ).toThrow(/Certificate encryption is required/u);
     } finally {
       restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previous);
     }
   });
 
-  it("returns password-protected downloads without certificate encryption when a start password is set", () => {
+  it("allows password-only wrapping for non-assessment callers when certificate encryption is not required", () => {
     const previous = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
     process.env.SEB_CONFIG_ENCRYPTION_ENABLED = "false";
     try {
       const service = new SebConfigurationService(new AppConfig());
       const plainConfig = Buffer.from("<plist><dict /></plist>");
 
-      const download = service.prepareSebConfigurationDownload(plainConfig, { startPassword: "exam-start" });
+      const download = service.prepareSebConfigurationDownload(plainConfig, {
+        startPassword: "unique-start-passphrase"
+      });
       const wrapped = gunzipSync(download);
 
       expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pswd");
-      expect(gunzipSync(decryptRncryptor(wrapped.subarray(4), "exam-start"))).toEqual(plainConfig);
+      expect(gunzipSync(decryptRncryptor(wrapped.subarray(4), "unique-start-passphrase"))).toEqual(plainConfig);
     } finally {
       restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previous);
     }
@@ -172,3 +237,23 @@ function restoreEnv(name: string, value: string | undefined): void {
     process.env[name] = value;
   }
 }
+
+const TEST_ENCRYPTION_CERTIFICATE = `-----BEGIN CERTIFICATE-----
+MIIDDzCCAfegAwIBAgIUTVqWS5LNrVP73MfQMvc3Ezx6Ks8wDQYJKoZIhvcNAQEL
+BQAwDzENMAsGA1UEAwwEdGVzdDAeFw0yNjA3MTMxMzA5NDdaFw0yNjA3MTQxMzA5
+NDdaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+AoIBAQCtqjvuCYKlJrKoUBxjcu0j/Q5JzCB0CiQSYTwH4v1w6nLeJol21z54ORvA
+zB4gmOgVsiwk07WcUXmp+R26eMZgIsnat7Amt/1LUIU8tioFDwGIlvNEGn9oBKUh
+YGphRbE9OA7VIKj5GR1FbKAjD2oXJh+QpQiSvDHC8hc/pcg1hZ5AaOyHlJ64tuBE
+N5iNPmd0rjrMLenh1gYZu1SPQPM4d2v0fF/diyE6TkC2qkWYdd/dn56F/8j2bKtN
+cMwV0svQTzEZ9PEhIuACZ69+D1+rGH5MaBurK/mcn2WGcCC8ttwJbZjQ1dw4zXmI
+/GlXM4fq71Q7rMY6EHvRKRYOtV2FAgMBAAGjYzBhMB0GA1UdDgQWBBSVWl8Pv80u
+/mne2Uis1h3Z+D8v+TAfBgNVHSMEGDAWgBSVWl8Pv80u/mne2Uis1h3Z+D8v+TAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIEMDANBgkqhkiG9w0BAQsFAAOC
+AQEAdGCY5dfU9j3uZitu/ImYgsfWa/a8tp9+olbYNi8gW2BabtLu3I1Y7x4RMkll
+Oqjl2zQpvyBJ56Q1WFWOPUhU81D2lf0ydtdbfLKsvcSX02WC5NEjt6cC6zbTJmPc
+D019bN1lAnGZKK1wSgY1gfHIndQoXKEY4xDk+oOifSfKKabNa6R0Gs4Lhg/Bq4mJ
+2+aedlR+ge7GyJWrC/dfwVtkCznMd/1WzarGf2aTAFBEB2UUtm11zzNpx/tqMHeW
+ClruPCLNejsy4A5v/qlF1dJW93hroVEI+YxVp90LzQot78+W/nNFSUznljie2/wV
+E81UceKphlt0QCKPmIszpT5ExQ==
+-----END CERTIFICATE-----`;

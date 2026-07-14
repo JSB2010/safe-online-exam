@@ -2,15 +2,20 @@ import { HttpException } from "@nestjs/common";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuizController } from "../../src/server/controllers/quiz.controller.js";
 import { createActionToken } from "../../src/server/http/action-token.js";
+import { AssessmentAuthorizationService } from "../../src/server/services/assessment-authorization.service.js";
 import { defaultCourseSebDefaults } from "../../src/shared/models.js";
 
 const SESSION_SECRET = "test-session-secret";
 const COURSE_ID = "course-1";
 const USER_ID = "user-1";
+const SUBJECT = "lti-subject-1";
+const DEPLOYMENT_ID = "deployment-1";
+const SESSION_ID = "session-1";
+const INSTRUCTOR_ROLE = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor";
+const LEARNER_ROLE = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner";
 
 describe("QuizController", () => {
   let assessments: Record<string, ReturnType<typeof vi.fn>>;
-  let canvasApi: Record<string, ReturnType<typeof vi.fn>>;
   let courseSettings: Record<string, ReturnType<typeof vi.fn>>;
   let controller: QuizController;
 
@@ -19,6 +24,10 @@ describe("QuizController", () => {
       refreshCourseContent: vi.fn(),
       enableSebWithAccessCode: vi.fn(),
       disableSebWithAccessCode: vi.fn(),
+      enableContentSebWithAccessCode: vi.fn(),
+      disableContentSebWithAccessCode: vi.fn(),
+      regenerateQuizAccessCode: vi.fn(),
+      regenerateContentAccessCode: vi.fn(),
       updateSebConfigurationStructured: vi.fn(),
       getQuizzesForCourse: vi.fn(),
       getSebSettingForQuiz: vi.fn(),
@@ -26,45 +35,51 @@ describe("QuizController", () => {
       saveQuizSebSetting: vi.fn(),
       saveContentSebSetting: vi.fn(),
       getQuiz: vi.fn(),
-      getOrCreateContentSebSetting: vi.fn(),
-      validateSebConfiguration: vi.fn(),
-      withAssessmentLock: vi.fn(async (_contentId: string, action: () => Promise<unknown>) => action())
-    };
-    canvasApi = {
-      setQuizAccessCode: vi.fn(),
-      removeQuizAccessCode: vi.fn(),
-      setNewQuizAccessCode: vi.fn(),
-      removeNewQuizAccessCode: vi.fn()
+      getAssessmentRecord: vi.fn(async (id: string) => assessmentById(id)),
+      validateSebConfiguration: vi.fn()
     };
     courseSettings = {
       getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults(COURSE_ID)),
       saveDefaults: vi.fn(),
       resetQuizToDefaults: vi.fn()
     };
-    controller = new QuizController(configDouble(), assessments as any, canvasApi as any, courseSettings as any);
+    const authorization = new AssessmentAuthorizationService(configDouble() as any, assessments as any);
+    controller = new QuizController(configDouble() as any, assessments as any, courseSettings as any, authorization);
   });
 
-  it("saves course defaults only when the action token matches the requested course", async () => {
+  it("saves course defaults only for a verified instructor with a session-bound token", async () => {
     courseSettings.saveDefaults.mockImplementation(async (_courseId, defaults) => ({
       ...defaultCourseSebDefaults(COURSE_ID),
       ...defaults
     }));
 
-    const result = await controller.saveCourseDefaults(requestWithActionToken(USER_ID, COURSE_ID), COURSE_ID, {
-      quitPassword: " exit-pass ",
-      startPassword: " start-pass ",
+    const result = await controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
+      quitPassword: " exit-passphrase ",
+      startPassword: " start-passphrase ",
       setupCompleted: true,
-      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu/path" }],
+      urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
       externalTools: [{ id: "Calc", label: "Calculator", url: "calc.example.edu", enabled: true }]
     });
 
-    expect(result).toMatchObject({ success: true });
+    expect(result).toMatchObject({
+      success: true,
+      defaults: {
+        courseId: COURSE_ID,
+        setupCompleted: true,
+        hasQuitPassword: true,
+        hasEffectiveQuitPassword: true,
+        hasStartPassword: true
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("exit-pass");
+    expect(JSON.stringify(result)).not.toContain("start-pass");
+    expect(JSON.stringify(result)).not.toContain("managed-server-exit");
     expect(courseSettings.saveDefaults).toHaveBeenCalledWith(
       COURSE_ID,
       expect.objectContaining({
         courseId: COURSE_ID,
-        quitPassword: "exit-pass",
-        startPassword: "start-pass",
+        quitPassword: "exit-passphrase",
+        startPassword: "start-passphrase",
         setupCompleted: true,
         urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
         externalTools: [
@@ -79,96 +94,209 @@ describe("QuizController", () => {
     );
 
     await expectHttpError(
-      () => controller.saveCourseDefaults(requestWithActionToken(USER_ID, "other-course"), COURSE_ID, {}),
-      401
+      () => controller.saveCourseDefaults(mutationRequest({ courseId: "other-course" }), COURSE_ID, {}),
+      403
     );
   });
 
-  it("refreshes course content and returns Canvas authorization guidance when needed", async () => {
+  it("preserves write-only course secrets when the client omits masked fields", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      quitPassword: "existing-quit",
+      startPassword: "existing-start"
+    });
+    courseSettings.saveDefaults.mockImplementation(async (_courseId, defaults) => defaults);
+
+    const result = await controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
+      setupCompleted: true,
+      urlRules: [],
+      externalTools: []
+    });
+
+    expect(courseSettings.saveDefaults).toHaveBeenCalledWith(
+      COURSE_ID,
+      expect.objectContaining({ quitPassword: "existing-quit", startPassword: "existing-start" })
+    );
+    expect(result).toMatchObject({
+      defaults: { hasQuitPassword: true, hasStartPassword: true }
+    });
+    expect(JSON.stringify(result)).not.toContain("existing-quit");
+    expect(JSON.stringify(result)).not.toContain("existing-start");
+  });
+
+  it("refreshes course content for the verified Canvas user", async () => {
     assessments.refreshCourseContent.mockResolvedValue({
       classicQuizzes: [{ id: "quiz-1", title: "Quiz 1", canvasQuizId: "quiz-1" }]
     });
 
-    await expect(controller.refresh(requestWithSession(), COURSE_ID)).resolves.toEqual({
+    await expect(controller.refresh(mutationRequest(), COURSE_ID)).resolves.toEqual({
       success: true,
       message: "Quiz data refreshed successfully",
       quizCount: 1,
       quizzes: [{ id: "quiz-1", title: "Quiz 1", canvasQuizId: "quiz-1" }]
     });
-
-    await expectHttpError(() => controller.refresh({ session: {}, header: () => undefined } as any, COURSE_ID), 401);
+    expect(assessments.refreshCourseContent).toHaveBeenCalledWith(COURSE_ID, USER_ID);
   });
 
-  it("reads course defaults only for authorized course sessions", async () => {
-    courseSettings.getDefaults.mockResolvedValue({ ...defaultCourseSebDefaults(COURSE_ID), setupCompleted: true });
-
-    await expect(controller.getCourseDefaults(requestWithSession(), COURSE_ID)).resolves.toMatchObject({
-      success: true,
-      defaults: { setupCompleted: true }
-    });
-    await expectHttpError(() => controller.getCourseDefaults(requestWithSession(), "other-course"), 401);
-  });
-
-  it("enables New Quiz SEB with a Canvas access code and inherited course defaults", async () => {
-    const existing = newQuizSetting({ sebRequired: false, enabled: false, accessCode: null, configKey: "stale" });
-    assessments.getOrCreateContentSebSetting.mockResolvedValue(existing);
-    assessments.saveContentSebSetting.mockImplementation(async (setting) => setting);
-    canvasApi.setNewQuizAccessCode.mockResolvedValue(true);
+  it("returns secret-free course defaults only to the course instructor", async () => {
     courseSettings.getDefaults.mockResolvedValue({
       ...defaultCourseSebDefaults(COURSE_ID),
       setupCompleted: true,
-      startPassword: "course-start",
+      quitPassword: "unique-quit-secret",
+      startPassword: "unique-start-secret"
+    });
+
+    const result = await controller.getCourseDefaults(readRequest(), COURSE_ID);
+    expect(result).toMatchObject({
+      success: true,
+      defaults: {
+        setupCompleted: true,
+        hasQuitPassword: true,
+        hasEffectiveQuitPassword: true,
+        hasStartPassword: true
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("quit-secret");
+    expect(JSON.stringify(result)).not.toContain("start-secret");
+    await expectHttpError(() => controller.getCourseDefaults(readRequest(), "other-course"), 403);
+  });
+
+  it("reveals saved course passwords only through an instructor-authorized no-store POST", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      startPassword: "blueheron",
+      quitPassword: "80419372"
+    });
+    const response = { setHeader: vi.fn() } as any;
+
+    await expect(controller.revealCoursePasswords(mutationRequest(), response, COURSE_ID)).resolves.toEqual({
+      success: true,
+      expiresInSeconds: 30,
+      passwords: {
+        start: { value: "blueheron", source: "course" },
+        exit: { value: "80419372", source: "course" }
+      }
+    });
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
+    expect(response.setHeader).toHaveBeenCalledWith("referrer-policy", "no-referrer");
+    await expectHttpError(() => controller.revealCoursePasswords(readRequest(), response, COURSE_ID), 403);
+  });
+
+  it("reveals assessment values without exposing the managed server exit password", async () => {
+    assessments.getAssessmentRecord.mockResolvedValue(
+      classicAssessment({
+        seb: {
+          ...assessmentSebState(),
+          startPassword: "quizstart",
+          startPasswordOverride: true,
+          quitPassword: null
+        }
+      })
+    );
+    const response = { setHeader: vi.fn() } as any;
+
+    await expect(
+      controller.revealAssessmentPasswords(mutationRequest(), response, COURSE_ID, "quiz-1")
+    ).resolves.toEqual({
+      success: true,
+      expiresInSeconds: 30,
+      passwords: {
+        start: { value: "quizstart", source: "assessment" },
+        exit: { value: null, source: "managed" }
+      }
+    });
+    expect(JSON.stringify(response.setHeader.mock.calls)).not.toContain("managed-server-exit");
+  });
+
+  it("enables New Quiz SEB when the route exactly matches the stored assessment", async () => {
+    const existing = newQuizSetting({
+      sebRequired: false,
+      enabled: false,
+      accessCode: null,
+      configKey: "stale-config-key"
+    });
+    assessments.enableContentSebWithAccessCode.mockResolvedValue({
+      ...existing,
+      sebRequired: true,
+      enabled: true,
+      accessCode: "GENERATED-CODE",
+      configKey: null,
+      startPassword: "course-start-secret",
+      customDomains: ["domain:docs.example.edu"],
+      usesCourseDefaults: true
+    });
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      setupCompleted: true,
+      startPassword: "course-start-secret",
       urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }]
     });
 
-    const result = await controller.enable(requestWithSession(), COURSE_ID, "newquiz:course-1:assignment-99");
+    const result = await controller.enable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99");
 
     expect(result).toMatchObject({
       success: true,
-      message: "SEB enabled."
+      message: "SEB enabled.",
+      setting: {
+        contentId: "newquiz:course-1:assignment-99",
+        hasAccessCode: true,
+        hasConfigKey: false,
+        hasEffectiveQuitPassword: true,
+        hasStartPassword: true
+      }
     });
-    expect(canvasApi.setNewQuizAccessCode).toHaveBeenCalledWith(
+    expect(JSON.stringify(result)).not.toContain("course-start-secret");
+    expect(JSON.stringify(result)).not.toContain("managed-server-exit");
+    expect(assessments.enableContentSebWithAccessCode).toHaveBeenCalledWith(
       COURSE_ID,
+      "newquiz:course-1:assignment-99",
       "assignment-99",
-      expect.stringMatching(/^[A-Z0-9]{16}$/u),
+      USER_ID,
+      expect.objectContaining({ courseId: COURSE_ID, startPassword: "course-start-secret" })
+    );
+  });
+
+  it("propagates passwordless New Quiz enablement rejection from the assessment service", async () => {
+    assessments.enableContentSebWithAccessCode.mockRejectedValue(
+      new HttpException({ error_code: "SEB_QUIT_PASSWORD_REQUIRED" }, 400)
+    );
+
+    await expectHttpError(() => controller.enable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99"), 400);
+
+    expect(assessments.enableContentSebWithAccessCode).toHaveBeenCalledOnce();
+  });
+
+  it("does not mutate a New Quiz when its stored Canvas identity does not match the route", async () => {
+    assessments.getAssessmentRecord.mockResolvedValue(
+      newQuizAssessment({ canvas: { ...newQuizAssessment().canvas, assignmentId: "assignment-elsewhere" } })
+    );
+
+    await expectHttpError(() => controller.enable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99"), 404);
+    expect(assessments.enableContentSebWithAccessCode).not.toHaveBeenCalled();
+  });
+
+  it("disables New Quiz SEB and clears any stale Canvas-side access code", async () => {
+    assessments.disableContentSebWithAccessCode.mockResolvedValue(
+      newQuizSetting({ sebRequired: false, enabled: false, accessCode: null, configKey: null })
+    );
+
+    const result = await controller.disable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99");
+
+    expect(result).toMatchObject({
+      success: true,
+      message: "SEB disabled.",
+      setting: { hasAccessCode: false, hasConfigKey: false }
+    });
+    expect(assessments.disableContentSebWithAccessCode).toHaveBeenCalledWith(
+      COURSE_ID,
+      "newquiz:course-1:assignment-99",
+      "assignment-99",
       USER_ID
     );
-    expect(assessments.saveContentSebSetting).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contentId: "newquiz:course-1:assignment-99",
-        sebRequired: true,
-        enabled: true,
-        accessCode: expect.stringMatching(/^[A-Z0-9]{16}$/u),
-        configKey: null,
-        startPassword: "course-start",
-        customDomains: ["domain:docs.example.edu"],
-        usesCourseDefaults: true
-      })
-    );
   });
 
-  it("disables New Quiz SEB without calling Canvas when no access code is stored", async () => {
-    assessments.getOrCreateContentSebSetting.mockResolvedValue(
-      newQuizSetting({ sebRequired: true, enabled: true, accessCode: null, configKey: "stored" })
-    );
-    assessments.saveContentSebSetting.mockImplementation(async (setting) => setting);
-
-    const result = await controller.disable(requestWithSession(), COURSE_ID, "newquiz:course-1:assignment-99");
-
-    expect(result).toMatchObject({ success: true, message: "SEB disabled." });
-    expect(canvasApi.removeNewQuizAccessCode).not.toHaveBeenCalled();
-    expect(assessments.saveContentSebSetting).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sebRequired: false,
-        enabled: false,
-        accessCode: null,
-        configKey: null
-      })
-    );
-  });
-
-  it("regenerates Classic Quiz access codes and invalidates stored Config Keys", async () => {
-    assessments.getSebSettingForQuiz.mockResolvedValue({
+  it("regenerates Classic Quiz access codes without returning either secret", async () => {
+    assessments.regenerateQuizAccessCode.mockResolvedValue({
       quizId: "quiz-1",
       courseId: COURSE_ID,
       sebRequired: true,
@@ -180,50 +308,58 @@ describe("QuizController", () => {
       customDomains: [],
       externalTools: []
     });
-    assessments.saveQuizSebSetting.mockImplementation(async (setting) => setting);
-    canvasApi.setQuizAccessCode.mockResolvedValue(true);
+    const result = await controller.regenerate(mutationRequest(), COURSE_ID, "quiz-1");
 
-    const result = await controller.regenerate(requestWithSession(), COURSE_ID, "quiz-1");
-
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       success: true,
       message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
     });
-    expect(canvasApi.setQuizAccessCode).toHaveBeenCalledWith(
-      COURSE_ID,
-      "quiz-1",
-      expect.stringMatching(/^[A-Z0-9]{16}$/u),
-      USER_ID
-    );
-    expect(assessments.saveQuizSebSetting).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accessCode: expect.stringMatching(/^[A-Z0-9]{16}$/u),
-        configKey: null
-      })
-    );
+    expect(JSON.stringify(result)).not.toContain("OLD-CODE");
+    expect(JSON.stringify(result)).not.toContain("stored-config-key");
+    expect(assessments.regenerateQuizAccessCode).toHaveBeenCalledWith(COURSE_ID, "quiz-1", USER_ID);
   });
 
-  it("resets quiz settings to course defaults and redirects config downloads", async () => {
+  it("resets quiz settings through exact assessment authorization and redacts the response", async () => {
     courseSettings.resetQuizToDefaults.mockResolvedValue({
       quizId: "quiz-1",
       courseId: COURSE_ID,
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS-SECRET",
+      configKey: "CONFIG-SECRET",
+      quitPassword: "UNIQUE-QUIT-SECRET",
+      startPassword: "UNIQUE-START-SECRET",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: [],
       usesCourseDefaults: true
     });
 
-    await expect(controller.resetDefaults(requestWithSession(), COURSE_ID, "quiz-1")).resolves.toEqual({
+    const result = await controller.resetDefaults(mutationRequest(), COURSE_ID, "quiz-1");
+    expect(result).toMatchObject({
       success: true,
-      setting: { quizId: "quiz-1", courseId: COURSE_ID, usesCourseDefaults: true }
+      setting: {
+        quizId: "quiz-1",
+        courseId: COURSE_ID,
+        usesCourseDefaults: true,
+        hasAccessCode: true,
+        hasConfigKey: true,
+        hasQuitPassword: true,
+        hasEffectiveQuitPassword: true,
+        hasStartPassword: true
+      }
     });
+    expect(JSON.stringify(result)).not.toContain("ACCESS-SECRET");
+    expect(JSON.stringify(result)).not.toContain("CONFIG-SECRET");
+    expect(JSON.stringify(result)).not.toContain("UNIQUE-QUIT-SECRET");
+    expect(JSON.stringify(result)).not.toContain("UNIQUE-START-SECRET");
 
     courseSettings.resetQuizToDefaults.mockResolvedValueOnce(null);
-    await expectHttpError(() => controller.resetDefaults(requestWithSession(), COURSE_ID, "missing"), 404);
-
-    const response = { redirect: vi.fn() } as any;
-    controller.redirectConfig(response, COURSE_ID, "quiz-1");
-    expect(response.redirect).toHaveBeenCalledWith(302, "/seb/config/course-1/quiz-1.seb");
+    await expectHttpError(() => controller.resetDefaults(mutationRequest(), COURSE_ID, "quiz-1"), 404);
   });
 
-  it("reports normalized New Quiz status for authenticated requests", async () => {
+  it("reports normalized New Quiz status to an authorized instructor", async () => {
     assessments.getContentSebSetting.mockResolvedValue(
       newQuizSetting({
         sebRequired: true,
@@ -233,7 +369,7 @@ describe("QuizController", () => {
       })
     );
 
-    const result = await controller.status(requestWithSession(), "newquiz:course-1:assignment-99");
+    const result = await controller.status(readRequest(), COURSE_ID, "newquiz:course-1:assignment-99");
 
     expect(result).toMatchObject({
       authenticated: true,
@@ -241,72 +377,277 @@ describe("QuizController", () => {
       sebEnabled: true,
       hasAccessCode: true,
       configValid: true,
-      externalTools: [
-        expect.objectContaining({
-          id: "calc",
-          url: "https://calc.example.edu/",
-          enabled: true
-        })
-      ]
+      externalTools: [expect.objectContaining({ id: "calc", url: "https://calc.example.edu/", enabled: true })]
     });
   });
 
-  it("returns quiz lists, settings, and individual quiz records from the assessment service", async () => {
+  it("returns only secret-free quiz settings and course-bound quiz records", async () => {
     assessments.getQuizzesForCourse.mockResolvedValue([{ id: "quiz-1", title: "Quiz 1" }]);
-    assessments.getSebSettingForQuiz.mockResolvedValue({ quizId: "quiz-1", sebRequired: true });
-    assessments.getQuiz.mockResolvedValue({ id: "quiz-1", title: "Quiz 1" });
-
-    await expect(controller.getQuizzes(requestWithSession())).resolves.toEqual([{ id: "quiz-1", title: "Quiz 1" }]);
-    await expect(controller.getSettings(requestWithSession())).resolves.toEqual({
-      "quiz-1": { quizId: "quiz-1", sebRequired: true }
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "quiz-1",
+      courseId: COURSE_ID,
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS-SECRET",
+      configKey: "CONFIG-SECRET",
+      quitPassword: "UNIQUE-QUIT-SECRET",
+      startPassword: "UNIQUE-START-SECRET",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
     });
-    await expect(controller.getQuiz("quiz-1")).resolves.toEqual({ id: "quiz-1", title: "Quiz 1" });
-    await expectHttpError(() => controller.getQuizzes({ session: {}, header: () => undefined } as any), 403);
+    assessments.getQuiz.mockResolvedValue({ id: "quiz-1", title: "Quiz 1", courseId: COURSE_ID });
+
+    await expect(controller.getQuizzes(readRequest())).resolves.toEqual([{ id: "quiz-1", title: "Quiz 1" }]);
+    const settings = await controller.getSettings(readRequest());
+    expect(settings).toMatchObject({
+      "quiz-1": {
+        quizId: "quiz-1",
+        sebRequired: true,
+        hasAccessCode: true,
+        hasConfigKey: true,
+        hasQuitPassword: true,
+        hasEffectiveQuitPassword: true,
+        hasStartPassword: true
+      }
+    });
+    expect(JSON.stringify(settings)).not.toContain("ACCESS-SECRET");
+    expect(JSON.stringify(settings)).not.toContain("CONFIG-SECRET");
+    expect(JSON.stringify(settings)).not.toContain("UNIQUE-QUIT-SECRET");
+    expect(JSON.stringify(settings)).not.toContain("UNIQUE-START-SECRET");
+    await expect(controller.getQuiz(readRequest(), "quiz-1")).resolves.toEqual({
+      id: "quiz-1",
+      title: "Quiz 1",
+      courseId: COURSE_ID
+    });
   });
 
-  it("reports unauthenticated SEB status without touching settings", async () => {
-    await expect(controller.status({ session: {}, header: () => undefined } as any, "quiz-1")).resolves.toEqual({
-      authenticated: false
-    });
-    expect(assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
+  it("rejects learner, legacy-alias, and action-token-only management requests", async () => {
+    await expectHttpError(() => controller.getQuizzes(readRequest({ roles: [LEARNER_ROLE] })), 403);
+    await expectHttpError(() => controller.getQuizzes(legacyAliasRequest()), 401);
+    await expectHttpError(() => controller.refresh(actionTokenOnlyRequest(), COURSE_ID), 401);
+    expect(assessments.refreshCourseContent).not.toHaveBeenCalled();
   });
 
-  it("rejects structured saves with mismatched query users or missing content ids", async () => {
+  it("rejects cross-course and wrong-session mutation tokens before changing state", async () => {
     await expectHttpError(
-      () => controller.saveStructured(requestWithSession(), { quizId: "quiz-1" }, "other-user"),
+      () => controller.enable(mutationRequest({ courseId: "other-course" }), COURSE_ID, "quiz-1"),
       403
     );
-    await expectHttpError(() => controller.saveStructured(requestWithSession(), {}, USER_ID), 400);
+    await expectHttpError(
+      () => controller.enable(mutationRequest({ tokenSessionId: "other-session" }), COURSE_ID, "quiz-1"),
+      403
+    );
+    expect(assessments.enableSebWithAccessCode).not.toHaveBeenCalled();
+  });
+
+  it("rejects structured saves with identity, course, or object mismatches", async () => {
+    await expectHttpError(() => controller.saveStructured(mutationRequest(), { quizId: "quiz-1" }, "other-user"), 403);
+    await expectHttpError(
+      () => controller.saveStructured(mutationRequest(), { quizId: "quiz-1", courseId: "other-course" }, USER_ID),
+      403
+    );
+    await expectHttpError(() => controller.saveStructured(mutationRequest(), {}, USER_ID), 400);
+
+    assessments.getAssessmentRecord.mockResolvedValueOnce(classicAssessment({ courseId: "other-course" }));
+    await expectHttpError(
+      () => controller.saveStructured(mutationRequest(), { quizId: "quiz-1", courseId: COURSE_ID }, USER_ID),
+      404
+    );
+    expect(assessments.saveQuizSebSetting).not.toHaveBeenCalled();
+  });
+
+  it("saves a Classic Quiz structured policy and returns only secret-presence flags", async () => {
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "quiz-1",
+      courseId: COURSE_ID,
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS-SECRET",
+      configKey: "CONFIG-SECRET",
+      quitPassword: "OLD-UNIQUE-QUIT",
+      startPassword: "OLD-UNIQUE-START",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    });
+    assessments.saveQuizSebSetting.mockImplementation(async (setting) => setting);
+
+    const result = await controller.saveStructured(
+      mutationRequest(),
+      {
+        quizId: "quiz-1",
+        courseId: COURSE_ID,
+        quitPassword: "NEW-UNIQUE-QUIT",
+        startPassword: "NEW-UNIQUE-START",
+        quitPasswordOverride: true,
+        startPasswordOverride: true,
+        urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }]
+      },
+      USER_ID
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      setting: {
+        quizId: "quiz-1",
+        courseId: COURSE_ID,
+        hasAccessCode: true,
+        hasConfigKey: true,
+        hasQuitPassword: true,
+        hasStartPassword: true
+      }
+    });
+    expect(JSON.stringify(result)).not.toContain("ACCESS-SECRET");
+    expect(JSON.stringify(result)).not.toContain("CONFIG-SECRET");
+    expect(JSON.stringify(result)).not.toContain("NEW-QUIT");
+    expect(JSON.stringify(result)).not.toContain("NEW-START");
+  });
+
+  it("keeps the public config redirect route compatible", () => {
+    const response = { redirect: vi.fn() } as any;
+    controller.redirectConfig(response, COURSE_ID, "quiz-1");
+    expect(response.redirect).toHaveBeenCalledWith(302, "/seb/launch/quiz-1");
   });
 });
+
+interface RequestOptions {
+  userId?: string;
+  courseId?: string;
+  subject?: string;
+  deploymentId?: string;
+  roles?: string[];
+  sessionId?: string;
+  tokenSessionId?: string;
+  origin?: string;
+}
 
 function configDouble() {
   return {
     getCanvasDomain: () => "https://canvas.example.edu",
+    getRequiredToolUrl: () => "https://tool.example.edu",
     value: {
-      security: { sessionSecret: SESSION_SECRET }
+      security: { sessionSecret: SESSION_SECRET },
+      seb: { defaultQuitPassword: "managed-server-exit" }
     }
   };
 }
 
-function requestWithSession(): any {
+function readRequest(options: RequestOptions = {}): any {
+  const userId = options.userId || USER_ID;
+  const courseId = options.courseId || COURSE_ID;
+  const subject = options.subject || SUBJECT;
+  const deploymentId = options.deploymentId || DEPLOYMENT_ID;
+  const sessionId = options.sessionId || SESSION_ID;
+  const headers = new Map<string, string>();
+  if (options.origin) {
+    headers.set("origin", options.origin);
+  }
   return {
+    sessionID: sessionId,
     session: {
-      launchData: {
-        userId: USER_ID,
-        courseId: COURSE_ID,
-        roles: []
+      verifiedLtiPrincipal: {
+        version: 1,
+        issuer: "https://canvas.example.edu",
+        deploymentId,
+        subject,
+        canvasUserId: userId,
+        courseId,
+        roles: options.roles || [INSTRUCTOR_ROLE],
+        custom: {},
+        authenticatedAt: "2026-07-13T00:00:00.000Z"
       }
+    },
+    header: (name: string) => headers.get(name.toLowerCase())
+  };
+}
+
+function mutationRequest(options: RequestOptions = {}): any {
+  const request = readRequest(options);
+  const principal = request.session.verifiedLtiPrincipal;
+  const token = createActionToken(configDouble() as any, principal.canvasUserId, principal.courseId, {
+    subject: principal.subject,
+    deploymentId: principal.deploymentId,
+    sessionId: options.tokenSessionId || request.sessionID
+  });
+  const originalHeader = request.header;
+  request.header = (name: string) => (name.toLowerCase() === "x-auth-token" ? token : originalHeader(name));
+  return request;
+}
+
+function legacyAliasRequest(): any {
+  return {
+    sessionID: SESSION_ID,
+    session: {
+      launchData: { userId: USER_ID, courseId: COURSE_ID, roles: [INSTRUCTOR_ROLE] },
+      userId: USER_ID,
+      courseId: COURSE_ID,
+      canvas_user_id: USER_ID,
+      canvas_course_id: COURSE_ID
     },
     header: () => undefined
   };
 }
 
-function requestWithActionToken(userId: string, courseId: string): any {
-  const token = createActionToken(configDouble() as any, userId, courseId);
+function actionTokenOnlyRequest(): any {
+  const token = createActionToken(configDouble() as any, USER_ID, COURSE_ID, {
+    subject: SUBJECT,
+    deploymentId: DEPLOYMENT_ID,
+    sessionId: SESSION_ID
+  });
   return {
+    sessionID: SESSION_ID,
     session: {},
     header: (name: string) => (name.toLowerCase() === "x-auth-token" ? token : undefined)
+  };
+}
+
+function assessmentById(id: string): Record<string, unknown> | null {
+  if (id === "classicquiz_quiz-1") {
+    return classicAssessment();
+  }
+  if (id === "newquiz:course-1:assignment-99") {
+    return newQuizAssessment();
+  }
+  return null;
+}
+
+function classicAssessment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "classicquiz_quiz-1",
+    courseId: COURSE_ID,
+    contentType: "CLASSIC_QUIZ",
+    canvas: { id: "quiz-1", quizId: "quiz-1", title: "Quiz 1" },
+    seb: assessmentSebState(),
+    ...overrides
+  };
+}
+
+function newQuizAssessment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "newquiz:course-1:assignment-99",
+    courseId: COURSE_ID,
+    contentType: "NEW_QUIZ",
+    canvas: { id: "assignment-99", assignmentId: "assignment-99", title: "New Quiz" },
+    seb: assessmentSebState(),
+    ...overrides
+  };
+}
+
+function assessmentSebState() {
+  return {
+    required: false,
+    enabled: false,
+    usesCourseDefaults: true,
+    quitPasswordOverride: false,
+    startPasswordOverride: false,
+    ssoDomains: [],
+    educationalToolDomains: [],
+    customDomains: [],
+    urlRules: [],
+    externalTools: []
   };
 }
 

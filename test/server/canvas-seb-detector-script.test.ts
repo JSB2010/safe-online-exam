@@ -26,6 +26,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?user_id=7288",
       body: `
+        <nav><a aria-label="Safe Exam Browser" href="/courses/11825/external_tools/44">Safe Exam Browser</a></nav>
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
           <form id="access_code_form">
@@ -38,13 +39,19 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
 
     expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
-    const openSebLink = context.document.querySelector<HTMLAnchorElement>('a[href^="sebs://"]');
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
 
-    expect(openSebLink?.href).toContain("sebs://tool.example.edu/seb/config/11825/23455.seb");
-    expect(context.document.querySelector('a[href^="https://tool.example.edu/seb/config"]')).toBeNull();
-    expect(decodeURIComponent(openSebLink?.href || "")).toContain(
-      "canvas_url=https://canvas.example.edu/courses/11825/quizzes/23455/take?user_id=7288"
+    const directLaunchUrl = new URL(openSebLink!.href);
+    expect(directLaunchUrl.origin + directLaunchUrl.pathname).toBe(
+      "https://canvas.example.edu/courses/11825/external_tools/44"
     );
+    expect(directLaunchUrl.searchParams.get("display")).toBe("borderless");
+    expect(directLaunchUrl.searchParams.get("launch_url")).toBe(
+      "https://tool.example.edu/seb/launch/classicquiz_23455"
+    );
+    expect(openSebLink?.textContent).toContain("Open in Safe Exam Browser");
+    expect(openSebLink?.rel).toContain("noopener");
+    expect(context.document.querySelector('a[href^="sebs://"]')).toBeNull();
     expect(context.document.getElementById("seb-launch-countdown-text")).toBeNull();
     expect(context.document.getElementById("seb-launch-countdown-bar")).toBeNull();
     expect(context.document.getElementById("seb-launch-view-page-button")).toBeNull();
@@ -84,6 +91,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/assignments/991/taking/31299",
       body: `
+        <nav><a aria-label="Safe Exam Browser" href="/courses/11825/external_tools/44">Safe Exam Browser</a></nav>
         <main>
           <h1>New Quiz</h1>
           <section id="attempt-history">Attempt History: Attempt 1</section>
@@ -98,8 +106,12 @@ describe("Canvas SEB detector script", () => {
 
     expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
     expect(context.document.body.textContent).toContain("review previous attempts");
-    const openSebLink = context.document.querySelector<HTMLAnchorElement>('a[href^="sebs://"]');
-    expect(openSebLink?.href).toContain("sebs://tool.example.edu/seb/config/11825/newquiz%3A11825%3A991.seb");
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    const directLaunchUrl = new URL(openSebLink!.href);
+    expect(directLaunchUrl.pathname).toBe("/courses/11825/external_tools/44");
+    expect(directLaunchUrl.searchParams.get("launch_url")).toBe(
+      "https://tool.example.edu/seb/launch/newquiz:11825:991"
+    );
     expect(context.document.getElementById("seb-launch-back-button")).toBeNull();
 
     context.document.querySelector<HTMLButtonElement>("#seb-launch-view-page-button")?.click();
@@ -128,9 +140,9 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
 
     expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
-    expect(context.console.log).toHaveBeenCalledWith(
-      "Canvas SEB Detector:",
-      "No access code requirement detected, allowing normal access"
+    expect(context.console.log.mock.calls.every((call) => call[0] === "Canvas SEB Detector:")).toBe(true);
+    expect(context.console.log.mock.calls.every((call) => ["info", "success", "warn", "error"].includes(call[1]))).toBe(
+      true
     );
 
     context.document.querySelector("main")?.insertAdjacentHTML(
@@ -149,12 +161,8 @@ describe("Canvas SEB detector script", () => {
     await vi.advanceTimersByTimeAsync(400);
 
     expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
-    const openSebLink = context.document.querySelector<HTMLAnchorElement>('a[href^="sebs://"]');
-    expect(openSebLink?.href).toContain("sebs://tool.example.edu/seb/config/11825/newquiz%3A11825%3A437577.seb");
-    expect(context.console.log).toHaveBeenCalledWith(
-      "Canvas SEB Detector:",
-      "Late-rendered access code requirement detected"
-    );
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    expect(openSebLink?.href).toBe("https://canvas.example.edu/courses/11825");
 
     context.document.querySelector("main")?.appendChild(context.document.createElement("span"));
     await flushPromises();
@@ -165,8 +173,9 @@ describe("Canvas SEB detector script", () => {
 
   it("proves SEB config key, retrieves the one-time access code, fills it, and submits the access-code form", async () => {
     const submitSpy = vi.fn((event: Event) => event.preventDefault());
+    const secretSentinel = "SEB_TEST_SECRET_SENTINEL";
     const context = createDetectorContext({
-      path: "/courses/11825/quizzes/23455/take?user_id=7288",
+      path: `/courses/11825/quizzes/23455/take?user_id=7288&answer=${secretSentinel}`,
       debugResponse: { enabled: true },
       userAgent: "Mozilla/5.0 SafeExamBrowser",
       safeExamBrowser: {
@@ -179,14 +188,68 @@ describe("Canvas SEB detector script", () => {
       },
       fetchResponses: {
         "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
-        "/api/seb/access-code/11825/23455": { success: true, accessCode: "sensitive-code-123" },
-        "/api/seb/tools/11825/23455": { success: true, tools: [] }
+        "/api/seb/access-code/11825/23455": { success: true, accessCode: secretSentinel, tools: [] }
       },
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
-          <form id="access_code_form">
-            <input name="access_code" type="password" />
+          <p>This quiz is restricted by an access code.</p>
+          <form class="access_code_form" action="/courses/11825/quizzes/23455/take" method="post">
+            <label for="quiz_access_code">Access Code</label>
+            <input id="quiz_access_code" name="access_code" type="password" />
+            <button type="submit" disabled>Submit</button>
+          </form>
+        </main>
+      `
+    });
+    const submitButton = context.document.querySelector<HTMLButtonElement>(
+      'form.access_code_form button[type="submit"]'
+    );
+    context.document.querySelector<HTMLInputElement>("#quiz_access_code")?.addEventListener("input", () => {
+      if (submitButton) submitButton.disabled = false;
+    });
+    context.document.querySelector("form")?.addEventListener("submit", submitSpy);
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_600);
+
+    expect(context.fetch).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/api/seb/access-proof/11825/23455`,
+      expect.objectContaining({ method: "POST", credentials: "omit" })
+    );
+    expect(context.fetch).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/api/seb/access-code/11825/23455`,
+      expect.objectContaining({
+        method: "POST",
+        credentials: "omit",
+        cache: "no-store",
+        headers: expect.objectContaining({ "X-SEB-Proof-Token": "proof-1" })
+      })
+    );
+    const field = context.document.querySelector<HTMLInputElement>('input[name="access_code"]');
+    expect(field?.value).toBe(secretSentinel);
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    const logOutput = JSON.stringify(context.console.log.mock.calls);
+    expect(logOutput).not.toContain(secretSentinel);
+    expect(logOutput).not.toContain("user_id=7288");
+  });
+
+  it("does not fill or submit an official-shaped Classic Quiz form whose action only shares the quiz path prefix", async () => {
+    const submitSpy = vi.fn((event: Event) => event.preventDefault());
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/23455": { success: true, accessCode: "must-not-be-filled", tools: [] }
+      },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <p>This quiz is restricted by an access code.</p>
+          <form class="access_code_form" action="/courses/11825/quizzes/23455evil/take">
+            <input id="quiz_access_code" name="access_code" type="password" />
             <button type="submit">Submit</button>
           </form>
         </main>
@@ -196,26 +259,38 @@ describe("Canvas SEB detector script", () => {
 
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(2_600);
+    await flushPromises();
 
-    const field = context.document.querySelector<HTMLInputElement>('input[name="access_code"]');
-    expect(field?.value).toBe("sensitive-code-123");
-    expect(submitSpy).toHaveBeenCalledTimes(1);
-    expect(context.fetch).toHaveBeenCalledWith(
-      `${APP_BASE_URL}/api/seb/access-proof/11825/23455`,
-      expect.objectContaining({ method: "POST" })
-    );
-    expect(context.fetch).toHaveBeenCalledWith(
-      `${APP_BASE_URL}/api/seb/access-code/11825/23455`,
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({ "X-SEB-Proof-Token": "proof-1" })
-      })
-    );
-    const logOutput = JSON.stringify(context.console.log.mock.calls);
-    expect(logOutput).not.toContain("sensitive");
-    expect(logOutput).not.toContain("sen***");
-    expect(logOutput).not.toContain("user_id=7288");
-    expect(logOutput).toContain("user_id=%5Bredacted%5D");
+    expect(context.document.querySelector<HTMLInputElement>('input[name="access_code"]')?.value).toBe("");
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not fill an official-shaped Classic Quiz form targeting another same-origin quiz subpage", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/23455": { success: true, accessCode: "must-not-be-filled", tools: [] }
+      },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <p>This quiz is restricted by an access code.</p>
+          <form class="access_code_form" action="/courses/11825/quizzes/23455/edit">
+            <input id="quiz_access_code" name="access_code" type="password" />
+            <button type="submit">Submit</button>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_600);
+    await flushPromises();
+
+    expect(context.document.querySelector<HTMLInputElement>("#quiz_access_code")?.value).toBe("");
   });
 
   it("shows a stale or modified SEB configuration message when proof is rejected", async () => {
@@ -239,8 +314,7 @@ describe("Canvas SEB detector script", () => {
           statusCode: 403,
           error_code: "INVALID_SEB_CONFIG_PROOF",
           message
-        },
-        "/api/seb/tools/11825/23455": { success: true, tools: [] }
+        }
       },
       body: `
         <main>
@@ -302,7 +376,8 @@ describe("Canvas SEB detector script", () => {
         "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": { success: true, proofToken: "proof-1" },
         "/api/seb/access-code/11825/newquiz%3A11825%3A437577": {
           success: true,
-          accessCode: "new-quiz-code"
+          accessCode: "new-quiz-code",
+          exitGrant: "e".repeat(43)
         }
       },
       body: `
@@ -310,12 +385,19 @@ describe("Canvas SEB detector script", () => {
           <section id="access-code-gate">
             <p>An access code is required to start</p>
             <p>Previous submission complete</p>
-            <input id="TextInput___0" type="password" />
+            <input id="TextInput___0" type="text" />
             <label><input id="Checkbox___0" type="checkbox" /> Show access code</label>
-            <button type="button" data-automation="sdk-submit-access-code-button">Submit</button>
+            <button type="button" data-automation="sdk-submit-access-code-button" disabled>Submit</button>
           </section>
         </main>
       `
+    });
+    const accessCodeInput = context.document.querySelector<HTMLInputElement>("#TextInput___0");
+    const accessCodeSubmit = context.document.querySelector<HTMLButtonElement>(
+      '[data-automation="sdk-submit-access-code-button"]'
+    );
+    accessCodeInput?.addEventListener("input", () => {
+      if (accessCodeSubmit) accessCodeSubmit.disabled = false;
     });
     context.document
       .querySelector<HTMLButtonElement>('[data-automation="sdk-submit-access-code-button"]')
@@ -356,7 +438,217 @@ describe("Canvas SEB detector script", () => {
     );
   });
 
-  it("waits for the New Quiz confirmation dialog and Canvas completion before redirecting", async () => {
+  it("waits for a late-rendered New Quiz access-code gate and accepts Canvas submit-selector changes", async () => {
+    const submitSpy = vi.fn();
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/launch",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/newquiz%3A11825%3A437577": {
+          success: true,
+          accessCode: "late-new-quiz-code",
+          exitGrant: "e".repeat(43)
+        }
+      },
+      body: `
+        <main id="new-quiz-root">
+          <h1>New Quiz for SEB</h1>
+          <div aria-label="Loading assessment">Loading…</div>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-proof/")).length).toBe(
+      1
+    );
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-code/")).length).toBe(
+      1
+    );
+    expect(context.document.getElementById("seb-access-code-progress-overlay")).toBeNull();
+
+    const root = context.document.querySelector<HTMLElement>("#new-quiz-root")!;
+    root.innerHTML = `
+      <h1>New Quiz for SEB</h1>
+      <section id="late-access-code-gate">
+        <p>An access code is required to start.</p>
+        <input id="late-access-code" />
+        <button id="late-access-submit" type="button" disabled>Submit</button>
+      </section>
+    `;
+    const field = context.document.querySelector<HTMLInputElement>("#late-access-code")!;
+    const submit = context.document.querySelector<HTMLButtonElement>("#late-access-submit")!;
+    field.addEventListener("input", () => {
+      submit.disabled = false;
+    });
+    submit.addEventListener("click", submitSpy);
+
+    await vi.advanceTimersByTimeAsync(3_500);
+    await flushPromises();
+
+    expect(field.value).toBe("late-new-quiz-code");
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-proof/")).length).toBe(
+      1
+    );
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-code/")).length).toBe(
+      1
+    );
+  });
+
+  it("retries New Quiz priming when the SEB Config Key API becomes ready after page load", async () => {
+    const security: { configKey?: string; updateKeys: (callback: () => void) => void } = {
+      updateKeys: (callback) => callback()
+    };
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/launch",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/newquiz%3A11825%3A437577": {
+          success: true,
+          accessCode: "new-quiz-code",
+          exitGrant: "e".repeat(43)
+        }
+      },
+      body: `<main><h1>New Quiz is loading</h1></main>`
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/access-proof/"))).toBe(false);
+    expect(context.document.getElementById("seb-access-code-progress-overlay")).toBeNull();
+
+    security.configKey = DETECTOR_CONFIG_KEY;
+    await vi.advanceTimersByTimeAsync(5_500);
+    await flushPromises();
+
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-proof/")).length).toBe(
+      1
+    );
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-code/")).length).toBe(
+      1
+    );
+  });
+
+  it("selects only the contextual New Quiz access-code input when the gate shares a container with other text fields", async () => {
+    const submitSpy = vi.fn();
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31300",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/newquiz%3A11825%3A437577": {
+          success: true,
+          accessCode: "new-quiz-code",
+          exitGrant: "e".repeat(43)
+        }
+      },
+      body: `
+        <main>
+          <label>Search <input id="course-search" type="text" /></label>
+          <div>
+            <p>An access code is required to start</p>
+            <input id="access-code-entry" type="text" />
+            <label><input type="checkbox" /> Show access code</label>
+            <button type="button" data-automation="sdk-submit-access-code-button" disabled>Submit</button>
+          </div>
+        </main>
+      `
+    });
+    const accessCodeInput = context.document.querySelector<HTMLInputElement>("#access-code-entry")!;
+    const submit = context.document.querySelector<HTMLButtonElement>(
+      '[data-automation="sdk-submit-access-code-button"]'
+    )!;
+    accessCodeInput.addEventListener("input", () => {
+      submit.disabled = false;
+    });
+    submit.addEventListener("click", submitSpy);
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_500);
+    await flushPromises();
+
+    expect(accessCodeInput.value).toBe("new-quiz-code");
+    expect(context.document.querySelector<HTMLInputElement>("#course-search")?.value).toBe("");
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an ambiguous New Quiz gate instead of filling an arbitrary password field", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31300",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/newquiz%3A11825%3A437577": {
+          success: true,
+          accessCode: "must-not-be-filled",
+          exitGrant: "e".repeat(43)
+        }
+      },
+      body: `
+        <main>
+          <p>An access code is required to start</p>
+          <input id="unrelated-text" type="text" />
+          <input id="unrelated-password" type="password" />
+          <button type="button" data-automation="sdk-submit-access-code-button">Submit</button>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(41_000);
+    await flushPromises();
+
+    expect(context.document.querySelector<HTMLInputElement>("#unrelated-text")?.value).toBe("");
+    expect(context.document.querySelector<HTMLInputElement>("#unrelated-password")?.value).toBe("");
+    expect(context.document.body.textContent).toContain("Something went wrong");
+    expect(context.document.body.textContent).toContain("Canvas access-code field could not be found");
+  });
+
+  it("primes once without showing an error or tools on a New Quiz attempt-history page", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31345",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/newquiz%3A11825%3A437577": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/newquiz%3A11825%3A437577": {
+          success: true,
+          accessCode: "new-quiz-code",
+          exitGrant: "e".repeat(43)
+        }
+      },
+      body: `
+        <main>
+          <h1>New Quiz for SEB</h1>
+          <p>An access code is required to start.</p>
+          <section><h2>Attempt History</h2><a href="#">Attempt 1</a></section>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(35_000);
+
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-proof/")).length).toBe(
+      1
+    );
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/access-code/")).length).toBe(
+      1
+    );
+    expect(context.document.getElementById("seb-access-code-progress-overlay")).toBeNull();
+    expect(context.document.getElementById("seb-exam-tools-sidebar")).toBeNull();
+  });
+
+  it("exits a confirmed New Quiz when Canvas renders results without changing the take URL", async () => {
+    const exitGrant = "e".repeat(43);
     const context = createDetectorContext({
       path: "/courses/11825/assignments/437577/taking/31299/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
@@ -373,6 +665,10 @@ describe("Canvas SEB detector script", () => {
         </main>
       `
     });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
 
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
@@ -387,6 +683,7 @@ describe("Canvas SEB detector script", () => {
 
     context.document.querySelector<HTMLButtonElement>("#confirm-submit")?.click();
     expect(context.sessionStorage.getItem("seb_pending_redirect")).toContain('"quizId":"newquiz:11825:437577"');
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Submitting quiz");
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(context.location.assign).not.toHaveBeenCalled();
@@ -397,7 +694,14 @@ describe("Canvas SEB detector script", () => {
     );
     await vi.advanceTimersByTimeAsync(900);
 
-    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/newquiz:11825:437577`);
+    expect(context.location.assign).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/seb/exit/session/11825/newquiz%3A11825%3A437577/${exitGrant}`
+    );
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Quiz submitted");
+
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(context.location.assign).toHaveBeenCalledTimes(1);
   });
 
   it("does not redirect a New Quiz when confirmation is followed by a submission error", async () => {
@@ -419,15 +723,17 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
     context.document.querySelector<HTMLButtonElement>("#confirm-submit")?.click();
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Submitting quiz");
     context.document.body.appendChild(
       context.document.createTextNode("We could not submit your assessment. Please try again.")
     );
     await vi.advanceTimersByTimeAsync(12_500);
 
     expect(context.location.assign).not.toHaveBeenCalled();
+    expect(context.document.getElementById("seb-classic-submission-overlay")).toBeNull();
   });
 
-  it("redirects a timed New Quiz submission after Canvas renders a completion signal", async () => {
+  it("does not redirect from ambient New Quiz completion content without a verified final submit", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/assignments/437577/taking/31299/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
@@ -437,10 +743,16 @@ describe("Canvas SEB detector script", () => {
 
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
-    context.document.body.appendChild(context.document.createTextNode("Submission successful"));
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/assignments/437577/taking/31299/results`;
+    context.location.pathname = "/courses/11825/assignments/437577/taking/31299/results";
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div role="region" aria-label="Assessment results page"><h1 data-automation="sdk-result-list-title">Results</h1></div>'
+    );
     await vi.advanceTimersByTimeAsync(900);
 
-    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/newquiz:11825:437577`);
+    expect(context.sessionStorage.getItem("seb_pending_redirect")).toBeNull();
+    expect(context.location.assign).not.toHaveBeenCalled();
   });
 
   it("clears a pending New Quiz redirect when Canvas opens a different attempt", async () => {
@@ -471,7 +783,207 @@ describe("Canvas SEB detector script", () => {
     expect(context.location.assign).not.toHaveBeenCalled();
   });
 
-  it("redirects to the SEB exit page after a verified final submit and completion indicator", async () => {
+  it("exits a confirmed New Quiz when Canvas routes to the attempt results page without completion markers", async () => {
+    const exitGrant = "f".repeat(43);
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `
+        <main>
+          <div role="dialog" aria-modal="true">
+            <h2>Confirm Submission</h2>
+            <p>Upon submission you will not be able to change your answers. Are you ready to submit?</p>
+            <button id="confirm-submit" type="button">Submit</button>
+          </div>
+        </main>
+      `
+    });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    context.document.querySelector<HTMLButtonElement>("#confirm-submit")?.click();
+    expect(context.sessionStorage.getItem("seb_pending_redirect")).toContain('"quizId":"newquiz:11825:437577"');
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/assignments/437577/taking/31299/results`;
+    context.location.pathname = "/courses/11825/assignments/437577/taking/31299/results";
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(context.location.assign).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/seb/exit/session/11825/newquiz%3A11825%3A437577/${exitGrant}`
+    );
+  });
+
+  it("does not exit a confirmed New Quiz from the bare assignment route until completion markers render", async () => {
+    const exitGrant = "g".repeat(43);
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `
+        <main>
+          <div role="dialog" aria-modal="true">
+            <h2>Confirm Submission</h2>
+            <p>Are you ready to submit?</p>
+            <button id="confirm-submit" type="button">Submit</button>
+          </div>
+        </main>
+      `
+    });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    context.document.querySelector<HTMLButtonElement>("#confirm-submit")?.click();
+
+    // A route without the attempt's post-take segment is not proof of
+    // submission; a failed submit followed by navigation must not exit SEB.
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/assignments/437577`;
+    context.location.pathname = "/courses/11825/assignments/437577";
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(context.location.assign).not.toHaveBeenCalled();
+
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div role="region" aria-label="Assessment results page"><h1 data-automation="sdk-result-list-title">Results</h1></div>'
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(context.location.assign).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/seb/exit/session/11825/newquiz%3A11825%3A437577/${exitGrant}`
+    );
+    expect(context.location.assign).toHaveBeenCalledTimes(1);
+  });
+
+  it("exits a primed New Quiz exam session when results render even if the confirmation click was missed", async () => {
+    const exitGrant = "h".repeat(43);
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `<main><h1>New Quiz</h1></main>`
+    });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect(context.sessionStorage.getItem("seb_pending_redirect")).toBeNull();
+
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div role="region" aria-label="Assessment Results Page"><h1>Results</h1></div>'
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(context.location.assign).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/seb/exit/session/11825/newquiz%3A11825%3A437577/${exitGrant}`
+    );
+  });
+
+  it("exits a primed New Quiz exam session when Canvas routes to the attempt results page without any visible click", async () => {
+    const exitGrant = "j".repeat(43);
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `<main><h1>New Quiz</h1></main>`
+    });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    expect(context.sessionStorage.getItem("seb_pending_redirect")).toBeNull();
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/assignments/437577/taking/31299/results`;
+    context.location.pathname = "/courses/11825/assignments/437577/taking/31299/results";
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(context.location.assign).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/seb/exit/session/11825/newquiz%3A11825%3A437577/${exitGrant}`
+    );
+  });
+
+  it("does not exit from the attempt results route without a primed exam session grant", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `<main><h1>New Quiz</h1></main>`
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/assignments/437577/taking/31299/results`;
+    context.location.pathname = "/courses/11825/assignments/437577/taking/31299/results";
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(context.location.assign).not.toHaveBeenCalled();
+  });
+
+  it("does not exit a primed New Quiz exam session while still on the attempt take route", async () => {
+    const exitGrant = "k".repeat(43);
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `<main><h1>New Quiz</h1></main>`
+    });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(12_500);
+
+    expect(context.location.assign).not.toHaveBeenCalled();
+  });
+
+  it("does not exit a primed New Quiz exam session from the assignment route alone without a verified submit", async () => {
+    const exitGrant = "i".repeat(43);
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31299/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `<main><h1>New Quiz</h1></main>`
+    });
+    context.sessionStorage.setItem(
+      "seb_exam_session_capabilities:11825:newquiz:11825:437577",
+      JSON.stringify({ tools: [], exitGrant, ts: Date.now() })
+    );
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/assignments/437577`;
+    context.location.pathname = "/courses/11825/assignments/437577";
+    context.document.body.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(context.location.assign).not.toHaveBeenCalled();
+  });
+
+  it("redirects a Classic Quiz after verified final submit reaches Canvas's completed-submission page", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?debug=true",
       debugResponse: { enabled: true },
@@ -489,14 +1001,210 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
 
-    context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")?.click();
+    context.sessionStorage.setItem(
+      "seb_pending_redirect",
+      JSON.stringify({
+        courseId: "11825",
+        quizId: "23455",
+        contentType: "CLASSIC_QUIZ",
+        attemptId: null,
+        ts: Date.now()
+      })
+    );
     context.document.body.appendChild(context.document.createTextNode("Your quiz has been submitted"));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(context.location.assign).not.toHaveBeenCalled();
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`;
+    context.location.pathname = "/courses/11825/quizzes/23455";
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div class="quiz-submission"><div class="quiz_score"><span class="score_value">10 / 10</span></div></div>'
+    );
     await vi.advanceTimersByTimeAsync(900);
 
     expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
   });
 
-  it("redirects after a verified final submit when Classic Quiz remains on the take page", async () => {
+  it("submits the official Classic Quiz form through Canvas and exits only after Canvas returns confirmed results", async () => {
+    const canvasSubmitUrl = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/submissions?user_id=7288`;
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/courses/11825/quizzes/23455/submissions": {
+          __url: `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`,
+          __text: '<main><div class="quiz-submission"><div class="quiz_score">10 / 10</div></div></main>'
+        }
+      },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="submit_quiz_form" class="all_questions last_page" method="post" action="${canvasSubmitUrl}">
+            <input type="hidden" name="attempt" value="1" />
+            <input type="hidden" name="question_42" value="answer" />
+            <button id="submit_quiz_button" class="submit_quiz_button quiz_submit" type="submit">Submit Quiz</button>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+
+    const form = context.document.querySelector<HTMLFormElement>("#submit_quiz_form")!;
+    const submitEvent = new context.Event("submit", { bubbles: true, cancelable: true }) as SubmitEvent;
+    Object.defineProperty(submitEvent, "submitter", {
+      configurable: true,
+      value: context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")
+    });
+    const nativeSubmissionAllowed = form.dispatchEvent(submitEvent);
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(nativeSubmissionAllowed).toBe(false);
+    expect(context.fetch).toHaveBeenCalledWith(
+      canvasSubmitUrl,
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        redirect: "follow",
+        cache: "no-store",
+        body: expect.anything()
+      })
+    );
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain("Quiz submitted");
+    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
+  });
+
+  it("submits a confirmed Classic Quiz even when Canvas stops the event before document bubbling", async () => {
+    const canvasSubmitUrl = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/submissions?user_id=7288`;
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/courses/11825/quizzes/23455/submissions": {
+          __url: `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`,
+          __text: '<main><div class="quiz-submission"><div class="quiz_score">10 / 10</div></div></main>'
+        }
+      },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="submit_quiz_form" class="all_questions last_page" method="post" action="${canvasSubmitUrl}">
+            <input type="hidden" name="attempt" value="1" />
+            <input type="hidden" name="question_42" value="answer" />
+            <button id="submit_quiz_button" class="submit_quiz_button quiz_submit" type="submit">Submit Quiz</button>
+          </form>
+        </main>
+      `
+    });
+    const form = context.document.querySelector<HTMLFormElement>("#submit_quiz_form")!;
+    form.addEventListener("submit", (event) => {
+      // Canvas has already accepted its synchronous confirmation here, but a
+      // form-level handler keeps the event from reaching document listeners.
+      event.stopPropagation();
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+
+    const submitEvent = new context.Event("submit", { bubbles: true, cancelable: true }) as SubmitEvent;
+    Object.defineProperty(submitEvent, "submitter", {
+      configurable: true,
+      value: context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")
+    });
+    const nativeSubmissionAllowed = form.dispatchEvent(submitEvent);
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(nativeSubmissionAllowed).toBe(false);
+    expect(context.fetch).toHaveBeenCalledWith(
+      canvasSubmitUrl,
+      expect.objectContaining({ method: "POST", credentials: "same-origin", redirect: "follow" })
+    );
+    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
+  });
+
+  it("does not exit when Canvas returns the quiz page without a completed-submission structure", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/courses/11825/quizzes/23455/submissions": {
+          __url: `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`,
+          __text: '<main><div class="ic-flash-error">Submission could not be verified.</div></main>'
+        }
+      },
+      body: `
+        <main>
+          <form id="submit_quiz_form" class="all_questions last_page" method="post"
+            action="/courses/11825/quizzes/23455/submissions">
+            <input type="hidden" name="attempt" value="1" />
+            <button id="submit_quiz_button" type="submit">Submit Quiz</button>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    const submitEvent = new context.Event("submit", { bubbles: true, cancelable: true }) as SubmitEvent;
+    Object.defineProperty(submitEvent, "submitter", {
+      configurable: true,
+      value: context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")
+    });
+    context.document.querySelector<HTMLFormElement>("#submit_quiz_form")?.dispatchEvent(submitEvent);
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(context.location.assign).not.toHaveBeenCalled();
+    expect(context.document.getElementById("seb-classic-submission-overlay")?.textContent).toContain(
+      "Submission not confirmed"
+    );
+    expect(context.sessionStorage.removeItem).toHaveBeenCalledWith("seb_pending_redirect");
+  });
+
+  it("does not send the Classic Quiz request when Canvas cancels the submit event", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `
+        <main>
+          <form id="submit_quiz_form" class="all_questions last_page" method="post"
+            action="/courses/11825/quizzes/23455/submissions">
+            <button id="submit_quiz_button" type="submit">Submit Quiz</button>
+          </form>
+        </main>
+      `
+    });
+    const form = context.document.querySelector<HTMLFormElement>("#submit_quiz_form")!;
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    const submitEvent = new context.Event("submit", { bubbles: true, cancelable: true }) as SubmitEvent;
+    Object.defineProperty(submitEvent, "submitter", {
+      configurable: true,
+      value: context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")
+    });
+    form.dispatchEvent(submitEvent);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(context.fetch.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/submissions"))).toBe(
+      false
+    );
+    expect(context.sessionStorage.removeItem).toHaveBeenCalledWith("seb_pending_redirect");
+  });
+
+  it("does not directly redirect after a verified final submit while Classic Quiz remains on the take page", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
@@ -518,7 +1226,7 @@ describe("Canvas SEB detector script", () => {
     context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")?.click();
     await vi.advanceTimersByTimeAsync(1_200);
 
-    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
+    expect(context.location.assign).not.toHaveBeenCalled();
   });
 
   it("does not directly redirect from a final-looking click unless a submit event fires", async () => {
@@ -543,7 +1251,7 @@ describe("Canvas SEB detector script", () => {
     expect(context.location.assign).not.toHaveBeenCalled();
   });
 
-  it("redirects after Classic Quiz final submit when Canvas navigates to quiz history", async () => {
+  it("requires a Classic Quiz completion structure on the exact Canvas post-submit page", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
@@ -562,13 +1270,97 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
 
-    context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")?.click();
-    context.location.href = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/history?version=1`;
-    context.location.pathname = "/courses/11825/quizzes/23455/history";
-    context.document.body.appendChild(context.document.createTextNode("Attempt History"));
+    context.sessionStorage.setItem(
+      "seb_pending_redirect",
+      JSON.stringify({
+        courseId: "11825",
+        quizId: "23455",
+        contentType: "CLASSIC_QUIZ",
+        attemptId: null,
+        ts: Date.now()
+      })
+    );
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`;
+    context.location.pathname = "/courses/11825/quizzes/23455";
+    context.document.body.appendChild(context.document.createTextNode("Quiz submitted"));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(context.location.assign).not.toHaveBeenCalled();
+
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div class="quiz-submission"><div class="quiz_duration">This attempt took 2 minutes.</div></div>'
+    );
     await vi.advanceTimersByTimeAsync(900);
 
     expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
+  });
+
+  it("redirects a completed Classic Quiz when Canvas withholds the result behind its muted notice", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="quiz_form">
+            <button id="submit_quiz_button" type="submit">Submit Quiz</button>
+          </form>
+        </main>
+      `
+    });
+    context.document.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    context.sessionStorage.setItem(
+      "seb_pending_redirect",
+      JSON.stringify({
+        courseId: "11825",
+        quizId: "23455",
+        contentType: "CLASSIC_QUIZ",
+        attemptId: null,
+        ts: Date.now()
+      })
+    );
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`;
+    context.location.pathname = "/courses/11825/quizzes/23455";
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div class="muted-notice"><h3>Your quiz has been muted</h3></div>'
+    );
+    await vi.advanceTimersByTimeAsync(900);
+
+    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
+  });
+
+  it("does not accept a Classic completion structure on a non-submit quiz subpage", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="quiz_form">
+            <button id="submit_quiz_button" type="submit">Submit Quiz</button>
+          </form>
+        </main>
+      `
+    });
+    context.document.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(3_100);
+    context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")?.click();
+
+    context.location.href = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/history?version=1`;
+    context.location.pathname = "/courses/11825/quizzes/23455/history";
+    context.document.body.insertAdjacentHTML("beforeend", '<div class="quiz-submission"></div>');
+    await vi.advanceTimersByTimeAsync(12_500);
+
+    expect(context.location.assign).not.toHaveBeenCalled();
   });
 
   it("does not mistake hidden access-code inputs in the quiz form for the access-code gate", async () => {
@@ -599,18 +1391,19 @@ describe("Canvas SEB detector script", () => {
     );
   });
 
-  it("redirects from a Classic Quiz post-submit page in SEB even if no pending flag was recorded", async () => {
+  it("does not redirect from a Classic Quiz post-submit page without a verified pending submit", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/history?version=1",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
       safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
-      body: `<main><h1 id="quiz_title">Midterm Quiz</h1><p>Attempt History</p></main>`
+      body: `<main aria-label="Assessment results page"><h1 data-automation="sdk-result-list-title">Results</h1></main>`
     });
 
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(900);
 
-    expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
+    expect(context.sessionStorage.getItem("seb_pending_redirect")).toBeNull();
+    expect(context.location.assign).not.toHaveBeenCalled();
   });
 
   it("captures final submits from quiz forms added after initial completion setup", async () => {
@@ -647,7 +1440,7 @@ describe("Canvas SEB detector script", () => {
     );
   });
 
-  it("redirects after pending final submit when Canvas lands on the Classic Quiz detail page", async () => {
+  it("does not treat result-like text as completion after Canvas lands on the Classic Quiz detail page", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
@@ -666,10 +1459,26 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
 
-    context.document.querySelector<HTMLButtonElement>("#submit_quiz_button")?.click();
+    context.sessionStorage.setItem(
+      "seb_pending_redirect",
+      JSON.stringify({
+        courseId: "11825",
+        quizId: "23455",
+        contentType: "CLASSIC_QUIZ",
+        attemptId: null,
+        ts: Date.now()
+      })
+    );
     context.location.href = `${CANVAS_BASE_URL}/courses/11825/quizzes/23455`;
     context.location.pathname = "/courses/11825/quizzes/23455";
     context.document.body.appendChild(context.document.createTextNode("Quiz Results"));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(context.location.assign).not.toHaveBeenCalled();
+
+    context.document.body.insertAdjacentHTML(
+      "beforeend",
+      '<div role="region" aria-label="Assessment results page"><h1 data-automation="sdk-result-list-title">Results</h1></div>'
+    );
     await vi.advanceTimersByTimeAsync(900);
 
     expect(context.location.assign).toHaveBeenCalledWith(`${APP_BASE_URL}/seb/exit/11825/23455`);
@@ -692,13 +1501,24 @@ describe("Canvas SEB detector script", () => {
   });
 
   it("renders only HTTPS exam tools and reuses the named tool window", async () => {
-    const toolWindow = { closed: false, focus: vi.fn(), opener: {} };
+    const toolWindow = {
+      closed: false,
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: { replace: vi.fn() },
+      opener: {}
+    };
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?debug=true",
       debugResponse: { enabled: true },
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
       fetchResponses: {
-        "/api/seb/tools/11825/23455": {
+        "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/23455": {
           success: true,
+          accessCode: "ACCESS",
+          exitGrant: "e".repeat(43),
           tools: [
             { id: "calc", label: "Calculator", url: "https://calc.example.edu" },
             { id: "bad", label: "Bad Tool", url: "http://bad.example.edu" }
@@ -709,31 +1529,83 @@ describe("Canvas SEB detector script", () => {
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
-          <form id="quiz_form"><button type="submit">Submit Quiz</button></form>
+          <form id="access_code_form"><input name="access_code" type="password" /><button type="submit">Submit</button></form>
         </main>
       `
     });
+    context.document.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
 
     await context.runDetector();
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(context.document.querySelectorAll(".seb-tool-button")).toHaveLength(0);
+
+    context.document.querySelector("#access_code_form")?.remove();
+    context.document.querySelector("main")?.appendChild(context.document.createElement("section"));
+    await vi.advanceTimersByTimeAsync(400);
 
     const buttons = [...context.document.querySelectorAll<HTMLButtonElement>(".seb-tool-button")];
     expect(buttons).toHaveLength(1);
     expect(buttons[0].textContent).toContain("Calculator");
     expect(context.document.body.textContent).not.toContain("Bad Tool");
+    expect(context.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/seb/tools/"), expect.anything());
 
     buttons[0].click();
     buttons[0].click();
 
     expect(context.openWindow).toHaveBeenCalledTimes(1);
-    expect(context.openWindow).toHaveBeenCalledWith(
-      "https://calc.example.edu",
-      expect.stringMatching(/^seb_exam_tool_/u)
-    );
+    expect(context.openWindow).toHaveBeenCalledWith("about:blank", expect.stringMatching(/^seb_exam_tool_/u));
+    expect(toolWindow.location.replace).toHaveBeenCalledWith("https://calc.example.edu");
+    expect(toolWindow.opener).toBeNull();
     expect(toolWindow.focus).toHaveBeenCalled();
   });
 
-  it("enables debug logging from injected app debug mode and URL override parameters", async () => {
+  it("abandons the named broker when opener isolation cannot be verified", async () => {
+    const toolWindow = {
+      closed: false,
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: { replace: vi.fn() }
+    } as Record<string, any>;
+    Object.defineProperty(toolWindow, "opener", {
+      configurable: true,
+      get: () => ({ retained: true }),
+      set: vi.fn()
+    });
+    const fallbackWindow = { closed: false, focus: vi.fn(), opener: null };
+    const openWindow = vi.fn().mockReturnValueOnce(toolWindow).mockReturnValueOnce(fallbackWindow);
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take?debug=true",
+      debugResponse: { enabled: true },
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/23455": {
+          success: true,
+          accessCode: "ACCESS",
+          exitGrant: "e".repeat(43),
+          tools: [{ id: "calc", label: "Calculator", url: "https://calc.example.edu" }]
+        }
+      },
+      openWindow,
+      body: `<main><h1 id="quiz_title">Midterm Quiz</h1><form id="access_code_form"><input name="access_code" type="password" /><button type="submit">Submit</button></form></main>`
+    });
+    context.document.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(1_000);
+    context.document.querySelector("#access_code_form")?.remove();
+    context.document.querySelector("main")?.appendChild(context.document.createElement("section"));
+    await vi.advanceTimersByTimeAsync(400);
+    context.document.querySelector<HTMLButtonElement>(".seb-tool-button")?.click();
+
+    expect(toolWindow.location.replace).not.toHaveBeenCalled();
+    expect(toolWindow.close).toHaveBeenCalled();
+    expect(openWindow).toHaveBeenNthCalledWith(2, "https://calc.example.edu", "_blank", "noopener,noreferrer");
+  });
+
+  it("emits only structural console markers when server debug mode is enabled", async () => {
     const endpointContext = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       debugResponse: { enabled: true },
@@ -748,22 +1620,27 @@ describe("Canvas SEB detector script", () => {
     });
     await urlContext.runDetector();
 
-    expect(endpointContext.console.log).toHaveBeenCalledWith(
-      "Canvas SEB Detector:",
-      "Canvas SEB Detector Script Loaded!"
-    );
-    expect(urlContext.console.log).toHaveBeenCalledWith("Canvas SEB Detector:", "Canvas SEB Detector Script Loaded!");
+    for (const context of [endpointContext, urlContext]) {
+      expect(context.console.log).toHaveBeenCalled();
+      expect(
+        context.console.log.mock.calls.every(
+          (call) => call[0] === "Canvas SEB Detector:" && ["info", "success", "warn", "error"].includes(call[1])
+        )
+      ).toBe(true);
+      expect(JSON.stringify(context.console.log.mock.calls)).not.toContain("Canvas SEB Detector Script Loaded!");
+    }
   });
 
-  it("sends sanitized server-side detector traces when debug mode is enabled", async () => {
+  it("sends credentialless structural traces without URL, DOM, or secret content", async () => {
+    const secretSentinel = "SEB_TEST_SECRET_SENTINEL";
     const context = createDetectorContext({
-      path: "/courses/11825/quizzes/23455/take?user_id=7288&debug=true",
+      path: `/courses/11825/quizzes/23455/take?user_id=7288&debug=true&answer=${secretSentinel}`,
       debugResponse: { enabled: true },
       body: `
         <main>
-          <h1 id="quiz_title">Midterm Quiz</h1>
+          <h1 id="quiz_title">Midterm Quiz ${secretSentinel}</h1>
           <form id="quiz_form">
-            <input name="access_code" type="hidden" value="already-accepted" />
+            <input name="access_code" type="hidden" value="${secretSentinel}" />
             <button id="submit_quiz_button" type="submit">Submit Quiz</button>
           </form>
         </main>
@@ -777,11 +1654,27 @@ describe("Canvas SEB detector script", () => {
       String(input).endsWith("/api/debug/canvas-detector-trace")
     );
     expect(traceCalls.length).toBeGreaterThan(0);
-    const renderedPayloads = JSON.stringify(traceCalls.map(([, init]) => JSON.parse(String(init?.body))));
+    expect(traceCalls.every(([, init]) => init?.credentials === "omit")).toBe(true);
+    const payloads = traceCalls.map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+    for (const payload of payloads) {
+      expect(Object.keys(payload).sort()).toEqual(["events", "source", "traceId", "version"]);
+      for (const event of payload.events as Array<Record<string, unknown>>) {
+        expect(Object.keys(event).sort()).toEqual([
+          "at",
+          "event",
+          "hidden",
+          "readyState",
+          "sebDetected",
+          "seq",
+          "type"
+        ]);
+      }
+    }
+    const renderedPayloads = JSON.stringify(payloads);
     expect(renderedPayloads).toContain("canvas-seb-detector");
     expect(renderedPayloads).not.toContain("user_id=7288");
-    expect(renderedPayloads).not.toContain("already-accepted");
-    expect(renderedPayloads).toContain("user_id=%5Bredacted%5D");
+    expect(renderedPayloads).not.toContain(secretSentinel);
+    expect(renderedPayloads).not.toContain("quiz_title");
   });
 
   it("keeps debug logs quiet when server debug mode is disabled", async () => {
@@ -793,7 +1686,11 @@ describe("Canvas SEB detector script", () => {
 
     await context.runDetector();
 
-    expect(context.console.log).not.toHaveBeenCalledWith("Canvas SEB Detector:", "Canvas SEB Detector Script Loaded!");
+    expect(context.console.log).not.toHaveBeenCalled();
+    expect(context.fetch).not.toHaveBeenCalledWith(
+      `${APP_BASE_URL}/api/debug/canvas-detector-trace`,
+      expect.anything()
+    );
   });
 
   it("does not allow URL parameters to force debug logs when server debug mode is disabled", async () => {
@@ -805,7 +1702,11 @@ describe("Canvas SEB detector script", () => {
 
     await context.runDetector();
 
-    expect(context.console.log).not.toHaveBeenCalledWith("Canvas SEB Detector:", "Canvas SEB Detector Script Loaded!");
+    expect(context.console.log).not.toHaveBeenCalled();
+    expect(context.fetch).not.toHaveBeenCalledWith(
+      `${APP_BASE_URL}/api/debug/canvas-detector-trace`,
+      expect.anything()
+    );
   });
 
   it("does not attach duplicate final-submit handlers after SPA reruns", async () => {
@@ -862,6 +1763,7 @@ function createDetectorContext(options: DetectorContextOptions) {
   const localStorage = createStorage();
   const location = {
     href: `${CANVAS_BASE_URL}${options.path}`,
+    origin: CANVAS_BASE_URL,
     pathname: new URL(options.path, CANVAS_BASE_URL).pathname,
     assign: vi.fn((url: string) => {
       location.href = url;
@@ -892,6 +1794,7 @@ function createDetectorContext(options: DetectorContextOptions) {
     navigator: { userAgent: options.userAgent || "Mozilla/5.0 Safari/605.1.15" },
     SafeExamBrowser: options.safeExamBrowser,
     SEB: undefined,
+    FormData: dom.window.FormData,
     open: openWindow,
     history: { back: historyBack },
     addEventListener: dom.window.addEventListener.bind(dom.window),
@@ -970,16 +1873,17 @@ function createStorage() {
 }
 
 function jsonResponse(body: FetchResponse) {
-  const { __status, ...payload } = body;
+  const { __status, __text, __url, ...payload } = body;
   const status = typeof __status === "number" ? __status : 200;
   return {
     ok: status >= 200 && status < 300,
     status,
+    url: typeof __url === "string" ? __url : "",
     async json() {
       return payload;
     },
     async text() {
-      return JSON.stringify(payload);
+      return typeof __text === "string" ? __text : JSON.stringify(payload);
     }
   };
 }

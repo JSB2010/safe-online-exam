@@ -28,7 +28,7 @@ export interface SessionRecord extends Record<string, any> {
 
 export interface TransientStateRecord extends Record<string, any> {
   id?: string | null;
-  kind: "lti-state" | "seb-proof";
+  kind: "lti-state" | "seb-proof" | "seb-proof-v2" | "seb-exit-grant" | "seb-config-grant" | "admission-budget";
   payload?: Record<string, string>;
   courseId?: string | null;
   contentId?: string | null;
@@ -48,10 +48,13 @@ export interface OperationLockRecord extends Record<string, any> {
 
 export interface TransientStateStore extends CollectionStore<TransientStateRecord> {
   consume(id: string): Promise<TransientStateRecord | null>;
+  claim(id: string, value: TransientStateRecord): Promise<boolean>;
+  consumeBudget(id: string, limit: number, windowMs: number): Promise<boolean>;
 }
 
 export interface OperationLockStore extends CollectionStore<OperationLockRecord> {
   acquire(id: string, ownerId: string, ttlMs: number): Promise<boolean>;
+  renew(id: string, ownerId: string, ttlMs: number): Promise<boolean>;
   release(id: string, ownerId: string): Promise<void>;
 }
 
@@ -120,7 +123,7 @@ export function createInMemoryRepositories(
 }
 
 export class InMemoryCollectionStore<T extends Record<string, any>> implements CollectionStore<T> {
-  private readonly documents = new Map<string, T>();
+  protected readonly documents = new Map<string, T>();
 
   constructor(seed?: Record<string, T>) {
     if (seed) {
@@ -238,6 +241,38 @@ export class InMemoryTransientStateStore
   extends InMemoryCollectionStore<TransientStateRecord>
   implements TransientStateStore
 {
+  async consumeBudget(id: string, limit: number, windowMs: number): Promise<boolean> {
+    const now = Date.now();
+    const existing = this.documents.get(id);
+    const existingCount =
+      existing?.kind === "admission-budget" && !isExpired(existing.expiresAt, now) ? Number(existing.count) || 0 : 0;
+    if (existingCount >= limit) {
+      return false;
+    }
+    const nowIso = new Date(now).toISOString();
+    const next = prepareDocument(
+      id,
+      {
+        ...(existingCount ? existing : {}),
+        kind: "admission-budget",
+        count: existingCount + 1,
+        expiresAt: existingCount ? existing!.expiresAt : new Date(now + windowMs)
+      } as TransientStateRecord,
+      nowIso
+    );
+    this.documents.set(id, structuredClone(next));
+    return true;
+  }
+
+  async claim(id: string, value: TransientStateRecord): Promise<boolean> {
+    const existing = await this.get(id);
+    if (existing && !isExpired(existing.expiresAt)) {
+      return false;
+    }
+    await this.save(id, value);
+    return true;
+  }
+
   async consume(id: string): Promise<TransientStateRecord | null> {
     const existing = await this.get(id);
     if (!existing || existing.consumedAt || isExpired(existing.expiresAt)) {
@@ -256,6 +291,48 @@ export class FirestoreTransientStateStore
   extends FirestoreCollectionStore<TransientStateRecord>
   implements TransientStateStore
 {
+  async consumeBudget(id: string, limit: number, windowMs: number): Promise<boolean> {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    return this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      const existing = snapshot.exists ? (snapshot.data() as TransientStateRecord) : null;
+      const existingCount =
+        existing?.kind === "admission-budget" && !isExpired(existing.expiresAt, now) ? Number(existing.count) || 0 : 0;
+      if (existingCount >= limit) {
+        return false;
+      }
+      transaction.set(
+        reference,
+        prepareDocument(
+          id,
+          {
+            ...(existingCount ? existing : {}),
+            kind: "admission-budget",
+            count: existingCount + 1,
+            expiresAt: existingCount ? existing!.expiresAt : new Date(now + windowMs)
+          } as TransientStateRecord,
+          nowIso
+        )
+      );
+      return true;
+    });
+  }
+
+  async claim(id: string, value: TransientStateRecord): Promise<boolean> {
+    return this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      if (snapshot.exists && !isExpired((snapshot.data() as TransientStateRecord).expiresAt)) {
+        return false;
+      }
+      const now = new Date().toISOString();
+      transaction.set(reference, prepareDocument(id, value, now));
+      return true;
+    });
+  }
+
   async consume(id: string): Promise<TransientStateRecord | null> {
     const consumedAt = new Date().toISOString();
     return this.firestore.runTransaction(async (transaction) => {
@@ -280,18 +357,54 @@ export class InMemoryOperationLockStore
   implements OperationLockStore
 {
   async acquire(id: string, ownerId: string, ttlMs: number): Promise<boolean> {
-    const existing = await this.get(id);
-    if (existing && existing.ownerId !== ownerId && !isExpired(existing.expiresAt)) {
+    if (!isValidLockTtl(ttlMs)) {
       return false;
     }
-    await this.save(id, { id, ownerId, expiresAt: new Date(Date.now() + ttlMs) });
+    const now = Date.now();
+    const existing = this.documents.get(id);
+    if (existing && existing.ownerId !== ownerId && !isExpired(existing.expiresAt, now)) {
+      return false;
+    }
+    const nowIso = new Date(now).toISOString();
+    this.documents.set(
+      id,
+      structuredClone(
+        prepareDocument(
+          id,
+          {
+            id,
+            ownerId,
+            expiresAt: new Date(now + ttlMs),
+            createdAt: existing?.createdAt || nowIso
+          },
+          nowIso
+        )
+      )
+    );
+    return true;
+  }
+
+  async renew(id: string, ownerId: string, ttlMs: number): Promise<boolean> {
+    if (!isValidLockTtl(ttlMs)) {
+      return false;
+    }
+    const now = Date.now();
+    const existing = this.documents.get(id);
+    if (!existing || existing.ownerId !== ownerId || isExpired(existing.expiresAt, now)) {
+      return false;
+    }
+    const nowIso = new Date(now).toISOString();
+    this.documents.set(
+      id,
+      structuredClone(prepareDocument(id, { ...existing, expiresAt: new Date(now + ttlMs), updatedAt: nowIso }, nowIso))
+    );
     return true;
   }
 
   async release(id: string, ownerId: string): Promise<void> {
-    const existing = await this.get(id);
+    const existing = this.documents.get(id);
     if (!existing || existing.ownerId === ownerId || isExpired(existing.expiresAt)) {
-      await this.delete(id);
+      this.documents.delete(id);
     }
   }
 }
@@ -301,12 +414,15 @@ export class FirestoreOperationLockStore
   implements OperationLockStore
 {
   async acquire(id: string, ownerId: string, ttlMs: number): Promise<boolean> {
-    const now = Date.now();
-    const expiresAt = new Date(now + ttlMs);
-    const nowIso = new Date(now).toISOString();
+    if (!isValidLockTtl(ttlMs)) {
+      return false;
+    }
     return this.firestore.runTransaction(async (transaction) => {
       const reference = this.firestore.collection(this.collectionName).doc(id);
       const snapshot = await transaction.get(reference);
+      const now = Date.now();
+      const expiresAt = new Date(now + ttlMs);
+      const nowIso = new Date(now).toISOString();
       if (snapshot.exists) {
         const existing = withDocumentId(snapshot.id, snapshot.data() as OperationLockRecord);
         if (existing.ownerId !== ownerId && !isExpired(existing.expiresAt, now)) {
@@ -328,6 +444,27 @@ export class FirestoreOperationLockStore
     });
   }
 
+  async renew(id: string, ownerId: string, ttlMs: number): Promise<boolean> {
+    if (!isValidLockTtl(ttlMs)) {
+      return false;
+    }
+    return this.firestore.runTransaction(async (transaction) => {
+      const reference = this.firestore.collection(this.collectionName).doc(id);
+      const snapshot = await transaction.get(reference);
+      const now = Date.now();
+      if (!snapshot.exists) {
+        return false;
+      }
+      const existing = withDocumentId(snapshot.id, snapshot.data() as OperationLockRecord);
+      if (existing.ownerId !== ownerId || isExpired(existing.expiresAt, now)) {
+        return false;
+      }
+      const nowIso = new Date(now).toISOString();
+      transaction.update(reference, { expiresAt: new Date(now + ttlMs), updatedAt: nowIso });
+      return true;
+    });
+  }
+
   async release(id: string, ownerId: string): Promise<void> {
     await this.firestore.runTransaction(async (transaction) => {
       const reference = this.firestore.collection(this.collectionName).doc(id);
@@ -341,6 +478,10 @@ export class FirestoreOperationLockStore
       }
     });
   }
+}
+
+function isValidLockTtl(ttlMs: number): boolean {
+  return Number.isSafeInteger(ttlMs) && ttlMs > 0;
 }
 
 function prepareDocument<T extends Record<string, any>>(id: string, value: T, now: string): T {

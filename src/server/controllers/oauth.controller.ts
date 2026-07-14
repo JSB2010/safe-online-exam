@@ -1,11 +1,15 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Controller, Get, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { LtiLaunchData } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { renderAppShell } from "../http/app-shell.js";
+import { discardResponseBody, readBoundedUtf8Response } from "../http/bounded-response.js";
+import { isUpstreamRequestTimeout, withUpstreamDeadline } from "../http/upstream-deadline.js";
+import { isCanvasRestUserId, isVerifiedInstructor, verifiedLtiPrincipal } from "../security/verified-lti-principal.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
+
+const OAUTH_TOKEN_RESPONSE_MAX_BYTES = 64 * 1024;
 
 @Controller("/api")
 export class OAuthController {
@@ -21,9 +25,6 @@ export class OAuthController {
     @Res() response: Response,
     @Query() query: Record<string, string>
   ): Promise<void> {
-    if (query.user_id) {
-      await this.canvasApi.clearAccessToken(query.user_id);
-    }
     await this.authorize(request, response, query);
   }
 
@@ -33,10 +34,27 @@ export class OAuthController {
     @Res() response: Response,
     @Query() query: Record<string, string>
   ): Promise<void> {
-    const userId = query.user_id;
-    const courseId = query.course_id;
-    if (!userId || !courseId) {
-      response.status(400).send("Missing user_id or course_id");
+    const principal = verifiedLtiPrincipal(request);
+    if (!principal) {
+      response.status(401).send("A validated Canvas launch is required");
+      return;
+    }
+    if (!isVerifiedInstructor(principal)) {
+      response.status(403).send("Instructor access is required");
+      return;
+    }
+    if (!request.sessionID) {
+      response.status(401).send("A validated Canvas session is required");
+      return;
+    }
+    const userId = principal.canvasUserId;
+    const courseId = principal.courseId;
+    if (
+      !isCanvasRestUserId(userId) ||
+      (query.user_id && query.user_id !== userId) ||
+      (query.course_id && query.course_id !== courseId)
+    ) {
+      response.status(403).send("OAuth identity does not match the validated Canvas launch");
       return;
     }
     const clientId = this.config.value.canvas.oauthClientId;
@@ -46,23 +64,15 @@ export class OAuthController {
     }
     const redirectUri = this.oauthRedirectUri();
     const statePayload: Record<string, string> = {
-      nonce: randomUUID(),
-      userId,
+      purpose: "canvas-oauth-v2",
+      canvasUserId: userId,
+      ltiSubject: principal.subject,
       courseId,
-      redirectUrl:
-        query.redirect_url ||
-        `/lti/launch?course_id=${encodeURIComponent(courseId)}&user_id=${encodeURIComponent(userId)}`
+      issuer: principal.issuer,
+      deploymentId: principal.deploymentId,
+      sessionBinding: oauthSessionBinding(request.sessionID),
+      redirectUrl: safeLocalRedirect(query.redirect_url)
     };
-    const launchData = request.session?.launchData;
-    if (launchData?.roles?.length) {
-      statePayload.roles = JSON.stringify(launchData.roles);
-    }
-    if (launchData?.courseName) {
-      statePayload.courseName = launchData.courseName;
-    }
-    if (launchData?.fullName) {
-      statePayload.fullName = launchData.fullName;
-    }
     const state = await this.ltiState.createState(statePayload);
     const authUrl = new URL(`${this.config.getCanvasDomain()}/login/oauth2/auth`);
     authUrl.searchParams.set("client_id", clientId);
@@ -90,31 +100,56 @@ export class OAuthController {
       return;
     }
     try {
-      const state = await this.ltiState.consumeState(query.state);
+      const state = this.ltiState.peekState(query.state);
+      const principal = verifiedLtiPrincipal(request);
+      if (
+        state.purpose !== "canvas-oauth-v2" ||
+        !principal ||
+        !isVerifiedInstructor(principal) ||
+        !request.sessionID ||
+        state.sessionBinding !== oauthSessionBinding(request.sessionID) ||
+        state.canvasUserId !== principal.canvasUserId ||
+        state.ltiSubject !== principal.subject ||
+        state.courseId !== principal.courseId ||
+        state.issuer !== principal.issuer ||
+        state.deploymentId !== principal.deploymentId
+      ) {
+        throw new Error("OAuth callback does not match the initiating Canvas session");
+      }
+      await this.ltiState.claimState(query.state);
       const token = await this.exchangeCode(query.code, this.oauthRedirectUri());
-      await this.canvasApi.storeAccessToken(state.userId, token.access_token, {
+      const tokenOwner = token.user?.id === undefined ? "" : String(token.user.id);
+      if (!tokenOwner || tokenOwner !== principal.canvasUserId) {
+        throw new Error("Canvas OAuth token owner does not match the validated LTI user");
+      }
+      await this.canvasApi.storeAccessToken(tokenOwner, token.access_token, {
         refreshToken: token.refresh_token || null,
         scope: token.scope || null,
         expiresIn: token.expires_in
       });
-      restoreLaunchDataFromOAuthState(request, state);
-      response.redirect(addOAuthReturnParams(state.redirectUrl, state.courseId, state.userId));
-    } catch (error) {
+      response.redirect(safeLocalRedirect(state.redirectUrl));
+    } catch {
       response.status(400).send(
         renderAppShell({
           title: "Canvas Authorization Error",
           view: "oauth-error",
-          initialData: { error: error instanceof Error ? error.message : String(error) }
+          initialData: { error: "Canvas authorization could not be verified. Return to Canvas and try again." }
         })
       );
     }
   }
 
   @Get("/oauth2status")
-  async status(@Query("user_id") userId?: string): Promise<Record<string, unknown>> {
+  async status(@Req() request: Request, @Query("user_id") userId?: string): Promise<Record<string, unknown>> {
+    const principal = verifiedLtiPrincipal(request);
+    if (!principal || !isVerifiedInstructor(principal)) {
+      return { authorized: false };
+    }
+    if (userId && userId !== principal.canvasUserId) {
+      return { authorized: false };
+    }
     return {
-      authorized: userId ? await this.canvasApi.hasAccessToken(userId) : false,
-      userId
+      authorized: await this.canvasApi.hasAccessToken(principal.canvasUserId)
     };
   }
 
@@ -125,7 +160,13 @@ export class OAuthController {
   private async exchangeCode(
     code: string | undefined,
     redirectUri: string
-  ): Promise<{ access_token: string; refresh_token?: string; scope?: string; expires_in?: number }> {
+  ): Promise<{
+    access_token: string;
+    refresh_token?: string;
+    scope?: string;
+    expires_in?: number;
+    user?: { id?: string | number };
+  }> {
     if (!code) {
       throw new Error("Missing OAuth code");
     }
@@ -141,67 +182,107 @@ export class OAuthController {
       redirect_uri: redirectUri,
       code
     });
-    const response = await fetch(`${this.config.getCanvasDomain()}/login/oauth2/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body
-    });
-    if (!response.ok) {
-      throw new Error(`Canvas OAuth token exchange failed: ${response.status}`);
+    try {
+      return await withUpstreamDeadline(async (signal) => {
+        const response = await fetch(`${this.config.getCanvasDomain()}/login/oauth2/token`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body,
+          signal
+        });
+        if (!response.ok) {
+          await discardResponseBody(response);
+          throw new OAuthExchangeResponseError(response.status);
+        }
+        const text = await readBoundedUtf8Response(response, OAUTH_TOKEN_RESPONSE_MAX_BYTES);
+        return parseOAuthTokenResponse(text);
+      });
+    } catch (error) {
+      if (isUpstreamRequestTimeout(error)) {
+        throw new Error("Canvas OAuth token exchange timed out", { cause: error });
+      }
+      if (error instanceof OAuthExchangeResponseError) {
+        throw new Error(`Canvas OAuth token exchange failed: ${error.status}`, {
+          cause: error
+        });
+      }
+      throw new Error("Canvas OAuth token exchange failed", { cause: error });
     }
-    return response.json() as Promise<{
-      access_token: string;
-      refresh_token?: string;
-      scope?: string;
-      expires_in?: number;
-    }>;
   }
 }
 
-function addOAuthReturnParams(redirectUrl: string | undefined, courseId: string, userId: string): string {
-  const target = redirectUrl || "/lti/launch";
-  const url = new URL(target, "https://placeholder.invalid");
-  if (!url.searchParams.has("course_id")) {
-    url.searchParams.set("course_id", courseId);
+class OAuthExchangeResponseError extends Error {
+  constructor(readonly status: number) {
+    super("Canvas OAuth token endpoint rejected the request");
   }
-  if (!url.searchParams.has("user_id")) {
-    url.searchParams.set("user_id", userId);
-  }
-  return `${url.pathname}${url.search}${url.hash}`;
 }
 
-function restoreLaunchDataFromOAuthState(request: Request, state: Record<string, string>): void {
-  const roles = parseOAuthStateRoles(state.roles);
-  if (!request.session || roles.length === 0) {
-    return;
-  }
-  const existing = request.session.launchData as LtiLaunchData | undefined;
-  request.session.launchData = {
-    ...(existing || {}),
-    userId: state.userId,
-    courseId: state.courseId,
-    roles,
-    courseName: state.courseName || existing?.courseName,
-    fullName: state.fullName || existing?.fullName
-  };
-  request.session.ltiLaunchData = request.session.launchData;
-  request.session.canvas_user_id = state.userId;
-  request.session.userId = state.userId;
-  request.session.user_id = state.userId;
-  request.session.canvas_course_id = state.courseId;
-  request.session.courseId = state.courseId;
-}
-
-function parseOAuthStateRoles(value: string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
+function parseOAuthTokenResponse(text: string): {
+  access_token: string;
+  refresh_token?: string;
+  scope?: string;
+  expires_in?: number;
+  user?: { id?: string | number };
+} {
+  let value: unknown;
   try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+    value = JSON.parse(text);
   } catch {
-    return [];
+    throw new Error("Invalid Canvas OAuth token response");
   }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid Canvas OAuth token response");
+  }
+  const record = value as Record<string, unknown>;
+  const accessToken = boundedString(record.access_token, 16_384);
+  const refreshToken = optionalBoundedString(record.refresh_token, 16_384);
+  const scope = optionalBoundedString(record.scope, 16_384);
+  const expiresIn = record.expires_in;
+  const user = record.user;
+  if (
+    !accessToken ||
+    refreshToken === null ||
+    scope === null ||
+    (expiresIn !== undefined && (!Number.isSafeInteger(expiresIn) || Number(expiresIn) < 0)) ||
+    (user !== undefined && (!user || typeof user !== "object" || Array.isArray(user)))
+  ) {
+    throw new Error("Invalid Canvas OAuth token response");
+  }
+  const userId = user === undefined ? undefined : (user as Record<string, unknown>).id;
+  if (userId !== undefined && typeof userId !== "string" && typeof userId !== "number") {
+    throw new Error("Invalid Canvas OAuth token response");
+  }
+  return {
+    access_token: accessToken,
+    ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
+    ...(scope === undefined ? {} : { scope }),
+    ...(expiresIn === undefined ? {} : { expires_in: Number(expiresIn) }),
+    ...(user === undefined ? {} : { user: { id: userId as string | number | undefined } })
+  };
+}
+
+function boundedString(value: unknown, maxLength: number): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : null;
+}
+
+function optionalBoundedString(value: unknown, maxLength: number): string | null | undefined {
+  return value === undefined ? undefined : boundedString(value, maxLength);
+}
+
+function safeLocalRedirect(value?: string): string {
+  try {
+    const url = new URL(value || "/lti/launch", "https://placeholder.invalid");
+    if (url.origin !== "https://placeholder.invalid" || !url.pathname.startsWith("/")) {
+      return "/lti/launch";
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/lti/launch";
+  }
+}
+
+function oauthSessionBinding(sessionId: string): string {
+  return createHash("sha256").update(`canvas-oauth-session:${sessionId}`, "utf8").digest("base64url");
 }
 
 export function canvasScopes(): string[] {

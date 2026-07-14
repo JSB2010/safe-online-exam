@@ -27,12 +27,12 @@ describe("public utility controllers", () => {
     const detectorTrace = { recordEvent: vi.fn() };
     const enabled = new DebugController({ value: { security: { debugEnabled: true } } } as any, detectorTrace as any);
 
-    expect(enabled.canvasDetectorTrace({ event: "loaded" }, "https://canvas.example.edu", "UA", "127.0.0.1")).toEqual({
+    expect(enabled.canvasDetectorTrace({ event: "loaded" }, "https://canvas.example.edu")).toEqual({
       enabled: true
     });
     expect(detectorTrace.recordEvent).toHaveBeenCalledWith(
       { event: "loaded" },
-      { ip: "127.0.0.1", origin: "https://canvas.example.edu", userAgent: "UA" }
+      { origin: "https://canvas.example.edu" }
     );
 
     const disabled = new DebugController({ value: { security: { debugEnabled: false } } } as any, detectorTrace as any);

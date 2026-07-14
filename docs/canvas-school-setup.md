@@ -43,7 +43,7 @@ Record these values while completing the Canvas steps:
 | `CANVAS_API_CLIENT_ID`     | API OAuth Developer Key ID/client ID.                           | `CANVAS_API_CLIENT_ID` / `${SECRET_PREFIX}_api_client_id`           |
 | `CANVAS_API_CLIENT_SECRET` | API OAuth Developer Key secret/key.                             | `CANVAS_API_CLIENT_SECRET` / `${SECRET_PREFIX}_api_client_secret`   |
 | `LTI_CLIENT_ID`            | LTI 1.3 Developer Key Client ID.                                | `LTI_CLIENT_ID` / `${SECRET_PREFIX}_lti_client_id`                  |
-| `LTI_DEPLOYMENT_ID`        | External App Deployment ID after installing by Client ID.       | Optional `LTI_DEPLOYMENT_ID` / `${SECRET_PREFIX}_lti_deployment_id` |
+| `LTI_DEPLOYMENT_ID`        | External App Deployment ID after installing by Client ID.       | Required `LTI_DEPLOYMENT_ID` / `${SECRET_PREFIX}_lti_deployment_id` |
 
 `CANVAS_API_CLIENT_ID` and `LTI_CLIENT_ID` are different values from different Canvas Developer Keys. Mixing them causes OAuth or LTI launch failures.
 
@@ -114,11 +114,16 @@ Canvas also supports `Paste JSON` and `Manual Entry` for LTI keys. If the JSON U
 - `oidc_initiation_url`: `${TOOL_URL}/lti/login`
 - `target_link_uri`: `${TOOL_URL}/lti/launch`
 - `public_jwk_url`: `${TOOL_URL}/.well-known/jwks.json`
+- `extensions[0].privacy_level`: `public`
 - Course Navigation placement
 - Assignment Selection deep-linking placement
+- Tool-level and Course Navigation `custom_fields.canvas_course_id`: `$Canvas.course.id`
+- Tool-level and Course Navigation `custom_fields.canvas_user_id`: `$Canvas.user.id`
 - `custom_fields.canvas_membership_roles`: `$Canvas.membership.roles`
 - `custom_fields.canvas_lis_membership_roles`: `$com.Instructure.membership.roles`
 - `custom_fields.canvas_membership_permissions`: `$Canvas.membership.permissions<...>`
+
+After changing `${TOOL_URL}/lti/config`, update and save the existing Canvas LTI Developer Key from that URL. Deploying the service does not by itself rewrite the configuration Canvas stored when the key was created. Confirm a fresh launch contains a numeric `canvas_user_id`; anonymous launches intentionally fail closed before Canvas API OAuth. If Canvas requires recreating and reinstalling the key, record the new Deployment ID and update `LTI_DEPLOYMENT_ID` before relaunching the tool.
 
 ## Install the App for the Entire School
 
@@ -134,7 +139,7 @@ Use this path for the normal school setup.
 8. Select `Submit`.
 9. Review the app confirmation screen and select `Install`.
 10. Confirm `Safe Exam Browser Canvas Integration` appears on the External Apps page.
-11. Open the app settings menu and record the `Deployment ID` for support records and optional `LTI_DEPLOYMENT_ID` enforcement.
+11. Open the app settings menu and record the `Deployment ID` for the required `LTI_DEPLOYMENT_ID` secret.
 
 If Canvas says the client ID is not found, verify that the LTI Developer Key exists in the same Canvas root account and is enabled.
 
@@ -152,7 +157,7 @@ Use this path only for a pilot or a course-specific install.
 8. Select `Submit`.
 9. Review the app confirmation screen and select `Install`.
 10. Confirm the app appears in that course's External Apps list.
-11. Open the app settings menu and record the `Deployment ID` if you want deployment ID enforcement for the pilot.
+11. Open the app settings menu and record the `Deployment ID` for the required `LTI_DEPLOYMENT_ID` secret.
 
 If the course UI does not show the app configuration controls, the user's course or account role does not have permission to manually configure external apps. Use the account-wide install or ask a Canvas root-account admin to enable the role permission.
 
@@ -163,29 +168,18 @@ After recording the Canvas values, update the existing secrets created during de
 ```bash
 export CANVAS_DOMAIN="https://school.instructure.com"
 export LTI_CLIENT_ID="REPLACE_WITH_CANVAS_LTI_CLIENT_ID"
+export LTI_DEPLOYMENT_ID="REPLACE_WITH_CANVAS_DEPLOYMENT_ID"
 export CANVAS_API_CLIENT_ID="REPLACE_WITH_CANVAS_API_CLIENT_ID"
 export CANVAS_API_CLIENT_SECRET="REPLACE_WITH_CANVAS_API_CLIENT_SECRET"
 
 printf '%s' "${CANVAS_DOMAIN}" | gcloud secrets versions add "${SECRET_PREFIX}_canvas_domain" --data-file=-
 printf '%s' "${LTI_CLIENT_ID}" | gcloud secrets versions add "${SECRET_PREFIX}_lti_client_id" --data-file=-
+printf '%s' "${LTI_DEPLOYMENT_ID}" | gcloud secrets versions add "${SECRET_PREFIX}_lti_deployment_id" --data-file=-
 printf '%s' "${CANVAS_API_CLIENT_ID}" | gcloud secrets versions add "${SECRET_PREFIX}_api_client_id" --data-file=-
 printf '%s' "${CANVAS_API_CLIENT_SECRET}" | gcloud secrets versions add "${SECRET_PREFIX}_api_client_secret" --data-file=-
 ```
 
-If using deployment ID enforcement:
-
-```bash
-export LTI_DEPLOYMENT_ID="REPLACE_WITH_CANVAS_DEPLOYMENT_ID"
-printf '%s' "${LTI_DEPLOYMENT_ID}" | gcloud secrets create "${SECRET_PREFIX}_lti_deployment_id" --replication-policy=automatic --data-file=-
-```
-
-If the deployment ID secret already exists, add a new version instead:
-
-```bash
-printf '%s' "${LTI_DEPLOYMENT_ID}" | gcloud secrets versions add "${SECRET_PREFIX}_lti_deployment_id" --data-file=-
-```
-
-Then redeploy Cloud Run so the service receives the latest Secret Manager versions. If you are enforcing `LTI_DEPLOYMENT_ID`, also follow the optional deployment ID note in [school-deployment.md](school-deployment.md) so future Cloud Build deploys keep that secret mounted.
+The portable bootstrap creates this deployment-ID secret with a placeholder so the first service revision can start. Replace that placeholder before testing any launch. Then redeploy Cloud Run so the service receives the latest Secret Manager versions; the maintained and school Cloud Build configs always mount this secret.
 
 ## Add the Detector Script to a Canvas Theme
 
@@ -221,6 +215,8 @@ Create a small JavaScript file, for example `canvas-seb-theme-loader.js`:
 ```
 
 Replace `${TOOL_URL}` with the deployed Cloud Run service URL before uploading the file to Canvas.
+
+The Classic Quiz detector deliberately needs to load only on `/take`. It submits the final Canvas form from that page and requires Canvas's response to contain the exact completed-attempt structure before opening the SEB exit page, so the loader does not need to run on the post-submit quiz-detail page.
 
 For a course-limited pilot, replace the path pattern with the specific course ID:
 
@@ -260,11 +256,11 @@ After installing the LTI app and applying the theme:
 6. Enable SEB for a Classic Quiz or New Quiz.
 7. Open the quiz-taking page in a normal browser and confirm the browser console loads `${TOOL_URL}/js/canvas-seb-detector.js`.
 8. Download the generated `.seb` file from the app.
-9. Open the quiz through SEB and confirm the access-code field is filled only after SEB launches with the generated configuration.
-10. For a New Quiz, confirm Canvas moves from `/assignments/:assignmentId/taking/:attemptId` to `/taking/:attemptId/take` after access-code validation.
-11. Select the first New Quiz Submit control and confirm SEB stays on Canvas while the confirmation dialog is open.
-12. Cancel once and confirm the quiz remains open, then submit again and confirm the SEB exit page opens only after Canvas renders the assessment results.
-13. Confirm the exit route closes SEB.
+9. Open the quiz through SEB and confirm the access-code field is filled only after SEB launches with the generated configuration. Confirm the Exam tools sidebar is not shown on this access-code gate.
+10. For a New Quiz, confirm Canvas moves from `/assignments/:assignmentId/taking/:attemptId` to `/taking/:attemptId/take` after access-code validation. For both quiz types, confirm the approved Exam tools sidebar appears immediately on the active quiz-taking page and never on an attempt-history page.
+11. For both quiz types, cancel the final Canvas confirmation once and confirm the quiz remains open without a submission request or exit redirect.
+12. Submit again. For a Classic Quiz, confirm the detector waits for Canvas's completed-attempt response; for a New Quiz, confirm it waits for Canvas's authoritative results UI. In both cases, the SEB exit page must open only after that confirmation.
+13. Confirm the validated exit page shows a two-second countdown and closes SEB without an additional SEB warning or native quit-password prompt. Confirm its button closes SEB immediately, and that native quit before submission still requires the configured password.
 
 Useful service checks:
 

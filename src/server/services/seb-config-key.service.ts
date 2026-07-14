@@ -24,7 +24,7 @@ export class SebConfigKeyService {
     if (!providedHash || !url || !storedConfigKey) {
       return false;
     }
-    const candidates = [storedConfigKey, this.hashForUrl(url, storedConfigKey)];
+    const candidates = [this.hashForUrl(url, storedConfigKey)];
     const querylessUrl = stripQueryAndFragment(url);
     if (querylessUrl !== stripFragment(url)) {
       candidates.push(this.hashForUrl(querylessUrl, storedConfigKey));

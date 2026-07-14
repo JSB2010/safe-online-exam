@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 OUT_DIR="${1:-.local/seb-certs}"
 NAME="${SEB_CERT_NAME:-seb-config-encryption-local}"
-P12_PASSWORD="${SEB_CERT_P12_PASSWORD:-seb-local-test}"
+P12_PASSWORD_FILE="${SEB_CERT_P12_PASSWORD_FILE:-${2:-}}"
 SUBJECT="${SEB_CERT_SUBJECT:-/CN=SEB Canvas LTI Local Config Encryption/O=Local Development}"
 DAYS="${SEB_CERT_DAYS:-3650}"
+
+if [[ -z "$P12_PASSWORD_FILE" || ! -f "$P12_PASSWORD_FILE" || ! -s "$P12_PASSWORD_FILE" ]]; then
+  echo "Set SEB_CERT_P12_PASSWORD_FILE or pass a non-empty admin-readable password file as argument 2." >&2
+  exit 64
+fi
 
 mkdir -p "$OUT_DIR"
 
@@ -46,7 +52,7 @@ openssl pkcs12 \
   -in "$CERT_PATH" \
   -name "$NAME" \
   -out "$P12_PATH" \
-  -passout "pass:$P12_PASSWORD" \
+  -passout "file:$P12_PASSWORD_FILE" \
   -keypbe PBE-SHA1-3DES \
   -certpbe PBE-SHA1-3DES \
   -macalg sha1
@@ -66,16 +72,10 @@ Use this app env for local testing:
   SEB_CONFIG_ENCRYPTION_ENABLED=true
   SEB_CONFIG_ENCRYPTION_CERT_PATH=$CERT_PATH
 
-Import this into your macOS login keychain for SEB testing:
-
-  security import "$P12_PATH" \\
-    -k ~/Library/Keychains/login.keychain-db \\
-    -P "$P12_PASSWORD" \\
-    -x \\
-    -T "/Applications/Safe Exam Browser.app"
-
-The -x flag imports the private key as non-extractable on this Mac.
-The -T flag pre-authorizes Safe Exam Browser to use the private key.
+Deploy this identity with an MDM Certificates payload configured with
+KeyIsExtractable=false and AllowAllAppsAccess=false, or use an authorized
+technician workflow. Do not pass PKCS#12 or keychain passwords in script
+arguments, environment values, or process command lines.
 
 The .p12 contains the private key. Do not publish it.
 EOF

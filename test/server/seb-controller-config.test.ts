@@ -18,109 +18,129 @@ const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).
 
 describe("SEB config downloads", () => {
   it("uses canonical Canvas quiz URLs instead of student-specific canvas_url query values", async () => {
-    await withConfig(async () => {
-      const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
-      const controller = new SebController(
-        new AppConfig(),
-        {} as any,
-        {} as any,
-        {
-          getSebSettingForQuiz: async () => ({
-            quizId: "23455",
-            courseId: "11825",
-            sebRequired: true,
-            enabled: true,
-            accessCode: "ACCESS-CODE",
-            ssoDomains: [],
-            educationalToolDomains: [],
-            customDomains: [],
-            externalTools: []
-          }),
-          getQuiz: async () => ({
-            id: "23455",
-            courseId: "11825",
-            title: "Midterm",
-            htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455?module_item_id=44`
-          }),
-          saveQuizConfigKeyIfUnchanged: saveConfigKey
-        } as any,
-        {} as any,
-        new SebConfigurationService(new AppConfig()),
-        new SebConfigKeyService(),
-        proofService()
-      );
+    await withConfig(
+      async () => {
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi
+          .spyOn(sebConfig, "prepareSebConfigurationDownload")
+          .mockImplementation((plaintext) => plaintext);
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {
+            isAssessmentAvailableForLearner: async () => true,
+            getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
+            getSebSettingForQuiz: async () => ({
+              quizId: "23455",
+              courseId: "11825",
+              sebRequired: true,
+              enabled: true,
+              accessCode: "ACCESS-CODE",
+              ssoDomains: [],
+              educationalToolDomains: [],
+              customDomains: [],
+              externalTools: []
+            }),
+            getQuiz: async () => ({
+              id: "23455",
+              courseId: "11825",
+              title: "Midterm",
+              htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455?module_item_id=44`
+            })
+          } as any,
+          {} as any,
+          sebConfig,
+          new SebConfigKeyService(),
+          proofService(),
+          configGrantDouble(),
+          admissionDouble()
+        );
 
-      const generated = await downloadConfig(
-        controller,
-        `${CANVAS_URL}/courses/11825/quizzes/23455/take?user_id=7288&attempt=1`
-      );
-      const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
+        const generated = await downloadConfig(
+          controller,
+          `${CANVAS_URL}/courses/11825/quizzes/23455/take?user_id=7288&attempt=1`
+        );
+        const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
 
-      expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
-      expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
-      expect(saveConfigKey).toHaveBeenCalledWith(
-        expect.objectContaining({ quizId: "23455" }),
-        new SebConfigKeyService().computeConfigKey(generated)
-      );
-    });
+        expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+        expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+        expect(prepareDownload).toHaveBeenCalledWith(generated, {
+          startPassword: undefined,
+          requireCertificateEncryption: true
+        });
+      },
+      { encryptionEnabled: true }
+    );
   });
 
   it("uses stable Canvas assignment entry URLs for New Quiz configs", async () => {
-    await withConfig(async () => {
-      const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
-      const controller = new SebController(
-        new AppConfig(),
-        {} as any,
-        {} as any,
-        {
-          getContentSebSetting: async () => ({
-            contentId: "newquiz:11825:991",
-            courseId: "11825",
-            assignmentId: "991",
-            canvasId: "991",
-            htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991?module_item_id=44`,
-            sebRequired: true,
-            enabled: true,
-            accessCode: "ACCESS-CODE",
-            ssoDomains: [],
-            educationalToolDomains: [],
-            customDomains: [],
-            externalTools: []
-          }),
-          getContentItem: async () => ({
-            id: "newquiz:11825:991",
-            courseId: "11825",
-            canvasId: "991",
-            assignmentId: "991",
-            contentType: "NEW_QUIZ",
-            title: "New Quiz",
-            htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991/taking/8888/take?module_item_id=44`
-          }),
-          saveContentConfigKeyIfUnchanged: saveConfigKey
-        } as any,
-        {} as any,
-        new SebConfigurationService(new AppConfig()),
-        new SebConfigKeyService(),
-        proofService()
-      );
+    await withConfig(
+      async () => {
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi
+          .spyOn(sebConfig, "prepareSebConfigurationDownload")
+          .mockImplementation((plaintext) => plaintext);
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {
+            isAssessmentAvailableForLearner: async () => true,
+            getAssessmentRecord: async () => assessmentRecord("newquiz:11825:991", "NEW_QUIZ"),
+            getContentSebSetting: async () => ({
+              contentId: "newquiz:11825:991",
+              courseId: "11825",
+              assignmentId: "991",
+              canvasId: "991",
+              htmlUrl: `${CANVAS_URL}/courses/11825/assignments/991?module_item_id=44`,
+              sebRequired: true,
+              enabled: true,
+              accessCode: "ACCESS-CODE",
+              ssoDomains: [],
+              educationalToolDomains: [],
+              customDomains: [],
+              externalTools: []
+            }),
+            getContentItem: async () => ({
+              id: "newquiz:11825:991",
+              courseId: "11825",
+              canvasId: "991",
+              assignmentId: "991",
+              contentType: "NEW_QUIZ",
+              title: "New Quiz",
+              // A stale or poisoned cached URL must not override the assessment's
+              // signed course and canonical assignment identifiers.
+              htmlUrl: `${CANVAS_URL}/courses/99999/assignments/777/taking/8888/take?module_item_id=44`
+            })
+          } as any,
+          {} as any,
+          sebConfig,
+          new SebConfigKeyService(),
+          proofService(),
+          configGrantDouble(),
+          admissionDouble()
+        );
 
-      const generated = await downloadConfig(
-        controller,
-        `${CANVAS_URL}/courses/11825/assignments/991/taking/31299/take`,
-        "newquiz:11825:991"
-      );
-      const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
+        const generated = await downloadConfig(
+          controller,
+          `${CANVAS_URL}/courses/11825/assignments/991/taking/31299/take`,
+          "newquiz:11825:991"
+        );
+        const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
 
-      expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
-      expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
-      expect(saveConfigKey).toHaveBeenCalledWith(
-        expect.objectContaining({ contentId: "newquiz:11825:991" }),
-        new SebConfigKeyService().computeConfigKey(generated)
-      );
-    });
+        expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
+        expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
+        expect(prepareDownload).toHaveBeenCalledWith(generated, {
+          startPassword: undefined,
+          requireCertificateEncryption: true
+        });
+      },
+      { encryptionEnabled: true }
+    );
   });
 
-  it("encrypts downloaded configs while saving Config Keys from plaintext settings", async () => {
+  it("encrypts downloaded assessment configs without persisting a replayable Config Key", async () => {
     await withConfig(
       async () => {
         const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
@@ -129,6 +149,8 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isAssessmentAvailableForLearner: async () => true,
+            getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
             getSebSettingForQuiz: async () => ({
               quizId: "23455",
               courseId: "11825",
@@ -151,7 +173,9 @@ describe("SEB config downloads", () => {
           {} as any,
           new SebConfigurationService(new AppConfig()),
           new SebConfigKeyService(),
-          proofService()
+          proofService(),
+          configGrantDouble(),
+          admissionDouble()
         );
 
         const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
@@ -167,70 +191,273 @@ describe("SEB config downloads", () => {
 
         expect(unzipped.subarray(0, 4).toString("utf8")).toBe("pkhs");
         expect(downloaded.toString("utf8")).not.toContain("<plist");
-        expect(saveConfigKey).toHaveBeenCalledWith(
-          expect.objectContaining({ quizId: "23455" }),
-          new SebConfigKeyService().computeConfigKey(plaintext)
+        expect(new SebConfigKeyService().computeConfigKey(plaintext)).toMatch(/^[a-f0-9]{64}$/u);
+        expect(saveConfigKey).not.toHaveBeenCalled();
+      },
+      { encryptionEnabled: true }
+    );
+  });
+
+  it("keeps start-password settings inside the certificate-encrypted assessment download", async () => {
+    await withConfig(
+      async () => {
+        const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
+        const configKeySalt = Buffer.alloc(32, 9).toString("base64");
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi.spyOn(sebConfig, "prepareSebConfigurationDownload");
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {
+            isAssessmentAvailableForLearner: async () => true,
+            getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
+            getSebSettingForQuiz: async () => ({
+              quizId: "23455",
+              courseId: "11825",
+              sebRequired: true,
+              enabled: true,
+              accessCode: "ACCESS-CODE",
+              startPassword: "unique-start-passphrase",
+              configKeySalt,
+              ssoDomains: [],
+              educationalToolDomains: [],
+              customDomains: [],
+              externalTools: []
+            }),
+            getQuiz: async () => ({
+              id: "23455",
+              courseId: "11825",
+              title: "Midterm",
+              htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
+            }),
+            saveQuizConfigKeyIfUnchanged: saveConfigKey
+          } as any,
+          {} as any,
+          sebConfig,
+          new SebConfigKeyService(),
+          proofService(),
+          configGrantDouble(),
+          admissionDouble()
+        );
+
+        const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+        const wrapped = gunzipSync(downloaded);
+
+        expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pkhs");
+        expect(downloaded.toString("utf8")).not.toContain("unique-start-passphrase");
+        expect(prepareDownload).toHaveBeenCalledWith(expect.any(Buffer), {
+          startPassword: "unique-start-passphrase",
+          requireCertificateEncryption: true
+        });
+        expect(saveConfigKey).not.toHaveBeenCalled();
+      },
+      { encryptionEnabled: true }
+    );
+  });
+
+  it("fails closed when assessment certificate encryption is disabled", async () => {
+    await withConfig(async () => {
+      const controller = classicController(new SebConfigurationService(new AppConfig()));
+      const response = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+
+      expect(response.status).toHaveBeenCalledWith(400);
+      expect(response.sent).toBe(
+        "Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings."
+      );
+    });
+  });
+
+  it("rejects a config download when the assessment is owned by another course", async () => {
+    await withConfig(
+      async () => {
+        const controller = classicController(new SebConfigurationService(new AppConfig()), "different-course");
+        const response = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+
+        expect(response.status).toHaveBeenCalledWith(400);
+        expect(response.sent).toBe(
+          "Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings."
         );
       },
       { encryptionEnabled: true }
     );
   });
 
-  it("password-protects downloads while saving Config Keys from salted plaintext settings", async () => {
-    await withConfig(async () => {
-      const saveConfigKey = vi.fn(async (setting, configKey) => ({ ...setting, configKey }));
-      const configKeySalt = Buffer.alloc(32, 9).toString("base64");
-      const controller = new SebController(
-        new AppConfig(),
-        {} as any,
-        {} as any,
-        {
-          getSebSettingForQuiz: async () => ({
-            quizId: "23455",
-            courseId: "11825",
-            sebRequired: true,
-            enabled: true,
-            accessCode: "ACCESS-CODE",
-            startPassword: "exam-start",
-            configKeySalt,
-            ssoDomains: [],
-            educationalToolDomains: [],
-            customDomains: [],
-            externalTools: []
-          }),
-          getQuiz: async () => ({
-            id: "23455",
-            courseId: "11825",
-            title: "Midterm",
-            htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
-          }),
-          saveQuizConfigKeyIfUnchanged: saveConfigKey
-        } as any,
-        {} as any,
-        new SebConfigurationService(new AppConfig()),
-        new SebConfigKeyService(),
-        proofService()
-      );
+  it("single-flights concurrent grants when a persisted start-password salt is stable", async () => {
+    await withConfig(
+      async () => {
+        const configKeySalt = Buffer.alloc(32, 7).toString("base64");
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi
+          .spyOn(sebConfig, "prepareSebConfigurationDownload")
+          .mockImplementation((plaintext) => plaintext);
+        const readinessCheck = vi.spyOn(sebConfig, "assertConfigurationDownloadReady");
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {
+            isAssessmentAvailableForLearner: async () => true,
+            getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
+            getSebSettingForQuiz: async () => ({
+              quizId: "23455",
+              courseId: "11825",
+              sebRequired: true,
+              enabled: true,
+              accessCode: "ACCESS-CODE",
+              startPassword: "unique-start-passphrase",
+              configKeySalt,
+              ssoDomains: [],
+              educationalToolDomains: [],
+              customDomains: [],
+              urlRules: [],
+              externalTools: []
+            }),
+            getQuiz: async () => ({ id: "23455", courseId: "11825", title: "Midterm" })
+          } as any,
+          {} as any,
+          sebConfig,
+          new SebConfigKeyService(),
+          proofService(),
+          configGrantDouble(),
+          admissionDouble()
+        );
 
-      const downloaded = await downloadConfig(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
-      const wrapped = gunzipSync(downloaded);
-      const plaintext = new SebConfigurationService(new AppConfig()).generateSebConfiguration({
-        courseId: "11825",
-        contentId: "classicquiz_23455",
-        startUrl: `${CANVAS_URL}/courses/11825/quizzes/23455/take`,
-        accessCode: "ACCESS-CODE",
-        allowedDomains: [],
-        quitPassword: undefined,
-        startPassword: "exam-start",
-        configKeySalt
-      });
+        const [first, second] = await Promise.all([
+          downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`),
+          downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`)
+        ]);
 
-      expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pswd");
-      expect(saveConfigKey).toHaveBeenCalledWith(
-        expect.objectContaining({ quizId: "23455" }),
-        new SebConfigKeyService().computeConfigKey(plaintext)
-      );
-    });
+        expect(first.sent).toBeInstanceOf(Buffer);
+        expect(second.sent).toBeInstanceOf(Buffer);
+        expect(prepareDownload).toHaveBeenCalledTimes(1);
+        expect(readinessCheck).toHaveBeenCalledTimes(2);
+      },
+      { encryptionEnabled: true }
+    );
+  });
+
+  it("rechecks encryption readiness before serving cached assessment bytes", async () => {
+    await withConfig(
+      async () => {
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi
+          .spyOn(sebConfig, "prepareSebConfigurationDownload")
+          .mockImplementation((plaintext) => plaintext);
+        const readinessCheck = vi
+          .spyOn(sebConfig, "assertConfigurationDownloadReady")
+          .mockImplementationOnce(() => undefined)
+          .mockImplementationOnce(() => {
+            throw new Error("SEB config encryption certificate has expired");
+          });
+        const controller = classicController(sebConfig);
+
+        const first = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+        const second = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+
+        expect(first.sent).toBeInstanceOf(Buffer);
+        expect(second.status).toHaveBeenCalledWith(400);
+        expect(second.sent).toBe(
+          "Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings."
+        );
+        expect(prepareDownload).toHaveBeenCalledTimes(1);
+        expect(readinessCheck).toHaveBeenCalledTimes(2);
+      },
+      { encryptionEnabled: true }
+    );
+  });
+
+  it("rejects anonymous config downloads before any expensive configuration work", async () => {
+    await withConfig(
+      async () => {
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi.spyOn(sebConfig, "prepareSebConfigurationDownload");
+        const controller = classicController(sebConfig);
+        let sent: unknown;
+        const response = {
+          status: vi.fn(() => response),
+          type: vi.fn(() => response),
+          setHeader: vi.fn(() => response),
+          send: vi.fn((body: unknown) => {
+            sent = body;
+            return response;
+          })
+        } as any;
+
+        await controller.downloadConfig(
+          {
+            ip: "192.0.2.44",
+            socket: { remoteAddress: "192.0.2.44" },
+            header: () => undefined
+          } as any,
+          response,
+          "11825",
+          "classicquiz_23455",
+          undefined
+        );
+
+        expect(response.status).toHaveBeenCalledWith(403);
+        expect(sent).toBe("Invalid or expired configuration grant");
+        expect(prepareDownload).not.toHaveBeenCalled();
+      },
+      { encryptionEnabled: true }
+    );
+  });
+
+  it("rejects a grant after the assessment settings fingerprint changes", async () => {
+    await withConfig(
+      async () => {
+        const setting = {
+          quizId: "23455",
+          courseId: "11825",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS-ONE",
+          ssoDomains: [],
+          educationalToolDomains: [],
+          customDomains: [],
+          urlRules: [],
+          externalTools: []
+        };
+        const sebConfig = new SebConfigurationService(new AppConfig());
+        const prepareDownload = vi.spyOn(sebConfig, "prepareSebConfigurationDownload");
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {
+            isAssessmentAvailableForLearner: async () => true,
+            getSebSettingForQuiz: async () => setting,
+            getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
+            getQuiz: async () => ({ id: "23455", courseId: "11825", title: "Midterm" })
+          } as any,
+          {} as any,
+          sebConfig,
+          new SebConfigKeyService(),
+          proofService(),
+          configGrantDouble(),
+          admissionDouble()
+        );
+        const request = authenticatedRequest();
+        const target = await (controller as any).resolveConfigGrantTarget("11825", "23455");
+        const grant = await (controller as any).configGrants.mintGrant(
+          request,
+          request.session.verifiedLtiPrincipal,
+          "11825",
+          target.canonicalContentId,
+          target.settingsFingerprint
+        );
+        setting.accessCode = "ACCESS-TWO";
+        const response = responseDouble();
+
+        await controller.downloadConfig(request, response as any, "11825", "classicquiz_23455", grant);
+
+        expect(response.status).toHaveBeenCalledWith(403);
+        expect(response.send).toHaveBeenCalledWith("Invalid or expired configuration grant");
+        expect(prepareDownload).not.toHaveBeenCalled();
+      },
+      { encryptionEnabled: true }
+    );
   });
 });
 
@@ -238,11 +465,84 @@ function proofService(): SebAccessProofService {
   return new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
 }
 
+function configGrantDouble() {
+  return {
+    mintGrant: vi.fn(async (_request, _principal, _courseId, _contentId, settingsFingerprint) =>
+      String(settingsFingerprint)
+    ),
+    consumeGrant: vi.fn(async (token, courseId, contentId) =>
+      token
+        ? {
+            issuer: "https://canvas.example.edu",
+            deploymentId: "deployment-1",
+            subject: "opaque-student-1",
+            courseId,
+            contentId,
+            settingsFingerprint: token
+          }
+        : null
+    )
+  } as any;
+}
+
+function admissionDouble() {
+  return { consumeRequestIp: vi.fn().mockResolvedValue(true) } as any;
+}
+
+function authenticatedRequest(): any {
+  return {
+    ip: "192.0.2.15",
+    socket: { remoteAddress: "192.0.2.15" },
+    protocol: "https",
+    hostname: "tool.example.edu",
+    originalUrl: "/seb/launch/classicquiz_23455",
+    sessionID: "session-1",
+    session: {
+      verifiedLtiPrincipal: {
+        version: 1,
+        issuer: "https://canvas.example.edu",
+        deploymentId: "deployment-1",
+        subject: "opaque-student-1",
+        canvasUserId: "student-1",
+        courseId: "11825",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+        custom: {},
+        authenticatedAt: "2026-01-01T00:00:00.000Z"
+      }
+    },
+    get: (name: string) => (name.toLowerCase() === "host" ? "tool.example.edu" : undefined),
+    header: () => undefined
+  };
+}
+
+function responseDouble(): any {
+  const response = {
+    status: vi.fn(),
+    type: vi.fn(),
+    setHeader: vi.fn(),
+    send: vi.fn()
+  };
+  response.status.mockReturnValue(response);
+  response.type.mockReturnValue(response);
+  response.setHeader.mockReturnValue(response);
+  return response;
+}
+
 async function downloadConfig(
   controller: SebController,
   canvasUrl: string,
   contentId = "classicquiz_23455"
 ): Promise<Buffer> {
+  const result = await downloadConfigResponse(controller, canvasUrl, contentId);
+  expect(result.sent).toBeInstanceOf(Buffer);
+  return result.sent as Buffer;
+}
+
+async function downloadConfigResponse(
+  controller: SebController,
+  _canvasUrl: string,
+  contentId = "classicquiz_23455"
+): Promise<{ sent: unknown; status: ReturnType<typeof vi.fn> }> {
   let sent: unknown;
   const response = {
     status: vi.fn(() => response),
@@ -253,9 +553,102 @@ async function downloadConfig(
       return response;
     })
   } as any;
-  await controller.downloadConfig(response, "11825", contentId, canvasUrl);
-  expect(sent).toBeInstanceOf(Buffer);
-  return sent as Buffer;
+  const request = {
+    ip: "192.0.2.15",
+    protocol: "https",
+    hostname: "tool.example.edu",
+    originalUrl: `/seb/config/11825/${contentId}.seb`,
+    get: (name: string) => (name.toLowerCase() === "host" ? "tool.example.edu" : undefined),
+    header: () => undefined
+  } as any;
+  const principal = {
+    version: 1,
+    issuer: "https://canvas.example.edu",
+    deploymentId: "deployment-1",
+    subject: "opaque-student-1",
+    canvasUserId: "student-1",
+    courseId: "11825",
+    roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+    custom: {},
+    authenticatedAt: "2026-01-01T00:00:00.000Z"
+  };
+  const authenticated = { ...request, sessionID: "session-1", session: { verifiedLtiPrincipal: principal } };
+  const target = await (controller as any).resolveConfigGrantTarget("11825", contentId);
+  const grant = await (controller as any).configGrants.mintGrant(
+    authenticated,
+    principal,
+    "11825",
+    target.canonicalContentId,
+    target.settingsFingerprint
+  );
+  await controller.downloadConfig(request, response, "11825", contentId, grant);
+  return { sent, status: response.status };
+}
+
+function classicController(sebConfig: SebConfigurationService, recordCourseId = "11825"): SebController {
+  return new SebController(
+    new AppConfig(),
+    {} as any,
+    {} as any,
+    {
+      isAssessmentAvailableForLearner: async () => true,
+      getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ", recordCourseId),
+      getSebSettingForQuiz: async () => ({
+        quizId: "23455",
+        courseId: "11825",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "ACCESS-CODE",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      }),
+      getQuiz: async () => ({
+        id: "23455",
+        courseId: "11825",
+        title: "Midterm",
+        htmlUrl: `${CANVAS_URL}/courses/11825/quizzes/23455`
+      })
+    } as any,
+    {} as any,
+    sebConfig,
+    new SebConfigKeyService(),
+    proofService(),
+    configGrantDouble(),
+    admissionDouble()
+  );
+}
+
+function assessmentRecord(
+  id: string,
+  contentType: "CLASSIC_QUIZ" | "NEW_QUIZ",
+  courseId = "11825"
+): Record<string, unknown> {
+  const canvasId = contentType === "CLASSIC_QUIZ" ? "23455" : "991";
+  return {
+    id,
+    courseId,
+    contentType,
+    canvas: {
+      id: canvasId,
+      ...(contentType === "CLASSIC_QUIZ" ? { quizId: canvasId } : { assignmentId: canvasId }),
+      title: contentType === "CLASSIC_QUIZ" ? "Midterm" : "New Quiz"
+    },
+    seb: {
+      required: true,
+      enabled: true,
+      accessCode: "ACCESS-CODE",
+      usesCourseDefaults: true,
+      quitPasswordOverride: false,
+      startPasswordOverride: false,
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      urlRules: [],
+      externalTools: []
+    }
+  };
 }
 
 async function withConfig(run: () => Promise<void>, options: { encryptionEnabled?: boolean } = {}): Promise<void> {
@@ -263,9 +656,11 @@ async function withConfig(run: () => Promise<void>, options: { encryptionEnabled
   const previousToolUrl = process.env.TOOL_URL;
   const previousEncryptionEnabled = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
   const previousPublicKeyPem = process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
+  const previousQuitPassword = process.env.SEB_QUIT_PASSWORD;
   process.env.CANVAS_BASE_URL = CANVAS_URL;
   process.env.TOOL_URL = TOOL_URL;
   process.env.SEB_CONFIG_ENCRYPTION_ENABLED = options.encryptionEnabled ? "true" : "false";
+  process.env.SEB_QUIT_PASSWORD = "managed-server-exit";
   if (options.encryptionEnabled) {
     process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM = TEST_PUBLIC_KEY_PEM;
   } else {
@@ -278,6 +673,7 @@ async function withConfig(run: () => Promise<void>, options: { encryptionEnabled
     restoreEnv("TOOL_URL", previousToolUrl);
     restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previousEncryptionEnabled);
     restoreEnv("SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM", previousPublicKeyPem);
+    restoreEnv("SEB_QUIT_PASSWORD", previousQuitPassword);
   }
 }
 

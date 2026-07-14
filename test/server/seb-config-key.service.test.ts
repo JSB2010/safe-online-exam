@@ -33,13 +33,13 @@ describe("SebConfigKeyService", () => {
     expect(service.validateConfigKeyHashForUrl(hash, "https://canvas.example.com/courses/1", key)).toBe(true);
   });
 
-  it("accepts direct SEB config keys exposed by the JavaScript security API", () => {
+  it("rejects raw Config Keys because proof must be bound to the requested URL", () => {
     const service = new SebConfigKeyService();
     const key = service.computeConfigKey(
       Buffer.from(plist.build({ startURL: "https://canvas.example.com/courses/1" }))
     );
 
-    expect(service.validateConfigKeyHashForUrl(key, "https://canvas.example.com/courses/1?user_id=7", key)).toBe(true);
+    expect(service.validateConfigKeyHashForUrl(key, "https://canvas.example.com/courses/1?user_id=7", key)).toBe(false);
   });
 
   it("accepts queryless URL hashes for Canvas quiz attempt URLs", () => {

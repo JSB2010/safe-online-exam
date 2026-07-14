@@ -439,6 +439,65 @@ p {
   font-size: 13px;
 }
 
+.saved-password-reveal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  color: #344054;
+  background: #f8fafc;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.saved-password-reveal > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.saved-password-reveal small {
+  color: #667085;
+}
+
+.saved-password-values {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.saved-password-value {
+  display: grid;
+  min-width: 140px;
+  gap: 1px;
+}
+
+.saved-password-value > span {
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.saved-password-value > strong,
+.saved-password-value > small {
+  font-size: 11px;
+}
+
+@media (max-width: 700px) {
+  .saved-password-reveal,
+  .saved-password-values {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .saved-password-value {
+    min-width: 0;
+  }
+}
+
 .dialog-backdrop {
   position: fixed;
   inset: 0;

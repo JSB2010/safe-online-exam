@@ -1,13 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LtiController } from "../../src/server/controllers/lti.controller.js";
+import {
+  createLtiOidcBrowserTransaction,
+  LTI_OIDC_BROWSER_BINDING_FIELD,
+  LTI_OIDC_TRANSACTION_ID_FIELD,
+  ltiOidcTransactionCookieName,
+  matchingLtiOidcBrowserTransactionCookie
+} from "../../src/server/security/lti-oidc-browser-binding.js";
+import type { VerifiedLtiPrincipal } from "../../src/server/security/verified-lti-principal.js";
 import { defaultCourseSebDefaults } from "../../src/shared/models.js";
 import type { LtiLaunchData } from "../../src/shared/models.js";
+
+const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
 describe("LtiController role routing", () => {
   let controller: LtiController;
   let canvasApi: { hasAccessToken: ReturnType<typeof vi.fn> };
   let ltiService: { validateToken: ReturnType<typeof vi.fn> };
-  let ltiState: { createState: ReturnType<typeof vi.fn>; consumeState: ReturnType<typeof vi.fn> };
+  let ltiState: {
+    createState: ReturnType<typeof vi.fn>;
+    peekState: ReturnType<typeof vi.fn>;
+    claimState: ReturnType<typeof vi.fn>;
+  };
+  let distributedAdmission: {
+    consumeLtiLoginIp: ReturnType<typeof vi.fn>;
+    consumeLtiValidationIp: ReturnType<typeof vi.fn>;
+    consumeLtiStateValidationAttempt: ReturnType<typeof vi.fn>;
+  };
   let assessments: {
     refreshCourseContent: ReturnType<typeof vi.fn>;
     getQuizzesForCourse: ReturnType<typeof vi.fn>;
@@ -15,14 +34,28 @@ describe("LtiController role routing", () => {
     getSebSettingForQuiz: ReturnType<typeof vi.fn>;
     getContentSebSetting: ReturnType<typeof vi.fn>;
     getQuiz: ReturnType<typeof vi.fn>;
+    isAssessmentAvailableForLearner: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     canvasApi = { hasAccessToken: vi.fn().mockResolvedValue(true) };
     ltiService = { validateToken: vi.fn() };
     ltiState = {
-      createState: vi.fn().mockReturnValue("encoded-state"),
-      consumeState: vi.fn().mockReturnValue({ nonce: "nonce-1" })
+      createState: vi.fn().mockResolvedValue("encoded-state"),
+      peekState: vi.fn().mockReturnValue({
+        nonce: "nonce-1",
+        issuer: "https://canvas.example.test",
+        deploymentId: "deployment-1",
+        targetLinkUri: "https://tool.example.test/lti/launch",
+        [LTI_OIDC_TRANSACTION_ID_FIELD]: BROWSER_TRANSACTION.transactionId,
+        [LTI_OIDC_BROWSER_BINDING_FIELD]: BROWSER_TRANSACTION.bindingHash
+      }),
+      claimState: vi.fn().mockResolvedValue(undefined)
+    };
+    distributedAdmission = {
+      consumeLtiLoginIp: vi.fn().mockResolvedValue(true),
+      consumeLtiValidationIp: vi.fn().mockResolvedValue(true),
+      consumeLtiStateValidationAttempt: vi.fn().mockResolvedValue(true)
     };
     assessments = {
       refreshCourseContent: vi.fn().mockResolvedValue({ classicQuizzes: [], contentItems: [] }),
@@ -30,7 +63,8 @@ describe("LtiController role routing", () => {
       getCachedContentForCourse: vi.fn().mockResolvedValue([]),
       getSebSettingForQuiz: vi.fn().mockResolvedValue(null),
       getContentSebSetting: vi.fn().mockResolvedValue(null),
-      getQuiz: vi.fn().mockResolvedValue(null)
+      getQuiz: vi.fn().mockResolvedValue(null),
+      isAssessmentAvailableForLearner: vi.fn().mockResolvedValue(true)
     };
     controller = new LtiController(
       {
@@ -39,9 +73,12 @@ describe("LtiController role routing", () => {
         value: {
           lti: {
             authUrl: "https://canvas.example.test/api/lti/authorize_redirect",
-            clientId: "client-1"
+            clientId: "client-1",
+            issuer: "https://canvas.example.test",
+            deploymentId: "deployment-1"
           },
-          security: { sessionSecret: "test-secret" }
+          security: { sessionSecret: "test-secret" },
+          seb: { defaultQuitPassword: "managed-server-exit" }
         }
       } as any,
       ltiService as any,
@@ -51,7 +88,8 @@ describe("LtiController role routing", () => {
       {
         getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults("course-1"))
       } as any,
-      { isRequestFromSeb: vi.fn().mockReturnValue(false) } as any
+      { isRequestFromSeb: vi.fn().mockReturnValue(false) } as any,
+      distributedAdmission as any
     );
   });
 
@@ -95,7 +133,118 @@ describe("LtiController role routing", () => {
     expect(redirectUrl.searchParams.get("state")).toBe("encoded-state");
     expect(redirectUrl.searchParams.get("nonce")).toMatch(/[0-9a-f-]{36}/u);
     expect(redirectUrl.searchParams.get("lti_message_hint")).toBe("message-hint");
-    expect(request.session.target_link_uri).toBe("https://tool.example.test/lti/launch");
+    expect(ltiState.createState).toHaveBeenCalledWith({
+      nonce: expect.any(String),
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      issuer: "https://canvas.example.test",
+      deploymentId: "deployment-1",
+      [LTI_OIDC_TRANSACTION_ID_FIELD]: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/u),
+      [LTI_OIDC_BROWSER_BINDING_FIELD]: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u)
+    });
+    const issuedState = ltiState.createState.mock.calls[0][0] as Record<string, string>;
+    const [cookieName, cookieValue, cookieOptions] = response.cookie.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>
+    ];
+    expect(cookieName).toBe(ltiOidcTransactionCookieName(issuedState[LTI_OIDC_TRANSACTION_ID_FIELD]));
+    expect(cookieValue).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(cookieOptions).toEqual({
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      path: "/",
+      maxAge: 600_000
+    });
+    expect(
+      matchingLtiOidcBrowserTransactionCookie({ cookies: { [cookieName]: cookieValue } } as any, issuedState)
+    ).toBe(cookieName);
+  });
+
+  it("overwrites one fixed transaction cookie across repeated login initiations", async () => {
+    const loginRequest = {
+      query: {
+        iss: "https://canvas.example.test",
+        login_hint: "hint-1",
+        target_link_uri: "https://tool.example.test/lti/launch",
+        lti_deployment_id: "deployment-1"
+      },
+      session: {}
+    } as any;
+    const firstResponse = responseDouble();
+    const secondResponse = responseDouble();
+
+    await controller.loginGet(loginRequest, firstResponse);
+    await controller.loginGet(loginRequest, secondResponse);
+
+    const [firstCookieName, firstCookieValue] = firstResponse.cookie.mock.calls[0] as [string, string];
+    const [secondCookieName, secondCookieValue] = secondResponse.cookie.mock.calls[0] as [string, string];
+    const firstState = ltiState.createState.mock.calls[0][0] as Record<string, string>;
+    const secondState = ltiState.createState.mock.calls[1][0] as Record<string, string>;
+    const cookiesAfterSecondLogin = { [secondCookieName]: secondCookieValue };
+
+    expect(firstCookieName).toBe("__Host-seb-lti-oidc");
+    expect(secondCookieName).toBe(firstCookieName);
+    expect(secondCookieValue).not.toBe(firstCookieValue);
+    expect(matchingLtiOidcBrowserTransactionCookie({ cookies: cookiesAfterSecondLogin } as any, firstState)).toBeNull();
+    expect(matchingLtiOidcBrowserTransactionCookie({ cookies: cookiesAfterSecondLogin } as any, secondState)).toBe(
+      secondCookieName
+    );
+  });
+
+  it("rejects OIDC login attempts for an unconfigured deployment or attacker target URI", async () => {
+    const response = responseDouble();
+    const request = {
+      query: {
+        iss: "https://canvas.example.test",
+        login_hint: "hint-1",
+        target_link_uri: "https://attacker.example/lti/launch",
+        lti_deployment_id: "attacker-deployment"
+      },
+      session: {}
+    } as any;
+
+    await controller.loginGet(request, response);
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Invalid LTI platform or target"));
+    expect(ltiState.createState).not.toHaveBeenCalled();
+  });
+
+  it("bounds public login envelopes and applies distributed admission before issuing state", async () => {
+    const oversizedResponse = responseDouble();
+    await controller.loginGet(
+      {
+        query: {
+          iss: "https://canvas.example.test",
+          login_hint: "x".repeat(4_097),
+          target_link_uri: "https://tool.example.test/lti/launch",
+          lti_deployment_id: "deployment-1"
+        }
+      } as any,
+      oversizedResponse
+    );
+
+    expect(oversizedResponse.status).toHaveBeenCalledWith(400);
+    expect(distributedAdmission.consumeLtiLoginIp).not.toHaveBeenCalled();
+    expect(ltiState.createState).not.toHaveBeenCalled();
+
+    distributedAdmission.consumeLtiLoginIp.mockResolvedValue(false);
+    const limitedResponse = responseDouble();
+    await controller.loginGet(
+      {
+        query: {
+          iss: "https://canvas.example.test",
+          login_hint: "hint-1",
+          target_link_uri: "https://tool.example.test/lti/launch",
+          lti_deployment_id: "deployment-1"
+        }
+      } as any,
+      limitedResponse
+    );
+
+    expect(limitedResponse.status).toHaveBeenCalledWith(429);
+    expect(ltiState.createState).not.toHaveBeenCalled();
   });
 
   it("rejects malformed OIDC login and launch requests with fallback HTML", async () => {
@@ -119,37 +268,291 @@ describe("LtiController role routing", () => {
   });
 
   it("returns Canvas LTI dynamic registration metadata", () => {
-    expect(controller.ltiConfig()).toMatchObject({
+    const metadata = controller.ltiConfig();
+    expect(metadata).toMatchObject({
       title: "Safe Exam Browser Canvas Integration",
       oidc_initiation_url: "https://tool.example.test/lti/login",
       target_link_uri: "https://tool.example.test/lti/launch",
       public_jwk_url: "https://tool.example.test/.well-known/jwks.json",
       extensions: [
         expect.objectContaining({
-          platform: "canvas.instructure.com"
+          platform: "canvas.instructure.com",
+          privacy_level: "public",
+          settings: expect.objectContaining({
+            placements: [
+              expect.objectContaining({
+                placement: "course_navigation",
+                visibility: "members",
+                default: "enabled",
+                enabled: true,
+                custom_fields: expect.objectContaining({
+                  canvas_course_id: "$Canvas.course.id",
+                  canvas_user_id: "$Canvas.user.id"
+                })
+              })
+            ]
+          })
         })
+      ],
+      custom_fields: expect.objectContaining({
+        canvas_course_id: "$Canvas.course.id",
+        canvas_user_id: "$Canvas.user.id"
+      })
+    });
+    expect(metadata).toMatchObject({
+      extensions: [
+        {
+          settings: {
+            placements: [
+              expect.objectContaining({
+                placement: "course_navigation",
+                visibility: "members",
+                default: "enabled",
+                enabled: true,
+                windowTarget: "_blank"
+              })
+            ]
+          }
+        }
       ]
     });
   });
 
-  it("returns removed deep-linking guidance instead of rendering the teacher UI", async () => {
+  it("accepts a cross-site signed POST and returns removed deep-linking guidance", async () => {
     ltiService.validateToken.mockResolvedValue({
-      userId: "teacher-1",
+      ltiSubject: "opaque-teacher-1",
+      canvasUserId: "42",
+      issuer: "https://canvas.example.test",
+      userId: "42",
       courseId: "course-1",
       roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      deploymentId: "deployment-1",
+      targetLinkUri: "https://tool.example.test/lti/launch",
       messageType: "LtiDeepLinkingRequest"
     });
     const response = responseDouble();
+    const request = emptySessionRequest();
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
 
-    await controller.launchPost({ session: {} } as any, response, { id_token: "token", state: "state" });
+    await controller.launchPost(request, response, { id_token: "token", state: "state" });
 
-    expect(ltiState.consumeState).toHaveBeenCalledWith("state");
+    expect(ltiState.peekState).toHaveBeenCalledWith("state");
+    expect(ltiState.claimState).toHaveBeenCalledWith("state");
     expect(ltiService.validateToken).toHaveBeenCalledWith("token", "nonce-1");
+    expect(response.clearCookie).toHaveBeenCalledWith(BROWSER_TRANSACTION.cookieName, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      path: "/"
+    });
+    expect(request.session.regenerate).toHaveBeenCalled();
+    expect(request.session.verifiedLtiPrincipal).toMatchObject({
+      subject: "opaque-teacher-1",
+      canvasUserId: "42",
+      courseId: "course-1",
+      deploymentId: "deployment-1"
+    });
     expect(response.status).toHaveBeenCalledWith(410);
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Deep Linking Removed"));
   });
 
-  it("does not reuse stale instructor roles for a different queried user", async () => {
+  it.each([
+    ["missing", {}],
+    ["mismatched", { [BROWSER_TRANSACTION.cookieName]: "x".repeat(43) }]
+  ])(
+    "rejects a launch with a %s initiating-browser cookie before validating or claiming state",
+    async (_label, cookies) => {
+      const response = responseDouble();
+      const request = emptySessionRequest(cookies);
+
+      await controller.launchPost(request, response, { id_token: "token", state: "stolen-state" });
+
+      expect(response.status).toHaveBeenCalledWith(400);
+      expect(response.send).toHaveBeenCalledWith(expect.stringContaining("signed Canvas launch could not be verified"));
+      expect(distributedAdmission.consumeLtiStateValidationAttempt).not.toHaveBeenCalled();
+      expect(ltiService.validateToken).not.toHaveBeenCalled();
+      expect(ltiState.claimState).not.toHaveBeenCalled();
+      expect(request.session.regenerate).not.toHaveBeenCalled();
+      expect(request.session.verifiedLtiPrincipal).toBeUndefined();
+      expect(response.clearCookie).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not clear the browser transaction or install a principal when the atomic state claim fails", async () => {
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-teacher-1",
+      canvasUserId: "42",
+      issuer: "https://canvas.example.test",
+      userId: "42",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      deploymentId: "deployment-1",
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      messageType: "LtiResourceLinkRequest"
+    });
+    ltiState.claimState.mockRejectedValue(new Error("Invalid or already consumed LTI state"));
+    const response = responseDouble();
+    const request = emptySessionRequest();
+
+    await controller.launchPost(request, response, { id_token: "token", state: "replayed-state" });
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(request.session.regenerate).not.toHaveBeenCalled();
+    expect(request.session.verifiedLtiPrincipal).toBeUndefined();
+    expect(response.clearCookie).not.toHaveBeenCalled();
+  });
+
+  it("preserves a valid cross-site POST launch and same-origin session reload", async () => {
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-teacher-1",
+      canvasUserId: "42",
+      issuer: "https://canvas.example.test",
+      userId: "42",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      deploymentId: "deployment-1",
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      messageType: "LtiResourceLinkRequest"
+    });
+    const launchResponse = responseDouble();
+    const request = emptySessionRequest();
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
+
+    await controller.launchPost(request, launchResponse, { id_token: "token", state: "state" });
+
+    expect(launchResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
+    expect(request.session.verifiedLtiPrincipal).toMatchObject({ canvasUserId: "42", courseId: "course-1" });
+
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "same-origin"
+      })[name.toLowerCase()];
+    const reloadResponse = responseDouble();
+    await controller.launchGet(request, reloadResponse);
+
+    expect(reloadResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
+  });
+
+  it("turns a signed assessment target into a one-time direct SEB launch handoff", async () => {
+    const targetLinkUri = "https://tool.example.test/seb/launch/classicquiz_23455";
+    ltiState.peekState.mockReturnValue({
+      nonce: "nonce-1",
+      issuer: "https://canvas.example.test",
+      deploymentId: "deployment-1",
+      targetLinkUri,
+      [LTI_OIDC_TRANSACTION_ID_FIELD]: BROWSER_TRANSACTION.transactionId,
+      [LTI_OIDC_BROWSER_BINDING_FIELD]: BROWSER_TRANSACTION.bindingHash
+    });
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-student-1",
+      canvasUserId: "43",
+      issuer: "https://canvas.example.test",
+      userId: "43",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+      deploymentId: "deployment-1",
+      targetLinkUri,
+      messageType: "LtiResourceLinkRequest"
+    });
+    const request = emptySessionRequest();
+    const response = responseDouble();
+
+    await controller.launchPost(request, response, { id_token: "token", state: "state" });
+
+    expect(request.session.save).toHaveBeenCalled();
+    expect(request.session.pendingSebLaunch).toMatchObject({
+      courseId: "course-1",
+      contentId: "classicquiz_23455",
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1"
+    });
+    expect(response.redirect).toHaveBeenCalledWith(303, "/seb/launch/classicquiz_23455");
+    expect(response.send).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with Canvas configuration guidance when the signed numeric user id is absent", async () => {
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-teacher-1",
+      issuer: "https://canvas.example.test",
+      userId: "opaque-teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      deploymentId: "deployment-1",
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      messageType: "LtiResourceLinkRequest",
+      custom: {}
+    });
+    const response = responseDouble();
+    const request = emptySessionRequest();
+
+    await controller.launchPost(request, response, { id_token: "token", state: "state" });
+
+    expect(ltiState.claimState).toHaveBeenCalledWith("state");
+    expect(response.clearCookie).toHaveBeenCalled();
+    expect(request.session.regenerate).toHaveBeenCalled();
+    expect(request.session.verifiedLtiPrincipal).toBeUndefined();
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Canvas Configuration Error"));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("refresh this tool's LTI Developer Key"));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining("opaque-teacher-1"));
+  });
+
+  it("stops repeated invalid JWTs for one state before another token validation", async () => {
+    ltiService.validateToken.mockRejectedValue(new Error("invalid signature"));
+    distributedAdmission.consumeLtiStateValidationAttempt
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await controller.launchPost(emptySessionRequest(), responseDouble(), {
+        id_token: "invalid-token",
+        state: "same-valid-encrypted-state"
+      });
+    }
+
+    expect(ltiService.validateToken).toHaveBeenCalledTimes(5);
+    expect(ltiState.claimState).not.toHaveBeenCalled();
+  });
+
+  it("does not claim state or install a principal when signed launch claims differ from the login context", async () => {
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-teacher-1",
+      canvasUserId: "42",
+      issuer: "https://canvas.example.test",
+      userId: "42",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      deploymentId: "attacker-deployment",
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      messageType: "LtiResourceLinkRequest"
+    });
+    const response = responseDouble();
+    const request = emptySessionRequest();
+
+    await controller.launchPost(request, response, { id_token: "token", state: "state" });
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("signed Canvas launch could not be verified"));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining("attacker-deployment"));
+    expect(ltiState.claimState).not.toHaveBeenCalled();
+    expect(request.session.regenerate).not.toHaveBeenCalled();
+    expect(request.session.verifiedLtiPrincipal).toBeUndefined();
+  });
+
+  it("rejects a queried identity mismatch without rewriting the verified launch session", async () => {
     const response = responseDouble();
     const request = requestDouble({
       userId: "teacher-1",
@@ -159,45 +562,124 @@ describe("LtiController role routing", () => {
 
     await controller.launchGet(request, response, "course-1", "student-1");
 
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Forbidden"));
+    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
+    expect(request.session.launchData?.roles).toEqual(["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]);
+    expect(request.session.launchData?.userId).toBe("teacher-1");
+    expect(request.session.verifiedLtiPrincipal.canvasUserId).toBe("teacher-1");
+  });
+
+  it("redirects unauthenticated GET launches instead of minting a session from query parameters", async () => {
+    const response = responseDouble();
+    const request = { session: {}, sessionID: "attacker-session" } as any;
+
+    await controller.launchGet(request, response, "course-1", "teacher-1");
+
+    expect(response.redirect).toHaveBeenCalledWith("/login");
+    expect(request.session.launchData).toBeUndefined();
+    expect(request.session.verifiedLtiPrincipal).toBeUndefined();
+    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("does not elevate forged launchData roles above the verified learner principal", async () => {
+    const instructorRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor";
+    const learnerRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner";
+    const response = responseDouble();
+    const request = requestDouble(
+      { userId: "student-1", courseId: "course-1", roles: [instructorRole] },
+      { roles: [learnerRole] }
+    );
+
+    await controller.launchGet(request, response);
+
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student"'));
     expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
-    expect(request.session.launchData?.roles).toEqual([]);
-    expect(request.session.launchData?.userId).toBe("student-1");
+  });
+
+  it("rejects cross-site iframe GET launches before reusing an authenticated session", async () => {
+    const response = responseDouble();
+    const request = requestDouble({
+      userId: "teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
+    });
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
+
+    await controller.launchGet(request, response);
+
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Reopen this tool from Canvas"));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
+    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
+    expect(assessments.refreshCourseContent).not.toHaveBeenCalled();
   });
 
   it("renders the teacher view only when the launch has an instructor role", async () => {
     const response = responseDouble();
-    await controller.launchGet(
-      requestDouble({
-        userId: "teacher-1",
-        courseId: "course-1",
-        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
-      }),
-      response
-    );
+    const request = requestDouble({
+      userId: "teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
+    });
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "same-origin"
+      })[name.toLowerCase()];
 
-    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
+    await controller.launchGet(request, response);
+
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).toContain('"view":"teacher"');
+    expect(html).toContain('"hasEffectiveQuitPassword":true');
+    expect(html).not.toContain("managed-server-exit");
     expect(canvasApi.hasAccessToken).toHaveBeenCalledWith("teacher-1");
   });
 
   it("renders only enabled SEB assessments for student course launches", async () => {
     assessments.getQuizzesForCourse.mockResolvedValue([
-      { id: "quiz-b", courseId: "course-1", title: "Beta Classic", htmlUrl: "https://canvas.example/quizzes/b" },
-      { id: "quiz-a", courseId: "course-1", title: "Alpha Classic", htmlUrl: "https://canvas.example/quizzes/a" }
+      { id: "103", courseId: "course-2", title: "Cross-course Classic", htmlUrl: "https://canvas.example/quizzes/103" },
+      { id: "102", courseId: "course-1", title: "Beta Classic", htmlUrl: "https://canvas.example/quizzes/102" },
+      { id: "101", courseId: "course-1", title: "Alpha Classic", htmlUrl: "https://canvas.example/quizzes/101" }
     ]);
     assessments.getCachedContentForCourse.mockResolvedValue([
       {
         id: "newquiz:course-1:99",
         courseId: "course-1",
+        canvasId: "99",
+        assignmentId: "99",
         title: "Gamma New Quiz",
         contentType: "NEW_QUIZ",
         htmlUrl: "https://canvas.example/assignments/99"
+      },
+      {
+        id: "newquiz:course-2:100",
+        courseId: "course-2",
+        canvasId: "100",
+        assignmentId: "100",
+        title: "Cross-course New Quiz",
+        contentType: "NEW_QUIZ",
+        htmlUrl: "https://canvas.example/assignments/100"
       }
     ]);
     assessments.getSebSettingForQuiz.mockImplementation(async (quizId: string) =>
-      quizId === "quiz-a" ? { sebRequired: true, enabled: true } : { sebRequired: false, enabled: false }
+      quizId === "101"
+        ? { quizId, courseId: "course-1", sebRequired: true, enabled: true, accessCode: "ACCESS" }
+        : { quizId, courseId: "course-1", sebRequired: false, enabled: false }
     );
-    assessments.getContentSebSetting.mockResolvedValue({ sebRequired: true, enabled: true });
+    assessments.getContentSebSetting.mockResolvedValue({
+      contentId: "newquiz:course-1:99",
+      courseId: "course-1",
+      assignmentId: "99",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS"
+    });
     const response = responseDouble();
 
     await controller.launchGet(
@@ -214,17 +696,53 @@ describe("LtiController role routing", () => {
     expect(html).toContain("Alpha Classic");
     expect(html).toContain("Gamma New Quiz");
     expect(html).not.toContain("Beta Classic");
+    expect(html).not.toContain("Cross-course Classic");
+    expect(html).not.toContain("Cross-course New Quiz");
     expect(html.indexOf("Alpha Classic")).toBeLessThan(html.indexOf("Gamma New Quiz"));
+    expect(html).not.toContain("?grant=");
+  });
+
+  it("does not list enabled settings whose Canvas presence is stale or unavailable", async () => {
+    assessments.getQuizzesForCourse.mockResolvedValue([{ id: "101", courseId: "course-1", title: "Stale Classic" }]);
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "101",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "STALE-ACCESS"
+    });
+    assessments.isAssessmentAvailableForLearner.mockResolvedValue(false);
+    const response = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      response
+    );
+
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).toContain('"view":"student"');
+    expect(html).not.toContain("Stale Classic");
+    expect(assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
   });
 
   it("renders the SEB-required screen for targeted student launches outside SEB", async () => {
     assessments.getQuiz.mockResolvedValue({
-      id: "quiz-1",
+      id: "23455",
       courseId: "course-1",
       title: "Midterm",
-      htmlUrl: "https://canvas.example/quizzes/quiz-1"
+      htmlUrl: "https://canvas.example/quizzes/23455"
     });
-    assessments.getSebSettingForQuiz.mockResolvedValue({ sebRequired: true, enabled: true });
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "23455",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS"
+    });
     const response = responseDouble();
 
     await controller.launchGet(
@@ -232,22 +750,63 @@ describe("LtiController role routing", () => {
         userId: "student-1",
         courseId: "course-1",
         roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
-        custom: { quiz_id: "quiz-1" }
+        custom: { quiz_id: "23455" }
       }),
       response
     );
 
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-required"'));
-    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("/seb/config/course-1/quiz-1.seb"));
+    expect(response.send).toHaveBeenCalledWith(
+      expect.stringContaining("/api/seb/config-grant/course-1/classicquiz_23455")
+    );
   });
 });
 
-function requestDouble(launchData: LtiLaunchData): any {
+function requestDouble(launchDataInput: LtiLaunchData, principalOverrides: Partial<VerifiedLtiPrincipal> = {}): any {
+  const launchData: LtiLaunchData = {
+    ltiSubject: `opaque-${launchDataInput.userId}`,
+    canvasUserId: launchDataInput.userId,
+    issuer: "https://canvas.example.test",
+    deploymentId: "deployment-1",
+    targetLinkUri: "https://tool.example.test/lti/launch",
+    custom: {},
+    ...launchDataInput
+  };
+  const principal: VerifiedLtiPrincipal = {
+    version: 1,
+    issuer: launchData.issuer!,
+    deploymentId: launchData.deploymentId!,
+    subject: launchData.ltiSubject!,
+    canvasUserId: launchData.canvasUserId!,
+    courseId: launchData.courseId!,
+    roles: [...launchData.roles],
+    custom: { ...(launchData.custom || {}) },
+    authenticatedAt: "2026-01-01T00:00:00.000Z",
+    ...principalOverrides
+  };
   return {
     originalUrl: "/lti/launch",
     protocol: "https",
     get: () => "tool.example.test",
-    session: { launchData }
+    sessionID: "session-1",
+    session: { launchData, verifiedLtiPrincipal: principal }
+  };
+}
+
+function emptySessionRequest(
+  cookies: Record<string, string> = { [BROWSER_TRANSACTION.cookieName]: BROWSER_TRANSACTION.cookieValue }
+): any {
+  const session = {
+    regenerate: vi.fn((callback: (error?: Error) => void) => callback()),
+    save: vi.fn((callback: (error?: Error) => void) => callback())
+  };
+  return {
+    originalUrl: "/lti/launch",
+    protocol: "https",
+    get: () => "tool.example.test",
+    cookies,
+    sessionID: "new-session-1",
+    session
   };
 }
 
@@ -255,8 +814,12 @@ function responseDouble(): any {
   const response = {
     send: vi.fn(),
     redirect: vi.fn(),
-    status: vi.fn()
+    status: vi.fn(),
+    setHeader: vi.fn(),
+    cookie: vi.fn(),
+    clearCookie: vi.fn()
   };
   response.status.mockReturnValue(response);
+  response.setHeader.mockReturnValue(response);
   return response;
 }
