@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("automatically navigates the SEB exit page to the quit endpoint without browser errors", async ({ page }) => {
+test("keeps an unvalidated assessment exit page nonterminal", async ({ page }) => {
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") {
@@ -11,24 +11,19 @@ test("automatically navigates the SEB exit page to the quit endpoint without bro
 
   await page.goto("/seb/exit/course-1/classicquiz_quiz-1");
 
-  await expect(page).toHaveURL(/\/seb\/exit\/quit\/course-1\/quiz-1$/u);
-  await expect(page.getByRole("heading", { name: "Safe Exam Browser Closing" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Quit again" })).toHaveAttribute(
-    "href",
-    /\/seb\/exit\/quit\/course-1\/quiz-1$/
-  );
+  await expect(page).toHaveURL(/\/seb\/exit\/course-1\/classicquiz_quiz-1$/u);
+  await expect(page.getByRole("heading", { name: "Assessment Complete" })).toBeVisible();
+  await expect(page.getByText("Return to the submitted assessment results page")).toBeVisible();
+  await expect(page.getByRole("link")).toHaveCount(0);
   expect(browserErrors).toEqual([]);
 });
 
-test("preserves a New Quiz content ID through the SEB exit and quit flow", async ({ page }) => {
+test("preserves a New Quiz content ID on the nonterminal exit page", async ({ page }) => {
   await page.goto("/seb/exit/course-1/newquiz:course-1:assignment-9");
 
-  await expect(page).toHaveURL(/\/seb\/exit\/quit\/course-1\/newquiz:course-1:assignment-9$/u);
-  await expect(page.getByRole("heading", { name: "Safe Exam Browser Closing" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Quit again" })).toHaveAttribute(
-    "href",
-    /\/seb\/exit\/quit\/course-1\/newquiz:course-1:assignment-9$/
-  );
+  await expect(page).toHaveURL(/\/seb\/exit\/course-1\/newquiz:course-1:assignment-9$/u);
+  await expect(page.getByRole("heading", { name: "Assessment Complete" })).toBeVisible();
+  await expect(page.getByText("Return to the submitted assessment results page")).toBeVisible();
 });
 
 test("serves the detector script from both compatibility paths", async ({ request }) => {
@@ -65,12 +60,16 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
     target_link_uri: "http://localhost:8080/lti/launch",
     public_jwk_url: "http://localhost:8080/.well-known/jwks.json"
   });
-  expect(ltiBody.extensions?.[0]?.settings?.placements?.[0]).toMatchObject({
+  const placement = ltiBody.extensions?.[0]?.settings?.placements?.[0];
+  expect(placement).toMatchObject({
     placement: "course_navigation",
     message_type: "LtiResourceLinkRequest",
     target_link_uri: "http://localhost:8080/lti/launch",
-    visibility: "admins"
+    visibility: "members",
+    default: "enabled",
+    enabled: true
   });
+  expect(placement).not.toHaveProperty("windowTarget");
 });
 
 test("serves built app assets before API CORS restrictions", async ({ request }) => {
@@ -86,14 +85,16 @@ test("serves built app assets before API CORS restrictions", async ({ request })
 });
 
 test("keeps SEB config and proof endpoints defensive without seeded assessment data", async ({ request }) => {
-  const config = await request.get("/seb/config/course-1/classicquiz_quiz-1.seb");
-  expect(config.status()).toBe(400);
-  expect(await config.text()).toContain("SEB not enabled or access code missing");
+  const config = await request.get("/seb/config/course-1/classicquiz_23455.seb");
+  expect(config.status()).toBe(403);
+  const configError = await config.text();
+  expect(configError).toContain("Invalid or expired configuration grant");
+  expect(configError).not.toContain("access code");
 
-  const proof = await request.post("/api/seb/access-proof/course-1/quiz-1", {
+  const proof = await request.post("/api/seb/access-proof/course-1/23455", {
     data: {
       configKeyHash: "a".repeat(64),
-      url: "https://canvas.example.edu/courses/course-1/quizzes/quiz-1/take"
+      url: "https://canvas.example.edu/courses/course-1/quizzes/23455/take"
     }
   });
   expect(proof.status()).toBe(404);
@@ -102,11 +103,20 @@ test("keeps SEB config and proof endpoints defensive without seeded assessment d
     message: "No SEB setting found for this quiz"
   });
 
-  const accessCode = await request.get("/api/seb/access-code/course-1/quiz-1");
-  expect(accessCode.status()).toBe(403);
+  const accessCode = await request.get("/api/seb/access-code/course-1/23455");
+  expect(accessCode.status()).toBe(405);
   await expect(accessCode.json()).resolves.toMatchObject({
     success: false,
-    message: "Invalid or expired SEB access proof"
+    message: "Use POST to redeem an SEB access proof"
+  });
+
+  const forgedRedemption = await request.post("/api/seb/access-code/course-1/23455", {
+    headers: { "x-seb-proof-token": "x".repeat(43) }
+  });
+  expect(forgedRedemption.status()).toBe(404);
+  await expect(forgedRedemption.json()).resolves.toMatchObject({
+    success: false,
+    message: "No SEB setting found for this quiz"
   });
 });
 

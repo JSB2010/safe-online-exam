@@ -4,10 +4,9 @@ import {
   BookOpen,
   Calculator,
   Check,
-  Clipboard,
-  ExternalLink,
   Eye,
   EyeOff,
+  ExternalLink,
   KeyRound,
   Lock,
   LogOut,
@@ -24,11 +23,12 @@ import {
   X
 } from "lucide-react";
 import type { ReactNode, SetStateAction } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import type { CourseSebDefaults, ExternalToolConfig, SebUrlRule, SebUrlRuleMatch } from "../shared/models.js";
 import {
   EXTERNAL_TOOL_PRESETS,
+  canEnableSebAssessment,
   legacyDomainsToUrlRules,
   normalizeExternalTools,
   normalizeUrlRules
@@ -52,6 +52,7 @@ interface QuizView {
 interface StudentQuizView extends QuizView {
   sebLaunchUrl: string;
   configUrl?: string;
+  configGrantUrl?: string;
 }
 
 type Toast = {
@@ -60,13 +61,22 @@ type Toast = {
   message: string;
 };
 
-declare global {
-  interface Window {
-    __SEB_BOOTSTRAP__?: BootstrapPayload;
+function readBootstrap(): BootstrapPayload {
+  const element = document.getElementById("seb-bootstrap");
+  if (!element?.textContent) {
+    return { view: "teacher", data: {} };
+  }
+  try {
+    const value = JSON.parse(element.textContent) as Partial<BootstrapPayload>;
+    return typeof value.view === "string" && value.data && typeof value.data === "object"
+      ? { view: value.view, data: value.data }
+      : { view: "teacher", data: {} };
+  } catch {
+    return { view: "teacher", data: {} };
   }
 }
 
-const bootstrap = window.__SEB_BOOTSTRAP__ || { view: "teacher", data: {} };
+const bootstrap = readBootstrap();
 
 export function App() {
   switch (bootstrap.view) {
@@ -74,9 +84,15 @@ export function App() {
       return <TeacherDashboard data={bootstrap.data} />;
     case "api-authorization":
       return <AuthorizationPage data={bootstrap.data} />;
+    case "student-session-authorization":
+      return <StudentSessionAuthorizationPage data={bootstrap.data} />;
+    case "student-session-connected":
+      return <StudentSessionConnectedPage data={bootstrap.data} />;
     case "seb-required":
     case "seb-download":
       return <SebDownloadPage data={bootstrap.data} />;
+    case "seb-launching":
+      return <SebLaunchingPage data={bootstrap.data} />;
     case "seb-exit":
       return <SebExitPage data={bootstrap.data} />;
     case "seb-quit":
@@ -142,7 +158,6 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   const [activeItem, setActiveItem] = useState<QuizView | null>(null);
   const [showDefaults, setShowDefaults] = useState(false);
   const [showSetup, setShowSetup] = useState(!!data.showSetupWizard);
-  const [visiblePasswordId, setVisiblePasswordId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -156,6 +171,13 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     () => Object.values(settings).filter((setting: any) => setting?.sebRequired).length,
     [settings]
   );
+  const needsExitPassword = useMemo(
+    () =>
+      items.some(
+        (item) => !settings[item.id]?.sebRequired && !canEnableSebAssessment(settings[item.id], courseDefaults)
+      ),
+    [courseDefaults, items, settings]
+  );
 
   const pushToast = (tone: Toast["tone"], message: string) => {
     const id = clientId("toast");
@@ -167,6 +189,10 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
 
   async function toggleSeb(item: QuizView) {
     const enabled = !!settings[item.id]?.sebRequired;
+    if (!enabled && !canEnableSebAssessment(settings[item.id], courseDefaults)) {
+      pushToast("error", "Set an exit password in Course defaults before enabling SEB.");
+      return;
+    }
     setBusyId(item.id);
     try {
       const body = await requestJson(
@@ -199,10 +225,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       });
       if (redirectForAuth(body)) return;
       if (body.success) {
-        const launchUrl = new URL("/lti/launch", window.location.origin);
-        launchUrl.searchParams.set("course_id", data.courseId);
-        launchUrl.searchParams.set("user_id", data.userId);
-        window.location.assign(`${launchUrl.pathname}${launchUrl.search}`);
+        window.location.assign("/lti/launch");
       } else {
         pushToast("error", body.message || "Could not refresh Canvas content.");
       }
@@ -273,13 +296,16 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search quizzes" />
           </div>
         </div>
+        {needsExitPassword && (
+          <div className="notice error">
+            <Lock size={17} /> Set an exit password in Course defaults before enabling SEB for these quizzes.
+          </div>
+        )}
         <div className="content-list">
           {filtered.map((item) => {
             const setting = settings[item.id] || {};
             const enabled = !!setting.sebRequired;
-            const exitPassword = effectiveExitPassword(setting, courseDefaults);
-            const startPassword = effectiveStartPassword(setting, courseDefaults);
-            const passwordVisible = visiblePasswordId === item.id;
+            const canEnable = enabled || canEnableSebAssessment(setting, courseDefaults);
             return (
               <article className="content-row teacher-row" key={item.id}>
                 <div className="content-main">
@@ -306,33 +332,6 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
                     </a>
                   )}
                   {enabled && (
-                    <div className="password-action">
-                      <button
-                        className="button secondary"
-                        onClick={() => setVisiblePasswordId(passwordVisible ? null : item.id)}
-                      >
-                        {passwordVisible ? <EyeOff size={16} /> : <Eye size={16} />}
-                        Passwords
-                      </button>
-                      {passwordVisible && (
-                        <div className="password-popover password-list">
-                          <PasswordPopoverRow
-                            label="Start password"
-                            value={startPassword}
-                            emptyLabel="No start password set"
-                            onCopy={() => pushToast("success", "Start password copied.")}
-                          />
-                          <PasswordPopoverRow
-                            label="Exit password"
-                            value={exitPassword}
-                            emptyLabel="No exit password set"
-                            onCopy={() => pushToast("success", "Exit password copied.")}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {enabled && (
                     <button className="icon-button" onClick={() => setActiveItem(item)} title="Quiz settings">
                       <Settings size={17} />
                     </button>
@@ -340,7 +339,14 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
                   <button
                     className={clsx("button", enabled ? "danger" : "primary")}
                     onClick={() => toggleSeb(item)}
-                    disabled={busyId === item.id}
+                    disabled={busyId === item.id || !canEnable}
+                    title={
+                      canEnable
+                        ? enabled
+                          ? "Disable SEB"
+                          : "Enable SEB"
+                        : "Set an exit password in Course defaults before enabling SEB"
+                    }
                   >
                     {enabled ? <Unlock size={16} /> : <Lock size={16} />}
                     {enabled ? "Disable" : "Enable"}
@@ -377,6 +383,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       {showDefaults && (
         <DefaultsDialog
           defaults={courseDefaults}
+          courseId={data.courseId}
+          authToken={data.authToken}
           onClose={() => setShowDefaults(false)}
           onSave={async (next) => {
             await saveCourseDefaults({ ...next, setupCompleted: true });
@@ -397,39 +405,6 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
 
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((t) => t.id !== id))} />
     </main>
-  );
-}
-
-function PasswordPopoverRow({
-  label,
-  value,
-  emptyLabel,
-  onCopy
-}: {
-  label: string;
-  value: string;
-  emptyLabel: string;
-  onCopy: () => void;
-}) {
-  return (
-    <div className="password-popover-row">
-      <div>
-        <strong>{label}</strong>
-        <span>{value || emptyLabel}</span>
-      </div>
-      {value && (
-        <button
-          className="icon-button tiny"
-          title={`Copy ${label.toLowerCase()}`}
-          onClick={() => {
-            void navigator.clipboard?.writeText(value);
-            onCopy();
-          }}
-        >
-          <Clipboard size={14} />
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -477,9 +452,11 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
                 </div>
               </div>
               <span className="status-pill enabled">SEB required</span>
-              <a className="button primary" href={quiz.sebLaunchUrl}>
-                <ExternalLink size={16} /> Launch
-              </a>
+              <SebLaunchButton
+                grantUrl={quiz.configGrantUrl || quiz.configUrl}
+                token={data.configGrantToken}
+                label="Launch"
+              />
             </article>
           ))}
           {quizzes.length === 0 && (
@@ -493,6 +470,8 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
       {showSetupCheck && (
         <SebSetupCheckDialog
           launchUrl={data.setupCheckLaunchUrl || data.setupCheckConfigUrl || "/seb/check/config.seb"}
+          readinessUrl={data.sessionReadinessUrl || "/api/seb/session-readiness"}
+          authToken={data.configGrantToken}
           onClose={() => setShowSetupCheck(false)}
         />
       )}
@@ -500,7 +479,43 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
   );
 }
 
-function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClose: () => void }) {
+function SebSetupCheckDialog({
+  launchUrl,
+  readinessUrl,
+  authToken,
+  onClose
+}: {
+  launchUrl: string;
+  readinessUrl: string;
+  authToken?: string;
+  onClose: () => void;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+
+  const launchCheck = async () => {
+    if (checking) return;
+    setChecking(true);
+    setError("");
+    try {
+      const result = await requestJson(readinessUrl, {
+        method: "POST",
+        headers: actionHeaders(authToken)
+      });
+      if (!result.success) {
+        throw new Error(result.message || "Canvas connection could not be verified.");
+      }
+      window.location.assign(launchUrl);
+    } catch (launchError) {
+      if ((launchError as { code?: unknown }).code === "CANVAS_SESSION_AUTHORIZATION_REQUIRED") {
+        window.location.assign("/lti/launch");
+        return;
+      }
+      setError(launchError instanceof Error ? launchError.message : "Canvas connection could not be verified.");
+      setChecking(false);
+    }
+  };
+
   return (
     <div className="dialog-backdrop" role="presentation">
       <section
@@ -519,7 +534,7 @@ function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClos
           </button>
         </header>
         <div className="setup-check-intro">
-          <p>This opens a short SEB test on this computer before you take a real quiz.</p>
+          <p>This confirms your Canvas connection, then opens a short SEB test on this computer.</p>
           <div className="instruction-list">
             <div>
               <strong>1</strong>
@@ -539,10 +554,11 @@ function SebSetupCheckDialog({ launchUrl, onClose }: { launchUrl: string; onClos
           <button className="button secondary" onClick={onClose}>
             Cancel
           </button>
-          <a className="button primary" href={launchUrl}>
-            <PlayCircle size={16} /> Launch SEB check
-          </a>
+          <button className="button primary" type="button" disabled={checking} onClick={() => void launchCheck()}>
+            <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch SEB check"}
+          </button>
         </footer>
+        {error && <p className="field-error">{error}</p>}
       </section>
     </div>
   );
@@ -575,11 +591,9 @@ function SettingsDialog({
     toolsForSetting(setting, courseDefaults)
   );
   const [passwordOverride, setPasswordOverride] = useState(setting.quitPasswordOverride === true);
-  const [quitPassword, setQuitPassword] = useState(effectiveExitPassword(setting, courseDefaults));
+  const [quitPassword, setQuitPassword] = useState("");
   const [startPasswordOverride, setStartPasswordOverride] = useState(setting.startPasswordOverride === true);
-  const [startPassword, setStartPassword] = useState(effectiveStartPassword(setting, courseDefaults));
-  const [showPassword, setShowPassword] = useState(false);
-  const [showStartPassword, setShowStartPassword] = useState(false);
+  const [startPassword, setStartPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -661,9 +675,9 @@ function SettingsDialog({
       setUrlRules(normalizeUrlRules(courseDefaults.urlRules));
       setExternalTools(mergeToolPresets(courseDefaults.externalTools || []));
       setPasswordOverride(false);
-      setQuitPassword(courseDefaults.quitPassword || "");
+      setQuitPassword("");
       setStartPasswordOverride(false);
-      setStartPassword(courseDefaults.startPassword || "");
+      setStartPassword("");
       onReset(saved);
     } catch (resetError) {
       setError(errorMessage(resetError, "Could not reset quiz defaults."));
@@ -685,6 +699,11 @@ function SettingsDialog({
           </button>
         </header>
 
+        <SavedPasswordReveal
+          endpoint={`/api/quizzes/${encodeURIComponent(courseId)}/${encodeURIComponent(item.id)}/passwords/reveal`}
+          authToken={authToken}
+        />
+
         <SettingsSections
           urlRules={urlRules}
           setUrlRules={customizeUrlRules}
@@ -698,12 +717,10 @@ function SettingsDialog({
           setPasswordOverride={customizePasswordOverride}
           startPasswordOverride={startPasswordOverride}
           setStartPasswordOverride={customizeStartPasswordOverride}
-          showPassword={showPassword}
-          setShowPassword={setShowPassword}
-          showStartPassword={showStartPassword}
-          setShowStartPassword={setShowStartPassword}
-          defaultPassword={courseDefaults.quitPassword || ""}
-          defaultStartPassword={courseDefaults.startPassword || ""}
+          hasDefaultPassword={canEnableSebAssessment(undefined, courseDefaults)}
+          hasDefaultStartPassword={
+            !!(courseDefaults as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
+          }
         />
 
         {error && (
@@ -729,12 +746,94 @@ function SettingsDialog({
   );
 }
 
+type RevealedPasswordValue = {
+  value: string | null;
+  source: "assessment" | "course" | "managed" | "none";
+};
+
+function SavedPasswordReveal({ endpoint, authToken }: { endpoint: string; authToken?: string }) {
+  const [passwords, setPasswords] = useState<{
+    start: RevealedPasswordValue;
+    exit: RevealedPasswordValue;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!passwords) return;
+    const timer = window.setTimeout(() => setPasswords(null), 30_000);
+    return () => window.clearTimeout(timer);
+  }, [passwords]);
+
+  async function reveal() {
+    setBusy(true);
+    setError(null);
+    try {
+      const body = await requestJson(endpoint, { method: "POST", headers: actionHeaders(authToken) });
+      setPasswords(body.passwords || null);
+    } catch (revealError) {
+      setError(errorMessage(revealError, "Saved passwords could not be revealed."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="saved-password-reveal" aria-live="polite">
+      <div>
+        <strong>Saved passwords</strong>
+        <small>Instructor-only. Revealed values hide automatically after 30 seconds.</small>
+      </div>
+      {!passwords ? (
+        <button className="button secondary" type="button" onClick={reveal} disabled={busy}>
+          <Eye size={16} /> {busy ? "Revealing…" : "Reveal saved passwords"}
+        </button>
+      ) : (
+        <div className="saved-password-values">
+          <PasswordRevealValue label="Start" password={passwords.start} />
+          <PasswordRevealValue label="Exit" password={passwords.exit} />
+          <button className="icon-button" type="button" onClick={() => setPasswords(null)} title="Hide passwords">
+            <EyeOff size={16} />
+          </button>
+        </div>
+      )}
+      {error && <small className="field-error">{error}</small>}
+    </section>
+  );
+}
+
+function PasswordRevealValue({ label, password }: { label: string; password: RevealedPasswordValue }) {
+  const source =
+    password.source === "assessment"
+      ? "quiz"
+      : password.source === "course"
+        ? "course default"
+        : password.source === "managed"
+          ? "managed by server"
+          : "not set";
+  return (
+    <span className="saved-password-value">
+      <strong>{label}</strong>
+      <span>{password.value || (password.source === "managed" ? "Hidden managed default" : "Not set")}</span>
+      <small>{source}</small>
+    </span>
+  );
+}
+
+function passwordRequirementText(otherPassword: "exit" | "start"): string {
+  return `Use 8–128 characters with at least 5 different letters or numbers. Letters-only and numbers-only are allowed; avoid common words, sequences, and repeated patterns. It must differ from the ${otherPassword} password.`;
+}
+
 function DefaultsDialog({
   defaults,
+  courseId,
+  authToken,
   onClose,
   onSave
 }: {
   defaults: CourseSebDefaults;
+  courseId: string;
+  authToken?: string;
   onClose: () => void;
   onSave: (defaults: CourseSebDefaults) => Promise<void>;
 }) {
@@ -766,6 +865,10 @@ function DefaultsDialog({
             <X size={17} />
           </button>
         </header>
+        <SavedPasswordReveal
+          endpoint={`/api/quizzes/course/${encodeURIComponent(courseId)}/passwords/reveal`}
+          authToken={authToken}
+        />
         <DefaultsEditor draft={draft} setDraft={setDraft} />
         {error && (
           <div className="notice error">
@@ -875,10 +978,12 @@ function DefaultsEditor({
   const showPassword = visibleSection === "all" || visibleSection === "password";
   const showUrls = visibleSection === "all" || visibleSection === "urls";
   const showTools = visibleSection === "all" || visibleSection === "tools";
-  const [passwordVisible, setPasswordVisible] = useState(false);
-  const [startPasswordVisible, setStartPasswordVisible] = useState(false);
-  const [startPasswordEnabled, setStartPasswordEnabled] = useState(() => !!draft.startPassword);
-  const [quitPasswordEnabled, setQuitPasswordEnabled] = useState(() => !!draft.quitPassword);
+  const [startPasswordEnabled, setStartPasswordEnabled] = useState(
+    () => !!draft.startPassword || !!(draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
+  );
+  const [quitPasswordEnabled, setQuitPasswordEnabled] = useState(
+    () => !!draft.quitPassword || !!(draft as CourseSebDefaults & { hasQuitPassword?: boolean }).hasQuitPassword
+  );
 
   const updateStartPasswordEnabled = (enabled: boolean) => {
     setStartPasswordEnabled(enabled);
@@ -910,23 +1015,17 @@ function DefaultsEditor({
               <small>Students enter this before SEB opens a quiz.</small>
             </span>
           </label>
-          <div className="password-field">
-            <input
-              type={startPasswordVisible ? "text" : "password"}
-              value={draft.startPassword || ""}
-              disabled={!startPasswordEnabled}
-              onChange={(event) => setDraft((current) => ({ ...current, startPassword: event.target.value }))}
-              placeholder="Start password"
-            />
-            <button
-              className="icon-button"
-              onClick={() => setStartPasswordVisible((current) => !current)}
-              disabled={!startPasswordEnabled}
-              title="Show or hide start password"
-            >
-              {startPasswordVisible ? <EyeOff size={17} /> : <Eye size={17} />}
-            </button>
-          </div>
+          <input
+            type="password"
+            value={draft.startPassword || ""}
+            disabled={!startPasswordEnabled}
+            onChange={(event) => setDraft((current) => ({ ...current, startPassword: event.target.value }))}
+            placeholder={startPasswordEnabled ? "Enter a replacement password, or leave blank to keep it" : "Disabled"}
+            autoComplete="new-password"
+            minLength={8}
+            maxLength={128}
+          />
+          {startPasswordEnabled && <small>{passwordRequirementText("exit")}</small>}
 
           <SectionHeading title="Exit password" />
           <label className="toggle-row compact">
@@ -936,27 +1035,23 @@ function DefaultsEditor({
               onChange={(event) => updateQuitPasswordEnabled(event.target.checked)}
             />
             <span>
-              <strong>Use an exit password</strong>
-              <small>SEB asks for this before students can quit during a quiz.</small>
+              <strong>Set a course exit password</strong>
+              <small>
+                An exit password is required before SEB can be enabled unless the server supplies a managed default.
+              </small>
             </span>
           </label>
-          <div className="password-field">
-            <input
-              type={passwordVisible ? "text" : "password"}
-              value={draft.quitPassword || ""}
-              disabled={!quitPasswordEnabled}
-              onChange={(event) => setDraft((current) => ({ ...current, quitPassword: event.target.value }))}
-              placeholder="Exit password"
-            />
-            <button
-              className="icon-button"
-              onClick={() => setPasswordVisible((current) => !current)}
-              disabled={!quitPasswordEnabled}
-              title="Show or hide password"
-            >
-              {passwordVisible ? <EyeOff size={17} /> : <Eye size={17} />}
-            </button>
-          </div>
+          <input
+            type="password"
+            value={draft.quitPassword || ""}
+            disabled={!quitPasswordEnabled}
+            onChange={(event) => setDraft((current) => ({ ...current, quitPassword: event.target.value }))}
+            placeholder={quitPasswordEnabled ? "Enter a replacement password, or leave blank to keep it" : "Disabled"}
+            autoComplete="new-password"
+            minLength={8}
+            maxLength={128}
+          />
+          {quitPasswordEnabled && <small>{passwordRequirementText("start")}</small>}
         </section>
       )}
       {showUrls && (
@@ -1004,12 +1099,8 @@ function SettingsSections({
   setPasswordOverride,
   startPasswordOverride,
   setStartPasswordOverride,
-  showPassword,
-  setShowPassword,
-  showStartPassword,
-  setShowStartPassword,
-  defaultPassword,
-  defaultStartPassword
+  hasDefaultPassword,
+  hasDefaultStartPassword
 }: {
   urlRules: SebUrlRule[];
   setUrlRules: (rules: SebUrlRule[]) => void;
@@ -1023,12 +1114,8 @@ function SettingsSections({
   setPasswordOverride: (value: boolean) => void;
   startPasswordOverride: boolean;
   setStartPasswordOverride: (value: boolean) => void;
-  showPassword: boolean;
-  setShowPassword: (value: boolean) => void;
-  showStartPassword: boolean;
-  setShowStartPassword: (value: boolean) => void;
-  defaultPassword: string;
-  defaultStartPassword: string;
+  hasDefaultPassword: boolean;
+  hasDefaultStartPassword: boolean;
 }) {
   return (
     <div className="settings-stack">
@@ -1043,28 +1130,25 @@ function SettingsSections({
           <span>
             <strong>Set a quiz-specific start password</strong>
             <small>
-              {defaultStartPassword
+              {hasDefaultStartPassword
                 ? "Otherwise this quiz uses the course default."
                 : "Otherwise this quiz has no start password."}
             </small>
           </span>
         </label>
-        <div className="password-field">
-          <input
-            type={showStartPassword ? "text" : "password"}
-            value={startPasswordOverride ? startPassword : defaultStartPassword}
-            disabled={!startPasswordOverride}
-            onChange={(event) => setStartPassword(event.target.value)}
-            placeholder="Password students enter before SEB opens the quiz"
-          />
-          <button
-            className="icon-button"
-            onClick={() => setShowStartPassword(!showStartPassword)}
-            title="Show or hide start password"
-          >
-            {showStartPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-          </button>
-        </div>
+        <input
+          type="password"
+          value={startPasswordOverride ? startPassword : ""}
+          disabled={!startPasswordOverride}
+          onChange={(event) => setStartPassword(event.target.value)}
+          placeholder={
+            startPasswordOverride ? "Enter a replacement password, or leave blank to keep it" : "Using course default"
+          }
+          autoComplete="new-password"
+          minLength={8}
+          maxLength={128}
+        />
+        {startPasswordOverride && <small>{passwordRequirementText("exit")}</small>}
       </section>
 
       <section className="settings-section">
@@ -1078,24 +1162,25 @@ function SettingsSections({
           <span>
             <strong>Set a quiz-specific exit password</strong>
             <small>
-              {defaultPassword
-                ? "Otherwise this quiz uses the course default."
-                : "Otherwise this quiz has no exit password."}
+              {hasDefaultPassword
+                ? "Otherwise this quiz uses the course or managed server default."
+                : "A course, quiz, or managed server exit password is required while SEB is enabled."}
             </small>
           </span>
         </label>
-        <div className="password-field">
-          <input
-            type={showPassword ? "text" : "password"}
-            value={passwordOverride ? quitPassword : defaultPassword}
-            disabled={!passwordOverride}
-            onChange={(event) => setQuitPassword(event.target.value)}
-            placeholder="Quiz exit password"
-          />
-          <button className="icon-button" onClick={() => setShowPassword(!showPassword)} title="Show or hide password">
-            {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-          </button>
-        </div>
+        <input
+          type="password"
+          value={passwordOverride ? quitPassword : ""}
+          disabled={!passwordOverride}
+          onChange={(event) => setQuitPassword(event.target.value)}
+          placeholder={
+            passwordOverride ? "Enter a replacement password, or leave blank to keep it" : "Using course default"
+          }
+          autoComplete="new-password"
+          minLength={8}
+          maxLength={128}
+        />
+        {passwordOverride && <small>{passwordRequirementText("start")}</small>}
       </section>
 
       <section className="settings-section">
@@ -1142,13 +1227,12 @@ function UrlRuleEditor({
           >
             <option value="domain">Any URL on domain</option>
             <option value="exact">Exact URL</option>
-            <option value="regex">Advanced regex</option>
           </select>
           <input
             value={rule.value}
             disabled={disabled}
             onChange={(event) => update(rule.id, { value: event.target.value })}
-            placeholder={rule.match === "regex" ? "^https://example\\.edu/.*$" : "example.edu"}
+            placeholder={rule.match === "exact" ? "https://example.edu/resource" : "example.edu"}
           />
           <button
             className="icon-button"
@@ -1180,7 +1264,7 @@ function ToolEditor({
   return (
     <div className="tool-list">
       {tools.map((tool) => (
-        <div className={clsx("tool-row", tool.matchType === "regex" && "with-regex")} key={tool.id}>
+        <div className="tool-row" key={tool.id}>
           <label className="tool-enabled">
             <input
               type="checkbox"
@@ -1214,17 +1298,7 @@ function ToolEditor({
           >
             <option value="exact">Exact URL</option>
             <option value="domain">Whole domain</option>
-            <option value="regex">Advanced regex</option>
           </select>
-          {tool.matchType === "regex" && (
-            <input
-              className="tool-regex-field"
-              value={tool.allowedPattern || ""}
-              disabled={disabled}
-              onChange={(event) => update(tool.id, { allowedPattern: event.target.value })}
-              placeholder="URL filter regex"
-            />
-          )}
           <button
             className="icon-button tool-remove-button"
             disabled={disabled || !!tool.preset}
@@ -1255,9 +1329,83 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
   );
 }
 
+const STUDENT_SESSION_CONNECTED_MESSAGE = "seb-canvas-session-connected";
+
+function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }) {
+  const [connecting, setConnecting] = useState(false);
+  const popupRef = useRef<Window | null>(null);
+  const authUrl = typeof data.authUrl === "string" ? data.authUrl : "/api/student-session-authorize";
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (
+        event.origin !== window.location.origin ||
+        event.source !== popupRef.current ||
+        !event.data ||
+        typeof event.data !== "object" ||
+        (event.data as { type?: unknown }).type !== STUDENT_SESSION_CONNECTED_MESSAGE
+      ) {
+        return;
+      }
+      popupRef.current?.close();
+      window.location.reload();
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  useEffect(() => {
+    if (!connecting) return;
+    const timer = window.setInterval(() => {
+      if (popupRef.current?.closed) {
+        popupRef.current = null;
+        setConnecting(false);
+      }
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [connecting]);
+
+  const connect = () => {
+    const popup = window.open(authUrl, "seb_canvas_session_authorization", "popup,width=560,height=720");
+    if (!popup) {
+      window.location.assign(authUrl);
+      return;
+    }
+    popupRef.current = popup;
+    popup.focus();
+    setConnecting(true);
+  };
+
+  return (
+    <MessagePage
+      icon={<KeyRound />}
+      title="Connect Canvas"
+      message="Connect Canvas once to open Safe Exam Browser quizzes without signing in again."
+      action={
+        <button className="button primary" type="button" disabled={connecting} onClick={connect}>
+          <KeyRound size={16} /> {connecting ? "Connecting…" : "Connect Canvas"}
+        </button>
+      }
+    />
+  );
+}
+
+function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
+  const returnUrl = typeof data.returnUrl === "string" ? data.returnUrl : "/lti/launch";
+
+  useEffect(() => {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: STUDENT_SESSION_CONNECTED_MESSAGE }, window.location.origin);
+      window.setTimeout(() => window.close(), 100);
+      return;
+    }
+    window.location.replace(returnUrl);
+  }, [returnUrl]);
+
+  return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Exam Browser Quizzes." />;
+}
+
 function SebDownloadPage({ data }: { data: Record<string, any> }) {
-  const configUrl = data.sebConfigUrl || data.configUrl || data.configDownloadUrl;
-  const launchUrl = data.sebLaunchUrl || configUrl;
   return (
     <MessagePage
       icon={<Shield />}
@@ -1268,9 +1416,105 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
           <button className="button secondary" type="button" onClick={() => window.history.back()}>
             <ArrowLeft size={16} /> Back
           </button>
-          <a className="button primary" href={launchUrl}>
-            <ExternalLink size={16} /> Open SEB
-          </a>
+          <SebLaunchButton grantUrl={data.configGrantUrl} token={data.configGrantToken} label="Open SEB" />
+        </>
+      }
+    />
+  );
+}
+
+function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?: string; label: string }) {
+  const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState("");
+
+  const launch = async () => {
+    if (!grantUrl || !token || launching) {
+      setError("Reopen the Safe Exam Browser tool from Canvas and try again.");
+      return;
+    }
+    setLaunching(true);
+    setError("");
+    let broker: Window | null = null;
+    try {
+      const uniqueName = `seb_config_launch_${window.crypto.randomUUID()}`;
+      broker = window.open("about:blank", uniqueName);
+      if (broker) {
+        broker.opener = null;
+        if (broker.opener !== null) {
+          broker.close();
+          broker = null;
+        }
+      }
+    } catch {
+      try {
+        broker?.close();
+      } catch {
+        // Best-effort cleanup when a browser blocks opener isolation.
+      }
+      broker = null;
+    }
+    try {
+      const response = await fetch(grantUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { accept: "application/json", "x-auth-token": token }
+      });
+      const payload = (await response.json()) as { sebLaunchUrl?: unknown; message?: unknown };
+      if (!response.ok || typeof payload.sebLaunchUrl !== "string" || !/^sebs?:\/\//iu.test(payload.sebLaunchUrl)) {
+        throw new Error(typeof payload.message === "string" ? payload.message : "Unable to prepare Safe Exam Browser");
+      }
+      if (broker && !broker.closed) {
+        broker.location.replace(payload.sebLaunchUrl);
+      } else {
+        const fallback = window.open(payload.sebLaunchUrl, "_blank", "noopener,noreferrer");
+        if (!fallback) {
+          window.location.assign(payload.sebLaunchUrl);
+        }
+      }
+    } catch (launchError) {
+      broker?.close();
+      setError(launchError instanceof Error ? launchError.message : "Unable to prepare Safe Exam Browser");
+    } finally {
+      setLaunching(false);
+    }
+  };
+
+  return (
+    <span>
+      <button className="button primary" type="button" disabled={launching} onClick={() => void launch()}>
+        <ExternalLink size={16} /> {launching ? "Preparing…" : label}
+      </button>
+      {error && <span className="field-error">{error}</span>}
+    </span>
+  );
+}
+
+function SebLaunchingPage({ data }: { data: Record<string, any> }) {
+  const sebLaunchUrl = typeof data.sebLaunchUrl === "string" ? data.sebLaunchUrl : "";
+  const returnUrl = typeof data.browserReturnUrl === "string" ? data.browserReturnUrl : "";
+
+  useEffect(() => {
+    if (!/^sebs?:\/\//iu.test(sebLaunchUrl)) return;
+    window.location.assign(sebLaunchUrl);
+  }, [sebLaunchUrl]);
+
+  return (
+    <MessagePage
+      icon={<Shield />}
+      title="Opening Safe Exam Browser"
+      message="Approve the browser prompt to open SEB. You can return to your Canvas course with the button below."
+      action={
+        <>
+          {sebLaunchUrl && (
+            <a className="button primary" href={sebLaunchUrl}>
+              <ExternalLink size={16} /> Open SEB
+            </a>
+          )}
+          {returnUrl && (
+            <a className="button secondary" href={returnUrl}>
+              <ArrowLeft size={16} /> Return to course
+            </a>
+          )}
         </>
       }
     />
@@ -1278,22 +1522,28 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
 }
 
 function SebExitPage({ data }: { data: Record<string, any> }) {
-  const seconds = 2;
+  const quitUrl = typeof data.quitUrl === "string" ? data.quitUrl : "";
   return (
     <MessagePage
       icon={<Check />}
       title="Assessment Complete"
-      message="SEB will close this session automatically. Use the button if it stays open."
+      message={
+        quitUrl
+          ? "SEB will close this session automatically. Use the button if it stays open."
+          : "Return to the submitted assessment results page to finish closing Safe Exam Browser."
+      }
       action={
-        <AutoRedirectAction
-          url={data.quitUrl}
-          label="Quit Safe Exam Browser"
-          icon={<LogOut size={16} />}
-          seconds={seconds}
-          linkId="sebQuitLink"
-          statusLabel="Quitting automatically"
-          doneLabel="Quitting now"
-        />
+        quitUrl ? (
+          <AutoRedirectAction
+            url={quitUrl}
+            label="Quit Safe Exam Browser"
+            icon={<LogOut size={16} />}
+            seconds={2}
+            linkId="sebQuitLink"
+            statusLabel="Quitting automatically"
+            doneLabel="Quitting now"
+          />
+        ) : undefined
       }
     />
   );
@@ -1319,9 +1569,7 @@ function AutoRedirectAction({
   const [remaining, setRemaining] = useState(seconds);
 
   useEffect(() => {
-    if (!url) {
-      return;
-    }
+    if (!url) return;
     const interval = window.setInterval(() => {
       setRemaining((current) => Math.max(0, current - 1));
     }, 1000);
@@ -1673,7 +1921,11 @@ async function requestJson(url: string, init?: RequestInit): Promise<Record<stri
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("application/json") ? await response.json() : {};
   if (!response.ok) {
-    throw new Error(body.message || body.error || `Request failed with status ${response.status}.`);
+    const error = new Error(body.message || body.error || `Request failed with status ${response.status}.`) as Error & {
+      code?: unknown;
+    };
+    error.code = body.error_code;
+    throw error;
   }
   return body;
 }
@@ -1693,7 +1945,7 @@ function useDefaultsDraft(
 }
 
 function normalizeCourseDefaults(input: any, courseId: string): CourseSebDefaults {
-  return {
+  const normalized = {
     id: input?.id || courseId,
     courseId: input?.courseId || courseId,
     quitPassword: input?.quitPassword || "",
@@ -1702,8 +1954,12 @@ function normalizeCourseDefaults(input: any, courseId: string): CourseSebDefault
     externalTools: mergeToolPresets(input?.externalTools || []),
     setupCompleted: !!input?.setupCompleted,
     createdAt: input?.createdAt,
-    updatedAt: input?.updatedAt
+    updatedAt: input?.updatedAt,
+    hasQuitPassword: input?.hasQuitPassword === true,
+    hasEffectiveQuitPassword: input?.hasEffectiveQuitPassword === true,
+    hasStartPassword: input?.hasStartPassword === true
   };
+  return normalized;
 }
 
 function rulesForSetting(setting: Record<string, any>, defaults: CourseSebDefaults): SebUrlRule[] {
@@ -1722,20 +1978,6 @@ function toolsForSetting(setting: Record<string, any>, defaults: CourseSebDefaul
     return mergeToolPresets(defaults.externalTools || []);
   }
   return mergeToolPresets(setting.externalTools || []);
-}
-
-function effectiveExitPassword(setting: Record<string, any>, defaults: CourseSebDefaults): string {
-  if (setting.quitPasswordOverride === true) {
-    return setting.quitPassword || "";
-  }
-  return setting.quitPassword || defaults.quitPassword || "";
-}
-
-function effectiveStartPassword(setting: Record<string, any>, defaults: CourseSebDefaults): string {
-  if (setting.startPasswordOverride === true) {
-    return setting.startPassword || "";
-  }
-  return setting.startPassword || defaults.startPassword || "";
 }
 
 function mergeToolPresets(value: ExternalToolConfig[]): ExternalToolConfig[] {

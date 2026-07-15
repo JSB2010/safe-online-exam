@@ -14,3 +14,9 @@ target
 .env
 .env.*
 !.env.example
+.local/
+*.p12
+*.pfx
+*.key
+*.key.pem
+*.private.pem

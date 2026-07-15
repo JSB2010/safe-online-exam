@@ -1,43 +1,44 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { ContentSebSetting, StructuredSebConfigRequest } from "../../shared/models.js";
+import type { StructuredSebConfigRequest } from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
   defaultQuizSebSetting,
+  legacyDomainsToUrlRules,
   normalizeCourseSebDefaults,
+  normalizeConcreteDomains,
   normalizeExternalTools,
   normalizeUrlRules,
   parseNewQuizContentId,
   urlRulesToAllowedEntries
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
-import { verifyActionToken } from "../http/action-token.js";
-import { apiError, noUserSession } from "../http/api-error.js";
-import { AssessmentService, generateAccessCode } from "../services/assessment.service.js";
+import { apiError } from "../http/api-error.js";
+import { toCourseDefaultsView, toSebSettingView } from "../http/seb-response.js";
+import { AssessmentAuthorizationService } from "../services/assessment-authorization.service.js";
+import { AssessmentService } from "../services/assessment.service.js";
 import {
   type CanvasApiPermissionError,
-  CanvasApiService,
   isCanvasApiAuthorizationError,
   isCanvasApiPermissionError
 } from "../services/canvas-api.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
+import { hasEffectiveSebQuitPassword } from "../services/seb-quit-password.js";
 
 @Controller("/api/quizzes")
 export class QuizController {
   constructor(
     private readonly config: AppConfig,
     private readonly assessments: AssessmentService,
-    private readonly canvasApi: CanvasApiService,
-    private readonly courseSettings: CourseSettingsService
+    private readonly courseSettings: CourseSettingsService,
+    private readonly authorization: AssessmentAuthorizationService
   ) {}
 
   @Post("/course/:courseId/refresh")
   async refresh(@Req() request: Request, @Param("courseId") courseId: string): Promise<Record<string, unknown>> {
-    const userId = userIdFromRequest(request, this.config);
-    if (!userId) {
-      return noUserSession();
-    }
+    const principal = this.authorization.requireInstructorForCourse(request, courseId, true);
+    const userId = principal.canvasUserId;
     try {
       const { classicQuizzes: quizzes } = await this.assessments.refreshCourseContent(courseId, userId);
       return {
@@ -62,10 +63,14 @@ export class QuizController {
     @Req() request: Request,
     @Param("courseId") courseId: string
   ): Promise<Record<string, unknown>> {
-    if (!isAuthorizedCourseRequest(request, this.config, courseId)) {
-      return noUserSession();
-    }
-    return { success: true, defaults: await this.courseSettings.getDefaults(courseId) };
+    this.authorization.requireInstructorForCourse(request, courseId);
+    return {
+      success: true,
+      defaults: toCourseDefaultsView(
+        await this.courseSettings.getDefaults(courseId),
+        this.config.value.seb.defaultQuitPassword
+      )
+    };
   }
 
   @Put("/course/:courseId/defaults")
@@ -74,21 +79,66 @@ export class QuizController {
     @Param("courseId") courseId: string,
     @Body() body: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    if (!isAuthorizedCourseRequest(request, this.config, courseId)) {
-      return noUserSession();
-    }
+    this.authorization.requireInstructorForCourse(request, courseId, true);
+    assertSafePolicyInput(body);
+    const existing = await this.courseSettings.getDefaults(courseId);
     const defaults = await this.courseSettings.saveDefaults(
       courseId,
       normalizeCourseSebDefaults({
         courseId,
-        quitPassword: typeof body.quitPassword === "string" ? body.quitPassword : null,
-        startPassword: typeof body.startPassword === "string" ? body.startPassword : null,
+        quitPassword: secretUpdate(body, "quitPassword", existing.quitPassword),
+        startPassword: secretUpdate(body, "startPassword", existing.startPassword),
         urlRules: Array.isArray(body.urlRules) ? (body.urlRules as any) : [],
         externalTools: Array.isArray(body.externalTools) ? (body.externalTools as any) : [],
         setupCompleted: body.setupCompleted !== false
       })
     );
-    return { success: true, defaults };
+    return {
+      success: true,
+      defaults: toCourseDefaultsView(defaults, this.config.value.seb.defaultQuitPassword)
+    };
+  }
+
+  @Post("/course/:courseId/passwords/reveal")
+  async revealCoursePasswords(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+    @Param("courseId") courseId: string
+  ): Promise<Record<string, unknown>> {
+    this.authorization.requireInstructorForCourse(request, courseId, true);
+    setPasswordRevealHeaders(response);
+    const defaults = await this.courseSettings.getDefaults(courseId);
+    return passwordRevealResponse(
+      defaults.startPassword || null,
+      defaults.startPassword ? "course" : "none",
+      defaults.quitPassword || null,
+      defaults.quitPassword ? "course" : this.config.value.seb.defaultQuitPassword ? "managed" : "none"
+    );
+  }
+
+  @Post("/:courseId/:quizId/passwords/reveal")
+  async revealAssessmentPasswords(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+    @Param("courseId") courseId: string,
+    @Param("quizId") quizId: string
+  ): Promise<Record<string, unknown>> {
+    const { assessment } = await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
+    setPasswordRevealHeaders(response);
+    const startPassword = assessment.seb.startPassword || null;
+    const quitPassword = assessment.seb.quitPassword || null;
+    return passwordRevealResponse(
+      startPassword,
+      startPassword ? (assessment.seb.startPasswordOverride ? "assessment" : "course") : "none",
+      quitPassword,
+      quitPassword
+        ? assessment.seb.quitPasswordOverride
+          ? "assessment"
+          : "course"
+        : this.config.value.seb.defaultQuitPassword
+          ? "managed"
+          : "none"
+    );
   }
 
   @Put("/:quizId/seb")
@@ -97,11 +147,11 @@ export class QuizController {
     @Param("quizId") quizId: string,
     @Body() body: Record<string, boolean>
   ): Promise<Record<string, unknown>> {
-    const userId = userIdFromRequest(request, this.config);
-    const courseId = courseIdFromRequest(request, this.config);
-    if (!userId || !courseId) {
-      return noUserSession();
-    }
+    const principal = this.authorization.requireInstructor(request, true);
+    assertSafePolicyInput(body as unknown as Record<string, unknown>);
+    const courseId = principal.courseId;
+    const userId = principal.canvasUserId;
+    await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
     const required = !!body.required;
     try {
       if (required) {
@@ -111,10 +161,16 @@ export class QuizController {
           userId,
           await this.courseSettings.getDefaults(courseId)
         );
-        return { success: true, setting };
+        return {
+          success: true,
+          setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
+        };
       }
       const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
-      return { success: true, setting };
+      return {
+        success: true,
+        setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
+      };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
         return canvasAuthorizationRequired(courseId, userId);
@@ -132,10 +188,8 @@ export class QuizController {
     @Body() body: StructuredSebConfigRequest,
     @Query("userId") userId?: string
   ): Promise<Record<string, unknown>> {
-    const sessionUser = userIdFromRequest(request, this.config);
-    if (!sessionUser) {
-      return noUserSession();
-    }
+    const principal = this.authorization.requireInstructor(request, true);
+    const sessionUser = principal.canvasUserId;
     if (userId && userId !== sessionUser) {
       return apiError(403, "User mismatch");
     }
@@ -144,92 +198,123 @@ export class QuizController {
       return apiError(400, "quizId or contentId is required");
     }
     const parsed = parseNewQuizContentId(contentId);
-    const courseId = body.courseId || parsed?.courseId || courseIdFromRequest(request, this.config);
-    const defaults = courseId ? await this.courseSettings.getDefaults(courseId) : null;
+    const courseId = principal.courseId;
+    if ((body.courseId && body.courseId !== courseId) || (parsed && parsed.courseId !== courseId)) {
+      return apiError(403, "Course mismatch");
+    }
+    await this.authorization.requireInstructorForAssessment(request, courseId, contentId, true);
+    const defaults = await this.courseSettings.getDefaults(courseId);
+    const urlRules = Array.isArray(body.urlRules)
+      ? normalizeUrlRules(body.urlRules)
+      : legacyDomainsToUrlRules(body.customDomains);
+    const ssoDomains = normalizeConcreteDomains(body.ssoDomains);
+    const educationalToolDomains = normalizeConcreteDomains(body.educationalToolDomains);
+    const externalTools = normalizeExternalTools(body.externalTools);
     if (parsed) {
-      const setting = await this.getOrCreateNewQuizSetting(contentId, parsed.courseId, parsed.assignmentId);
+      const setting = await this.assessments.getContentSebSetting(contentId);
+      if (!setting) {
+        return apiError(404, "Assessment not found");
+      }
       const saved = await this.assessments.saveContentSebSetting(
         applyCourseDefaultsToContentSetting(
           {
             ...setting,
-            ssoDomains: body.ssoDomains || [],
-            educationalToolDomains: body.educationalToolDomains || [],
-            customDomains: body.customDomains || urlRulesToAllowedEntries(body.urlRules),
-            urlRules: normalizeUrlRules(body.urlRules),
-            externalTools: normalizeExternalTools(body.externalTools),
+            ssoDomains,
+            educationalToolDomains,
+            customDomains: urlRulesToAllowedEntries(urlRules),
+            urlRules,
+            externalTools,
             externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
-            quitPassword: normalizeBlank(body.quitPassword),
-            startPassword: normalizeBlank(body.startPassword),
+            quitPassword: secretUpdate(
+              body as unknown as Record<string, unknown>,
+              "quitPassword",
+              setting.quitPassword
+            ),
+            startPassword: secretUpdate(
+              body as unknown as Record<string, unknown>,
+              "startPassword",
+              setting.startPassword
+            ),
             usesCourseDefaults: body.usesCourseDefaults === true,
             quitPasswordOverride: body.quitPasswordOverride === true,
             startPasswordOverride: body.startPasswordOverride === true,
-            sebRequired: true,
+            // Saving policy must not bypass the Canvas access-code commit workflow.
+            sebRequired: setting.sebRequired,
             enabled: setting.enabled
           },
           defaults
         )
       );
-      return { success: true, setting: saved };
+      return {
+        success: true,
+        setting: toSebSettingView(saved, this.config.value.seb.defaultQuitPassword)
+      };
     }
     const setting = body.quizId ? await this.assessments.getSebSettingForQuiz(body.quizId) : null;
-    const saved = body.quizId
-      ? await this.assessments.saveQuizSebSetting(
-          applyCourseDefaultsToQuizSetting(
-            {
-              ...defaultQuizSebSetting(body.quizId, courseId),
-              ...setting,
-              id: setting?.id || body.quizId,
-              quizId: body.quizId,
-              courseId: courseId || setting?.courseId || null,
-              ssoDomains: body.ssoDomains || [],
-              educationalToolDomains: body.educationalToolDomains || [],
-              customDomains: body.customDomains || urlRulesToAllowedEntries(body.urlRules),
-              urlRules: normalizeUrlRules(body.urlRules),
-              externalTools: normalizeExternalTools(body.externalTools),
-              externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
-              quitPassword: normalizeBlank(body.quitPassword),
-              startPassword: normalizeBlank(body.startPassword),
-              usesCourseDefaults: body.usesCourseDefaults === true,
-              quitPasswordOverride: body.quitPasswordOverride === true,
-              startPasswordOverride: body.startPasswordOverride === true,
-              sebRequired: true,
-              enabled: setting?.enabled ?? true
-            },
-            defaults
-          )
-        )
-      : await this.assessments.updateSebConfigurationStructured(body, true);
-    return { success: true, setting: saved };
+    if (!body.quizId || !setting) {
+      return apiError(404, "Assessment not found");
+    }
+    const saved = await this.assessments.saveQuizSebSetting(
+      applyCourseDefaultsToQuizSetting(
+        {
+          ...defaultQuizSebSetting(body.quizId, courseId),
+          ...setting,
+          id: setting?.id || body.quizId,
+          quizId: body.quizId,
+          courseId: courseId || setting?.courseId || null,
+          ssoDomains,
+          educationalToolDomains,
+          customDomains: urlRulesToAllowedEntries(urlRules),
+          urlRules,
+          externalTools,
+          externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
+          quitPassword: secretUpdate(body as unknown as Record<string, unknown>, "quitPassword", setting.quitPassword),
+          startPassword: secretUpdate(
+            body as unknown as Record<string, unknown>,
+            "startPassword",
+            setting.startPassword
+          ),
+          usesCourseDefaults: body.usesCourseDefaults === true,
+          quitPasswordOverride: body.quitPasswordOverride === true,
+          startPasswordOverride: body.startPasswordOverride === true,
+          // Saving policy must not bypass the Canvas access-code commit workflow.
+          sebRequired: setting.sebRequired,
+          enabled: setting.enabled
+        },
+        defaults
+      )
+    );
+    return {
+      success: true,
+      setting: toSebSettingView(saved, this.config.value.seb.defaultQuitPassword)
+    };
   }
 
   @Get()
   async getQuizzes(@Req() request: Request): Promise<unknown> {
-    const courseId = courseIdFromRequest(request, this.config);
-    if (!courseId) {
-      return noUserSession(403);
-    }
-    return this.assessments.getQuizzesForCourse(courseId);
+    const principal = this.authorization.requireInstructor(request);
+    return this.assessments.getQuizzesForCourse(principal.courseId);
   }
 
   @Get("/seb-settings")
   async getSettings(@Req() request: Request): Promise<Record<string, unknown>> {
-    const courseId = courseIdFromRequest(request, this.config);
-    if (!courseId) {
-      return noUserSession(403);
-    }
+    const principal = this.authorization.requireInstructor(request);
+    const courseId = principal.courseId;
     const quizzes = await this.assessments.getQuizzesForCourse(courseId);
     const settings: Record<string, unknown> = {};
     for (const quiz of quizzes) {
       const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
       if (setting) {
-        settings[quiz.id] = setting;
+        settings[quiz.id] = toSebSettingView(setting, this.config.value.seb.defaultQuitPassword);
       }
     }
     return settings;
   }
 
   @Get("/:quizId")
-  async getQuiz(@Param("quizId") quizId: string): Promise<unknown> {
+  async getQuiz(@Req() request: Request, @Param("quizId") quizId: string): Promise<unknown> {
+    const principal = this.authorization.requireInstructor(request);
+    await this.authorization.requireInstructorForAssessment(request, principal.courseId, quizId);
     return this.assessments.getQuiz(quizId);
   }
 
@@ -239,15 +324,23 @@ export class QuizController {
     @Param("courseId") courseId: string,
     @Param("quizId") quizId: string
   ): Promise<Record<string, unknown>> {
-    const userId = userIdFromRequest(request, this.config);
-    if (!userId) {
-      return noUserSession();
-    }
+    const { principal } = await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
+    const userId = principal.canvasUserId;
     try {
       const parsed = parseNewQuizContentId(quizId);
       if (parsed) {
-        const setting = await this.enableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
-        return { success: true, message: "SEB enabled.", setting };
+        const setting = await this.assessments.enableContentSebWithAccessCode(
+          courseId,
+          quizId,
+          parsed.assignmentId,
+          userId,
+          await this.courseSettings.getDefaults(courseId)
+        );
+        return {
+          success: true,
+          message: "SEB enabled.",
+          setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
+        };
       }
       const setting = await this.assessments.enableSebWithAccessCode(
         courseId,
@@ -258,7 +351,7 @@ export class QuizController {
       return {
         success: true,
         message: "SEB enabled.",
-        setting
+        setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
       };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
@@ -277,15 +370,15 @@ export class QuizController {
     @Param("courseId") courseId: string,
     @Param("quizId") quizId: string
   ): Promise<Record<string, unknown>> {
-    const userId = userIdFromRequest(request, this.config);
-    if (!userId) {
-      return noUserSession();
-    }
+    await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
     const setting = await this.courseSettings.resetQuizToDefaults(courseId, quizId);
     if (!setting) {
       return apiError(404, "No SEB setting found for this quiz");
     }
-    return { success: true, setting };
+    return {
+      success: true,
+      setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
+    };
   }
 
   @Post("/:courseId/:quizId/seb/disable")
@@ -294,18 +387,29 @@ export class QuizController {
     @Param("courseId") courseId: string,
     @Param("quizId") quizId: string
   ): Promise<Record<string, unknown>> {
-    const userId = userIdFromRequest(request, this.config);
-    if (!userId) {
-      return noUserSession();
-    }
+    const { principal } = await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
+    const userId = principal.canvasUserId;
     try {
       const parsed = parseNewQuizContentId(quizId);
       if (parsed) {
-        const setting = await this.disableNewQuiz(courseId, quizId, parsed.assignmentId, userId);
-        return { success: true, message: "SEB disabled.", setting };
+        const setting = await this.assessments.disableContentSebWithAccessCode(
+          courseId,
+          quizId,
+          parsed.assignmentId,
+          userId
+        );
+        return {
+          success: true,
+          message: "SEB disabled.",
+          setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
+        };
       }
       const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
-      return { success: true, message: "SEB disabled.", setting };
+      return {
+        success: true,
+        message: "SEB disabled.",
+        setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
+      };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
         return canvasAuthorizationRequired(courseId, userId);
@@ -320,10 +424,10 @@ export class QuizController {
   @Get("/:courseId/:quizId/seb/config")
   redirectConfig(
     @Res() response: Response,
-    @Param("courseId") courseId: string,
+    @Param("courseId") _courseId: string,
     @Param("quizId") quizId: string
   ): void {
-    response.redirect(302, `/seb/config/${courseId}/${quizId}.seb`);
+    response.redirect(302, `/seb/launch/${encodeURIComponent(quizId)}`);
   }
 
   @Post("/:courseId/:quizId/seb/regenerate-code")
@@ -332,37 +436,20 @@ export class QuizController {
     @Param("courseId") courseId: string,
     @Param("quizId") quizId: string
   ): Promise<Record<string, unknown>> {
-    const userId = userIdFromRequest(request, this.config);
-    if (!userId) {
-      return noUserSession();
-    }
+    const { principal } = await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
+    const userId = principal.canvasUserId;
     try {
-      return await this.assessments.withAssessmentLock(quizId, async () => {
-        const accessCode = generateAccessCode();
-        const parsed = parseNewQuizContentId(quizId);
-        if (parsed) {
-          const setting = await this.assessments.getContentSebSetting(quizId);
-          if (!setting?.sebRequired) {
-            return apiError(404, "SEB is not enabled for this quiz");
-          }
-          await this.canvasApi.setNewQuizAccessCode(courseId, parsed.assignmentId, accessCode, userId);
-          await this.assessments.saveContentSebSetting({ ...setting, accessCode, configKey: null });
-          return {
-            success: true,
-            message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
-          };
-        }
-        const setting = await this.assessments.getSebSettingForQuiz(quizId);
-        if (!setting?.sebRequired) {
-          return apiError(404, "SEB is not enabled for this quiz");
-        }
-        await this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId);
-        await this.assessments.saveQuizSebSetting({ ...setting, accessCode, configKey: null });
-        return {
-          success: true,
-          message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
-        };
-      });
+      const parsed = parseNewQuizContentId(quizId);
+      const setting = parsed
+        ? await this.assessments.regenerateContentAccessCode(courseId, quizId, parsed.assignmentId, userId)
+        : await this.assessments.regenerateQuizAccessCode(courseId, quizId, userId);
+      if (!setting) {
+        return apiError(404, "SEB is not enabled for this quiz");
+      }
+      return {
+        success: true,
+        message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
+      };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
         return canvasAuthorizationRequired(courseId, userId);
@@ -375,10 +462,12 @@ export class QuizController {
   }
 
   @Get("/:courseId/:quizId/seb/status")
-  async status(@Req() request: Request, @Param("quizId") quizId: string): Promise<Record<string, unknown>> {
-    if (!userIdFromRequest(request, this.config)) {
-      return { authenticated: false };
-    }
+  async status(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Param("quizId") quizId: string
+  ): Promise<Record<string, unknown>> {
+    await this.authorization.requireInstructorForAssessment(request, courseId, quizId);
     const parsed = parseNewQuizContentId(quizId);
     if (parsed) {
       const setting = await this.assessments.getContentSebSetting(quizId);
@@ -387,7 +476,11 @@ export class QuizController {
         canvasDomain: this.config.getCanvasDomain().replace(/^https?:\/\//u, ""),
         sebEnabled: !!setting?.sebRequired,
         hasAccessCode: !!setting?.accessCode,
-        configValid: !!(setting?.sebRequired && setting.accessCode),
+        configValid: !!(
+          setting?.sebRequired &&
+          setting.accessCode &&
+          hasEffectiveSebQuitPassword(setting.quitPassword, this.config.value.seb.defaultQuitPassword)
+        ),
         ssoDomains: setting?.ssoDomains || [],
         educationalToolDomains: setting?.educationalToolDomains || [],
         customDomains: setting?.customDomains || [],
@@ -407,96 +500,64 @@ export class QuizController {
       externalTools: normalizeExternalTools(setting?.externalTools)
     };
   }
+}
 
-  private async enableNewQuiz(
-    courseId: string,
-    contentId: string,
-    assignmentId: string,
-    userId: string
-  ): Promise<ContentSebSetting> {
-    return this.assessments.withAssessmentLock(contentId, async () => {
-      const accessCode = generateAccessCode();
-      await this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId);
-      const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
-      const saved = await this.assessments.saveContentSebSetting(
-        applyCourseDefaultsToContentSetting(
-          {
-            ...setting,
-            sebRequired: true,
-            enabled: true,
-            accessCode,
-            configKey: null
-          },
-          await this.courseSettings.getDefaults(courseId)
-        )
-      );
-      return saved;
-    });
+function secretUpdate(
+  body: Record<string, unknown>,
+  key: "quitPassword" | "startPassword",
+  existing: string | null | undefined
+): string | null {
+  if (!Object.hasOwn(body, key)) {
+    return existing || null;
   }
+  const value = body[key];
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "string" && value.trim() ? value : existing || null;
+}
 
-  private async disableNewQuiz(
-    courseId: string,
-    contentId: string,
-    assignmentId: string,
-    userId: string
-  ): Promise<ContentSebSetting> {
-    return this.assessments.withAssessmentLock(contentId, async () => {
-      const setting = await this.getOrCreateNewQuizSetting(contentId, courseId, assignmentId);
-      if (setting.accessCode) {
-        await this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId);
+function assertSafePolicyInput(body: Record<string, unknown>): void {
+  const rules = Array.isArray(body.urlRules) ? body.urlRules : [];
+  if (rules.some((rule) => normalizeUrlRules([rule as any]).length !== 1)) {
+    apiError(
+      400,
+      "Allowed URLs must be exact HTTPS URLs or concrete domains; regex and wildcard rules are not allowed",
+      {
+        error_code: "INVALID_SEB_URL_POLICY"
       }
-      const saved = await this.assessments.saveContentSebSetting({
-        ...setting,
-        sebRequired: false,
-        enabled: false,
-        accessCode: null,
-        configKey: null
+    );
+  }
+  for (const key of ["ssoDomains", "educationalToolDomains", "customDomains"] as const) {
+    const values = Array.isArray(body[key]) ? (body[key] as unknown[]) : [];
+    if (
+      values.some(
+        (value) =>
+          typeof value !== "string" ||
+          (key === "customDomains"
+            ? legacyDomainsToUrlRules([value]).length !== 1
+            : normalizeConcreteDomains([value]).length !== 1)
+      )
+    ) {
+      apiError(400, "SEB domain rules must use concrete hostnames without wildcards", {
+        error_code: "INVALID_SEB_DOMAIN_POLICY"
       });
-      return saved;
+    }
+  }
+  const tools = Array.isArray(body.externalTools) ? (body.externalTools as Array<Record<string, unknown>>) : [];
+  if (
+    tools.some(
+      (tool) =>
+        tool.matchType === "regex" ||
+        typeof tool.allowedPattern === "string" ||
+        (Array.isArray(tool.allowedDomains) && !tool.preset) ||
+        normalizeExternalTools([tool as any]).length !== 1
+    )
+  ) {
+    apiError(400, "External tools must use a canonical HTTPS URL or its concrete domain", {
+      error_code: "INVALID_SEB_TOOL_POLICY"
     });
   }
-
-  private async getOrCreateNewQuizSetting(
-    contentId: string,
-    courseId: string,
-    assignmentId: string
-  ): Promise<ContentSebSetting> {
-    return this.assessments.getOrCreateContentSebSetting(contentId, courseId, assignmentId);
-  }
-}
-
-function userIdFromRequest(request: Request, config: AppConfig): string | undefined {
-  return (
-    request.session?.launchData?.userId ||
-    request.session?.userId ||
-    request.session?.canvas_user_id ||
-    request.session?.user_id ||
-    actionTokenPayload(request, config)?.userId
-  );
-}
-
-function courseIdFromRequest(request: Request, config: AppConfig): string | undefined {
-  return (
-    request.session?.launchData?.courseId ||
-    request.session?.courseId ||
-    request.session?.canvas_course_id ||
-    actionTokenPayload(request, config)?.courseId
-  );
-}
-
-function actionTokenPayload(request: Request, config: AppConfig): { userId: string; courseId: string } | null {
-  const headerValue = request.header("x-auth-token");
-  return verifyActionToken(config, headerValue);
-}
-
-function isAuthorizedCourseRequest(request: Request, config: AppConfig, courseId: string): boolean {
-  const userId = userIdFromRequest(request, config);
-  const resolvedCourseId = courseIdFromRequest(request, config);
-  return !!userId && resolvedCourseId === courseId;
-}
-
-function normalizeBlank(value?: string | null): string | null {
-  return value?.trim() ? value : null;
 }
 
 function canvasAuthorizationRequired(courseId: string, userId: string): Record<string, unknown> {
@@ -515,30 +576,41 @@ function canvasPermissionDenied(error: CanvasApiPermissionError): Record<string,
     message:
       "Canvas denied this update. The saved Canvas authorization is valid, but Canvas rejected the write request. Confirm the Canvas API Developer Key allows quiz access-code write scopes, then reauthorize Canvas.",
     canvasStatus: error.status,
-    canvasPath: safeCanvasPath(error.url),
-    canvasMessage: summarizeCanvasMessage(error.responseBody)
+    canvasPath: safeCanvasPath(error.url)
   };
-}
-
-function summarizeCanvasMessage(responseBody: string): string | null {
-  try {
-    const parsed = JSON.parse(responseBody) as { errors?: Array<{ message?: string }> };
-    return (
-      parsed.errors
-        ?.map((entry) => entry.message)
-        .filter(Boolean)
-        .join("; ") || null
-    );
-  } catch {
-    return responseBody.slice(0, 300) || null;
-  }
 }
 
 function safeCanvasPath(url: string): string {
   try {
     const parsed = new URL(url);
-    return `${parsed.pathname}${parsed.search}`;
+    return parsed.pathname;
   } catch {
     return url;
   }
+}
+
+type PasswordSource = "assessment" | "course" | "managed" | "none";
+
+function passwordRevealResponse(
+  startPassword: string | null,
+  startSource: PasswordSource,
+  quitPassword: string | null,
+  quitSource: PasswordSource
+): Record<string, unknown> {
+  return {
+    success: true,
+    expiresInSeconds: 30,
+    passwords: {
+      start: { value: startPassword, source: startSource },
+      // A managed server default is intentionally never returned to the browser.
+      exit: { value: quitSource === "managed" ? null : quitPassword, source: quitSource }
+    }
+  };
+}
+
+function setPasswordRevealHeaders(response: Response): void {
+  response.setHeader("cache-control", "private, no-store, max-age=0");
+  response.setHeader("pragma", "no-cache");
+  response.setHeader("referrer-policy", "no-referrer");
+  response.setHeader("x-content-type-options", "nosniff");
 }

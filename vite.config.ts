@@ -14,7 +14,7 @@ export default defineConfig({
   build: {
     outDir: "dist/client",
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: {
       output: {
         entryFileNames: "assets/index.js",

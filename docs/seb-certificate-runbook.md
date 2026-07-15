@@ -1,160 +1,122 @@
 # SEB Certificate Runbook
 
-This app encrypts generated `.seb` downloads with the public certificate configured on the server. SEB clients need the matching private-key identity installed locally before they can open those configs.
+The service encrypts every deployed `.seb` download to a configured public certificate or public key. Cloud Run fails closed if certificate encryption is disabled or the public material is missing. The matching private identity belongs only on approved exam devices.
 
-Certificate encryption prevents casual editing of downloaded config files, but it is not the only security boundary. The server still validates the SEB Config Key before releasing the hidden Canvas access code. Treat any private key installed on a student-owned device as potentially recoverable over time.
+Certificate encryption and SEB Config Key proof are independent controls. Encryption prevents a student from opening or replacing the config without the managed identity. Config Key proof prevents the hidden Canvas access code from being released when the active settings do not match the current server-generated config. Neither control should be disabled to work around a rollout problem.
 
-## Files
+## Artifacts And Ownership
 
 The local generator creates these files under `.local/seb-certs/` by default:
 
 ```text
 seb-config-encryption-local.crt.pem   Public certificate for Cloud Run.
 seb-config-encryption-local.cer       Public certificate in DER format.
-seb-config-encryption-local.key.pem   Private key PEM. Keep private.
-seb-config-encryption-local.p12       PKCS#12 identity for client install. Keep private.
+seb-config-encryption-local.key.pem   Private key PEM. Restricted bootstrap artifact.
+seb-config-encryption-local.p12       Private client identity. Restricted bootstrap artifact.
 ```
 
-Only the public certificate belongs in Cloud Run. Do not deploy the private key or `.p12` to the app, and do not serve the `.p12` from this app.
+Only the public certificate belongs in Cloud Run. Never mount, upload, log, email, or serve the private key or `.p12` from this app. Assign a named certificate owner and record the creation date, expiration date, public-key hash, managed-device scope, and rotation date.
 
-## Generate Or Replace A Certificate
+## Generate Or Replace An Identity
 
-```bash
-bash scripts/generate-seb-config-cert.sh
-```
-
-For a named production identity:
+Create a mode-0600 password file under the ignored `.local/` directory. The generator reads the password from that file; it does not accept a password value through an environment variable or process argument.
 
 ```bash
+umask 077
+mkdir -p .local
+openssl rand -base64 48 > .local/seb-cert-p12-password
+
 SEB_CERT_NAME=seb-config-encryption-prod \
 SEB_CERT_SUBJECT="/CN=SEB Canvas LTI Config Encryption/O=School Name" \
-SEB_CERT_P12_PASSWORD="REPLACE_WITH_LONG_RANDOM_PASSWORD" \
-bash scripts/generate-seb-config-cert.sh .local/seb-certs
+bash scripts/generate-seb-config-cert.sh \
+  .local/seb-certs \
+  .local/seb-cert-p12-password
 ```
 
-Use a long random `.p12` password and store it with the `.p12`.
+Move the `.p12`, private PEM, and password file into an access-controlled administrative vault immediately after generation. Delete workstation copies after the vault upload and MDM payload creation are verified. Do not paste any of their contents into shell history, environment variables, Jamf script parameters, policy logs, tickets, or chat.
 
-## Private Key Storage
+## Private Identity Storage
 
-Preferred storage is a restricted school password-manager vault item.
+Keep the private identity outside the Cloud Run runtime-secret set. Its vault policy should provide:
 
-Store all of these together:
+- access only to the small device-management/security administrator group;
+- audited retrieval and periodic access review;
+- no student, instructor, Cloud Run runtime, or general help-desk access;
+- separate storage or permissions for the identity and its passphrase when supported;
+- an offline recovery copy protected by the school's key-management policy.
 
-- `.p12` file attachment.
-- `.p12` password.
-- Public certificate PEM attachment.
-- Public-key hash shown by `/seb/config-encryption-certificate.pem`.
-- Creation date, expiration date, and owner.
-- These retrieval and install instructions.
-
-Acceptable infrastructure storage is Google Secret Manager, restricted to a small admin group with audit logs. Store the private identity separately from runtime Cloud Run secrets, and do not mount it into the app.
-
-Example Secret Manager storage:
+The public certificate can be stored in Secret Manager for Cloud Run:
 
 ```bash
-gcloud secrets create seb_config_encryption_p12 --replication-policy=automatic
-gcloud secrets versions add seb_config_encryption_p12 --data-file=.local/seb-certs/seb-config-encryption-prod.p12
-printf '%s' 'REPLACE_WITH_P12_PASSWORD' | gcloud secrets versions add seb_config_encryption_p12_password --data-file=-
+gcloud secrets create school_canvas_seb_seb_config_encryption_cert_pem \
+  --replication-policy=automatic \
+  --data-file=.local/seb-certs/seb-config-encryption-prod.crt.pem
 ```
 
-Example retrieval for an authorized admin workstation:
+If the secret already exists, add a new version and redeploy. The deploy config mounts it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`.
 
-```bash
-gcloud secrets versions access latest --secret=seb_config_encryption_p12 > /tmp/seb-config-encryption.p12
-gcloud secrets versions access latest --secret=seb_config_encryption_p12_password
-```
+## Managed Device Deployment
 
-Delete temporary retrieved copies after installation.
+Production exams require school-managed devices. Deploy the identity with the MDM Certificates payload, not a shell script or user-facing installer.
 
-## Cloud Run Configuration
+For Jamf Pro or another Apple MDM:
 
-Cloud Run needs only the public certificate:
+1. Create a scoped test smart group of managed staff/test Macs.
+2. Create a configuration profile with a PKCS#12 Certificates payload sourced from the restricted vault.
+3. Set the key as non-extractable (`KeyIsExtractable=false`, or the equivalent console control).
+4. Restrict private-key access to the intended SEB application (`AllowAllAppsAccess=false`, plus the SEB app identity/access-control setting supported by the MDM).
+5. Prevent users from removing the profile when the device-management platform supports it.
+6. Install the profile automatically at the correct device/user channel for the SEB build in use.
+7. Confirm an unrelated app cannot use the private key and the logged-in student cannot export it.
+8. Run the LTI setup check on the test Macs, then expand scope to the managed student group.
 
-```bash
-gcloud secrets create school_canvas_seb_seb_config_encryption_cert_pem --replication-policy=automatic
-gcloud secrets versions add school_canvas_seb_seb_config_encryption_cert_pem --data-file=.local/seb-certs/seb-config-encryption-prod.crt.pem
-```
+Use the SEB code-signing requirement and bundle identity documented by the current approved SEB package; do not grant private-key access to a mutable filesystem path alone. If the MDM cannot enforce non-extractability and app restriction, stop the rollout and use an authorized technician process that can apply equivalent Keychain ACL controls. Do not weaken the profile to `AllowAllAppsAccess=true`.
 
-The deployment config injects this as `SEB_CONFIG_ENCRYPTION_CERT_PEM`.
+The repository's `scripts/install-seb-config-cert-login-keychain.sh` is intentionally retired. It exits without reading or installing secrets. Do not restore its former base64 PKCS#12, PKCS#12 password, or login-keychain password parameters: command-line and policy parameters are observable to process inspection and management logs.
 
-To confirm the active public-key hash:
+## BYOD And Manual Installation
 
-```bash
-curl -fsSI "${TOOL_URL}/seb/config-encryption-certificate.pem"
-```
+A private identity installed on an unmanaged or student-administered device cannot be treated as non-recoverable. The supported high-integrity exam policy is therefore a managed-device requirement.
 
-Check the `x-seb-public-key-hash` header.
+If a school chooses to support BYOD for a lower-assurance activity, document that exception in the assessment policy and do not reuse the production exam identity. Use a separately scoped certificate with a short lifetime, install it through an authorized technician GUI workflow, and revoke it after the activity. Never give the `.p12` or its password to the student and never provide a command containing the password.
 
-## Manual BYOD Install
+## Pre-Exam Verification
 
-Install the `.p12` into the logged-in user's login keychain:
+Before each rollout window:
 
-```bash
-security import "/path/to/seb-config-encryption.p12" \
-  -k ~/Library/Keychains/login.keychain-db \
-  -P "REPLACE_WITH_P12_PASSWORD" \
-  -x \
-  -T "/Applications/Safe Exam Browser.app"
-```
-
-The `-x` flag makes the imported private key non-extractable from that Mac. On current macOS versions, the `-T` flag alone is not always enough to suppress the first private-key access prompt. If prompted on first use, the user should enter their Mac login password and choose **Always Allow** for Safe Exam Browser.
-
-After install, launch the student setup check from the LTI app before any real exam. The setup check opens `/seb/check/config.seb`, verifies the SEB Config Key against `/api/seb/check-proof`, and gives the user a low-stakes place to approve first-use Keychain access.
-
-## Jamf Rollout
-
-Preferred Jamf rollout:
-
-1. Create a scoped test group of managed staff/test Macs.
-2. Create a user-level configuration profile with a Certificates payload containing the `.p12` identity and its passphrase.
-3. Set the profile to install automatically.
-4. Confirm the identity lands in the logged-in user's login keychain.
-5. Launch the LTI setup check and confirm the encrypted setup config opens. If macOS prompts, choose **Always Allow**.
-6. Expand scope to the managed student Mac group.
-
-If Jamf's certificate profile still causes a first-use private-key prompt, use a Jamf policy/script to import the `.p12` into the logged-in user's login keychain. The template at [scripts/install-seb-config-cert-login-keychain.sh](../scripts/install-seb-config-cert-login-keychain.sh) accepts Jamf parameter `$4` for the base64 `.p12`, `$5` for the `.p12` password, and optional `$6` for the user's login keychain password if your deployment has a supported way to provide it. Keep the `.p12` and password restricted to the policy package/script context, scope the policy only to intended devices, and rotate any identity that was previously deployed by a script that made temporary private-key material readable by the console user. The template keeps decoded private-key material in a root-owned temporary directory, prepares the import with the password supplied through an environment variable rather than a process argument, and removes temporary files after import. The policy only has to install the identity once per user/key unless the identity is rotated or the Mac is wiped; it does not need to run after every reboot.
-
-The script can run before Safe Exam Browser is installed. In that case it imports the identity into the logged-in user's login keychain and skips app-path trust entries. If `$6` is provided, the script still applies the Team ID key partition list for SEB's signing team, so the later app install can use the key without requiring the app to exist at script time. If `$6` is not provided and SEB is not installed yet, run the policy again after SEB is installed or expect the student to approve the one-time **Always Allow** prompt during the setup check. The script still requires a normal logged-in user because this rollout stores the identity in that user's login keychain.
+1. Confirm Cloud Run has `SEB_CONFIG_ENCRYPTION_ENABLED=true` and the current public certificate secret.
+2. Confirm `/seb/config-encryption-certificate.pem` returns the expected `x-seb-public-key-hash` header.
+3. Confirm the MDM profile reports installed on every scheduled device.
+4. On a managed test device, run the student setup check and open the encrypted setup config.
+5. Confirm Config Key proof succeeds.
+6. Confirm a device without the profile cannot open the config.
+7. Confirm a non-SEB app and a standard student account cannot export or use the private key.
+8. Confirm the certificate will remain valid through the assessment and recovery window.
 
 ## Rotation
 
-Use this order to avoid breaking active exams:
+Use this order outside active exams:
 
-1. Generate the replacement identity.
-2. Store the new `.p12`, password, and public certificate in the restricted vault.
-3. Deploy the new private identity to managed clients with Jamf.
-4. Verify test clients can open a config encrypted to the new public cert.
-5. Update the Cloud Run public certificate secret.
-6. Deploy the app.
-7. Instructors or students download fresh `.seb` configs.
-8. Keep the old private identity installed until old configs are no longer needed.
-9. Remove the old identity from clients after the transition window.
+1. Generate and vault the replacement identity.
+2. Create a new MDM payload with non-extractable, SEB-restricted key access.
+3. Deploy it to a test group and complete the setup check.
+4. Expand the new identity to all managed exam clients.
+5. Update the Cloud Run public-certificate secret and deploy a new revision.
+6. Verify the active public-key hash and download fresh configs.
+7. Keep the old identity only for the defined transition/recovery window.
+8. Remove the old profile and revoke/delete the old private material after that window.
 
-Emergency rotation is the same process, but disable certificate encryption temporarily only if SEB config downloads must keep working before the new private identity is available:
-
-```text
-SEB_CONFIG_ENCRYPTION_ENABLED=false
-```
-
-Use that only as a short fallback. Config Key validation remains active, but downloaded configs are plaintext in that mode.
+If the private identity is suspected compromised, pause config downloads and affected exams, rotate the identity, invalidate existing settings/config proofs, and require fresh configs. Do not disable certificate encryption or introduce a plaintext fallback.
 
 ## Troubleshooting
 
-If SEB shows "Opening Settings Failed":
+If SEB reports that opening settings failed:
 
-1. Confirm the downloaded config starts with `pkhs` after gzip decompression.
-2. Confirm `/seb/config-encryption-certificate.pem` reports the same public-key hash as the config.
-3. Confirm the matching identity exists in the user's login keychain.
-4. Confirm Safe Exam Browser is installed at `/Applications/Safe Exam Browser.app`.
-5. Re-import the `.p12` with `-x -T "/Applications/Safe Exam Browser.app"`.
+1. Confirm the download is a current config, not a file retained from before rotation.
+2. Confirm `/seb/config-encryption-certificate.pem` reports the public-key hash expected by the MDM profile.
+3. Confirm the MDM profile is installed in the intended channel and reports no payload error.
+4. Confirm Safe Exam Browser is the approved, signed build targeted by the key access control.
+5. Confirm the certificate is valid and includes the private identity on the client.
+6. Re-run the setup check before attempting a real assessment.
 
-If the Jamf script exits before import, check the Jamf policy log for the `[SEB cert install]` prefix. Common expected timing failures are: no normal console user is logged in yet, the login keychain does not exist yet, the base64 `.p12` parameter is missing/truncated, or the provided login keychain password is wrong. Missing Safe Exam Browser is logged but is no longer fatal.
-
-Useful local checks:
-
-```bash
-security find-certificate -a -Z -c "SEB Canvas LTI" ~/Library/Keychains/login.keychain-db
-security dump-keychain ~/Library/Keychains/login.keychain-db | grep -A4 -B4 E23E217CEB7DC612FFB1FEC92C3B89BEF14146FA
-```
-
-Replace the hash with the active `x-seb-public-key-hash` value.
+If the profile cannot make the key both non-extractable and app-restricted, escalate to the MDM/security administrator. Do not use the retired installer, place secrets in Jamf parameters, loosen access to all apps, or disable server-side encryption.

@@ -1,12 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
+import { assertNewSebPassword, normalizeSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
 
 type SebStartPasswordSetting = Partial<QuizSebSetting & ContentSebSetting>;
 
 const CONFIG_KEY_SALT_BYTES = 32;
 
 export function normalizeSebStartPasswordState<T extends SebStartPasswordSetting>(existing: T | null, next: T): T {
-  const startPassword = normalizeBlank(next.startPassword);
+  assertNewSebPassword(existing?.startPassword, next.startPassword, "start");
+  const startPassword = resolveSebPasswordUpdate(existing?.startPassword, next.startPassword);
   if (!startPassword) {
     return {
       ...next,
@@ -41,7 +43,7 @@ export function newConfigKeySalt(): string {
 }
 
 function normalizeBlank(value?: string | null): string | null {
-  return value?.trim() ? value.trim() : null;
+  return normalizeSebPassword(value);
 }
 
 function normalizeSalt(value?: string | null): string | null {

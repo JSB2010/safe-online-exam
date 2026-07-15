@@ -13,15 +13,18 @@ export class StaticJsController {
   @Header("content-type", "application/javascript; charset=utf-8")
   async canvasDetector(@Req() request: Request, @Res({ passthrough: true }) response?: Response): Promise<string> {
     const debugEnabled = this.config?.value.security.debugEnabled ?? true;
-    setDetectorCacheHeaders(response, debugEnabled);
+    const diagnosticsEnabled = this.config?.value.security.detectorDiagnosticsEnabled ?? false;
+    setDetectorCacheHeaders(response, debugEnabled || diagnosticsEnabled);
 
-    const script = await readFirstAvailable(detectorAssetCandidates(debugEnabled));
+    const script = await readFirstAvailable(detectorAssetCandidates(debugEnabled || diagnosticsEnabled));
     const baseUrl = this.config?.getApplicationBaseUrl() || requestBaseUrl(request);
     return script
       .replaceAll('"__SEB_BASE_URL__"', JSON.stringify(baseUrl))
       .replaceAll("'__SEB_BASE_URL__'", JSON.stringify(baseUrl))
       .replaceAll('"__SEB_DEBUG_ENABLED__"', JSON.stringify(debugEnabled))
       .replaceAll("'__SEB_DEBUG_ENABLED__'", JSON.stringify(debugEnabled))
+      .replaceAll('"__SEB_DIAGNOSTIC_MODE__"', JSON.stringify(diagnosticsEnabled))
+      .replaceAll("'__SEB_DIAGNOSTIC_MODE__'", JSON.stringify(diagnosticsEnabled))
       .replaceAll("'${SEB_BASE_URL}'", JSON.stringify(baseUrl))
       .replaceAll("${SEB_API_KEY}", "");
   }
@@ -65,14 +68,11 @@ function setDetectorCacheHeaders(response: Response | undefined, debugEnabled: b
     return;
   }
 
-  if (debugEnabled) {
-    response.setHeader("cache-control", "no-cache, no-store, must-revalidate");
-    response.setHeader("pragma", "no-cache");
-    response.setHeader("expires", "0");
-    return;
-  }
-
-  response.setHeader("cache-control", "public, max-age=3600, stale-while-revalidate=86400");
-  response.setHeader("vary", "X-Forwarded-Host, X-Forwarded-Proto, X-Forwarded-Port");
-  response.setHeader("expires", new Date(Date.now() + 3600 * 1000).toUTCString());
+  response.setHeader(
+    "cache-control",
+    debugEnabled ? "no-cache, no-store, must-revalidate" : "no-cache, must-revalidate"
+  );
+  response.setHeader("pragma", "no-cache");
+  response.vary("Origin, X-Forwarded-Host, X-Forwarded-Proto, X-Forwarded-Port");
+  response.setHeader("expires", "0");
 }

@@ -1,99 +1,99 @@
 import { Injectable, Logger } from "@nestjs/common";
 
 export interface DetectorTraceRequestMeta {
-  ip?: string;
   origin?: string;
-  userAgent?: string;
+  includeDetails?: boolean;
 }
 
-const MAX_STRING_LENGTH = 600;
-const MAX_ARRAY_LENGTH = 25;
-const MAX_OBJECT_KEYS = 40;
-const MAX_DEPTH = 5;
+interface SafeTraceEvent {
+  seq: number;
+  event: string;
+  type: "info" | "success" | "warn" | "error";
+  readyState: "loading" | "interactive" | "complete" | "unknown";
+  hidden: boolean;
+  sebDetected: boolean;
+  details?: string;
+}
 
-const SENSITIVE_KEY_PATTERN =
-  /(?:access.?code|authorization|config.?key|cookie|encryption.?key|id.?token|password|private.?key|proof(?:.?token)?|secret|token|(?:^|[_-])state(?:$|[_-]))/iu;
-const SENSITIVE_URL_PARAMS = [
-  "access_code",
-  "access-token",
-  "access_token",
-  "canvas_url",
-  "code",
-  "id_token",
-  "login_hint",
-  "proofToken",
-  "quiz_access_code",
-  "state",
-  "token",
-  "user_id"
-];
+const MAX_DETAILS_LENGTH = 6_000;
 
 @Injectable()
 export class DetectorTraceService {
   private readonly logger = new Logger("CanvasSebDetectorTrace");
 
   recordEvent(payload: unknown, meta: DetectorTraceRequestMeta = {}): void {
+    const input = asRecord(payload);
+    const traceId = safeIdentifier(input.traceId, 80);
+    const events = Array.isArray(input.events)
+      ? input.events
+          .slice(0, 25)
+          .map((event) => toSafeEvent(event, meta.includeDetails === true))
+          .filter((event): event is SafeTraceEvent => !!event)
+      : [];
     const entry = {
       source: "canvas-seb-detector",
       receivedAt: new Date().toISOString(),
-      origin: sanitizeValue(meta.origin, "origin"),
-      userAgent: sanitizeValue(meta.userAgent, "userAgent"),
-      ip: sanitizeValue(meta.ip, "ip"),
-      payload: sanitizeValue(payload)
+      origin: safeOrigin(meta.origin),
+      traceId,
+      events
     };
-
     this.logger.log(JSON.stringify(entry));
   }
 }
 
-function sanitizeValue(value: unknown, key = "", depth = 0): unknown {
-  if (SENSITIVE_KEY_PATTERN.test(key)) {
-    return "[redacted]";
+function toSafeEvent(value: unknown, includeDetails: boolean): SafeTraceEvent | null {
+  const event = asRecord(value);
+  const name = safeIdentifier(event.event, 64);
+  if (!name) {
+    return null;
   }
-
-  if (value === null || value === undefined || typeof value === "number" || typeof value === "boolean") {
-    return value;
+  const type = ["info", "success", "warn", "error"].includes(String(event.type))
+    ? (String(event.type) as SafeTraceEvent["type"])
+    : "info";
+  const readyState = ["loading", "interactive", "complete"].includes(String(event.readyState))
+    ? (String(event.readyState) as SafeTraceEvent["readyState"])
+    : "unknown";
+  const safeEvent: SafeTraceEvent = {
+    seq: Number.isSafeInteger(event.seq) && Number(event.seq) >= 0 ? Number(event.seq) : 0,
+    event: name,
+    type,
+    readyState,
+    hidden: event.hidden === true,
+    sebDetected: event.sebDetected === true
+  };
+  if (includeDetails && event.details !== undefined) {
+    safeEvent.details = safeDetails(event.details);
   }
-
-  if (typeof value === "string") {
-    return sanitizeString(value);
-  }
-
-  if (depth >= MAX_DEPTH) {
-    return "[max-depth]";
-  }
-
-  if (Array.isArray(value)) {
-    return value.slice(0, MAX_ARRAY_LENGTH).map((item) => sanitizeValue(item, key, depth + 1));
-  }
-
-  if (typeof value === "object") {
-    const sanitized: Record<string, unknown> = {};
-    for (const [entryKey, entryValue] of Object.entries(value).slice(0, MAX_OBJECT_KEYS)) {
-      sanitized[entryKey] = sanitizeValue(entryValue, entryKey, depth + 1);
-    }
-    return sanitized;
-  }
-
-  return String(value);
+  return safeEvent;
 }
 
-function sanitizeString(value: string): string {
-  const trimmed = value.length > MAX_STRING_LENGTH ? `${value.slice(0, MAX_STRING_LENGTH)}...[truncated]` : value;
-  return sanitizeUrlIfPossible(trimmed);
-}
-
-function sanitizeUrlIfPossible(value: string): string {
+function safeDetails(value: unknown): string {
   try {
-    const url = new URL(value);
-    for (const param of SENSITIVE_URL_PARAMS) {
-      if (url.searchParams.has(param)) {
-        url.searchParams.set(param, "[redacted]");
-      }
+    const serialized = JSON.stringify(value);
+    if (typeof serialized !== "string") {
+      return "[unserializable]";
     }
-    url.hash = "";
-    return url.toString();
+    return serialized.length > MAX_DETAILS_LENGTH
+      ? serialized.slice(0, MAX_DETAILS_LENGTH) + "...[truncated]"
+      : serialized;
   } catch {
-    return value;
+    return "[unserializable]";
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function safeIdentifier(value: unknown, maxLength: number): string | null {
+  const text = typeof value === "string" ? value : "";
+  return text.length <= maxLength && /^[a-z0-9-]+$/u.test(text) ? text : null;
+}
+
+function safeOrigin(value?: string): string | null {
+  try {
+    return value ? new URL(value).origin : null;
+  } catch {
+    return null;
   }
 }

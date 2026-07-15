@@ -6,33 +6,50 @@ import type { DetectorTraceService } from "../../src/server/services/detector-tr
 describe("DebugController", () => {
   it("records Canvas detector trace events only when debug mode is enabled", () => {
     const trace = { recordEvent: vi.fn() } as unknown as DetectorTraceService;
-    const enabledController = createController(true, trace);
-    const disabledController = createController(false, trace);
+    const enabledController = createController({ debugEnabled: true }, trace);
+    const disabledController = createController({ debugEnabled: false }, trace);
 
-    expect(
-      enabledController.canvasDetectorTrace({ event: "submit" }, "https://canvas.example.edu", "SEB", "127.0.0.1")
-    ).toEqual({
+    expect(enabledController.canvasDetectorTrace({ event: "submit" }, "https://canvas.example.edu")).toEqual({
       enabled: true
     });
     expect(trace.recordEvent).toHaveBeenCalledWith(
       { event: "submit" },
-      { ip: "127.0.0.1", origin: "https://canvas.example.edu", userAgent: "SEB" }
+      { origin: "https://canvas.example.edu", includeDetails: false }
     );
 
     vi.clearAllMocks();
 
-    expect(disabledController.canvasDetectorTrace({ event: "submit" }, "https://canvas.example.edu", "SEB")).toEqual({
+    expect(disabledController.canvasDetectorTrace({ event: "submit" }, "https://canvas.example.edu")).toEqual({
       enabled: false
     });
     expect(trace.recordEvent).not.toHaveBeenCalled();
   });
+
+  it("records detail-rich trace events when detector diagnostics are enabled", () => {
+    const trace = { recordEvent: vi.fn() } as unknown as DetectorTraceService;
+    const controller = createController({ debugEnabled: false, detectorDiagnosticsEnabled: true }, trace);
+
+    expect(controller.canvasDetectorTrace({ event: "submit" }, "https://canvas.example.edu")).toEqual({
+      enabled: true
+    });
+    expect(trace.recordEvent).toHaveBeenCalledWith(
+      { event: "submit" },
+      { origin: "https://canvas.example.edu", includeDetails: true }
+    );
+  });
 });
 
-function createController(debugEnabled: boolean, trace: DetectorTraceService): DebugController {
+function createController(
+  security: { debugEnabled: boolean; detectorDiagnosticsEnabled?: boolean },
+  trace: DetectorTraceService
+): DebugController {
   const config = {
     profile: "dev",
     value: {
-      security: { debugEnabled }
+      security: {
+        debugEnabled: security.debugEnabled,
+        detectorDiagnosticsEnabled: security.detectorDiagnosticsEnabled ?? false
+      }
     }
   } as unknown as AppConfig;
 

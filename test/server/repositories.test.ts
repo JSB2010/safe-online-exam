@@ -94,6 +94,22 @@ describe("InMemoryCollectionStore", () => {
 });
 
 describe("Runtime state stores", () => {
+  it("atomically claims a state digest once and permits reuse only after expiry", async () => {
+    const store = new InMemoryTransientStateStore();
+    const liveClaim = {
+      kind: "lti-state" as const,
+      payload: { nonce: "nonce-1" },
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: new Date().toISOString()
+    };
+
+    await expect(store.claim("state-digest", liveClaim)).resolves.toBe(true);
+    await expect(store.claim("state-digest", { ...liveClaim, payload: { nonce: "attacker" } })).resolves.toBe(false);
+    await store.save("state-digest", { ...liveClaim, expiresAt: new Date(Date.now() - 1) });
+    await expect(store.claim("state-digest", { ...liveClaim, payload: { nonce: "replacement" } })).resolves.toBe(true);
+    await expect(store.get("state-digest")).resolves.toMatchObject({ payload: { nonce: "replacement" } });
+  });
+
   it("atomically consumes transient state once", async () => {
     const store = new InMemoryTransientStateStore();
     await store.save("state-1", {
@@ -106,15 +122,22 @@ describe("Runtime state stores", () => {
     await expect(store.consume("state-1")).resolves.toBeNull();
   });
 
-  it("rejects live operation locks and allows release or expiry", async () => {
+  it("rejects live operation locks, renews only the live owner, and allows release or expiry", async () => {
     const store = new InMemoryOperationLockStore();
 
     await expect(store.acquire("assessment:quiz-1", "owner-1", 60_000)).resolves.toBe(true);
     await expect(store.acquire("assessment:quiz-1", "owner-2", 60_000)).resolves.toBe(false);
+    const originalExpiry = (await store.get("assessment:quiz-1"))!.expiresAt;
+    await expect(store.renew("assessment:quiz-1", "owner-2", 120_000)).resolves.toBe(false);
+    await expect(store.renew("assessment:quiz-1", "owner-1", 120_000)).resolves.toBe(true);
+    expect(new Date((await store.get("assessment:quiz-1"))!.expiresAt).getTime()).toBeGreaterThan(
+      new Date(originalExpiry).getTime()
+    );
     await store.release("assessment:quiz-1", "owner-1");
     await expect(store.acquire("assessment:quiz-1", "owner-2", 60_000)).resolves.toBe(true);
 
     await store.save("assessment:quiz-2", { ownerId: "owner-1", expiresAt: new Date(Date.now() - 1000) });
+    await expect(store.renew("assessment:quiz-2", "owner-1", 60_000)).resolves.toBe(false);
     await expect(store.acquire("assessment:quiz-2", "owner-2", 60_000)).resolves.toBe(true);
   });
 
@@ -181,6 +204,22 @@ describe("Runtime state stores", () => {
     });
     const store = new FirestoreTransientStateStore(firestore as any, "transientStates");
 
+    await expect(
+      store.claim("fresh-claim", {
+        kind: "lti-state",
+        payload: { nonce: "nonce-1" },
+        expiresAt: futureDate(),
+        consumedAt: new Date().toISOString()
+      })
+    ).resolves.toBe(true);
+    await expect(
+      store.claim("fresh-claim", {
+        kind: "lti-state",
+        payload: { nonce: "attacker" },
+        expiresAt: futureDate(),
+        consumedAt: new Date().toISOString()
+      })
+    ).resolves.toBe(false);
     await expect(store.consume("missing")).resolves.toBeNull();
     await expect(store.consume("expired")).resolves.toBeNull();
     expect(firestore.docs.has("expired")).toBe(false);
@@ -193,7 +232,7 @@ describe("Runtime state stores", () => {
     expect(firestore.docs.get("state-1")).toMatchObject({ consumedAt: expect.any(String) });
   });
 
-  it("acquires and releases Firestore operation locks atomically", async () => {
+  it("acquires, renews, and releases Firestore operation locks atomically", async () => {
     const firestore = firestoreDouble({
       live: { ownerId: "owner-1", expiresAt: futureDate() },
       expired: { ownerId: "owner-1", expiresAt: new Date(Date.now() - 1000), createdAt: "created" }
@@ -203,6 +242,11 @@ describe("Runtime state stores", () => {
     await expect(store.acquire("fresh", "owner-1", 60_000)).resolves.toBe(true);
     expect(firestore.docs.get("fresh")).toMatchObject({ ownerId: "owner-1", expiresAt: expect.any(Date) });
     await expect(store.acquire("live", "owner-2", 60_000)).resolves.toBe(false);
+    const liveExpiry = new Date(firestore.docs.get("live")!.expiresAt as Date).getTime();
+    await expect(store.renew("live", "owner-2", 120_000)).resolves.toBe(false);
+    await expect(store.renew("live", "owner-1", 120_000)).resolves.toBe(true);
+    expect(new Date(firestore.docs.get("live")!.expiresAt as Date).getTime()).toBeGreaterThan(liveExpiry);
+    await expect(store.renew("expired", "owner-1", 60_000)).resolves.toBe(false);
     await expect(store.acquire("expired", "owner-2", 60_000)).resolves.toBe(true);
 
     await store.release("missing", "owner-1");

@@ -10,6 +10,7 @@ import { QuizController } from "./controllers/quiz.controller.js";
 import { SebController } from "./controllers/seb.controller.js";
 import { StaticJsController } from "./controllers/static-js.controller.js";
 import { AssessmentService } from "./services/assessment.service.js";
+import { AssessmentAuthorizationService } from "./services/assessment-authorization.service.js";
 import { CanvasApiService } from "./services/canvas-api.service.js";
 import { CourseSettingsService } from "./services/course-settings.service.js";
 import { DetectorTraceService } from "./services/detector-trace.service.js";
@@ -20,6 +21,9 @@ import { SebAccessProofService } from "./services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "./services/seb-config-key.service.js";
 import { SebConfigurationService } from "./services/seb-configuration.service.js";
 import { SebDetector } from "./services/seb-detector.service.js";
+import { SebConfigGrantService } from "./services/seb-config-grant.service.js";
+import { SebSessionHandoffService } from "./services/seb-session-handoff.service.js";
+import { DistributedAdmissionService } from "./security/distributed-admission.js";
 
 @Module({
   controllers: [
@@ -36,6 +40,7 @@ import { SebDetector } from "./services/seb-detector.service.js";
     AppConfig,
     RepositoryProvider,
     AssessmentService,
+    AssessmentAuthorizationService,
     CanvasApiService,
     CourseSettingsService,
     DetectorTraceService,
@@ -43,9 +48,12 @@ import { SebDetector } from "./services/seb-detector.service.js";
     LtiService,
     LtiStateService,
     SebAccessProofService,
+    SebConfigGrantService,
+    SebSessionHandoffService,
     SebConfigKeyService,
     SebConfigurationService,
-    SebDetector
+    SebDetector,
+    DistributedAdmissionService
   ]
 })
 export class AppModule {}
