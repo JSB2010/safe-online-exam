@@ -4,7 +4,7 @@ Canonical guidance for coding agents working in this repository.
 
 ## First Principles
 
-This is a TypeScript rewrite of the Canvas Safe Exam Browser LTI integration. The Java/Spring/Maven implementation has been removed and should not be restored.
+This is a TypeScript Canvas Safe Exam Browser LTI integration. Preserve its Canvas LTI URLs, Cloud Run service names, Firestore database IDs, SEB configuration behavior, and public compatibility endpoints.
 
 Preserve behavior before refactoring. Canvas LTI URLs, Cloud Run service names, Firestore database IDs, SEB configuration behavior, and public compatibility endpoints are part of the product contract.
 
@@ -98,7 +98,7 @@ Do not migrate to pnpm, Bun, or Turborepo only for novelty. Revisit pnpm workspa
 
 ## Environment Management
 
-Runtime config is environment-variable based. There are no Java `.properties` files.
+Runtime configuration is environment-variable based.
 
 - Use `.env.example` as the documented local template.
 - Do not commit real `.env` files.
@@ -167,9 +167,11 @@ test/
   server/              Vitest unit/service tests
 docs/
   architecture.md
+  canvas-setup.md
+  configuration.md
   deployment.md
+  certificate-management.md
   testing.md
-  tooling.md
 ```
 
 ## Frontend Rules
@@ -190,6 +192,8 @@ Primary docs:
 
 - `README.md`
 - `docs/architecture.md`
+- `docs/canvas-setup.md`
+- `docs/configuration.md`
 - `docs/deployment.md`
+- `docs/certificate-management.md`
 - `docs/testing.md`
-- `docs/tooling.md`

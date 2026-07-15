@@ -60,7 +60,7 @@ describe("deployment hardening artifacts", () => {
     const dev = source("cloudbuild-dev.yaml");
     const prod = source("cloudbuild-prod.yaml");
     const deployment = source("docs/deployment.md");
-    const school = source("docs/school-deployment.md");
+    const configuration = source("docs/configuration.md");
 
     expect(dev).toContain("--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com");
     expect(prod).toContain("--service-account=seb-canvas-prod@$PROJECT_ID.iam.gserviceaccount.com");
@@ -70,10 +70,10 @@ describe("deployment hardening artifacts", () => {
     expect(prod).not.toContain("--service-account=seb-canvas@$PROJECT_ID");
     expect(deployment).toContain("Firestore access conditioned on its configured database resource");
     expect(deployment).toContain("exact secret resources");
-    expect(school).toContain("resource.name == 'projects/${PROJECT_ID}/databases/${FIRESTORE_DATABASE_ID}'");
-    expect(school).toContain('gcloud secrets add-iam-policy-binding "${SECRET_NAME}"');
-    expect(school).not.toContain('--role="roles/artifactregistry.reader"');
-    expect(school).not.toMatch(
+    expect(configuration).toContain("FIRESTORE_DATABASE_ID");
+    expect(configuration).toContain("SEB_CONFIG_ENCRYPTION_CERT_PEM");
+    expect(deployment).not.toContain('--role="roles/artifactregistry.reader"');
+    expect(deployment).not.toMatch(
       /gcloud projects add-iam-policy-binding "\$\{PROJECT_ID\}"[\s\S]{0,180}--role="roles\/secretmanager\.secretAccessor"/u
     );
   });

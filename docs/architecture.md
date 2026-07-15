@@ -1,168 +1,234 @@
 # Architecture
 
-## Purpose
+## System Purpose
 
-This service connects Canvas LMS to Safe Exam Browser (SEB). Instructors launch the tool from Canvas, authorize Canvas API access, choose which quizzes require SEB, and the service updates Canvas access codes. Students receive SEB configuration files and are redirected back into Canvas only after SEB can prove it is using the generated configuration.
+Canvas Safe Exam Browser LTI is an LTI 1.3 tool for requiring Safe Exam Browser (SEB) on Canvas Classic Quizzes and New Quizzes. It has three connected responsibilities:
 
-## Framework Choice
+1. Give instructors a course-scoped interface for discovering Canvas assessments and managing SEB policy.
+2. Generate protected SEB configurations and establish a Canvas session inside SEB without transferring a normal-browser session cookie.
+3. Release the Canvas access code and approved web-tool capability only when SEB proves that it is using the current configuration.
 
-The rewrite uses NestJS for the backend and React/Vite for the UI.
-
-NestJS was chosen because the original app is an HTTP API plus server-rendered workflow service, not a content website. It provides clear controller/service/module boundaries, dependency injection, and straightforward testing while keeping deployment as one Cloud Run container. React/Vite handles app-shell routes and instructor/student UI without introducing a second deployable service.
+The service is not a general Canvas proxy. A deployment is configured for one Canvas origin and one LTI deployment boundary. All identity and authorization data used for a request comes from a validated LTI launch or a server-issued, bound capability.
 
 ## Runtime Shape
 
-```text
-Canvas
-  -> LTI 1.3 OIDC login and launch
-  -> Canvas OAuth callback
-  -> SEB detector script requests
-
-Cloud Run NestJS service
-  -> controllers validate route/session input
-  -> services handle Canvas, LTI, SEB, quiz, and content behavior
-  -> repositories persist to Firestore
-  -> React app shell hydrates workflow pages
-
-Firestore
-  -> assessments, course defaults, Canvas OAuth tokens, runtime state
+```mermaid
+flowchart LR
+  Canvas["Canvas"] -->|"OIDC login and signed LTI launch"| App["NestJS service"]
+  Canvas -->|"OAuth and REST/New Quiz APIs"| App
+  App -->|"assessment, course, token, session, state"| Firestore["Firestore"]
+  App -->|"React app shell"| Browser["Instructor or student browser"]
+  Canvas -->|"theme loader"| Detector["Canvas detector script"]
+  Detector -->|"Config Key proof and one-time redemption"| App
+  App -->|"encrypted .seb configuration"| SEB["Safe Exam Browser"]
+  SEB -->|"Canvas session URL and assessment"| Canvas
 ```
 
-## Main Components
+The application is one Node.js process. NestJS controllers expose HTTP endpoints, services own protocol and business behavior, repositories provide Firestore/in-memory storage, and React renders page views supplied by the server app shell. The detector is a separately served browser asset that runs on Canvas quiz pages.
 
-- `src/server/main.ts`: Nest bootstrap, session cookies, CORS, static React assets.
-- `src/server/config/app-config.ts`: environment normalization and compatibility with old Spring profile variables.
-- `src/server/data/repositories.ts`: Firestore-backed repositories plus in-memory stores for tests and local smoke checks.
-- `src/server/data/session-store.ts`: Express session store backed by the repository layer for Cloud Run multi-instance routing.
-- `src/server/controllers/lti.controller.ts`: Canvas LTI login, launch, config, and deep-link endpoints.
-- `src/server/controllers/oauth.controller.ts`: Canvas OAuth2 authorize/callback/status flow.
-- `src/server/controllers/quiz.controller.ts`: instructor quiz APIs for refresh, enable, disable, regenerate, status, and structured SEB settings.
-- `src/server/controllers/seb.controller.ts`: student SEB routes, config downloads, proof/access-code APIs, validation, redirects, and exit pages.
-- `src/server/services/canvas-api.service.ts`: Canvas REST/New Quiz API calls and OAuth token usage.
-- `src/server/services/assessment.service.ts`: unified Classic Quiz/New Quiz assessment persistence, cached Canvas metadata, and SEB enable/disable behavior.
-- `src/server/services/seb-configuration.service.ts`: `.seb` plist generation and allowed-domain policy.
-- `src/server/services/seb-config-key.service.ts`: Config Key hashing and proof validation.
-- `src/server/services/seb-access-proof.service.ts`: short-lived one-time proof tokens.
-- `src/client/app.tsx`: React views for instructor dashboard, SEB-required/download pages, and exit pages.
+## Code Ownership
 
-Tooling and CI choices are documented separately in `docs/tooling.md`.
+| Area                      | Primary locations                                                           | Responsibility                                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Bootstrap and HTTP policy | `src/server/main.ts`, `src/server/http/`                                    | Express session setup, CORS, security headers, app-shell rendering, request integrity, bounded upstream responses. |
+| Configuration             | `src/server/config/app-config.ts`                                           | Environment parsing, normalizing aliases, and hardened-runtime validation.                                         |
+| LTI                       | `lti.controller.ts`, `lti.service.ts`, `lti-state.service.ts`               | OIDC initiation, signed token validation, state encryption/replay claim, role routing, dynamic registration.       |
+| Canvas OAuth and APIs     | `oauth.controller.ts`, `canvas-api.service.ts`                              | Instructor/student authorization, token refresh, bounded Canvas REST/New Quiz requests, session-token handoff.     |
+| Assessment policy         | `quiz.controller.ts`, `assessment.service.ts`, `course-settings.service.ts` | Discovery, Canvas access-code mutations, course defaults, per-assessment overrides, exam tools.                    |
+| SEB lifecycle             | `seb.controller.ts`, `seb-configuration.service.ts`, `seb-*.service.ts`     | Configuration grants, configuration generation, proof, access-code redemption, setup check, exit grants.           |
+| Browser detector          | `src/server/assets/canvas-seb-detector.js`, `static-js.controller.ts`       | Quiz-page launch UI, access-code filling, approved tools, completion detection, diagnostic reporting.              |
+| Persistence               | `src/server/data/repositories.ts`, `session-store.ts`                       | Firestore documents, atomic consumption/claims, distributed rate budgets, locks, Express sessions.                 |
 
-## Data Model
+## Identity And Authorization
 
-Assessment documents are keyed by the public content ID used in SEB and LTI routes. Classic Quiz assessment IDs use:
+### LTI launch
 
-```text
-classicquiz_{quizId}
-```
+Canvas initiates OIDC at `/lti/login`. The service verifies the issuer, requested target link URI, configured client ID, and configured deployment ID before creating encrypted state. State is valid for ten minutes and is additionally bound to a short-lived, `HttpOnly`, secure browser transaction cookie.
 
-New Quiz assessment IDs use:
+Canvas posts an ID token to `/lti/launch`. The service validates:
 
-```text
-newquiz:{courseId}:{assignmentId}
-```
+- RS256 signing against the configured Canvas JWKS;
+- issuer, audience, nonce, token age, issued/expiry timestamps, LTI version, message type, and deployment ID;
+- the target link URI and initiation state tuple;
+- the initiating browser transaction cookie; and
+- a durable, atomic state claim in Firestore to prevent replay.
 
-Firestore collections:
+After successful validation, the server regenerates the Express session and stores a verified LTI principal. The principal contains only signed launch claims: issuer, deployment, subject, numeric Canvas user ID, course ID, roles, and custom fields. Query parameters and request bodies cannot substitute for it.
 
-- `assessments`: one document per Canvas assessment/content item, including Canvas metadata plus SEB enforcement, access-code, Config Key, URL rule, and exam-tool state.
-- `courses`: one document per Canvas course, including setup completion and course-level SEB defaults.
-- `canvasOAuthTokens`: Canvas OAuth access and refresh tokens keyed by Canvas user ID.
-- `sessions`: Express `JSESSIONID` payloads keyed by hashed session ID.
-- `transientStates`: short-lived OAuth state, LTI replay claims, and SEB proof records keyed by hashed token/state.
-- `operationLocks`: short-lived assessment update leases used while mutating Canvas access codes and matching Firestore state.
+Instructors receive the management view. Students receive a launch-only flow and never receive instructor management actions. A signed Canvas numeric user ID is required for Canvas REST authorization; a Canvas administrator must refresh the LTI registration if Canvas does not supply it.
 
-The Cloud Run deployment is safe to run with multiple instances. Durable application data and short-lived runtime state are both shared through Firestore; `USE_IN_MEMORY_STORE=true` is rejected when the app detects Cloud Run.
+### Canvas OAuth
 
-## LTI Flow
+An LTI launch authenticates a person but does not authorize Canvas API calls. The application uses a separate Canvas OAuth authorization for API access:
 
-1. Canvas starts OIDC login at `/lti/login`.
-2. The service creates encrypted, authenticated, self-contained state and nonce using `LtiStateService`. It also puts a fresh per-transaction secret in one fixed-name `HttpOnly`, `Secure`, `SameSite=None`, `__Host-` cookie and stores only that secret's hash inside the encrypted state. Issuance remains stateless and works across instances; a new login supersedes any unfinished login in the same browser without accumulating cookies.
-3. The browser is redirected to Canvas authorization.
-4. Canvas posts the signed launch to `/lti/launch`. For the assessment-specific target created by the detector popup, the signed `target_link_uri` is `/seb/launch/:contentId`; after validation the callback stores a two-minute, single-use handoff and redirects to that route.
-5. Before token validation or state consumption, both launch callbacks require the exact browser-transaction cookie created by the initiating login. A copied state cannot be completed from a different browser. The cookie supports Canvas's cross-site `form_post`, expires with the ten-minute state window, and is cleared immediately after a successful atomic claim.
-6. `LtiService` validates the ID token against Canvas JWKS, issuer, audience, nonce, the configured deployment ID, and the initiating login's issuer/target/deployment tuple.
-7. The callback atomically claims the encrypted state in Firestore to prevent replay, regenerates the session ID, and stores an immutable verified principal derived only from the signed launch.
-8. Instructor launches render with course/user context and quiz management actions.
-9. Course-navigation student launches render a launch-only list of SEB-enabled assessments from cached course settings. On an assessment page, the detector popup adds a same-tool `launch_url` to Canvas's installed external-tool route. Canvas validates the tool host and performs the normal signed LTI launch for that exact assessment. The server consumes the signed single-use handoff, mints the existing one-time configuration grant, and redirects directly to the `sebs://` URL, so there is no second launch button. A reopened direct-launch page returns to the Canvas course rather than issuing another configuration. A raw or reusable `.seb` URL is never placed in Canvas JavaScript. Students do not see instructor settings or Canvas OAuth actions. Learner release additionally requires a completed, bounded, fully paginated Canvas discovery no more than 24 hours old that found the assessment published and within its global unlock/lock window. Omitted records are retained for instructor reconciliation but tombstoned for learners; failed discovery marks cached records stale and also fails closed. Legacy records, invalid timestamps, and timestamps more than five minutes in the future remain unavailable until an instructor completes a successful refresh.
+1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from an existing verified launch.
+2. The service records encrypted, one-time state and redirects to Canvas.
+3. `/api/oauth2callback` verifies state and exchanges the authorization code.
+4. Firestore stores the token by numeric Canvas user ID; `CanvasApiService` refreshes it when necessary.
 
-The public JWKS endpoint is `/.well-known/jwks.json`. In production the private key must come from `LTI_PRIVATE_KEY`.
+Students use the same OAuth mechanism only to obtain the narrow Canvas session-token permission required for the SEB session handoff: `url:GET|/api/v1/login/session_token`. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
 
-## Canvas OAuth Flow
+## Assessment And Course Model
 
-LTI launch proves Canvas identity but does not provide the Canvas API token needed to read course content or update quiz access codes. Instructor API actions use a separate Canvas OAuth2 flow:
+### Identifiers
 
-1. `/api/oauth2authorize` creates an encrypted one-time state in Firestore and redirects to Canvas.
-2. Canvas redirects to `/api/oauth2callback`.
-3. The service exchanges the code for access/refresh tokens.
-4. Tokens are stored in Firestore in `canvasOAuthTokens`.
-5. `CanvasApiService` refreshes expiring access tokens with the stored refresh token before quiz, New Quiz, and assignment calls.
-6. If Canvas rejects an access token with `401`, the service refreshes once and retries the API call before asking the instructor to reauthorize.
+All persisted assessment documents use a canonical public content ID:
 
-## SEB Enforcement Flow
+| Assessment type | Canonical ID                        | Canvas mutation target   |
+| --------------- | ----------------------------------- | ------------------------ |
+| Classic Quiz    | `classicquiz_{quizId}`              | Quiz access-code API     |
+| New Quiz        | `newquiz:{courseId}:{assignmentId}` | New Quiz access-code API |
 
-1. Instructor enables SEB for a quiz/content item.
-2. The service generates a secure access code.
-3. Canvas is updated:
-   - Classic Quiz: quiz access code via Canvas quiz API.
-   - New Quiz: New Quiz API access code endpoint.
-4. The SEB setting is saved with `sebRequired`, `enabled`, and `accessCode`.
-5. Student launches the assessment.
-6. Non-SEB browsers receive a React page that offers the `.seb` configuration download.
-7. Downloading the config uses a canonical Canvas start URL, generates the inner config without persisting a replayable Config Key, and returns a certificate-encrypted `pkhs` `.seb` file. Cloud Run rejects startup if certificate wrapping or its validity-checked X.509 certificate is missing, and each assessment download rechecks that the cached certificate is currently valid. Classic Quizzes use `/quizzes/:quizId/take`; New Quizzes use the stable `/assignments/:assignmentId` entry route and let Canvas redirect to the student-specific `/taking/:attemptId` session.
-8. If an exam start password is configured, SEB prompts for that password before opening the exam config.
-9. SEB opens the configured Canvas URL.
-10. The detector script validates strict Config Key proof and retrieves the access code, approved tools, and a setting-generation-bound exit grant through a Firestore-backed one-time proof token. On an exact New Quiz assignment route it starts this exchange once before Canvas's asynchronous access-code field necessarily exists, then waits for one text/password input anchored to Canvas's access-code prompt and unique Submit control. Canvas may render that input as password, text, or an input with the default text type; the detector accepts those real component variants but refuses ambiguous input groups. An attempt-history view may prime the same config-bound capability, but it shows no access-code error and no tool sidebar. Tools are cached only in the current tab session, stay hidden on the access-code gate and attempt-history views, and render immediately when the active quiz-taking page appears.
-11. For Classic Quizzes, the detector lets Canvas's own unanswered-question confirmation run first, then submits the exact same-origin final-attempt form without leaving the detector-loaded page. It opens the SEB exit page only after Canvas returns the exact quiz-detail route with its server-rendered completed-submission or withheld-results structure. For New Quizzes, the detector watches for Canvas's late-rendered access gate, treats the page-level Submit control as a request to open Canvas's confirmation dialog, records final-submit intent only from that dialog, and requires Canvas's authoritative results UI before showing the SEB exit page. Ambient DOM text, URL changes, unrelated forms, and timers cannot mark an assessment complete. A cancelled, failed, or structurally unconfirmed submission remains in Canvas with a blocking proctor-help message. After confirmed completion, the detector presents an explicit Quit Link through the bound exit grant; the exit page follows that link after a two-second countdown, and the link redirects to the exact HMAC-authenticated Quit URL embedded in the current config. The redundant native SEB Quit URL confirmation is disabled. Native or early quit continues to require the configured password.
+The `assessments` collection stores Canvas discovery data, availability verification, and SEB state. `courses` stores course-level defaults and its exam-tool catalog. Course defaults can provide URL policy, start/exit password policy, and selected exam tools; an assessment may inherit defaults or retain an explicit list of course tool IDs.
 
-The student launch page also exposes a setup check that downloads `/seb/check/config.seb`. That config starts on `/seb/check`, is allowlisted only for the LTI app host, and validates against `/api/seb/check-proof`. It is intentionally separate from quiz settings and never releases Canvas access codes; its purpose is to verify certificate decryption, SEB runtime detection, service connectivity, storage, and Config Key proof before a real assessment.
+### Canvas discovery and availability
 
-Assessment configs explicitly disable application and user switching, virtual machines, additional displays, screen capture/sharing/mirroring, AirPlay, Siri and dictation, developer consoles, OS escape shortcuts, printing, downloads, uploads, open/save panels, and non-SEB clipboard access. In-browser camera, microphone, and screen capture (`browserMediaCapture*`) are disabled alongside the legacy `allowAudioCapture`/`allowVideoCapture` keys they replace in SEB 3.7, cookies are cleared at session start as well as end so each exam begins with the fresh SEB cookie jar the Canvas session hand-off assumes, and on macOS SEB must run from the system Applications folder (`forceAppFolderInstall` without `allowUserAppFolderInstall`) so a student-writable copy of the app is refused. They also require process/session monitoring, the Windows SEB service, a private clipboard, and request the Windows create-new-desktop kiosk mode. On macOS they enforce Apple's Automatic Assessment Configuration (AAC) assessment mode through the overlapping `enableMacOSAAC` (SEB 3.2–3.6.x, off by default) and `lockdownModePolicy` (SEB 3.7+, value 2 = enforce AAC) keys, with `aacDnsPrePinning` covering the macOS releases where AAC otherwise fails DNS resolution. Because SEB falls back to its weaker user-space classic kiosk mode — or, under the 3.7 enforce policy, to no kiosk mode at all — when the OS cannot run AAC, the config also floors macOS at 12.1 (the first release where AAC works unconditionally) via `allowMacOSVersionNumberCheckFull`/`allowMacOSVersionNumberMajor|Minor|Patch`, with the coarser `minMacOSVersion` (macOS 12) as the legacy-client fallback. AAC blocks screen capture, app switching, Siri, and dictation at the OS level, but it also blocks third-party assistive technology; accommodations that need such tools require a separate proctoring arrangement rather than a weakened baseline. Because `createNewDesktop` and the macOS lockdown policy are session-wide and can be governed by the installed client's local settings, the managed-device baseline must enforce the same kiosk/AAC modes. The setup check config carries the same macOS AAC and version-floor keys so an unsupported Mac fails the setup check instead of an exam. JavaScript, reload controls, and SEB-managed additional browser windows remain enabled so Canvas, New Quizzes, and explicitly allowlisted web tools continue to work. No native third-party applications are added to `permittedProcesses`, and the generated config intentionally does not replace SEB's built-in prohibited-process presets.
+Instructor discovery refreshes Classic and New Quiz data from Canvas. A learner can use an assessment only when its cached Canvas verification is current, explicitly verified, published, and within its global unlock/lock window. The verification window is 24 hours. Missing records are retained for instructor reconciliation but fail closed for learners; a failed refresh marks the cached discovery stale.
 
-The Config Key integration uses the SEB JavaScript API and therefore requires SEB 3.0 or newer on macOS/iOS and 3.3.2 or newer on Windows. Assessment configs additionally request Windows 3.6 or newer through `sebAllowedVersions`, which is the first Windows release family capable of enforcing that file-level version floor. `sebAllowedVersions` is not implemented by SEB for macOS, so the configs floor Macs on the OS version instead (macOS 12.1+ via the `allowMacOSVersionNumber*` keys) and rely on device policy to pin the SEB build itself. Older clients cannot enforce an unknown version-restriction key, so production device policy must pin a current school-approved stable SEB build and the setup check must pass before an assessment. The setup check proves API/config compatibility; it does not replace MDM version enforcement or application-integrity verification.
+Assessment updates use short-lived Firestore operation locks while Canvas and Firestore state are changed. This prevents concurrent updates from leaving the Canvas access code and the persisted SEB setting out of sync.
 
-Course defaults are stored per Canvas course. They include an optional exam start password, a default exit password, structured allowed URL rules, and a persisted exam-tool catalog. A new or pre-catalog course is seeded once with four disabled tools: Desmos Graphing Calculator (`https://www.desmos.com/calculator`), Desmos Scientific Calculator, GeoGebra Graphing Calculator, and GeoGebra Scientific Calculator. After that, every catalog entry is a course-owned record: instructors may rename, retarget, edit resources, or delete a preloaded entry, and deletion persists without automatic restoration. Every entry has an exact HTTPS launch URL and a typed access manifest: exact page, path-and-children, or an explicitly confirmed whole-domain exception. Regexes, wildcard hosts, credentials, identity-provider hosts, and unreviewed legacy patterns are rejected. User-entered general URL rules likewise support only exact HTTPS URLs and concrete whole-domain entries; unsafe persisted rules are quarantined instead of compiled into a config.
+### Exam tools and URL policy
 
-An assessment stores either `externalToolIds: null` to use its course default toggles or an explicit selected-ID list. It never owns a URL or resource definition. Course catalog changes propagate the current safe definitions to every assessment; defaulted assessments use the course toggles, overrides retain their IDs, and deleting a catalog entry removes it from all resolved settings. Only enabled, resolved selections enter the settings fingerprint, generated SEB `URLFilterRules`, Config Key proof response, and detector capability. The launch URL is always an `exact:` rule, so a root page is not accidentally expanded to its whole domain. A path rule is deliberately broader only below its named path; a whole-domain rule requires UI confirmation and remains visibly broad. `URLFilterEnableContentFilter` is intentionally disabled so Canvas-managed embedded resources can change without granting their shared storage and CDN hosts as top-level navigation destinations. Canvas-internal quiz and assignment rules separately allow dynamic query strings needed by Canvas. Canvas itself is restricted to the configured quiz or assignment URL family and same-tenant static asset paths; even the course-files page is not a navigation destination. New Quiz configs additionally allow only the configured Canvas tenant's regional `quiz-lti` and `quiz-api` service hosts. The detector receives the selected tool list only with the proof-gated access-code exchange, sanitizes it again, and keeps it in the current tab's session storage. It deliberately hides the sidebar on an access-code challenge or attempt-history page and renders it from that cache as soon as the active `/take` page is visible. The draggable sidebar has a native collapse button, viewport-clamped restored position, and per-tool window reuse; URL filtering remains the enforcement boundary.
+Course-owned exam tools have an exact HTTPS launch URL and typed resource rules: exact URL, a path and descendants, or an explicitly confirmed whole-domain rule. User-entered general rules are restricted to exact HTTPS URLs or concrete domains. Wildcards, credentials, identity-provider hosts, arbitrary regular expressions, and unsafe historical patterns are rejected or quarantined.
 
-`npm run migrate:exam-tools -- --dry-run` computes the same conversion without a write; `--apply` persists it. The migration seeds stored catalogs for existing courses, converts the legacy ACT/testing Desmos entry to standard Desmos, promotes quiz-only custom definitions as disabled course tools while keeping their originating selections, and clears each migrated assessment's stale Config Key. It is idempotent. A new course receives its stored default catalog after its first verified instructor launch, not from a read path.
+The detector sidebar is an affordance only. The SEB URL filter in the generated configuration is the control that determines what can load. Changing any selected tool or URL policy changes the configuration fingerprint; students must download a new configuration.
 
-Generated `.seb` downloads are certificate-encrypted using SEB macOS-compatible `pkhs` public-key-hash format. The server stores only the public certificate or public key and never needs the private key. Cloud Run requires encryption and a validity-checked X.509 certificate; public-key-only material remains a local-development fallback. Managed clients receive the matching private identity through an MDM Certificates payload configured as non-extractable and app-restricted; the retired login-keychain importer does not accept or install secrets. If an exam start password is set, the inner SEB payload also uses SEB `pswd` password encryption and includes a native `configKeySalt` value. The public certificate, when configured, is available from `/seb/config-encryption-certificate.pem` and `/seb/config-encryption-certificate.cer`; the private `.p12` identity is never served by the app.
+## SEB Lifecycle
 
-The generated URL filter keeps assessment navigation scoped to the configured Canvas course/content paths, the issued one-time Canvas session URL, and configured exam resources. It does not permit Canvas's general login family, Google, an identity provider, or legacy `ssoDomains`. Student Canvas authorization occurs once in the regular browser before SEB starts; the service then creates a fresh Canvas session URL during config generation. No wildcard Google, Canvas, Instructure, or user-content host is added.
+### Instructor configuration
 
-Certificate and password encryption harden the file against editing, but the server-side security boundary remains strict Config Key proof before releasing the hidden Canvas access code. Browser-provided proof is accepted only for the exact configured Classic Quiz or New Quiz assignment path family; assignment IDs that merely share a prefix are rejected. Proof tokens are single-use, short-lived, and bound to the current setting generation. The server deterministically regenerates the current inner config and computes its expected Config Key during proof verification rather than storing a replayable key at download time. Any SEB-affecting setting change alters that expected key and invalidates outstanding proof, so students must download a fresh config. Changing the exam start password rotates `configKeySalt`, which makes older passwordless or differently passworded configs fail Config Key validation.
+When an instructor enables SEB, `AssessmentService` creates an access code, mutates the appropriate Canvas assessment, and persists SEB state only after the mutation is successful. Enabling requires an effective exit password: assessment override, course default, or configured managed default. Optional start passwords protect the inner configuration payload. Password responses are redacted by default; an instructor can make a narrowly bound, short-lived reveal request.
 
-Config downloads do not write Config Keys to Firestore. Proof validation is derived from the current assessment settings, and setting-generation digests bind outstanding one-time proofs to that exact state. Canvas access-code enable, disable, and regenerate operations use short Firestore leases per assessment so two instances do not race Canvas writes against Firestore writes.
+### Student configuration download
 
-The cached Canvas availability gate is course-global. Canvas differentiated-assignment overrides, module prerequisites, individual attempt state, and enrollment-specific availability still require an assessment resource-link/start-ticket design that binds a signed learner launch to the specific assessment and attempt; cached instructor discovery does not claim to prove those per-user conditions.
+Student downloads do not use a reusable `.seb` link. A verified LTI principal requests a configuration grant, and the server mints a one-time 120-second capability bound to the principal, course, content ID, and current settings fingerprint. `GET /seb/config/:courseId/:contentId.seb` consumes that capability.
 
-`APP_DEBUG_ENABLED` is the single local debug toggle for the service. It enables type-only detector diagnostics, sanitized detector trace callbacks to `/api/debug/canvas-detector-trace`, and no-store detector script serving. It defaults to false, Cloud Run rejects true, and trace payloads do not include page content or user-supplied message text. With debug disabled, the detector callback is dormant and the same public detector URLs serve the minified asset with cache headers.
+For a student download, the service obtains a fresh Canvas session URL and builds the SEB start URL around it. The configuration contains the canonical Canvas assessment entry route, SEB URL policy, Config Key behavior, and an HMAC-bound quit URL. It is then encrypted to the configured public certificate. The service holds only public encryption material.
 
-## Security Notes
+### Config Key proof and access-code release
 
-- Production requires `STATE_ENCRYPTION_KEY`; dev has a fallback for local testing.
-- Cloud Run requires explicit school configuration through env vars or Secret Manager, including `TOOL_URL`, `CANVAS_DOMAIN`, `LTI_DEPLOYMENT_ID`, other LTI credentials, Canvas OAuth credentials, Firestore database ID, certificate encryption, and runtime secrets.
-- LTI login and launch fail closed unless the issuer, client, target URI, nonce, audience, and deployment ID all match the configured school and the initiating login. A `GET /lti/launch` can only reuse an already verified session; query parameters cannot create an identity.
-- Sessions use `JSESSIONID` for legacy cookie compatibility and are stored in Firestore by hashed session ID.
-- Secure cookies are used when the profile is prod or `TOOL_URL` is HTTPS.
-- Credentialed CORS allows exactly the configured Canvas origin and tool origin. It does not trust wildcard Canvas suffixes or arbitrary localhost origins.
-- Instructor APIs require the verified instructor principal, exact course/content ownership, and a session-bound action token for mutations. OAuth authorization is bound to that same principal.
-- Ordinary instructor settings treat access codes, Config Keys, start passwords, and quit passwords as redacted inputs; responses contain only presence booleans. Saved course/assessment passwords are returned only by the explicit instructor-authorized, session-bound, same-origin reveal POST and never include a managed server default.
-- Newly supplied start and exit passwords pass one server-side 8–128 character policy requiring at least five different letters or numbers. Letters-only and numbers-only values are allowed; common, sequential, repetitive, low-diversity, and control-character values are rejected with a specific message that never reflects the attempted secret. Because students may know an exam start password, it must differ from the effective course, quiz, or managed-server exit password. Legacy weak or reused passwords cannot generate an assessment config and must be replaced. Ordinary settings and bootstrap payloads remain redacted; saved values are available only through an explicit instructor-authorized, same-origin, session-bound, no-store reveal response that the UI clears after 30 seconds. Managed server defaults are never returned.
-- Enabled assessments and assessment config generation require an effective nonempty quit password from quiz/course settings or the managed server default. Native and early quit remain password protected. The post-submission countdown and explicit Quit Link require both a session exit grant and the HMAC-authenticated Quit URL embedded in the current config; static, manual, reusable, and pre-completion automatic assessment quit paths remain disabled.
-- Access-code APIs return real HTTP 403/404/409 statuses for failed proof or missing SEB state.
-- The detector script never receives an access code until strict Config Key proof succeeds.
-- Config proof tokens are single-use and short lived.
-- Detector traces redact access codes, proof tokens, OAuth/state/token values, cookies, passwords, and secret/private key fields before logging.
+On the Canvas assessment page, the detector gets the SEB Config Key hash and current browser URL through the SEB JavaScript API. It requests a proof from `POST /api/seb/access-proof/:courseId/:quizId`; the server verifies the assessment, current settings fingerprint, URL family, and Config Key hash before returning a one-time proof token.
 
-## React UI
+`POST /api/seb/access-code/:courseId/:quizId` consumes that proof token. It returns the access code, approved tools, and an exit grant with sensitive response headers. A proof is valid for two minutes and can be consumed once. The detector then fills only an unambiguous Canvas access-code prompt. It does not treat DOM content as authorization.
 
-The React app is not a marketing site. It renders operational views:
+### Completion and exit
 
-- instructor dashboard for quiz/content SEB management
-- setup wizard and course default settings for instructors after Canvas authorization
-- student launch page listing SEB-enabled assessments only
-- OAuth authorization state
-- SEB download/required pages
-- SEB completion and quit pages
+The detector waits for Canvas-authored completion evidence. Classic Quiz completion requires a successful final submission and the matching Canvas result structure; New Quiz completion requires the authoritative result UI. On confirmed completion, the detector uses a settings-bound exit grant to display a quit link. Unbound manual/automatic quit paths intentionally return `410` rather than accepting a general-purpose quit request.
 
-The UI uses text labels and Lucide icons, not emoji, and is designed to work inside Canvas iframes and SEB.
+### Setup check
+
+`/seb/check/config.seb` generates a separate configuration for testing certificate decryption, SEB runtime detection, connectivity, storage, and Config Key proof. It never releases an assessment access code and does not establish device trust. It should be part of pre-exam readiness testing, not a substitute for device management.
+
+## Configuration Security Boundary
+
+Generated assessment configurations include a strict Canvas and approved-resource URL filter, SEB Config Key proof setup, session-monitoring and kiosk-related policy, exit protection, and optional start-password protection. The exact plist is built by `SebConfigurationService`; use integration testing with the supported SEB clients rather than assuming a setting is honored by every client release or operating system.
+
+In a hardened runtime, certificate encryption is mandatory. The public X.509 certificate or public key permits wrapping the file; the matching private identity belongs only on approved client devices. [Certificate management](certificate-management.md) defines the required handling and rotation model.
+
+### Assessment and setup-check configuration policy
+
+Assessment configurations use the SEB exam-start purpose and include the assessment start URL, an HMAC-bound quit URL, URL filter rules, a derived Browser Exam Key, and a Config Key salt. If an instructor sets a start password, the inner configuration is password-protected before certificate wrapping. The outer encrypted file uses SEB’s public-key-hash (`pkhs`) format when a public certificate is configured.
+
+The setup-check configuration is deliberately different from an assessment configuration: it starts at `/seb/check`, has no assessment access code, allows quit without an assessment exit password, and cannot redeem an access-code proof. It applies the same macOS installation/AAC checks as an assessment so a client incompatibility is discovered before an exam.
+
+Assessment lockdown settings explicitly block configuration surfaces that would undermine the browser boundary, including application/user switching, virtual machines, additional displays, screen capture/sharing, AirPlay, Siri and dictation, developer console, printing, downloads/uploads, open/save panels, and non-SEB clipboard transfer. They leave Canvas-required browser behavior, reload, JavaScript, and SEB-managed browser windows available so Canvas and approved web tools can function.
+
+On macOS, the generated policy requires Automatic Assessment Configuration (AAC) through both `enableMacOSAAC` and `lockdownModePolicy`, requires installation from the system Applications location, and sets a macOS 12.1 floor through explicit version-number settings plus the coarse version field. The overlapping AAC keys cover supported SEB client generations; they do not replace device management. AAC may block third-party assistive technology, so an accommodation that requires it needs a separate approved assessment/proctoring arrangement rather than a weakened common configuration.
+
+On Windows, the configuration requests the OS-session and SEB-service controls used by the generated policy, including the kiosk desktop, process/session monitoring, and the supported SEB version floor. Client releases that do not understand a newer configuration key cannot enforce that key, so managed-device policy must also pin the approved SEB client version and integrity baseline. Validate the complete policy with a real supported client after SEB or operating-system updates.
+
+## Persistence And Expiration
+
+| Collection          | Contents                                                                                            | Expiration behavior                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `assessments`       | Canvas discovery and per-assessment SEB state                                                       | Durable until intentionally changed.                          |
+| `courses`           | Course defaults, setup state, and exam-tool catalog                                                 | Durable until intentionally changed.                          |
+| `canvasOAuthTokens` | Canvas access and refresh tokens                                                                    | Durable; lifecycle is driven by Canvas authorization/refresh. |
+| `sessions`          | Express session payloads keyed by a hashed session ID                                               | 30-minute session TTL.                                        |
+| `transientStates`   | LTI replay claims, OAuth state, configuration grants, proofs, session-handoff records, rate budgets | Every record has `expiresAt`; configure Firestore TTL.        |
+| `operationLocks`    | Short assessment-update leases                                                                      | Every record has `expiresAt`; configure Firestore TTL.        |
+
+Firestore transactions implement atomic state claims, token consumption, rate-budget increments, and operation locks. This is why a production deployment can serve more than one Cloud Run instance without moving runtime state into process memory.
+
+## HTTP And Security Controls
+
+- Security headers are applied before application routes; Express disables `x-powered-by` and trusts one proxy hop.
+- Sessions use `HttpOnly` cookies and use `Secure; SameSite=None` when the configured tool URL is HTTPS or the profile is production.
+- Sensitive proof, access-code, and password-reveal responses are no-store and are bound to the verified session/principal.
+- LTI initiation and token validation use process-local and Firestore-backed admission budgets. Configuration-grant minting is rate-limited per principal and IP.
+- Canvas API calls are constrained to the configured Canvas origin and `/api/v1` base. Responses have size limits and upstream deadlines; a `401` triggers at most one safe token refresh/retry.
+- The public detector script has two stable paths. Debug or diagnostic modes serve a readable, non-cacheable asset; normal production mode serves the built minified asset from the same public path.
+
+## Route Reference
+
+### Public and LTI routes
+
+| Route                                                | Purpose                                              |
+| ---------------------------------------------------- | ---------------------------------------------------- |
+| `GET /`, `GET /login`                                | Public service status and Canvas-launch fallback.    |
+| `GET /health`, `GET /login/health`, `GET /js/health` | Lightweight health responses.                        |
+| `GET /setup`, `GET /setup/guide`                     | Public role-oriented setup handoff.                  |
+| `GET /.well-known/jwks.json`                         | Public LTI signing keys.                             |
+| `GET /lti/config`                                    | Dynamic Canvas LTI registration document.            |
+| `GET /lti/login`, `POST /lti/login`                  | OIDC initiation.                                     |
+| `GET /lti/launch`, `POST /lti/launch`                | Signed LTI launch handling and session-based reload. |
+
+### Canvas OAuth routes
+
+| Route                                                    | Caller and purpose                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------ |
+| `GET /api/oauth2authorize`, `GET /api/oauth2reauthorize` | Verified instructor begins or repeats Canvas API authorization.    |
+| `GET /api/student-session-authorize`                     | Verified student begins the narrow session-handoff authorization.  |
+| `GET /api/oauth2callback`                                | Canvas OAuth redirect URI; state and launch session are validated. |
+| `GET /api/oauth2status`                                  | Verified instructor checks stored authorization availability.      |
+
+### Instructor assessment routes
+
+All routes below are under `/api/quizzes` and require the verified instructor/request-integrity boundary unless they are simple reads exposed through the current session.
+
+| Route                                                                                      | Purpose                                                  |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `GET /api/quizzes`, `GET /api/quizzes/:quizId`, `GET /api/quizzes/seb-settings`            | Read cached course assessment/settings views.            |
+| `POST /api/quizzes/course/:courseId/refresh`                                               | Refresh Classic Quiz and New Quiz discovery from Canvas. |
+| `GET /api/quizzes/course/:courseId/defaults`, `PUT /api/quizzes/course/:courseId/defaults` | Read or update course defaults and exam-tool catalog.    |
+| `POST /api/quizzes/course/:courseId/passwords/reveal`                                      | Session-bound course password reveal.                    |
+| `POST /api/quizzes/:courseId/:quizId/passwords/reveal`                                     | Session-bound assessment password reveal.                |
+| `PUT /api/quizzes/:quizId/seb`, `POST /api/quizzes/seb-config-structured`                  | Update SEB settings.                                     |
+| `POST /api/quizzes/:courseId/:quizId/seb/enable`                                           | Enable SEB and set the Canvas access code.               |
+| `POST /api/quizzes/:courseId/:quizId/seb/disable`                                          | Disable SEB and remove Canvas access-code protection.    |
+| `POST /api/quizzes/:courseId/:quizId/seb/reset-defaults`                                   | Return one assessment to course defaults.                |
+| `POST /api/quizzes/:courseId/:quizId/seb/regenerate-code`                                  | Rotate the protected Canvas access code.                 |
+| `GET /api/quizzes/:courseId/:quizId/seb/config`                                            | Redirect to the current configuration flow.              |
+| `GET /api/quizzes/:courseId/:quizId/seb/status`                                            | Return the secret-free SEB status view.                  |
+
+### Student SEB, proof, and exit routes
+
+| Route                                                                                             | Purpose                                                                            |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `GET /seb/quiz/:courseId/:quizId`                                                                 | Render assessment SEB-required/download view.                                      |
+| `POST /api/seb/config-grant/:courseId/:contentId`                                                 | Mint a one-time configuration download grant from a verified launch.               |
+| `GET /seb/config/:courseId/:contentId.seb`                                                        | Consume a configuration grant and download the encrypted assessment configuration. |
+| `GET /seb/config-encryption-certificate.pem`, `GET /seb/config-encryption-certificate.cer`        | Public active encryption certificate in PEM/DER form.                              |
+| `POST /api/seb/session-readiness`, `POST /api/seb/session-readiness/dismiss`                      | Test or dismiss the optional student setup prompt.                                 |
+| `GET /seb/check/config.seb`, `GET /seb/check`, `POST /api/seb/check-proof`, `GET /seb/check/quit` | Setup-check configuration, page, proof, and quit flow.                             |
+| `GET /seb/launch/:contentId`, `POST /seb/launch/:contentId`, `GET /seb/launch/:contentId/login`   | Signed/direct assessment-launch handoff.                                           |
+| `GET /seb/config/:courseId/:quizId`, `GET /seb/config/:quizId`                                    | Compatibility redirects into the current configuration flow.                       |
+| `POST /api/seb/access-proof/:courseId/:quizId`                                                    | Validate Config Key proof and mint the one-time access-code proof.                 |
+| `POST /api/seb/access-code/:courseId/:quizId`                                                     | Redeem a proof for the access code, approved tools, and exit grant.                |
+| `GET /api/seb/access-code/:courseId/:quizId`                                                      | Explicit method guidance; redemption is POST-only.                                 |
+| `GET /api/seb/tools/:courseId/:quizId`                                                            | Return the current approved tool view under the proof/session boundary.            |
+| `GET /seb/exit/session/:courseId/:quizId/:grant`                                                  | Render a validated post-submission exit page.                                      |
+| `GET /seb/exit/:courseId/:quizId`                                                                 | Render a non-terminal/manual exit page.                                            |
+| `GET /seb/exit/quit/:courseId/:quizId/:grant`                                                     | Redirect a validated exit grant to the configuration-bound SEB quit URL.           |
+| `GET /seb/exit/complete/:courseId/:quizId/:token`                                                 | Render the HMAC-authenticated SEB quit completion page.                            |
+| `GET /seb/exit/quit/:courseId/:quizId`, `GET /seb/exit/manual/:courseId/:quizId`                  | Deliberately unavailable unbound quit routes; return `410`.                        |
+
+### Detector and diagnostics routes
+
+| Route                                   | Purpose                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------- |
+| `GET /js/canvas-seb-detector.js`        | Stable detector script URL for new Canvas theme loaders.                           |
+| `GET /api/seb/canvas-detector.js`       | Stable compatibility alias for an existing loader.                                 |
+| `POST /api/debug/canvas-detector-trace` | Accepts sanitized detector diagnostics only when debug/diagnostic mode is enabled. |
+
+The route handlers are the source of truth for parameters and response schemas. Treat unlisted query parameters or output fields as implementation details.
