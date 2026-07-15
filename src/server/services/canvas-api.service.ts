@@ -231,6 +231,7 @@ export class CanvasApiService {
     scopeOrOptions?: string | StoreAccessTokenOptions | null
   ): Promise<OAuthToken> {
     const options = normalizeStoreAccessTokenOptions(scopeOrOptions);
+    const existing = await this.repositories.value.oauthTokens.get(userId);
     const token: OAuthToken = {
       id: userId,
       userId,
@@ -238,9 +239,28 @@ export class CanvasApiService {
       refreshToken: options.refreshToken || null,
       scope: options.scope || null,
       expiresAt: options.expiresAt || expiresAtFromSeconds(options.expiresIn),
+      studentReadinessPromptDismissedAt: existing?.studentReadinessPromptDismissedAt || null,
       updatedAt: new Date().toISOString()
     };
     return this.repositories.value.oauthTokens.save(userId, token);
+  }
+
+  async hasDismissedStudentReadinessPrompt(userId: string): Promise<boolean> {
+    return !!(await this.getStoredToken(userId))?.studentReadinessPromptDismissedAt;
+  }
+
+  async dismissStudentReadinessPrompt(userId: string): Promise<void> {
+    const dismissedAt = new Date().toISOString();
+    await this.repositories.value.oauthTokens.update(userId, (current) => {
+      if (!current?.accessToken) {
+        return current;
+      }
+      return {
+        ...current,
+        studentReadinessPromptDismissedAt: dismissedAt,
+        updatedAt: dismissedAt
+      };
+    });
   }
 
   async clearAccessToken(userId: string): Promise<void> {

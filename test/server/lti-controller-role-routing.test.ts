@@ -15,7 +15,11 @@ const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
 describe("LtiController role routing", () => {
   let controller: LtiController;
-  let canvasApi: { hasAccessToken: ReturnType<typeof vi.fn>; hasSessionTokenAccess: ReturnType<typeof vi.fn> };
+  let canvasApi: {
+    hasAccessToken: ReturnType<typeof vi.fn>;
+    hasSessionTokenAccess: ReturnType<typeof vi.fn>;
+    hasDismissedStudentReadinessPrompt: ReturnType<typeof vi.fn>;
+  };
   let ltiService: { validateToken: ReturnType<typeof vi.fn> };
   let ltiState: {
     createState: ReturnType<typeof vi.fn>;
@@ -40,7 +44,8 @@ describe("LtiController role routing", () => {
   beforeEach(() => {
     canvasApi = {
       hasAccessToken: vi.fn().mockResolvedValue(true),
-      hasSessionTokenAccess: vi.fn().mockResolvedValue(true)
+      hasSessionTokenAccess: vi.fn().mockResolvedValue(true),
+      hasDismissedStudentReadinessPrompt: vi.fn().mockResolvedValue(false)
     };
     ltiService = { validateToken: vi.fn() };
     ltiState = {
@@ -112,6 +117,7 @@ describe("LtiController role routing", () => {
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining("/seb/check/config.seb"));
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining("sebs://"));
     expect(canvasApi.hasSessionTokenAccess).toHaveBeenCalledWith("student-1");
+    expect(canvasApi.hasDismissedStudentReadinessPrompt).toHaveBeenCalledWith("student-1");
   });
 
   it("requires Canvas session authorization before rendering the student tool", async () => {
@@ -128,8 +134,29 @@ describe("LtiController role routing", () => {
     );
 
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student-session-authorization"'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"resumeAssessment":false'));
     expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"view":"student"'));
     expect(assessments.getQuizzesForCourse).not.toHaveBeenCalled();
+  });
+
+  it("does not re-show the optional setup-check prompt after a student dismisses it", async () => {
+    canvasApi.hasDismissedStudentReadinessPrompt.mockResolvedValue(true);
+    const response = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      response,
+      undefined,
+      undefined,
+      "1"
+    );
+
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"readinessRecommended":false'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"showReadinessPrompt":false'));
   });
 
   it("redirects valid OIDC login requests to Canvas authorization", async () => {
@@ -516,6 +543,7 @@ describe("LtiController role routing", () => {
     await controller.launchPost(request, response, { id_token: "token", state: "state" });
 
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"student-session-authorization"'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"resumeAssessment":true'));
     expect(response.redirect).not.toHaveBeenCalled();
     expect(request.session.pendingSebLaunch).toBeUndefined();
   });
@@ -658,6 +686,95 @@ describe("LtiController role routing", () => {
     expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
     expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
     expect(assessments.refreshCourseContent).not.toHaveBeenCalled();
+  });
+
+  it("allows exactly one cross-site Canvas iframe resume after a bound instructor OAuth callback", async () => {
+    const response = responseDouble();
+    const request = requestDouble({
+      userId: "teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
+    });
+    request.session.oauthCallbackResume = {
+      canvasUserId: "teacher-1",
+      ltiSubject: "opaque-teacher-1",
+      courseId: "course-1",
+      issuer: "https://canvas.example.test",
+      deploymentId: "deployment-1",
+      path: "/lti/launch",
+      issuedAt: Date.now()
+    };
+    request.session.save = vi.fn((callback: (error?: Error) => void) => callback());
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
+
+    await controller.launchGet(request, response);
+
+    expect(request.session.oauthCallbackResume).toBeUndefined();
+    expect(request.session.save).toHaveBeenCalled();
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
+    expect(canvasApi.hasAccessToken).toHaveBeenCalledWith("teacher-1");
+  });
+
+  it("rejects a cross-site iframe resume marker that is not bound to the active instructor course", async () => {
+    const response = responseDouble();
+    const request = requestDouble({
+      userId: "teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
+    });
+    request.session.oauthCallbackResume = {
+      canvasUserId: "teacher-1",
+      ltiSubject: "opaque-teacher-1",
+      courseId: "other-course",
+      issuer: "https://canvas.example.test",
+      deploymentId: "deployment-1",
+      path: "/lti/launch",
+      issuedAt: Date.now()
+    };
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
+
+    await controller.launchGet(request, response);
+
+    expect(request.session.oauthCallbackResume).toBeUndefined();
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired cross-site iframe OAuth resume marker", async () => {
+    const response = responseDouble();
+    const request = requestDouble({
+      userId: "teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
+    });
+    request.session.oauthCallbackResume = {
+      canvasUserId: "teacher-1",
+      ltiSubject: "opaque-teacher-1",
+      courseId: "course-1",
+      issuer: "https://canvas.example.test",
+      deploymentId: "deployment-1",
+      path: "/lti/launch",
+      issuedAt: Date.now() - 120_001
+    };
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
+
+    await controller.launchGet(request, response);
+
+    expect(request.session.oauthCallbackResume).toBeUndefined();
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
   });
 
   it("renders the teacher view only when the launch has an instructor role", async () => {

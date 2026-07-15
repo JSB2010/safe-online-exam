@@ -4,6 +4,8 @@ This guide covers the Canvas UI work required to make the Safe Exam Browser LTI 
 
 Use this after the Cloud Run service has been deployed and the final public `TOOL_URL` is known. If you are using the generated `run.app` URL, deploy once from [school-deployment.md](school-deployment.md), retrieve the URL, then return here.
 
+Start an installation with `${TOOL_URL}/setup` as the short role-separated handoff. It is a public, read-only guide that links to the deployed health, LTI configuration, JWKS, and detector checks; those checks confirm the service response only. Canvas installation, deployment activation, and theme JavaScript loading must still be verified manually in Canvas.
+
 ## Canvas Admin Prerequisites
 
 You need a Canvas root-account admin, or an admin role with these permissions enabled:
@@ -161,6 +163,18 @@ Then complete the rollout in this order:
 4. Keep the Developer Keys API response and the student authorization result out of logs and support tickets. They can contain credentials or personal information.
 
 Canvas does not add newly granted scopes to existing OAuth tokens. Reauthorization in step 2 is therefore required after this scope is added. If the scope is later removed, Canvas invalidates tokens issued from that Developer Key; restore the scope and have affected users authorize again. See Canvas's [Developer Key scope-change behavior](https://canvas.instructure.com/doc/api/file.developer_keys.html) for the platform rules.
+
+## Role handoffs and recovery
+
+Administrators install the app and maintain the Developer Key scopes; instructors configure a course policy and assessments; students connect Canvas, optionally run the readiness check, and open SEB-enabled assessments. Do not give students administrator configuration links or instructor credential-repair steps.
+
+Use these recoveries instead of asking a user to clear browser data:
+
+- A student cancels consent, closes the popup, or has a blocked popup: reopen the course tool or assessment and select **Connect Canvas** again. The connection page gives a retry message when a popup closes early.
+- A student enters an SEB-required assessment before connection: complete consent and confirm the app returns to the same assessment's normal **Open SEB** screen. No configuration is created until that action is selected.
+- A setup check reports a stale authorization or missing session-token scope: restore `url:GET|/api/v1/login/session_token` on the API Developer Key, then use **Reconnect Canvas** and authorize again.
+- An instructor cannot enable an assessment because no exit password is effective: use the in-course **Course readiness** card or **Course settings → Security**, save the policy, then retry enablement.
+- A Canvas API permission error for an instructor: reauthorize from the instructor connection page after the administrator corrects the Developer Key scopes. If the LTI app or detector is not installed, return to the administrator setup steps; the app cannot confirm those Canvas-side changes automatically.
 
 ## Create the LTI Developer Key
 

@@ -14,6 +14,15 @@ declare module "express-session" {
     courseId?: string;
     authToken?: string;
     oauthState?: Record<string, unknown>;
+    oauthCallbackResume?: {
+      canvasUserId: string;
+      ltiSubject: string;
+      courseId: string;
+      issuer: string;
+      deploymentId: string;
+      path: "/lti/launch";
+      issuedAt: number;
+    };
     pendingSebLaunch?: {
       courseId: string;
       contentId: string;

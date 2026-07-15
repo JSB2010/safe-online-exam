@@ -132,7 +132,7 @@ describe("OAuthController", () => {
         purpose: "canvas-student-session-oauth-v1",
         canvasUserId: "1",
         courseId: "course-1",
-        redirectUrl: "/lti/launch"
+        redirectUrl: "/lti/launch?connected=1"
       })
     );
   });
@@ -145,6 +145,46 @@ describe("OAuthController", () => {
     expect(response.redirect).toHaveBeenCalledOnce();
     expect(ltiState.createState).toHaveBeenCalledWith(
       expect.objectContaining({ purpose: "canvas-student-session-oauth-v1" })
+    );
+  });
+
+  it("returns a newly connected student to the signed direct assessment, not a client-selected destination", async () => {
+    const response = responseDouble();
+    const request = verifiedRequest({ roles: [learnerRole] });
+    request.session.launchData.targetLinkUri = "https://tool.example.edu/seb/launch/classicquiz_23455";
+
+    await controller.studentSessionAuthorize(request, response);
+
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purpose: "canvas-student-session-oauth-v1",
+        redirectUrl: "/seb/launch/classicquiz_23455?connected=1"
+      })
+    );
+  });
+
+  it("does not use an untrusted launch target as a student OAuth return destination", async () => {
+    const response = responseDouble();
+    const request = verifiedRequest({ roles: [learnerRole] });
+    request.session.launchData.targetLinkUri = "https://attacker.example/seb/launch/classicquiz_23455";
+
+    await controller.studentSessionAuthorize(request, response);
+
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUrl: "/lti/launch?connected=1" })
+    );
+  });
+
+  it("rejects a direct return intent when the saved launch no longer matches the active course", async () => {
+    const response = responseDouble();
+    const request = verifiedRequest({ roles: [learnerRole] });
+    request.session.launchData.targetLinkUri = "https://tool.example.edu/seb/launch/classicquiz_23455";
+    request.session.launchData.courseId = "other-course";
+
+    await controller.studentSessionAuthorize(request, response);
+
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUrl: "/lti/launch?connected=1" })
     );
   });
 
@@ -230,8 +270,33 @@ describe("OAuthController", () => {
       scope: "scope-1",
       expiresIn: 3600
     });
-    expect(request.session).toEqual(originalSession);
+    expect(request.session).toEqual({
+      ...originalSession,
+      oauthCallbackResume: {
+        canvasUserId: "1",
+        ltiSubject: "lti-subject-1",
+        courseId: "course-1",
+        issuer: "https://canvas.example.edu",
+        deploymentId: "deployment-1",
+        path: "/lti/launch",
+        issuedAt: expect.any(Number)
+      }
+    });
     expect(response.redirect).toHaveBeenCalledWith("/lti/launch");
+  });
+
+  it("does not create an iframe-resume marker for an unrelated safe local redirect", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      tokenResponse({ access_token: "access-token", refresh_token: "refresh-token", user: { id: 1 } })
+    );
+    ltiState.peekState.mockReturnValue(validState({ redirectUrl: "/setup" }));
+    const request = verifiedRequest();
+    const response = responseDouble();
+
+    await controller.callback(request, response, { code: "oauth-code", state: "state" });
+
+    expect(request.session.oauthCallbackResume).toBeUndefined();
+    expect(response.redirect).toHaveBeenCalledWith("/setup");
   });
 
   it("renders a popup completion page after student session authorization", async () => {
@@ -433,6 +498,7 @@ function verifiedRequest(
       launchData: {
         userId: "1",
         courseId: "course-1",
+        deploymentId: "deployment-1",
         roles: [instructorRole]
       },
       verifiedLtiPrincipal: {

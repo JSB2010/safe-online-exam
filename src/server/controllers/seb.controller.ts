@@ -195,6 +195,22 @@ export class SebController {
     }
   }
 
+  @Post("/api/seb/session-readiness/dismiss")
+  async dismissStudentReadinessPrompt(@Req() request: Request): Promise<Record<string, unknown>> {
+    const principal = verifiedLtiPrincipal(request);
+    if (!principal || !requiresStudentSessionHandoff(principal)) {
+      return apiError(403, "Verified student Canvas launch required", { error_code: "LTI_STUDENT_REQUIRED" });
+    }
+    requireSebConfigGrantRequestIntegrity(request, this.config, principal);
+    if (!this.canvasApi) {
+      return apiError(503, "Canvas session handoff is unavailable", { error_code: "CANVAS_SESSION_UNAVAILABLE" });
+    }
+    // This is only a prompt preference. It is intentionally separate from the
+    // readiness result and never grants durable device trust.
+    await this.canvasApi.dismissStudentReadinessPrompt(principal.canvasUserId);
+    return { success: true };
+  }
+
   @Get("/seb/config/:courseId/:contentId.seb")
   async downloadConfig(
     @Req() request: Request,
@@ -427,9 +443,10 @@ export class SebController {
   async launchGet(
     @Req() request: Request,
     @Res() response: Response,
-    @Param("contentId") contentId: string
+    @Param("contentId") contentId: string,
+    @Query("connected") connected?: string
   ): Promise<void> {
-    await this.handleSebLaunch(request, response, contentId);
+    await this.handleSebLaunch(request, response, contentId, undefined, undefined, connected === "1");
   }
 
   @Get("/seb/launch/:contentId/login")
@@ -834,7 +851,8 @@ export class SebController {
     response: Response,
     contentId: string,
     idToken?: string,
-    state?: string
+    state?: string,
+    showReadinessPrompt = false
   ): Promise<void> {
     if (idToken) {
       if (!hasBoundedLtiValidationEnvelope(state, idToken)) {
@@ -988,6 +1006,10 @@ export class SebController {
         throw error;
       }
     }
+    const readinessPromptDismissed =
+      showReadinessPrompt && this.canvasApi
+        ? await this.canvasApi.hasDismissedStudentReadinessPrompt(principal.canvasUserId)
+        : false;
     response.send(
       renderAppShell({
         title: "Safe Exam Browser Required",
@@ -1000,7 +1022,10 @@ export class SebController {
           contentId: resolved.content.id,
           browserReturnUrl: this.canvasCourseHomeUrl(resolved.content.courseId),
           configGrantUrl: configGrantEndpoint(resolved.content.courseId, resolvedCanonicalContentId),
-          configGrantToken: this.configGrantActionToken(request, principal)
+          configGrantToken: this.configGrantActionToken(request, principal),
+          setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+          sessionReadinessUrl: "/api/seb/session-readiness",
+          showReadinessPrompt: showReadinessPrompt && !readinessPromptDismissed
         }
       })
     );
@@ -1111,7 +1136,9 @@ export class SebController {
             contentId,
             browserReturnUrl: this.canvasCourseHomeUrl(courseId),
             configGrantUrl: configGrantEndpoint(courseId, contentId),
-            configGrantToken: this.configGrantActionToken(request, principal)
+            configGrantToken: this.configGrantActionToken(request, principal),
+            setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+            sessionReadinessUrl: "/api/seb/session-readiness"
           }
         })
       );

@@ -126,3 +126,24 @@ test("serves a Canvas launch fallback at /login", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Launch from Canvas" })).toBeVisible();
   await expect(page.getByText("configured LTI link")).toBeVisible();
 });
+
+test("serves the public, role-separated Canvas setup center", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await page.goto("/setup");
+
+  await expect(page.getByRole("heading", { name: "Canvas SEB setup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Canvas administrator" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Instructor" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Student" })).toBeVisible();
+  await expect(page.getByText("url:GET|/api/v1/login/session_token")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Detailed guide" })).toHaveAttribute("href", "/setup/guide");
+
+  await page.getByRole("link", { name: "Detailed guide" }).click();
+  await expect(page.getByRole("heading", { name: "Detailed rollout order" })).toBeVisible();
+  expect(browserErrors).toEqual([]);
+});

@@ -157,7 +157,7 @@ export class LtiController {
         const principal = verifiedLtiPrincipal(request);
         if (directContentId && principal && principal.courseId === launchData.courseId) {
           if (!(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
-            response.send(this.renderStudentSessionAuthorizationView());
+            response.send(this.renderStudentSessionAuthorizationView(true));
             return;
           }
           request.session!.pendingSebLaunch = {
@@ -209,9 +209,12 @@ export class LtiController {
     @Req() request: Request,
     @Res() response: Response,
     @Query("course_id") courseId?: string,
-    @Query("user_id") userId?: string
+    @Query("user_id") userId?: string,
+    @Query("connected") connected?: string
   ): Promise<void> {
-    if (isCrossSiteIframeNavigation(request)) {
+    const principal = verifiedLtiPrincipal(request);
+    const launchData = sessionValue<LtiLaunchData>(request, "launchData");
+    if (isCrossSiteIframeNavigation(request) && !consumeValidatedOAuthCallbackResume(request, principal, launchData)) {
       response
         .status(403)
         .send(
@@ -219,8 +222,9 @@ export class LtiController {
         );
       return;
     }
-    const principal = verifiedLtiPrincipal(request);
-    const launchData = sessionValue<LtiLaunchData>(request, "launchData");
+    if (isCrossSiteIframeNavigation(request)) {
+      await saveSession(request);
+    }
     if (!principal || !launchData) {
       response.redirect("/login");
       return;
@@ -248,7 +252,7 @@ export class LtiController {
       return;
     }
     if (isStudent(resolvedLaunchData)) {
-      response.send(await this.renderStudentLaunch(request, resolvedLaunchData));
+      response.send(await this.renderStudentLaunch(request, resolvedLaunchData, connected === "1"));
       return;
     }
     response.send(
@@ -413,6 +417,15 @@ export class LtiController {
           hasApiAuthorization,
           courseDefaults: toCourseDefaultsView(courseDefaults, this.config.value.seb.defaultQuitPassword),
           showSetupWizard: !courseDefaults.setupCompleted,
+          onboarding: {
+            canvasConnection: "connected",
+            courseSecurityReady:
+              !!courseDefaults.quitPassword?.trim() || !!this.config.value.seb.defaultQuitPassword?.trim(),
+            courseSetupComplete: courseDefaults.setupCompleted === true,
+            enabledAssessmentCount: Object.values(quizSebSettings).filter(
+              (setting: any) => setting?.sebRequired && setting?.enabled
+            ).length
+          },
           quizzes,
           quizSebSettings,
           authToken: createActionToken(this.config, userId, courseId, {
@@ -462,7 +475,11 @@ export class LtiController {
     });
   }
 
-  private async renderStudentLaunch(request: Request, launchData: LtiLaunchData): Promise<string> {
+  private async renderStudentLaunch(
+    request: Request,
+    launchData: LtiLaunchData,
+    showReadinessPrompt = false
+  ): Promise<string> {
     const courseId = launchData.courseId || "";
     const principal = verifiedLtiPrincipal(request);
     if (!principal || principal.courseId !== courseId) {
@@ -471,15 +488,16 @@ export class LtiController {
         "<h1>Canvas Launch Required</h1><p>Please reopen this assessment from Canvas.</p>"
       );
     }
-    if (!(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
-      return this.renderStudentSessionAuthorizationView();
-    }
-    const targetContentId =
+    const assessmentTargetId =
       launchData.custom?.quiz_id ||
       launchData.custom?.content_id ||
       sebLaunchContentIdFromTargetLinkUri(launchData.targetLinkUri, this.config.getRequiredToolUrl()) ||
-      launchData.resourceLinkId ||
       "";
+    const targetContentId = assessmentTargetId || launchData.resourceLinkId || "";
+    if (!(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
+      return this.renderStudentSessionAuthorizationView(!!assessmentTargetId);
+    }
+    const readinessPromptDismissed = await this.canvasApi.hasDismissedStudentReadinessPrompt(principal.canvasUserId);
     const target = targetContentId
       ? await this.resolveStudentContent(courseId, targetContentId, request, principal)
       : null;
@@ -508,17 +526,26 @@ export class LtiController {
         setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
         sessionReadinessUrl: "/api/seb/session-readiness",
         configGrantToken,
+        onboarding: {
+          connection: "connected",
+          readinessRecommended: !readinessPromptDismissed,
+          showReadinessPrompt: showReadinessPrompt && !readinessPromptDismissed
+        },
         quizzes: courseId ? await this.enabledStudentQuizzes(courseId, request, principal) : []
       }
     });
   }
 
-  private renderStudentSessionAuthorizationView(): string {
+  private renderStudentSessionAuthorizationView(resumeAssessment = false): string {
     return renderAppShell({
       title: "Connect Canvas",
       view: "student-session-authorization",
       initialData: {
-        authUrl: "/api/student-session-authorize"
+        authUrl: "/api/student-session-authorize",
+        onboarding: {
+          connection: "required",
+          resumeAssessment
+        }
       }
     });
   }
@@ -799,6 +826,32 @@ function isCrossSiteIframeNavigation(request: Request): boolean {
   const destination = request.header?.("sec-fetch-dest")?.trim().toLowerCase();
   const site = request.header?.("sec-fetch-site")?.trim().toLowerCase();
   return destination === "iframe" && site === "cross-site";
+}
+
+function consumeValidatedOAuthCallbackResume(
+  request: Request,
+  principal: VerifiedLtiPrincipal | null,
+  launchData: LtiLaunchData | undefined
+): boolean {
+  const resume = request.session?.oauthCallbackResume;
+  if (request.session) {
+    delete request.session.oauthCallbackResume;
+  }
+  return (
+    !!resume &&
+    Date.now() - resume.issuedAt >= 0 &&
+    Date.now() - resume.issuedAt <= 120_000 &&
+    !!principal &&
+    !!launchData &&
+    resume.path === "/lti/launch" &&
+    resume.canvasUserId === principal.canvasUserId &&
+    resume.ltiSubject === principal.subject &&
+    resume.courseId === principal.courseId &&
+    resume.issuer === principal.issuer &&
+    resume.deploymentId === principal.deploymentId &&
+    launchData.courseId === principal.courseId &&
+    launchData.deploymentId === principal.deploymentId
+  );
 }
 
 function sessionValue<T>(request: Request, key: string): T | undefined {

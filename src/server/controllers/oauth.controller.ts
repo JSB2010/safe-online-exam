@@ -13,6 +13,7 @@ import {
 } from "../security/verified-lti-principal.js";
 import { CanvasApiService } from "../services/canvas-api.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
+import { canonicalSebConfigContentId } from "../services/seb-config-grant.service.js";
 
 const OAUTH_TOKEN_RESPONSE_MAX_BYTES = 64 * 1024;
 
@@ -86,7 +87,7 @@ export class OAuthController {
       principal,
       "canvas-student-session-oauth-v1",
       studentSessionScopes(),
-      "/lti/launch"
+      this.studentReturnUrl(request, principal)
     );
   }
 
@@ -151,7 +152,20 @@ export class OAuthController {
         );
         return;
       }
-      response.redirect(safeLocalRedirect(state.redirectUrl));
+      const redirectUrl = safeLocalRedirect(state.redirectUrl);
+      if (isLtiLaunchRedirect(redirectUrl)) {
+        request.session!.oauthCallbackResume = {
+          canvasUserId: principal.canvasUserId,
+          ltiSubject: principal.subject,
+          courseId: principal.courseId,
+          issuer: principal.issuer,
+          deploymentId: principal.deploymentId,
+          path: "/lti/launch",
+          issuedAt: Date.now()
+        };
+        await saveSession(request);
+      }
+      response.redirect(redirectUrl);
     } catch {
       response.status(400).send(
         renderAppShell({
@@ -179,6 +193,25 @@ export class OAuthController {
 
   private oauthRedirectUri(): string {
     return this.config.value.canvas.redirectUri || `${this.config.getRequiredToolUrl()}/api/oauth2callback`;
+  }
+
+  /**
+   * The return location is derived only from the signed LTI launch saved in
+   * this browser session. It deliberately ignores query-string return URLs so
+   * a student OAuth flow cannot be turned into an open redirect or used to
+   * switch courses after consent.
+   */
+  private studentReturnUrl(request: Request, principal: NonNullable<ReturnType<typeof verifiedLtiPrincipal>>): string {
+    const launchData = request.session?.launchData;
+    if (launchData?.courseId !== principal.courseId || launchData.deploymentId !== principal.deploymentId) {
+      return "/lti/launch?connected=1";
+    }
+    const targetLinkUri = launchData.targetLinkUri;
+    const contentId = directSebContentId(targetLinkUri, this.config.getRequiredToolUrl());
+    if (contentId) {
+      return `/seb/launch/${encodeURIComponent(contentId)}?connected=1`;
+    }
+    return `/lti/launch?connected=1`;
   }
 
   private async beginAuthorization(
@@ -268,6 +301,27 @@ export class OAuthController {
   }
 }
 
+function directSebContentId(targetLinkUri: string | null | undefined, toolUrl: string): string | null {
+  if (!targetLinkUri) {
+    return null;
+  }
+  try {
+    const target = new URL(targetLinkUri);
+    const tool = new URL(toolUrl);
+    if (target.origin !== tool.origin) {
+      return null;
+    }
+    const match = /^\/seb\/launch\/([^/]+)$/u.exec(target.pathname);
+    if (!match) {
+      return null;
+    }
+    const contentId = decodeURIComponent(match[1]);
+    return canonicalSebConfigContentId(contentId) ? contentId : null;
+  } catch {
+    return null;
+  }
+}
+
 class OAuthExchangeResponseError extends Error {
   constructor(readonly status: number) {
     super("Canvas OAuth token endpoint rejected the request");
@@ -336,6 +390,23 @@ function safeLocalRedirect(value?: string): string {
   } catch {
     return "/lti/launch";
   }
+}
+
+function isLtiLaunchRedirect(value: string): boolean {
+  try {
+    return new URL(value, "https://placeholder.invalid").pathname === "/lti/launch";
+  } catch {
+    return false;
+  }
+}
+
+async function saveSession(request: Request): Promise<void> {
+  if (!request.session?.save) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    request.session!.save((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 function oauthSessionBinding(sessionId: string): string {

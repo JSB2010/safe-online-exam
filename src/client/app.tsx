@@ -22,7 +22,7 @@ import {
   Unlock,
   X
 } from "lucide-react";
-import type { ReactNode, SetStateAction } from "react";
+import type { ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import type {
@@ -60,10 +60,29 @@ interface StudentQuizView extends QuizView {
   configGrantUrl?: string;
 }
 
+interface OnboardingContext {
+  connection?: "required" | "connected";
+  resumeAssessment?: boolean;
+  readinessRecommended?: boolean;
+  showReadinessPrompt?: boolean;
+  canvasConnection?: "connected";
+  courseSecurityReady?: boolean;
+  courseSetupComplete?: boolean;
+  enabledAssessmentCount?: number;
+}
+
+type InstructorSetupStep = "security" | "tools" | "urls" | "enable";
+
 type Toast = {
   id: string;
   tone: "success" | "error";
   message: string;
+};
+
+type OnboardingRecovery = {
+  message: string;
+  actionLabel?: string;
+  actionUrl?: string;
 };
 
 function readBootstrap(): BootstrapPayload {
@@ -103,15 +122,11 @@ export function App() {
     case "seb-quit":
       return <SebQuitPage data={bootstrap.data} />;
     case "oauth-error":
-      return (
-        <MessagePage
-          icon={<AlertCircle />}
-          title="Canvas Connection Error"
-          message={String(bootstrap.data.error || "Canvas did not authorize access.")}
-        />
-      );
+      return <OAuthErrorPage data={bootstrap.data} />;
     case "student":
       return <StudentDashboard data={bootstrap.data} />;
+    case "admin-setup":
+      return <AdminSetupPage data={bootstrap.data} />;
     case "seb-check":
       return <SebSetupCheckPage data={bootstrap.data} />;
     case "service-status":
@@ -162,9 +177,11 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   const [query, setQuery] = useState("");
   const [activeItem, setActiveItem] = useState<QuizView | null>(null);
   const [showDefaults, setShowDefaults] = useState(false);
-  const [showSetup, setShowSetup] = useState(!!data.showSetupWizard);
+  const [showSetupWizard, setShowSetupWizard] = useState(data.showSetupWizard === true);
+  const [setupInitialStep, setSetupInitialStep] = useState<InstructorSetupStep>("security");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [recovery, setRecovery] = useState<OnboardingRecovery | null>(null);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -183,6 +200,24 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       ),
     [courseDefaults, items, settings]
   );
+  const onboarding = (data.onboarding || {}) as OnboardingContext;
+  const courseSecurityReady =
+    onboarding.courseSecurityReady === true || canEnableSebAssessment(undefined, courseDefaults);
+
+  const openCourseSettings = () => {
+    setShowDefaults(true);
+  };
+  const openSetupWizard = (step: InstructorSetupStep = courseSecurityReady ? "tools" : "security") => {
+    setSetupInitialStep(step);
+    setShowSetupWizard(true);
+  };
+  const handleRecovery = (value: unknown) => {
+    const next = onboardingRecovery(value, "instructor");
+    if (next) {
+      setRecovery(next);
+      pushToast("error", next.message);
+    }
+  };
 
   const pushToast = (tone: Toast["tone"], message: string) => {
     const id = clientId("toast");
@@ -195,7 +230,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   async function toggleSeb(item: QuizView) {
     const enabled = !!settings[item.id]?.sebRequired;
     if (!enabled && !canEnableSebAssessment(settings[item.id], courseDefaults)) {
-      pushToast("error", "Set an exit password in Course defaults before enabling SEB.");
+      openSetupWizard("security");
+      pushToast("error", "Complete exit security before enabling SEB.");
       return;
     }
     setBusyId(item.id);
@@ -206,6 +242,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       );
       if (redirectForAuth(body)) return;
       if (!body.success) {
+        handleRecovery(body);
         pushToast("error", body.message || "The SEB setting could not be updated.");
       } else {
         setSettings((current) => ({
@@ -215,6 +252,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
         pushToast("success", enabled ? "SEB disabled." : "SEB enabled.");
       }
     } catch (error) {
+      handleRecovery(error);
       pushToast("error", errorMessage(error, "The SEB setting could not be updated."));
     } finally {
       setBusyId(null);
@@ -232,16 +270,18 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       if (body.success) {
         window.location.assign("/lti/launch");
       } else {
+        handleRecovery(body);
         pushToast("error", body.message || "Could not refresh Canvas content.");
       }
     } catch (error) {
+      handleRecovery(error);
       pushToast("error", errorMessage(error, "Could not refresh Canvas content."));
     } finally {
       setBusyId(null);
     }
   }
 
-  async function saveCourseDefaults(next: CourseSebDefaults) {
+  async function saveCourseDefaults(next: CourseSebDefaults, successMessage = "Course defaults saved.") {
     const body = await requestJson(`/api/quizzes/course/${encodeURIComponent(data.courseId)}/defaults`, {
       method: "PUT",
       headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
@@ -249,10 +289,19 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     });
     if (redirectForAuth(body)) return;
     if (!body.success) {
+      handleRecovery(body);
       throw new Error(body.message || "Course defaults could not be saved.");
     }
     setCourseDefaults(normalizeCourseDefaults(body.defaults, data.courseId));
-    pushToast("success", "Course defaults saved.");
+    if (successMessage) {
+      pushToast("success", successMessage);
+    }
+  }
+
+  async function completeSetupWizard(next: CourseSebDefaults) {
+    await saveCourseDefaults({ ...next, setupCompleted: true }, "");
+    setShowSetupWizard(false);
+    pushToast("success", "Course setup complete. You can now enable your first assessment.");
   }
 
   return (
@@ -284,11 +333,28 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           >
             <RefreshCw size={18} />
           </button>
-          <button className="button secondary" onClick={() => setShowDefaults(true)}>
-            <Settings size={16} /> Course settings
+          <button className="icon-button" type="button" onClick={openCourseSettings} title="Course settings">
+            <Settings size={18} />
+          </button>
+          <button className="button secondary" onClick={() => openSetupWizard()}>
+            <ShieldCheck size={16} /> Course setup
           </button>
         </div>
       </header>
+
+      {showSetupWizard && (
+        <InstructorSetupWizard
+          courseName={data.courseName || `Course ${data.courseId}`}
+          defaults={courseDefaults}
+          securityReady={courseSecurityReady}
+          enabledAssessmentCount={onboarding.enabledAssessmentCount || activeCount}
+          initialStep={setupInitialStep}
+          onClose={() => setShowSetupWizard(false)}
+          onComplete={completeSetupWizard}
+        />
+      )}
+
+      {recovery && <RecoveryNotice recovery={recovery} onDismiss={() => setRecovery(null)} />}
 
       <section className="work-surface">
         <div className="list-header">
@@ -392,18 +458,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           authToken={data.authToken}
           onClose={() => setShowDefaults(false)}
           onSave={async (next) => {
-            await saveCourseDefaults({ ...next, setupCompleted: true });
+            await saveCourseDefaults({ ...next, setupCompleted: courseDefaults.setupCompleted === true });
             setShowDefaults(false);
-          }}
-        />
-      )}
-
-      {showSetup && (
-        <SetupWizard
-          defaults={courseDefaults}
-          onSave={async (next) => {
-            await saveCourseDefaults({ ...next, setupCompleted: true });
-            setShowSetup(false);
           }}
         />
       )}
@@ -415,7 +471,26 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
 
 function StudentDashboard({ data }: { data: Record<string, any> }) {
   const quizzes: StudentQuizView[] = data.quizzes || [];
-  const [showSetupCheck, setShowSetupCheck] = useState(false);
+  const onboarding = (data.onboarding || {}) as OnboardingContext;
+  const [showSetupCheck, setShowSetupCheck] = useState(onboarding.showReadinessPrompt === true);
+  const [showReadinessBanner, setShowReadinessBanner] = useState(onboarding.readinessRecommended !== false);
+  const [dismissingReadinessBanner, setDismissingReadinessBanner] = useState(false);
+  const [readinessBannerError, setReadinessBannerError] = useState("");
+
+  const dismissReadinessBanner = async () => {
+    if (dismissingReadinessBanner) return;
+    setDismissingReadinessBanner(true);
+    setReadinessBannerError("");
+    try {
+      await persistStudentReadinessPromptDismissal(data.configGrantToken);
+      setShowReadinessBanner(false);
+    } catch (error) {
+      setReadinessBannerError(errorMessage(error, "The reminder could not be dismissed. Try again."));
+    } finally {
+      setDismissingReadinessBanner(false);
+    }
+  };
+
   return (
     <main className="app-shell student-shell">
       <header className="topbar">
@@ -438,6 +513,39 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
           </button>
         </div>
       </header>
+
+      {showReadinessBanner && (
+        <section className="onboarding-card student-onboarding-card" aria-labelledby="student-ready-title">
+          <div>
+            <span className="section-kicker">Before your first quiz</span>
+            <h2 id="student-ready-title">Check this computer when you have a few minutes</h2>
+            <p>
+              The optional check confirms your Canvas connection and that Safe Exam Browser can open the school setup
+              file.
+            </p>
+            {readinessBannerError && (
+              <p className="field-error" role="alert">
+                {readinessBannerError}
+              </p>
+            )}
+          </div>
+          <div className="student-onboarding-actions">
+            <button className="button secondary" type="button" onClick={() => setShowSetupCheck(true)}>
+              <ShieldCheck size={16} /> Run setup check
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void dismissReadinessBanner()}
+              disabled={dismissingReadinessBanner}
+              title="Dismiss setup-check reminder"
+              aria-label="Dismiss setup-check reminder"
+            >
+              <X size={17} />
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="work-surface">
         <div className="list-header">
@@ -478,7 +586,287 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
           readinessUrl={data.sessionReadinessUrl || "/api/seb/session-readiness"}
           authToken={data.configGrantToken}
           onClose={() => setShowSetupCheck(false)}
+          onCompleted={dismissReadinessBanner}
         />
+      )}
+    </main>
+  );
+}
+
+function InstructorSetupWizard({
+  courseName,
+  defaults,
+  securityReady,
+  enabledAssessmentCount,
+  initialStep,
+  onClose,
+  onComplete
+}: {
+  courseName: string;
+  defaults: CourseSebDefaults;
+  securityReady: boolean;
+  enabledAssessmentCount: number;
+  initialStep: InstructorSetupStep;
+  onClose: () => void;
+  onComplete: (defaults: CourseSebDefaults) => Promise<void>;
+}) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
+  const [step, setStep] = useState<InstructorSetupStep>(initialStep);
+  const [draft, setDraft] = useDefaultsDraft(defaults);
+  const [finishing, setFinishing] = useState(false);
+  const [error, setError] = useState("");
+  const steps: Array<{ id: InstructorSetupStep; label: string }> = [
+    { id: "security", label: "Exit security" },
+    { id: "tools", label: "Exam tools" },
+    { id: "urls", label: "Advanced URLs" },
+    { id: "enable", label: "First assessment" }
+  ];
+  const stepIndex = steps.findIndex((candidate) => candidate.id === step);
+  const previousStep = stepIndex > 0 ? steps[stepIndex - 1].id : null;
+  const nextStep = stepIndex < steps.length - 1 ? steps[stepIndex + 1].id : null;
+  const hadCourseExitPassword =
+    (defaults as CourseSebDefaults & { hasQuitPassword?: boolean }).hasQuitPassword === true;
+  const retainsExistingCourseExitPassword = !hadCourseExitPassword || draft.quitPassword !== null;
+  const hasExitSecurity = (securityReady && retainsExistingCourseExitPassword) || !!draft.quitPassword?.trim();
+
+  const finish = async () => {
+    setFinishing(true);
+    setError("");
+    try {
+      await onComplete(draft);
+    } catch (completeError) {
+      setError(errorMessage(completeError, "Course setup could not be completed."));
+    } finally {
+      setFinishing(false);
+    }
+  };
+
+  const content = {
+    security: {
+      title: hasExitSecurity ? "Exit security is ready" : "Set the required exit security",
+      description: hasExitSecurity
+        ? "This course already has effective exit security. You can leave it as-is or set a replacement course password."
+        : "Every enabled assessment needs an exit password from this course or a managed school default."
+    },
+    tools: {
+      title: "Review the default exam tools",
+      description: "Choose the approved tools that assessments inherit. Keeping the existing safe defaults is fine."
+    },
+    urls: {
+      title: "Add allowed URLs only when needed",
+      description: "Most courses can leave this empty. Add only resources students must use during an assessment."
+    },
+    enable: {
+      title: "Enable the first assessment",
+      description:
+        enabledAssessmentCount > 0
+          ? `${enabledAssessmentCount} assessment${enabledAssessmentCount === 1 ? " is" : "s are"} already enabled. Finish this guide, then use the course list whenever you need to adjust one.`
+          : "Finish this guide, then choose an assessment from the course list to enable Safe Exam Browser."
+    }
+  }[step];
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section
+        className="dialog instructor-setup-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="setup-wizard-title"
+      >
+        <header className="dialog-header">
+          <div>
+            <span className="section-kicker">Guided course setup</span>
+            <h2 id="setup-wizard-title">Set up Safe Exam Browser</h2>
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            title="Finish setup later"
+            aria-label="Finish setup later"
+          >
+            <X size={17} />
+          </button>
+        </header>
+        <p className="setup-wizard-course">
+          {courseName} is connected to Canvas. Complete these steps here, then manage future changes from Course
+          settings.
+        </p>
+        <ol className="setup-wizard-progress" aria-label="Course setup progress">
+          {steps.map((candidate, index) => (
+            <li className={clsx(index === stepIndex && "active", index < stepIndex && "complete")} key={candidate.id}>
+              <button type="button" disabled={index > stepIndex} onClick={() => setStep(candidate.id)}>
+                <span>{index < stepIndex ? <Check size={14} /> : index + 1}</span>
+                {candidate.label}
+              </button>
+            </li>
+          ))}
+        </ol>
+        <section className="setup-wizard-body" aria-live="polite">
+          <span className="section-kicker">
+            Step {stepIndex + 1} of {steps.length}
+          </span>
+          <h3>{content.title}</h3>
+          <p>{content.description}</p>
+          {step !== "enable" && (
+            <div className="setup-wizard-editor">
+              <DefaultsEditor
+                draft={draft}
+                setDraft={setDraft}
+                visibleSection={step === "security" ? "password" : step === "tools" ? "tools" : "urls"}
+              />
+            </div>
+          )}
+        </section>
+        <footer className="dialog-actions setup-wizard-actions">
+          <button className="button secondary" type="button" onClick={onClose}>
+            Finish later
+          </button>
+          {previousStep && (
+            <button className="button secondary" type="button" onClick={() => setStep(previousStep)}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          )}
+          {step === "enable" ? (
+            <button
+              className="button primary"
+              type="button"
+              disabled={finishing || !hasExitSecurity}
+              onClick={() => void finish()}
+            >
+              <Check size={16} /> {finishing ? "Saving…" : "Save and finish"}
+            </button>
+          ) : nextStep ? (
+            <button
+              className="button primary"
+              type="button"
+              disabled={step === "security" && !hasExitSecurity}
+              onClick={() => setStep(nextStep)}
+            >
+              {step === "security" ? <Lock size={16} /> : <Check size={16} />} Continue
+            </button>
+          ) : null}
+        </footer>
+        {!hasExitSecurity && step === "security" && (
+          <p className="field-error" role="alert">
+            Set an exit password before continuing.
+          </p>
+        )}
+        {error && (
+          <p className="field-error" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function AdminSetupPage({ data }: { data: Record<string, any> }) {
+  const detailed = data.detailed === true;
+  const checks = [
+    ["Health", data.healthUrl],
+    ["LTI configuration", data.ltiConfigUrl],
+    ["Public signing keys", data.jwksUrl],
+    ["Canvas detector script", data.detectorUrl]
+  ].filter((entry): entry is [string, string] => typeof entry[1] === "string");
+
+  return (
+    <main className="app-shell service-shell setup-center">
+      <header className="topbar">
+        <div className="topbar-title">
+          <div className="brand-mark">
+            <Shield size={20} />
+          </div>
+          <div>
+            <h1>Canvas SEB setup</h1>
+            <p>A role-by-role rollout guide for the Canvas integration.</p>
+          </div>
+        </div>
+        <a className="button secondary" href={detailed ? "/setup" : "/setup/guide"}>
+          <BookOpen size={16} /> {detailed ? "Setup overview" : "Detailed guide"}
+        </a>
+      </header>
+
+      <section className="onboarding-card admin-intro" aria-labelledby="setup-start-title">
+        <div>
+          <span className="section-kicker">Start here</span>
+          <h2 id="setup-start-title">Each role completes a different part of setup</h2>
+          <p>
+            These checks confirm this service is reachable. Canvas installation, Developer Key scopes, and theme
+            activation still need an administrator to verify in Canvas.
+          </p>
+        </div>
+        <div className="setup-link-list">
+          {checks.map(([label, href]) => (
+            <a className="button secondary compact" href={href} target="_blank" rel="noreferrer" key={label}>
+              <ExternalLink size={15} /> {label}
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="setup-role-grid" aria-label="Setup responsibilities">
+        <article className="work-surface setup-role-card">
+          <span className="section-kicker">Role</span>
+          <h2>Canvas administrator</h2>
+          <strong>Install and verify</strong>
+          <p>
+            Create the API and LTI Developer Keys, install by Client ID, record the deployment ID, and add the detector
+            script to the active Canvas theme.
+          </p>
+          <strong>Required student scope</strong>
+          <code>url:GET|/api/v1/login/session_token</code>
+        </article>
+        <article className="work-surface setup-role-card">
+          <span className="section-kicker">Role</span>
+          <h2>Instructor</h2>
+          <strong>Prepare each course</strong>
+          <p>
+            Launch the course tool, connect Canvas, set the exit-password policy, choose course tools, then enable the
+            intended quizzes.
+          </p>
+        </article>
+        <article className="work-surface setup-role-card">
+          <span className="section-kicker">Role</span>
+          <h2>Student</h2>
+          <strong>Connect and check</strong>
+          <p>
+            Connect Canvas once from course navigation. The optional setup check confirms that SEB can open the school
+            configuration on that computer.
+          </p>
+        </article>
+      </section>
+
+      {detailed && (
+        <section className="work-surface setup-guide-detail">
+          <h2>Detailed rollout order</h2>
+          <ol>
+            <li>
+              Deploy the service and open each public check above. Do not treat a passing service check as proof that
+              Canvas installation is complete.
+            </li>
+            <li>
+              Create the Canvas API Developer Key with the quiz access-code scopes and the student session-token scope,
+              then configure the OAuth callback at <code>{data.toolUrl}/api/oauth2callback</code>.
+            </li>
+            <li>
+              Create or refresh the LTI 1.3 Developer Key from the public LTI configuration URL, install it by Client
+              ID, and store the Canvas deployment ID in the deployment configuration.
+            </li>
+            <li>
+              Load the detector script through the active Canvas theme, then test a Classic Quiz and New Quiz in a
+              non-production course.
+            </li>
+            <li>
+              Have an instructor configure course defaults and a student complete connection, setup check, and a real
+              SEB launch before broader rollout.
+            </li>
+          </ol>
+        </section>
       )}
     </main>
   );
@@ -488,20 +876,29 @@ function SebSetupCheckDialog({
   launchUrl,
   readinessUrl,
   authToken,
-  onClose
+  reconnectUrl = "/api/student-session-authorize",
+  onClose,
+  onCompleted
 }: {
   launchUrl: string;
   readinessUrl: string;
   authToken?: string;
+  reconnectUrl?: string;
   onClose: () => void;
+  onCompleted?: () => Promise<void>;
 }) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
+  const [reconnectRequired, setReconnectRequired] = useState(false);
 
   const launchCheck = async () => {
     if (checking) return;
     setChecking(true);
     setError("");
+    setReconnectRequired(false);
     try {
       const result = await requestJson(readinessUrl, {
         method: "POST",
@@ -510,10 +907,13 @@ function SebSetupCheckDialog({
       if (!result.success) {
         throw new Error(result.message || "Canvas connection could not be verified.");
       }
+      await onCompleted?.();
       window.location.assign(launchUrl);
     } catch (launchError) {
       if ((launchError as { code?: unknown }).code === "CANVAS_SESSION_AUTHORIZATION_REQUIRED") {
-        window.location.assign("/lti/launch");
+        setError("Your Canvas connection needs to be renewed before this device check can run.");
+        setReconnectRequired(true);
+        setChecking(false);
         return;
       }
       setError(launchError instanceof Error ? launchError.message : "Canvas connection could not be verified.");
@@ -534,7 +934,14 @@ function SebSetupCheckDialog({
             <span className="section-kicker">Device setup</span>
             <h2 id="setup-check-title">Safe Exam Browser setup check</h2>
           </div>
-          <button className="icon-button" onClick={onClose} title="Close setup check">
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            title="Close setup check"
+            aria-label="Close setup check"
+          >
             <X size={17} />
           </button>
         </header>
@@ -543,11 +950,11 @@ function SebSetupCheckDialog({
           <div className="instruction-list">
             <div>
               <strong>1</strong>
-              <span>If macOS asks for your login keychain password, enter your Mac password.</span>
+              <span>If your computer asks to approve the school configuration certificate, complete that prompt.</span>
             </div>
             <div>
               <strong>2</strong>
-              <span>Choose Always Allow so SEB can use the school configuration certificate next time.</span>
+              <span>Keep the SEB check open until every item has finished.</span>
             </div>
             <div>
               <strong>3</strong>
@@ -563,7 +970,16 @@ function SebSetupCheckDialog({
             <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch SEB check"}
           </button>
         </footer>
-        {error && <p className="field-error">{error}</p>}
+        {error && (
+          <p className="field-error" role="alert">
+            {error}
+          </p>
+        )}
+        {reconnectRequired && (
+          <button className="button secondary" type="button" onClick={() => window.location.assign(reconnectUrl)}>
+            <KeyRound size={16} /> Reconnect Canvas
+          </button>
+        )}
       </section>
     </div>
   );
@@ -590,6 +1006,9 @@ function SettingsDialog({
   onSaved: (body: any) => void;
   onReset: (body: any) => void;
 }) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
   const [usesDefaults, setUsesDefaults] = useState(setting.usesCourseDefaults !== false);
   const [urlRules, setUrlRules] = useState<SebUrlRule[]>(() => rulesForSetting(setting, courseDefaults));
   const [externalToolIds, setExternalToolIds] = useState<string[] | null>(() =>
@@ -802,7 +1221,11 @@ function SavedPasswordReveal({ endpoint, authToken }: { endpoint: string; authTo
           </button>
         </div>
       )}
-      {error && <small className="field-error">{error}</small>}
+      {error && (
+        <small className="field-error" role="alert">
+          {error}
+        </small>
+      )}
     </section>
   );
 }
@@ -833,19 +1256,24 @@ function DefaultsDialog({
   defaults,
   courseId,
   authToken,
+  initialSection = "password",
   onClose,
   onSave
 }: {
   defaults: CourseSebDefaults;
   courseId: string;
   authToken?: string;
+  initialSection?: "password" | "urls" | "tools";
   onClose: () => void;
   onSave: (defaults: CourseSebDefaults) => Promise<void>;
 }) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
   const [draft, setDraft] = useDefaultsDraft(defaults);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [section, setSection] = useState<"password" | "urls" | "tools">("password");
+  const [section, setSection] = useState<"password" | "urls" | "tools">(initialSection);
 
   async function save() {
     setSaving(true);
@@ -867,7 +1295,14 @@ function DefaultsDialog({
             <span className="section-kicker">Course settings</span>
             <h2 id="defaults-title">SEB course policy</h2>
           </div>
-          <button className="icon-button" onClick={onClose} title="Close defaults">
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            title="Close defaults"
+            aria-label="Close course settings"
+          >
             <X size={17} />
           </button>
         </header>
@@ -905,84 +1340,6 @@ function DefaultsDialog({
           <button className="button primary" onClick={save} disabled={saving}>
             <Save size={16} /> Save defaults
           </button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function SetupWizard({
-  defaults,
-  onSave
-}: {
-  defaults: CourseSebDefaults;
-  onSave: (defaults: CourseSebDefaults) => Promise<void>;
-}) {
-  const [step, setStep] = useState(0);
-  const [draft, setDraft] = useDefaultsDraft(defaults);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const steps = ["Passwords", "Allowed URLs", "Tools"];
-
-  async function finish() {
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(draft);
-    } catch (saveError) {
-      setError(errorMessage(saveError, "Setup could not be saved."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="dialog-backdrop" role="presentation">
-      <section className="dialog setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-title">
-        <header className="setup-header">
-          <div className="brand-mark">
-            <Shield size={22} />
-          </div>
-          <div>
-            <h2 id="setup-title">Set course defaults</h2>
-            <p>Choose the starting settings for SEB-enabled quizzes.</p>
-          </div>
-        </header>
-        <nav className="stepper" aria-label="Setup steps">
-          {steps.map((label, index) => (
-            <span className={clsx("step", index === step && "current", index < step && "done")} key={label}>
-              <span className="step-index">{index < step ? <Check size={14} /> : index + 1}</span>
-              <span>{label}</span>
-            </span>
-          ))}
-        </nav>
-        <DefaultsEditor
-          draft={draft}
-          setDraft={setDraft}
-          visibleSection={step === 0 ? "password" : step === 1 ? "urls" : "tools"}
-        />
-        {error && (
-          <div className="notice error">
-            <AlertCircle size={17} /> {error}
-          </div>
-        )}
-        <footer className="dialog-actions">
-          <button
-            className="button secondary"
-            onClick={() => setStep((current) => Math.max(0, current - 1))}
-            disabled={step === 0}
-          >
-            Back
-          </button>
-          {step < steps.length - 1 ? (
-            <button className="button primary" onClick={() => setStep((current) => current + 1)}>
-              Next
-            </button>
-          ) : (
-            <button className="button primary" onClick={finish} disabled={saving}>
-              <Save size={16} /> Finish setup
-            </button>
-          )}
         </footer>
       </section>
     </div>
@@ -1507,11 +1864,15 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
     <MessagePage
       icon={<KeyRound />}
       title="Connect Canvas"
-      message={data.message || "Authorize Canvas access so this tool can read quizzes and set access codes."}
+      message={
+        data.message || "Authorize Canvas access so this tool can read quizzes and set access codes for this course."
+      }
       action={
-        <a className="button primary" href={data.authUrl}>
-          <KeyRound size={16} /> Connect Canvas
-        </a>
+        <div className="student-action-stack">
+          <a className="button primary" href={data.authUrl}>
+            <KeyRound size={16} /> Connect Canvas
+          </a>
+        </div>
       }
     />
   );
@@ -1521,6 +1882,7 @@ const STUDENT_SESSION_CONNECTED_MESSAGE = "seb-canvas-session-connected";
 
 function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }) {
   const [connecting, setConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
   const popupRef = useRef<Window | null>(null);
   const authUrl = typeof data.authUrl === "string" ? data.authUrl : "/api/student-session-authorize";
 
@@ -1535,8 +1897,11 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
       ) {
         return;
       }
+      const returnUrl = (event.data as { returnUrl?: unknown }).returnUrl;
       popupRef.current?.close();
-      window.location.reload();
+      window.location.assign(
+        typeof returnUrl === "string" && returnUrl.startsWith("/") ? returnUrl : "/lti/launch?connected=1"
+      );
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -1548,12 +1913,14 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
       if (popupRef.current?.closed) {
         popupRef.current = null;
         setConnecting(false);
+        setConnectionError("The Canvas connection window was closed before it finished. Try again when you are ready.");
       }
     }, 400);
     return () => window.clearInterval(timer);
   }, [connecting]);
 
   const connect = () => {
+    setConnectionError("");
     const popup = window.open(authUrl, "seb_canvas_session_authorization", "popup,width=560,height=720");
     if (!popup) {
       window.location.assign(authUrl);
@@ -1568,11 +1935,22 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
     <MessagePage
       icon={<KeyRound />}
       title="Connect Canvas"
-      message="Connect Canvas once to open Safe Exam Browser quizzes without signing in again."
+      message={
+        (data.onboarding as OnboardingContext | undefined)?.resumeAssessment
+          ? "Connect Canvas once, then return to the Safe Exam Browser quiz you selected."
+          : "Connect Canvas once to open Safe Exam Browser quizzes without signing in again."
+      }
       action={
-        <button className="button primary" type="button" disabled={connecting} onClick={connect}>
-          <KeyRound size={16} /> {connecting ? "Connecting…" : "Connect Canvas"}
-        </button>
+        <div className="student-action-stack">
+          <button className="button primary" type="button" disabled={connecting} onClick={connect}>
+            <KeyRound size={16} /> {connecting ? "Connecting…" : "Connect Canvas"}
+          </button>
+          {connectionError && (
+            <span className="field-error" role="alert">
+              {connectionError}
+            </span>
+          )}
+        </div>
       }
     />
   );
@@ -1583,7 +1961,7 @@ function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
 
   useEffect(() => {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: STUDENT_SESSION_CONNECTED_MESSAGE }, window.location.origin);
+      window.opener.postMessage({ type: STUDENT_SESSION_CONNECTED_MESSAGE, returnUrl }, window.location.origin);
       window.setTimeout(() => window.close(), 100);
       return;
     }
@@ -1594,18 +1972,53 @@ function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
 }
 
 function SebDownloadPage({ data }: { data: Record<string, any> }) {
+  const [showSetupCheck, setShowSetupCheck] = useState(data.showReadinessPrompt === true);
+  return (
+    <>
+      <MessagePage
+        icon={<Shield />}
+        title="Safe Exam Browser Required"
+        message={
+          data.showReadinessPrompt
+            ? "Canvas is connected. You can optionally check this computer before opening your quiz."
+            : "Open this assessment in Safe Exam Browser when you are ready. If prompted, allow your browser to open the app."
+        }
+        action={
+          <>
+            <button className="button secondary" type="button" onClick={() => window.history.back()}>
+              <ArrowLeft size={16} /> Back
+            </button>
+            <button className="button secondary" type="button" onClick={() => setShowSetupCheck(true)}>
+              <ShieldCheck size={16} /> Setup check
+            </button>
+            <SebLaunchButton grantUrl={data.configGrantUrl} token={data.configGrantToken} label="Open SEB" />
+          </>
+        }
+      />
+      {showSetupCheck && (
+        <SebSetupCheckDialog
+          launchUrl={data.setupCheckLaunchUrl || "/seb/check/config.seb"}
+          readinessUrl={data.sessionReadinessUrl || "/api/seb/session-readiness"}
+          authToken={data.configGrantToken}
+          onClose={() => setShowSetupCheck(false)}
+          onCompleted={() => persistStudentReadinessPromptDismissal(data.configGrantToken).catch(() => undefined)}
+        />
+      )}
+    </>
+  );
+}
+
+function OAuthErrorPage({ data }: { data: Record<string, any> }) {
+  const description = typeof data.description === "string" && data.description ? ` ${data.description}` : "";
   return (
     <MessagePage
-      icon={<Shield />}
-      title="Safe Exam Browser Required"
-      message="Open this assessment in Safe Exam Browser when you are ready. If prompted, allow your browser to open the app."
+      icon={<AlertCircle />}
+      title="Canvas connection was not completed"
+      message={`Canvas did not authorize this connection.${description} Return to the course tool and select Connect Canvas to try again.`}
       action={
-        <>
-          <button className="button secondary" type="button" onClick={() => window.history.back()}>
-            <ArrowLeft size={16} /> Back
-          </button>
-          <SebLaunchButton grantUrl={data.configGrantUrl} token={data.configGrantToken} label="Open SEB" />
-        </>
+        <a className="button primary" href="/lti/launch">
+          <ArrowLeft size={16} /> Return to Canvas tool
+        </a>
       }
     />
   );
@@ -1661,7 +2074,11 @@ function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?
       }
     } catch (launchError) {
       broker?.close();
-      setError(launchError instanceof Error ? launchError.message : "Unable to prepare Safe Exam Browser");
+      const recovery = onboardingRecovery(launchError, "student");
+      setError(
+        recovery?.message ||
+          (launchError instanceof Error ? launchError.message : "Unable to prepare Safe Exam Browser")
+      );
     } finally {
       setLaunching(false);
     }
@@ -1672,7 +2089,11 @@ function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?
       <button className="button primary" type="button" disabled={launching} onClick={() => void launch()}>
         <ExternalLink size={16} /> {launching ? "Preparing…" : label}
       </button>
-      {error && <span className="field-error">{error}</span>}
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
     </span>
   );
 }
@@ -1997,6 +2418,26 @@ function MessagePage({
   );
 }
 
+function useEscapeToClose(onClose: () => void) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+}
+
+function useDialogInitialFocus(ref: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const timer = window.setTimeout(() => ref.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [ref]);
+}
+
 function detectSebRuntime(): boolean {
   const userAgent = navigator.userAgent || "";
   return (
@@ -2076,6 +2517,23 @@ function EmptyState({ title, message }: { title: string; message: string }) {
   );
 }
 
+function RecoveryNotice({ recovery, onDismiss }: { recovery: OnboardingRecovery; onDismiss: () => void }) {
+  return (
+    <div className="notice error onboarding-recovery" role="alert">
+      <AlertCircle size={17} />
+      <span>{recovery.message}</span>
+      {recovery.actionUrl && recovery.actionLabel && (
+        <a className="button secondary compact" href={recovery.actionUrl}>
+          {recovery.actionLabel}
+        </a>
+      )}
+      <button className="icon-button tiny" type="button" onClick={onDismiss} title="Dismiss guidance">
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 function ToastRegion({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
   return (
     <div className="toast-region" aria-live="polite" aria-atomic="false">
@@ -2104,6 +2562,16 @@ function actionHeaders(authToken?: string): HeadersInit {
   return authToken ? { "x-auth-token": authToken } : {};
 }
 
+async function persistStudentReadinessPromptDismissal(authToken?: string): Promise<void> {
+  const body = await requestJson("/api/seb/session-readiness/dismiss", {
+    method: "POST",
+    headers: actionHeaders(authToken)
+  });
+  if (!body.success) {
+    throw new Error(body.message || "The reminder could not be dismissed.");
+  }
+}
+
 async function requestJson(url: string, init?: RequestInit): Promise<Record<string, any>> {
   const response = await fetch(url, init);
   const contentType = response.headers.get("content-type") || "";
@@ -2120,6 +2588,52 @@ async function requestJson(url: string, init?: RequestInit): Promise<Record<stri
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function onboardingRecovery(value: unknown, audience: "instructor" | "student"): OnboardingRecovery | null {
+  const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const code =
+    typeof candidate.code === "string"
+      ? candidate.code
+      : typeof candidate.error_code === "string"
+        ? candidate.error_code
+        : "";
+  const authUrl = typeof candidate.authUrl === "string" ? candidate.authUrl : "";
+  if (candidate.requiresAuth === true || code === "CANVAS_AUTHORIZATION_REQUIRED") {
+    return {
+      message: "Canvas needs to be reconnected before this course can be updated.",
+      actionLabel: "Reconnect Canvas",
+      actionUrl: authUrl || "/api/oauth2reauthorize"
+    };
+  }
+  if (code === "CANVAS_PERMISSION_DENIED") {
+    return {
+      message:
+        "Canvas accepted your connection but blocked this update. A Canvas administrator needs to confirm the Developer Key scopes.",
+      actionLabel: "Open setup guide",
+      actionUrl: "/setup/guide"
+    };
+  }
+  if (code === "CANVAS_SESSION_AUTHORIZATION_REQUIRED") {
+    return audience === "student"
+      ? {
+          message: "Your Canvas connection needs to be renewed before Safe Exam Browser can open this quiz.",
+          actionLabel: "Reconnect Canvas",
+          actionUrl: "/api/student-session-authorize"
+        }
+      : null;
+  }
+  if (code === "CANVAS_SESSION_READINESS_FAILED") {
+    return {
+      message: "Canvas could not verify the connection right now. Try again, or return to Canvas and reconnect later."
+    };
+  }
+  if (code === "INVALID_SEB_CONFIG_PROOF" || code === "SEB_CONFIGURATION_UNAVAILABLE") {
+    return {
+      message: "This SEB configuration is no longer current. Return to Canvas and reopen the quiz from the course tool."
+    };
+  }
+  return null;
 }
 
 function useDefaultsDraft(

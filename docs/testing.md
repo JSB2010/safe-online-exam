@@ -101,12 +101,14 @@ Minimum checks:
 - Desktop viewport: open `/seb/exit/course-1/classicquiz_quiz-1`, verify no console errors and no layout overlap.
 - Mobile viewport around 390x844: verify the same page remains readable and the quit button fits.
 - Verify `/health`, `/.well-known/jwks.json`, `/lti/config`, `/js/canvas-seb-detector.js`, `/api/seb/canvas-detector.js`, and `/assets/index.js` return the expected production-build responses.
+- Open `/setup` and `/setup/guide`; confirm the role cards link to public service checks and do not claim that Canvas installation or theme JavaScript has been automatically verified.
 - Open a SEB download page route if seeded data is available.
 - Open the instructor dashboard from a real Canvas LTI launch in dev.
-- Verify the instructor setup wizard appears after first Canvas authorization for a course, then saves course defaults.
+- On a first instructor launch, verify the inline **Course readiness** checklist directs missing exit security to the Security tab, then safe default tool review and optional advanced URL editing. Attempt to enable a quiz before an effective exit password exists and confirm it routes to Security instead of leaving only a toast.
 - Verify a student LTI launch shows only SEB-enabled assessments with verified, published, currently open Canvas state from a successful refresh no more than 24 hours old and no instructor controls. Remove or unpublish an assessment, refresh successfully, and confirm its retained instructor settings cannot mint a learner config grant. Also simulate a New Quiz discovery failure, expired/invalid verification timestamps, and a timestamp more than five minutes in the future; cached rows can remain available to the instructor but must be hidden and fail closed for learners.
 - On both a Classic Quiz and New Quiz access-code page outside SEB, verify the detector popup's primary action launches that exact assessment through Canvas's installed external-tool URL and opens SEB without a second app-page click. Confirm the signed target, two-minute session handoff, and one-time configuration grant are required; reusing the handoff or grant must fail.
-- In a normal browser, open the student course-navigation tool without a stored Canvas OAuth credential. Confirm it shows only **Connect Canvas**, completes the scoped Canvas authorization in a user-initiated popup, and returns to the in-frame dashboard without a reconnect control. Revoke the student credential or remove the session-token scope, run the setup check, and confirm the readiness failure returns the student to the connection gate.
+- In a normal browser, open the student course-navigation tool without a stored Canvas OAuth credential. Confirm it shows only **Connect Canvas**, completes the scoped Canvas authorization in a user-initiated popup, returns to the in-frame dashboard, and opens the skippable setup-check prompt. Close the prompt with both its close button and Escape; confirm keyboard focus starts on the close button and errors are announced inline. Repeat with the popup blocked and closed early, then retry the connection.
+- Launch a Classic Quiz and a New Quiz directly before a student has connected Canvas. After consent, confirm each returns to that exact assessment's download screen with no configuration grant minted until **Open SEB** is selected. Revoke the student credential or remove the session-token scope, run the setup check, and confirm the readiness failure offers **Reconnect Canvas** rather than a generic redirect.
 - Launch both a Classic Quiz and a New Quiz from SEB with an empty SEB cookie jar. Confirm the generated config starts at Canvas's one-time session URL, reaches the assessment without a Google/SSO prompt, and its URL filter contains no identity-provider or legacy `ssoDomains` entries.
 - Before enabling a preloaded calculator tool in a school course, validate its current launch URL and resource manifest in a real SEB session for both Classic and New Quizzes: the launch page and required assets load, a disabled tool is absent and unreachable, unrelated same-domain paths remain blocked, the sidebar opens/reopens the one tool window, and returning to Canvas preserves the active exam flow. Re-run this check whenever an instructor changes a tool or its resources.
 
@@ -115,6 +117,16 @@ The committed Playwright smoke suite can be run with:
 ```bash
 npm run test:e2e
 ```
+
+## Live onboarding acceptance sequence
+
+Use separate Canvas admin, instructor, and student test accounts in the dev environment. Complete this sequence after an onboarding release:
+
+1. Admin: verify `/setup` public checks, install the LTI by Client ID, add the student session-token scope, and load the detector theme JavaScript.
+2. Instructor: cancel and retry Canvas OAuth, recover from a missing permission, set the course exit-password policy, review default tools, add one optional advanced URL/tool, and enable one Classic Quiz and one New Quiz.
+3. Student: connect Canvas from course navigation, skip and then run the readiness check, test a readiness failure/reconnect, and launch the two enabled assessments.
+4. Student: launch an SEB-required Classic Quiz and New Quiz before connecting Canvas; verify the post-consent return targets the original assessment and requires an explicit SEB launch.
+5. In native SEB: verify the generated configuration, Canvas session handoff, Config Key proof, Classic Quiz, New Quiz, access-code handoff, and password-protected quit behavior.
 
 ## Regression Checklist
 

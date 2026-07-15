@@ -231,6 +231,11 @@ export interface OAuthToken {
   refreshToken?: string | null;
   scope?: string | null;
   expiresAt?: string | null;
+  /**
+   * UI-only preference. This never represents device trust or readiness; it
+   * only prevents the optional student setup-check prompt from reappearing.
+   */
+  studentReadinessPromptDismissedAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }

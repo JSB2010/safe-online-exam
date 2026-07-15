@@ -268,6 +268,17 @@ describe("CanvasApiService", () => {
     await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(true);
   });
 
+  it("persists a student setup-check dismissal without treating it as device trust", async () => {
+    await expect(service.hasDismissedStudentReadinessPrompt("user-1")).resolves.toBe(false);
+
+    await service.dismissStudentReadinessPrompt("user-1");
+
+    await expect(service.hasDismissedStudentReadinessPrompt("user-1")).resolves.toBe(true);
+    await expect(repositories.oauthTokens.get("user-1")).resolves.toMatchObject({
+      studentReadinessPromptDismissedAt: expect.any(String)
+    });
+  });
+
   it("refreshes expired OAuth access tokens before calling Canvas APIs", async () => {
     await service.storeAccessToken("refresh-user", "old-token", {
       refreshToken: "refresh-token",
