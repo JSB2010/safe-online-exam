@@ -189,6 +189,8 @@ bash scripts/generate-seb-config-cert.sh \
 
 Vault the generated `.p12`, private PEM, and password file using the certificate runbook, then remove workstation copies. Only the public certificate PEM belongs in the Cloud Run runtime. Deploy the private identity to managed clients with an MDM Certificates payload configured as non-extractable and restricted to SEB; do not use script or policy parameters to carry it.
 
+Managed Macs need macOS 12.1 or newer and a school-approved SEB build (3.6.x stable or newer): generated assessment configs enforce Apple's Automatic Assessment Configuration (AAC) assessment mode and refuse to run on older macOS releases. AAC needs no MDM supervision or special entitlement — SEB ships with the assessment entitlement — but the MDM baseline for the installed SEB client should mirror the AAC preference (Preferences → Security → prefer/enforce Assessment Mode) so a locally started SEB session cannot run with a weaker kiosk mode than the exam configs demand. Note that AAC blocks third-party assistive technology; plan separate proctoring accommodations for students who rely on such tools instead of weakening the baseline.
+
 ## Create Secret Manager Entries
 
 Create the required secrets. If you are using the bootstrap path, the Canvas values can still be `bootstrap-pending`; replace them after the first deploy and Canvas setup.

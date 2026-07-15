@@ -225,7 +225,21 @@ describe("SebConfigurationService", () => {
       restartExamPasswordProtected: true,
       sebAllowedVersions: ["win.3.6.min"],
       sebServiceIgnore: false,
-      sebServicePolicy: 2
+      sebServicePolicy: 2,
+      aacDnsPrePinning: true,
+      allowMacOSVersionNumberCheckFull: true,
+      allowMacOSVersionNumberMajor: 12,
+      allowMacOSVersionNumberMinor: 1,
+      allowMacOSVersionNumberPatch: 0,
+      allowUserAppFolderInstall: false,
+      enableMacOSAAC: true,
+      forceAppFolderInstall: true,
+      lockdownModePolicy: 2,
+      minMacOSVersion: 10,
+      browserMediaCaptureCamera: false,
+      browserMediaCaptureMicrophone: false,
+      browserMediaCaptureScreen: false,
+      examSessionClearCookiesOnStart: true
     });
     for (const disabledFunctionKey of [
       "enableF1",
@@ -550,6 +564,18 @@ describe("SebConfigurationService", () => {
     expect(parsed.allowQuit).toBe(true);
     expect(parsed.ignoreQuitPassword).toBe(true);
     expect(parsed.browserWindowWebView).toBe(3);
+    expect(parsed).toMatchObject({
+      aacDnsPrePinning: true,
+      allowMacOSVersionNumberCheckFull: true,
+      allowMacOSVersionNumberMajor: 12,
+      allowMacOSVersionNumberMinor: 1,
+      allowMacOSVersionNumberPatch: 0,
+      allowUserAppFolderInstall: false,
+      enableMacOSAAC: true,
+      forceAppFolderInstall: true,
+      lockdownModePolicy: 2,
+      minMacOSVersion: 10
+    });
     expect(parsed.URLFilterEnable).toBe(true);
     expect(expressions).not.toContain("https://app.example.com/*");
     expect(expressions).toContain("^https://app\\.example\\.com/seb/check$");

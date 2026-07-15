@@ -41,11 +41,39 @@ interface UrlFilterRule {
   action: number;
 }
 
+// macOS exam boundary: Apple's Automatic Assessment Configuration (AAC) is
+// the OS-enforced assessment mode; SEB's classic macOS kiosk mode is only a
+// user-space fallback. Released SEB macOS clients (3.2 through 3.6.x) read
+// enableMacOSAAC ("Prefer Assessment Mode"), which defaults to off, and SEB
+// 3.7+ replaces that key with lockdownModePolicy (2 = enforce AAC). SEB only
+// enters AAC on macOS 11.x and 12.1 when aacDnsPrePinning works around the
+// in-AAC DNS failure on those releases, and 3.7's enforce policy silently
+// drops lockdown when the OS cannot run AAC, so the version floor rejects
+// anything older than macOS 12.1: allowMacOSVersionNumber* on clients with
+// the full three-part check, minMacOSVersion (10 = macOS 12) on older ones.
+// Windows and iOS clients ignore all of these keys. The install-location keys
+// make SEB refuse to run from user-writable locations (a student-modified
+// copy in ~/Applications or ~/Downloads) instead of only from /Applications.
+const MACOS_LOCKDOWN_SETTINGS: Readonly<Record<string, unknown>> = {
+  aacDnsPrePinning: true,
+  allowMacOSVersionNumberCheckFull: true,
+  allowMacOSVersionNumberMajor: 12,
+  allowMacOSVersionNumberMinor: 1,
+  allowMacOSVersionNumberPatch: 0,
+  allowUserAppFolderInstall: false,
+  enableMacOSAAC: true,
+  forceAppFolderInstall: true,
+  lockdownModePolicy: 2,
+  minMacOSVersion: 10
+};
+
 // Do not rely on client-version defaults for controls that define the exam
 // boundary. Unknown keys are ignored by clients on other platforms, while the
 // overlapping legacy/current keys keep the policy fail-closed across supported
 // Windows, macOS, and iOS releases.
 const ASSESSMENT_LOCKDOWN_SETTINGS: Readonly<Record<string, unknown>> = {
+  ...MACOS_LOCKDOWN_SETTINGS,
+
   // Browser and file-system escape surfaces.
   allowApplicationLog: false,
   allowBrowsingBackForward: false,
@@ -75,9 +103,15 @@ const ASSESSMENT_LOCKDOWN_SETTINGS: Readonly<Record<string, unknown>> = {
   openDownloads: false,
   showMenuBar: false,
 
-  // OS, display, capture, and application-switching controls.
+  // OS, display, capture, and application-switching controls. SEB macOS 3.7
+  // removes allowAudioCapture/allowVideoCapture; the browserMediaCapture*
+  // keys are their successors (getUserMedia/getDisplayMedia in the browser),
+  // so both generations are set explicitly.
   allowAirPlay: false,
   allowAudioCapture: false,
+  browserMediaCaptureCamera: false,
+  browserMediaCaptureMicrophone: false,
+  browserMediaCaptureScreen: false,
   allowDictation: false,
   allowDisplayMirroring: false,
   allowedDisplayBuiltin: true,
@@ -148,6 +182,10 @@ const ASSESSMENT_LOCKDOWN_SETTINGS: Readonly<Record<string, unknown>> = {
   enableChromeNotifications: false,
   enableCursorVerification: true,
   enableSessionVerification: true,
+  // The Canvas session hand-off assumes each exam starts with a fresh SEB
+  // cookie jar; clearing on start guarantees that even if a client default
+  // ever changes.
+  examSessionClearCookiesOnStart: true,
   examSessionClearCookiesOnEnd: true,
   ignoreExitKeys: true,
   removeBrowserProfile: true,
@@ -273,6 +311,10 @@ export class SebConfigurationService implements OnModuleInit {
       sebConfigPurpose: 0,
       originatorVersion: "3.7.0",
       startURL: input.startUrl,
+      // The setup check must exercise the same macOS AAC entry path and
+      // install-location checks as a real assessment so an unsupported Mac
+      // fails here instead of on exam day.
+      ...MACOS_LOCKDOWN_SETTINGS,
       allowQuit: true,
       ignoreQuitPassword: true,
       hashedQuitPassword: "",
