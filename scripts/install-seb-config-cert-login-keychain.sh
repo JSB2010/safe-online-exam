@@ -78,8 +78,12 @@ if run_as_user /usr/bin/security find-certificate -c "$CERT_CN" "$LOGIN_KEYCHAIN
   IDENTITY_PRESENT=true
 fi
 
+OLD_UMASK="$(umask)"
+umask 077
 TMP_DIR="$(/usr/bin/mktemp -d /private/tmp/seb-cert.XXXXXX)"
+umask "$OLD_UMASK"
 P12_PATH="$TMP_DIR/seb-config-encryption.p12"
+PEM_PATH="$TMP_DIR/seb-config-encryption.pem"
 
 cleanup() {
   /bin/rm -rf "$TMP_DIR"
@@ -100,9 +104,20 @@ if [[ "$IDENTITY_PRESENT" == "false" ]]; then
     die "Decoded .p12 file is empty"
   fi
 
-  /usr/sbin/chown -R "$CONSOLE_USER":staff "$TMP_DIR"
+  /usr/sbin/chown root:wheel "$TMP_DIR" "$P12_PATH"
   /bin/chmod 700 "$TMP_DIR"
   /bin/chmod 600 "$P12_PATH"
+
+  log "Preparing root-only import material"
+  if ! P12_PASSWORD="$P12_PASSWORD" /usr/bin/openssl pkcs12 \
+    -in "$P12_PATH" \
+    -passin env:P12_PASSWORD \
+    -out "$PEM_PATH" \
+    -nodes; then
+    die "Could not prepare PKCS#12 identity for import"
+  fi
+  /usr/sbin/chown root:wheel "$PEM_PATH"
+  /bin/chmod 600 "$PEM_PATH"
 
   log "Removing old partial identity if present"
   while run_as_user /usr/bin/security delete-identity -c "$CERT_CN" "$LOGIN_KEYCHAIN" >/dev/null 2>&1; do
@@ -117,9 +132,8 @@ if [[ "$IDENTITY_PRESENT" == "false" ]]; then
   else
     log "Importing identity into $CONSOLE_USER login keychain before SEB is installed"
   fi
-  run_as_user /usr/bin/security import "$P12_PATH" \
+  /usr/bin/security import "$PEM_PATH" \
     -k "$LOGIN_KEYCHAIN" \
-    -P "$P12_PASSWORD" \
     -x \
     "${IMPORT_TRUST_ARGS[@]}"
 fi
