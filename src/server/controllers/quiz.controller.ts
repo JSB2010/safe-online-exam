@@ -8,6 +8,8 @@ import {
   legacyDomainsToUrlRules,
   normalizeCourseSebDefaults,
   normalizeConcreteDomains,
+  normalizeExternalToolAccessRules,
+  normalizeExternalToolIds,
   normalizeExternalTools,
   normalizeUrlRules,
   parseNewQuizContentId,
@@ -82,6 +84,7 @@ export class QuizController {
     this.authorization.requireInstructorForCourse(request, courseId, true);
     assertSafePolicyInput(body);
     const existing = await this.courseSettings.getDefaults(courseId);
+    const hasToolCatalog = Array.isArray(body.externalTools);
     const defaults = await this.courseSettings.saveDefaults(
       courseId,
       normalizeCourseSebDefaults({
@@ -89,7 +92,8 @@ export class QuizController {
         quitPassword: secretUpdate(body, "quitPassword", existing.quitPassword),
         startPassword: secretUpdate(body, "startPassword", existing.startPassword),
         urlRules: Array.isArray(body.urlRules) ? (body.urlRules as any) : [],
-        externalTools: Array.isArray(body.externalTools) ? (body.externalTools as any) : [],
+        externalTools: hasToolCatalog ? (body.externalTools as any) : existing.externalTools,
+        externalToolsInitialized: hasToolCatalog || existing.externalToolsInitialized === true,
         setupCompleted: body.setupCompleted !== false
       })
     );
@@ -193,6 +197,11 @@ export class QuizController {
     if (userId && userId !== sessionUser) {
       return apiError(403, "User mismatch");
     }
+    if (Object.hasOwn(body, "externalTools")) {
+      return apiError(400, "Exam tool definitions are managed in Course settings", {
+        error_code: "QUIZ_TOOL_DEFINITIONS_NOT_ALLOWED"
+      });
+    }
     const contentId = body.contentId || body.quizId;
     if (!contentId) {
       return apiError(400, "quizId or contentId is required");
@@ -209,12 +218,12 @@ export class QuizController {
       : legacyDomainsToUrlRules(body.customDomains);
     const ssoDomains = normalizeConcreteDomains(body.ssoDomains);
     const educationalToolDomains = normalizeConcreteDomains(body.educationalToolDomains);
-    const externalTools = normalizeExternalTools(body.externalTools);
     if (parsed) {
       const setting = await this.assessments.getContentSebSetting(contentId);
       if (!setting) {
         return apiError(404, "Assessment not found");
       }
+      const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
       const saved = await this.assessments.saveContentSebSetting(
         applyCourseDefaultsToContentSetting(
           {
@@ -223,7 +232,8 @@ export class QuizController {
             educationalToolDomains,
             customDomains: urlRulesToAllowedEntries(urlRules),
             urlRules,
-            externalTools,
+            externalTools: setting.externalTools,
+            externalToolIds,
             externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
             quitPassword: secretUpdate(
               body as unknown as Record<string, unknown>,
@@ -254,6 +264,7 @@ export class QuizController {
     if (!body.quizId || !setting) {
       return apiError(404, "Assessment not found");
     }
+    const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
     const saved = await this.assessments.saveQuizSebSetting(
       applyCourseDefaultsToQuizSetting(
         {
@@ -266,7 +277,8 @@ export class QuizController {
           educationalToolDomains,
           customDomains: urlRulesToAllowedEntries(urlRules),
           urlRules,
-          externalTools,
+          externalTools: setting.externalTools,
+          externalToolIds,
           externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
           quitPassword: secretUpdate(body as unknown as Record<string, unknown>, "quitPassword", setting.quitPassword),
           startPassword: secretUpdate(
@@ -550,14 +562,43 @@ function assertSafePolicyInput(body: Record<string, unknown>): void {
       (tool) =>
         tool.matchType === "regex" ||
         typeof tool.allowedPattern === "string" ||
-        (Array.isArray(tool.allowedDomains) && !tool.preset) ||
+        typeof tool.url !== "string" ||
+        !tool.url.trim().startsWith("https://") ||
+        // Responses retain legacy `allowedDomains` as a derived compatibility
+        // field. Current custom tools submit it beside authoritative rules.
+        (Array.isArray(tool.allowedDomains) &&
+          tool.allowedDomains.length > 0 &&
+          !tool.preset &&
+          !(Array.isArray(tool.allowedRules) && tool.allowedRules.length > 0)) ||
+        (Array.isArray(tool.allowedRules) &&
+          (tool.allowedRules as unknown[]).some(
+            (rule) =>
+              normalizeExternalToolAccessRules([rule as any]).length !== 1 ||
+              ((rule as { match?: unknown; broadDomainConfirmed?: unknown }).match === "domain" &&
+                (rule as { broadDomainConfirmed?: unknown }).broadDomainConfirmed !== true)
+          )) ||
         normalizeExternalTools([tool as any]).length !== 1
     )
   ) {
-    apiError(400, "External tools must use a canonical HTTPS URL or its concrete domain", {
+    apiError(400, "External tools must use an exact HTTPS launch URL and explicit safe resource paths", {
       error_code: "INVALID_SEB_TOOL_POLICY"
     });
   }
+}
+
+function requestedExternalToolIds(
+  body: StructuredSebConfigRequest,
+  existing?: string[] | null
+): string[] | null | undefined {
+  if (!Object.hasOwn(body, "externalToolIds")) {
+    return existing;
+  }
+  if (body.externalToolIds !== null && !Array.isArray(body.externalToolIds)) {
+    apiError(400, "Exam tool selections must be a list of course tool ids", {
+      error_code: "INVALID_SEB_TOOL_SELECTION"
+    });
+  }
+  return normalizeExternalToolIds(body.externalToolIds);
 }
 
 function canvasAuthorizationRequired(courseId: string, userId: string): Record<string, unknown> {

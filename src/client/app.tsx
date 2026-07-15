@@ -25,12 +25,17 @@ import {
 import type { ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import type { CourseSebDefaults, ExternalToolConfig, SebUrlRule, SebUrlRuleMatch } from "../shared/models.js";
+import type {
+  CourseSebDefaults,
+  ExternalToolAccessRule,
+  ExternalToolConfig,
+  SebUrlRule,
+  SebUrlRuleMatch
+} from "../shared/models.js";
 import {
-  EXTERNAL_TOOL_PRESETS,
   canEnableSebAssessment,
   legacyDomainsToUrlRules,
-  normalizeExternalTools,
+  normalizeCourseExternalTools,
   normalizeUrlRules
 } from "../shared/models.js";
 
@@ -279,8 +284,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           >
             <RefreshCw size={18} />
           </button>
-          <button className="icon-button" onClick={() => setShowDefaults(true)} title="Course defaults">
-            <Settings size={18} />
+          <button className="button secondary" onClick={() => setShowDefaults(true)}>
+            <Settings size={16} /> Course settings
           </button>
         </div>
       </header>
@@ -289,7 +294,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
         <div className="list-header">
           <div>
             <h2>Quizzes</h2>
-            <p>Choose which quizzes require SEB and manage passwords.</p>
+            <p>Choose which quizzes require SEB and select the course tools they may use.</p>
           </div>
           <div className="search">
             <Search size={18} />
@@ -587,8 +592,10 @@ function SettingsDialog({
 }) {
   const [usesDefaults, setUsesDefaults] = useState(setting.usesCourseDefaults !== false);
   const [urlRules, setUrlRules] = useState<SebUrlRule[]>(() => rulesForSetting(setting, courseDefaults));
-  const [externalTools, setExternalTools] = useState<ExternalToolConfig[]>(() =>
-    toolsForSetting(setting, courseDefaults)
+  const [externalToolIds, setExternalToolIds] = useState<string[] | null>(() =>
+    Array.isArray(setting.externalToolIds)
+      ? setting.externalToolIds.filter((id: unknown) => typeof id === "string")
+      : null
   );
   const [passwordOverride, setPasswordOverride] = useState(setting.quitPasswordOverride === true);
   const [quitPassword, setQuitPassword] = useState("");
@@ -601,10 +608,7 @@ function SettingsDialog({
     setUsesDefaults(false);
     setUrlRules(next);
   };
-  const customizeExternalTools = (next: ExternalToolConfig[]) => {
-    setUsesDefaults(false);
-    setExternalTools(next);
-  };
+  const customizeExternalToolIds = (next: string[] | null) => setExternalToolIds(next);
   const customizePasswordOverride = (next: boolean) => {
     setUsesDefaults(false);
     setPasswordOverride(next);
@@ -633,7 +637,7 @@ function SettingsDialog({
         ssoDomains: [],
         educationalToolDomains: [],
         urlRules,
-        externalTools: normalizeExternalTools(externalTools),
+        externalToolIds,
         quitPassword: passwordOverride ? quitPassword : null,
         startPassword: startPasswordOverride ? startPassword : null,
         usesCourseDefaults: usesDefaults,
@@ -673,7 +677,7 @@ function SettingsDialog({
       }
       setUsesDefaults(true);
       setUrlRules(normalizeUrlRules(courseDefaults.urlRules));
-      setExternalTools(mergeToolPresets(courseDefaults.externalTools || []));
+      setExternalToolIds(null);
       setPasswordOverride(false);
       setQuitPassword("");
       setStartPasswordOverride(false);
@@ -707,8 +711,9 @@ function SettingsDialog({
         <SettingsSections
           urlRules={urlRules}
           setUrlRules={customizeUrlRules}
-          externalTools={externalTools}
-          setExternalTools={customizeExternalTools}
+          courseTools={courseDefaults.externalTools}
+          externalToolIds={externalToolIds}
+          setExternalToolIds={customizeExternalToolIds}
           quitPassword={quitPassword}
           setQuitPassword={customizeQuitPassword}
           startPassword={startPassword}
@@ -840,6 +845,7 @@ function DefaultsDialog({
   const [draft, setDraft] = useDefaultsDraft(defaults);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [section, setSection] = useState<"password" | "urls" | "tools">("password");
 
   async function save() {
     setSaving(true);
@@ -858,8 +864,8 @@ function DefaultsDialog({
       <section className="dialog large" role="dialog" aria-modal="true" aria-labelledby="defaults-title">
         <header className="dialog-header">
           <div>
-            <span className="section-kicker">Course defaults</span>
-            <h2 id="defaults-title">Starting settings</h2>
+            <span className="section-kicker">Course settings</span>
+            <h2 id="defaults-title">SEB course policy</h2>
           </div>
           <button className="icon-button" onClick={onClose} title="Close defaults">
             <X size={17} />
@@ -869,7 +875,24 @@ function DefaultsDialog({
           endpoint={`/api/quizzes/course/${encodeURIComponent(courseId)}/passwords/reveal`}
           authToken={authToken}
         />
-        <DefaultsEditor draft={draft} setDraft={setDraft} />
+        <nav className="settings-tabs" aria-label="Course settings">
+          {[
+            ["password", "Security"],
+            ["urls", "Allowed URLs"],
+            ["tools", "Exam tools"]
+          ].map(([id, label]) => (
+            <button
+              className={clsx("settings-tab", section === id && "active")}
+              key={id}
+              type="button"
+              aria-selected={section === id}
+              onClick={() => setSection(id as "password" | "urls" | "tools")}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        <DefaultsEditor draft={draft} setDraft={setDraft} visibleSection={section} />
         {error && (
           <div className="notice error">
             <AlertCircle size={17} /> {error}
@@ -1070,7 +1093,7 @@ function DefaultsEditor({
       {showTools && (
         <section className="settings-section">
           <SectionHeading
-            title="Education tools"
+            title="Exam tools"
             actionLabel="Add tool"
             onAction={() =>
               setDraft((current) => ({ ...current, externalTools: [...current.externalTools, newCustomTool()] }))
@@ -1089,8 +1112,9 @@ function DefaultsEditor({
 function SettingsSections({
   urlRules,
   setUrlRules,
-  externalTools,
-  setExternalTools,
+  courseTools,
+  externalToolIds,
+  setExternalToolIds,
   quitPassword,
   setQuitPassword,
   startPassword,
@@ -1104,8 +1128,9 @@ function SettingsSections({
 }: {
   urlRules: SebUrlRule[];
   setUrlRules: (rules: SebUrlRule[]) => void;
-  externalTools: ExternalToolConfig[];
-  setExternalTools: (tools: ExternalToolConfig[]) => void;
+  courseTools: ExternalToolConfig[];
+  externalToolIds: string[] | null;
+  setExternalToolIds: (ids: string[] | null) => void;
   quitPassword: string;
   setQuitPassword: (value: string) => void;
   startPassword: string;
@@ -1193,12 +1218,8 @@ function SettingsSections({
       </section>
 
       <section className="settings-section">
-        <SectionHeading
-          title="Education tools"
-          actionLabel="Add tool"
-          onAction={() => setExternalTools([...externalTools, newCustomTool()])}
-        />
-        <ToolEditor tools={externalTools} onChange={setExternalTools} />
+        <SectionHeading title="Exam tools" />
+        <QuizToolSelector tools={courseTools} selectedIds={externalToolIds} onChange={setExternalToolIds} />
       </section>
     </div>
   );
@@ -1264,52 +1285,219 @@ function ToolEditor({
   return (
     <div className="tool-list">
       {tools.map((tool) => (
-        <div className="tool-row" key={tool.id}>
-          <label className="tool-enabled">
-            <input
-              type="checkbox"
-              checked={tool.enabled}
-              disabled={disabled}
-              onChange={(event) => update(tool.id, { enabled: event.target.checked })}
-            />
-            <span className="tool-icon">
-              <Calculator size={16} />
+        <article className="tool-card" key={tool.id}>
+          <header className="tool-card-header">
+            <label className="tool-enabled">
+              <input
+                type="checkbox"
+                checked={tool.enabled}
+                disabled={disabled}
+                onChange={(event) => update(tool.id, { enabled: event.target.checked })}
+              />
+              <span className="tool-icon">
+                <Calculator size={16} />
+              </span>
+              <span>
+                <strong>{tool.label || "New custom tool"}</strong>
+                <small>{tool.enabled ? "Enabled by default for new SEB quizzes" : "Disabled by default"}</small>
+              </span>
+            </label>
+            <span className={clsx("tool-badge", tool.preset ? "preset" : "custom")}>
+              {tool.preset ? "Preloaded" : "Custom"}
             </span>
-          </label>
-          <input
-            className="tool-name-field"
-            value={tool.label}
-            disabled={disabled}
-            onChange={(event) => update(tool.id, { label: event.target.value })}
-            placeholder="Tool name"
-          />
-          <input
-            className="tool-url-field"
-            value={tool.url}
-            disabled={disabled}
-            onChange={(event) => update(tool.id, { url: event.target.value })}
-            placeholder="https://example.edu/tool"
-          />
-          <select
-            className="tool-match-field"
-            value={tool.matchType || "exact"}
-            disabled={disabled}
-            onChange={(event) => update(tool.id, { matchType: event.target.value as SebUrlRuleMatch })}
-          >
-            <option value="exact">Exact URL</option>
-            <option value="domain">Whole domain</option>
-          </select>
-          <button
-            className="icon-button tool-remove-button"
-            disabled={disabled || !!tool.preset}
-            onClick={() => onChange(tools.filter((entry) => entry.id !== tool.id))}
-            title="Remove tool"
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
+          </header>
+
+          <div className="tool-custom-fields">
+            <label>
+              Name
+              <input
+                value={tool.label}
+                disabled={disabled}
+                onChange={(event) => update(tool.id, { label: event.target.value })}
+                placeholder="Tool name"
+              />
+            </label>
+            <label>
+              Exact launch URL
+              <input
+                value={tool.url}
+                disabled={disabled}
+                onChange={(event) => update(tool.id, { url: event.target.value })}
+                placeholder="https://example.edu/tool"
+              />
+            </label>
+          </div>
+
+          <section className="tool-access-list">
+            <div className="tool-access-heading">
+              <div>
+                <strong>Allowed in SEB</strong>
+                <small>The launch page plus these exact resources are the only extra pages this tool can use.</small>
+              </div>
+              <button
+                className="button secondary small"
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  update(tool.id, {
+                    allowedRules: [...(tool.allowedRules || []), newToolAccessRule()]
+                  })
+                }
+              >
+                <Plus size={14} /> Add resource
+              </button>
+            </div>
+            <p className="tool-launch-url">
+              <code>{tool.url || "Exact launch URL required"}</code>
+            </p>
+            {(tool.allowedRules || []).map((rule) => (
+              <ToolAccessRuleEditor
+                disabled={disabled}
+                key={rule.id}
+                rule={rule}
+                onChange={(patch) =>
+                  update(tool.id, {
+                    allowedRules: (tool.allowedRules || []).map((entry) =>
+                      entry.id === rule.id ? { ...entry, ...patch } : entry
+                    )
+                  })
+                }
+                onRemove={() =>
+                  update(tool.id, { allowedRules: (tool.allowedRules || []).filter((entry) => entry.id !== rule.id) })
+                }
+              />
+            ))}
+            {(tool.allowedRules || []).length === 0 && <p className="empty-line">No additional resource paths.</p>}
+            <p className="tool-blocked-note">
+              Everything else—including sign-in, saved work, sharing, and other sites—is blocked.
+            </p>
+          </section>
+
+          <footer className="tool-card-actions">
+            <button
+              className="button danger small"
+              disabled={disabled}
+              type="button"
+              onClick={() => onChange(tools.filter((entry) => entry.id !== tool.id))}
+            >
+              <Trash2 size={14} /> Remove tool
+            </button>
+          </footer>
+        </article>
       ))}
       {tools.length === 0 && <p className="empty-line">No tools configured.</p>}
+    </div>
+  );
+}
+
+function ToolAccessRuleEditor({
+  rule,
+  onChange,
+  onRemove,
+  disabled
+}: {
+  rule: ExternalToolAccessRule;
+  onChange: (patch: Partial<ExternalToolAccessRule>) => void;
+  onRemove: () => void;
+  disabled: boolean;
+}) {
+  const changeMatch = (match: ExternalToolAccessRule["match"]) => {
+    if (
+      match === "domain" &&
+      !window.confirm("Allow every HTTPS page on this domain? This is broader than an exact URL or resource path.")
+    ) {
+      return;
+    }
+    onChange({
+      match,
+      ...(match === "domain" ? { broadDomainConfirmed: true } : { broadDomainConfirmed: undefined })
+    });
+  };
+  return (
+    <div className={clsx("tool-access-rule", rule.match === "domain" && "broad")}>
+      <select
+        value={rule.match}
+        disabled={disabled}
+        onChange={(event) => changeMatch(event.target.value as ExternalToolAccessRule["match"])}
+      >
+        <option value="exact">Exact URL</option>
+        <option value="path">Path and children</option>
+        <option value="domain">Whole domain (broad)</option>
+      </select>
+      <input
+        value={rule.value}
+        disabled={disabled}
+        onChange={(event) => onChange({ value: event.target.value })}
+        placeholder={
+          rule.match === "domain"
+            ? "assets.example.edu"
+            : rule.match === "path"
+              ? "https://example.edu/assets/*"
+              : "https://example.edu/resource"
+        }
+      />
+      {!disabled && (
+        <button className="icon-button" type="button" onClick={onRemove} title="Remove allowed resource">
+          <Trash2 size={16} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function QuizToolSelector({
+  tools,
+  selectedIds,
+  onChange
+}: {
+  tools: ExternalToolConfig[];
+  selectedIds: string[] | null;
+  onChange: (ids: string[] | null) => void;
+}) {
+  const catalog = normalizeCourseExternalTools(tools);
+  const selected = new Set(selectedIds || catalog.filter((tool) => tool.enabled).map((tool) => tool.id));
+  const update = (tool: ExternalToolConfig, enabled: boolean) => {
+    const next = new Set(selected);
+    if (enabled) next.add(tool.id);
+    else next.delete(tool.id);
+    onChange(Array.from(next));
+  };
+
+  return (
+    <div className="quiz-tool-selector">
+      <div className="quiz-tool-selector-copy">
+        <p>
+          {selectedIds === null
+            ? "This quiz uses the course defaults. Check a box to make a quiz-specific selection."
+            : "This quiz has its own tool selection. Only checked tools will be included in its SEB file."}
+        </p>
+        {selectedIds !== null && (
+          <button className="button secondary small" type="button" onClick={() => onChange(null)}>
+            Reset to course defaults
+          </button>
+        )}
+      </div>
+      <div className="quiz-tool-list">
+        {catalog.map((tool) => (
+          <label className="quiz-tool-option" key={tool.id}>
+            <input
+              type="checkbox"
+              checked={selected.has(tool.id)}
+              onChange={(event) => update(tool, event.target.checked)}
+            />
+            <span>
+              <strong>{tool.label}</strong>
+              <small>
+                {selectedIds === null
+                  ? tool.enabled
+                    ? "Course default: enabled"
+                    : "Course default: disabled"
+                  : tool.url}
+              </small>
+            </span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1940,7 +2128,7 @@ function useDefaultsDraft(
   return useState<CourseSebDefaults>(() => ({
     ...defaults,
     urlRules: normalizeUrlRules(defaults.urlRules),
-    externalTools: mergeToolPresets(defaults.externalTools || [])
+    externalTools: normalizeCourseExternalTools(defaults.externalTools)
   }));
 }
 
@@ -1951,7 +2139,7 @@ function normalizeCourseDefaults(input: any, courseId: string): CourseSebDefault
     quitPassword: input?.quitPassword || "",
     startPassword: input?.startPassword || "",
     urlRules: normalizeUrlRules(input?.urlRules),
-    externalTools: mergeToolPresets(input?.externalTools || []),
+    externalTools: normalizeCourseExternalTools(input?.externalTools),
     setupCompleted: !!input?.setupCompleted,
     createdAt: input?.createdAt,
     updatedAt: input?.updatedAt,
@@ -1973,43 +2161,21 @@ function rulesForSetting(setting: Record<string, any>, defaults: CourseSebDefaul
   return legacyDomainsToUrlRules(setting.customDomains || []);
 }
 
-function toolsForSetting(setting: Record<string, any>, defaults: CourseSebDefaults): ExternalToolConfig[] {
-  if (setting.usesCourseDefaults !== false) {
-    return mergeToolPresets(defaults.externalTools || []);
-  }
-  return mergeToolPresets(setting.externalTools || []);
-}
-
-function mergeToolPresets(value: ExternalToolConfig[]): ExternalToolConfig[] {
-  const normalized = normalizeExternalTools(value);
-  const presetTools = EXTERNAL_TOOL_PRESETS.map((preset) => {
-    const existing = normalized.find((tool) => tool.preset === preset.preset || tool.id === preset.id);
-    return {
-      ...preset,
-      ...existing,
-      id: preset.id,
-      label: existing?.label || preset.label,
-      url: existing?.url || preset.url,
-      preset: preset.preset,
-      matchType: existing?.matchType || "exact"
-    };
-  });
-  const presetIds = new Set(EXTERNAL_TOOL_PRESETS.map((preset) => preset.id));
-  const presetNames = new Set(EXTERNAL_TOOL_PRESETS.map((preset) => preset.preset));
-  return [
-    ...presetTools,
-    ...normalized.filter((tool) => !presetIds.has(tool.id) && (!tool.preset || !presetNames.has(tool.preset)))
-  ];
-}
-
 function newCustomTool(): ExternalToolConfig {
   return {
     id: clientId("tool"),
     label: "",
     url: "",
-    enabled: true,
-    allowedDomains: [],
-    matchType: "exact"
+    enabled: false,
+    allowedRules: []
+  };
+}
+
+function newToolAccessRule(): ExternalToolAccessRule {
+  return {
+    id: clientId("tool-resource"),
+    value: "",
+    match: "path"
   };
 }
 

@@ -1,5 +1,5 @@
 import type { ContentSebSetting, CourseSebDefaults, QuizSebSetting } from "../../shared/models.js";
-import { normalizeExternalTools, normalizeUrlRules } from "../../shared/models.js";
+import { normalizeCourseExternalTools, normalizeExternalTools, normalizeUrlRules } from "../../shared/models.js";
 import { hasEffectiveSebQuitPassword } from "../services/seb-quit-password.js";
 
 type SebSetting = QuizSebSetting | ContentSebSetting;
@@ -30,6 +30,7 @@ export function toSebSettingView(
     customDomains: [...(setting.customDomains || [])],
     urlRules: normalizeUrlRules(setting.urlRules),
     externalTools: normalizeExternalTools(setting.externalTools),
+    externalToolIds: setting.externalToolIds === undefined ? null : setting.externalToolIds,
     canvasDomain: "canvasDomain" in setting ? setting.canvasDomain || null : null,
     usesCourseDefaults: setting.usesCourseDefaults === true,
     quitPasswordOverride: setting.quitPasswordOverride === true,
@@ -53,7 +54,7 @@ export function toCourseDefaultsView(
     courseId: defaults.courseId,
     setupCompleted: defaults.setupCompleted === true,
     urlRules: normalizeUrlRules(defaults.urlRules),
-    externalTools: normalizeExternalTools(defaults.externalTools),
+    externalTools: normalizeCourseExternalTools(defaults.externalTools),
     hasQuitPassword: !!defaults.quitPassword,
     hasEffectiveQuitPassword: hasEffectiveSebQuitPassword(defaults.quitPassword, serverDefaultQuitPassword),
     hasStartPassword: !!defaults.startPassword,

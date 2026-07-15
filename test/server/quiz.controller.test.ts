@@ -58,7 +58,7 @@ describe("QuizController", () => {
       startPassword: " start-passphrase ",
       setupCompleted: true,
       urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
-      externalTools: [{ id: "Calc", label: "Calculator", url: "calc.example.edu", enabled: true }]
+      externalTools: [{ id: "Calc", label: "Calculator", url: "https://calc.example.edu", enabled: true }]
     });
 
     expect(result).toMatchObject({
@@ -82,14 +82,14 @@ describe("QuizController", () => {
         startPassword: "start-passphrase",
         setupCompleted: true,
         urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
-        externalTools: [
+        externalTools: expect.arrayContaining([
           expect.objectContaining({
             id: "calc",
             label: "Calculator",
             url: "https://calc.example.edu/",
             enabled: true
           })
-        ]
+        ])
       })
     );
 
@@ -122,6 +122,57 @@ describe("QuizController", () => {
     });
     expect(JSON.stringify(result)).not.toContain("existing-quit");
     expect(JSON.stringify(result)).not.toContain("existing-start");
+  });
+
+  it("requires an explicit confirmation before a custom tool can allow an entire domain", async () => {
+    await expectHttpError(
+      () =>
+        controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
+          setupCompleted: true,
+          externalTools: [
+            {
+              id: "reference",
+              label: "Reference",
+              url: "https://reference.example.edu/exam",
+              enabled: false,
+              allowedRules: [{ id: "broad", match: "domain", value: "reference.example.edu" }]
+            }
+          ]
+        }),
+      400
+    );
+    expect(courseSettings.saveDefaults).not.toHaveBeenCalled();
+
+    await expectHttpError(
+      () =>
+        controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
+          setupCompleted: true,
+          externalTools: [
+            {
+              id: "legacy-bypass",
+              label: "Legacy bypass",
+              url: "https://reference.example.edu/exam",
+              enabled: false,
+              allowedRules: [],
+              allowedDomains: ["domain:reference.example.edu"]
+            }
+          ]
+        }),
+      400
+    );
+    expect(courseSettings.saveDefaults).not.toHaveBeenCalled();
+
+    await expectHttpError(
+      () =>
+        controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
+          setupCompleted: true,
+          externalTools: [
+            { id: "missing-scheme", label: "Missing scheme", url: "reference.example.edu", enabled: false }
+          ]
+        }),
+      400
+    );
+    expect(courseSettings.saveDefaults).not.toHaveBeenCalled();
   });
 
   it("refreshes course content for the verified Canvas user", async () => {
@@ -484,7 +535,8 @@ describe("QuizController", () => {
         startPassword: "NEW-UNIQUE-START",
         quitPasswordOverride: true,
         startPasswordOverride: true,
-        urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }]
+        urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+        externalToolIds: ["desmos-graphing"]
       },
       USER_ID
     );
@@ -504,6 +556,32 @@ describe("QuizController", () => {
     expect(JSON.stringify(result)).not.toContain("CONFIG-SECRET");
     expect(JSON.stringify(result)).not.toContain("NEW-QUIT");
     expect(JSON.stringify(result)).not.toContain("NEW-START");
+    expect(assessments.saveQuizSebSetting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalToolIds: ["desmos-graphing"],
+        externalTools: expect.arrayContaining([
+          expect.objectContaining({ id: "desmos-graphing", enabled: true }),
+          expect.objectContaining({ id: "desmos-scientific", enabled: false })
+        ])
+      })
+    );
+  });
+
+  it("rejects quiz-level tool definitions while allowing only course-tool selections", async () => {
+    await expectHttpError(
+      () =>
+        controller.saveStructured(
+          mutationRequest(),
+          {
+            quizId: "quiz-1",
+            courseId: COURSE_ID,
+            externalTools: [{ id: "bypass", label: "Bypass", url: "https://evil.example.edu", enabled: true }]
+          },
+          USER_ID
+        ),
+      400
+    );
+    expect(assessments.saveQuizSebSetting).not.toHaveBeenCalled();
   });
 
   it("keeps the public config redirect route compatible", () => {

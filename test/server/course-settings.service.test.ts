@@ -29,6 +29,63 @@ afterEach(() => {
 });
 
 describe("CourseSettingsService", () => {
+  it("persists the full disabled preset catalog when an instructor opens a new course", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+
+    expect(await repos.value.courses.get("course-1")).toBeNull();
+    const defaults = await service.ensureDefaults("course-1");
+
+    expect(defaults.externalTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "desmos-graphing", enabled: false }),
+        expect.objectContaining({ id: "desmos-scientific", enabled: false }),
+        expect.objectContaining({ id: "geogebra-graphing", enabled: false }),
+        expect.objectContaining({ id: "geogebra-scientific", enabled: false })
+      ])
+    );
+    await expect(repos.value.courses.get("course-1")).resolves.toMatchObject({
+      sebDefaults: { externalTools: expect.arrayContaining([expect.objectContaining({ id: "desmos-graphing" })]) }
+    });
+  });
+
+  it("keeps preloaded tool edits and intentional deletion after a course save", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    const seeded = await service.ensureDefaults("course-1");
+    const editedCatalog = seeded.externalTools
+      .filter((tool) => tool.id !== "desmos-scientific")
+      .map((tool) =>
+        tool.id === "desmos-graphing"
+          ? {
+              ...tool,
+              label: "District Graphing Calculator",
+              url: "https://calculator.example.edu/graphing",
+              allowedRules: [{ id: "assets", match: "path" as const, value: "https://calculator.example.edu/assets/*" }]
+            }
+          : tool
+      );
+
+    const saved = await service.saveDefaults("course-1", {
+      setupCompleted: true,
+      externalTools: editedCatalog
+    });
+
+    expect(saved.externalTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "desmos-graphing",
+          label: "District Graphing Calculator",
+          url: "https://calculator.example.edu/graphing"
+        })
+      ])
+    );
+    expect(saved.externalTools).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "desmos-scientific" })])
+    );
+    await expect(service.getDefaults("course-1")).resolves.toMatchObject({ externalTools: saved.externalTools });
+  });
+
   it("rejects course-default and managed-fallback start/exit password collisions", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);
@@ -243,6 +300,40 @@ describe("CourseSettingsService", () => {
     });
   });
 
+  it("keeps an explicit quiz tool selection while refreshing it from the current course catalog", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    await repos.value.assessments.save(
+      "classicquiz_override",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "override",
+        courseId: "course-1",
+        sebRequired: true,
+        enabled: true,
+        configKey: "stale-config-key",
+        usesCourseDefaults: false,
+        externalToolIds: ["desmos-graphing"],
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        urlRules: [],
+        externalTools: []
+      })
+    );
+    const service = new CourseSettingsService(repos);
+
+    await service.saveDefaults("course-1", {
+      quitPassword: "course-password",
+      setupCompleted: true,
+      externalTools: [{ id: "desmos-graphing", label: "ignored", url: "https://evil.example.edu", enabled: false }]
+    });
+
+    const setting = assessmentToQuizSebSetting((await repos.value.assessments.get("classicquiz_override"))!);
+    expect(setting).toMatchObject({ externalToolIds: ["desmos-graphing"], configKey: null });
+    expect(setting.externalTools.filter((tool) => tool.enabled)).toEqual([
+      expect.objectContaining({ id: "desmos-graphing", url: "https://evil.example.edu/" })
+    ]);
+  });
+
   it("persists and propagates only canonical course URL policy", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     await repos.value.assessments.save(
@@ -295,14 +386,17 @@ describe("CourseSettingsService", () => {
       { id: "exact", match: "exact", value: "https://tool.example.edu/start" },
       { id: "docs", match: "domain", value: "docs.example.edu" }
     ]);
-    expect(saved.externalTools).toEqual([
-      expect.objectContaining({
-        id: "desmos-calculator",
-        label: "Desmos Test Mode",
-        url: "https://www.desmos.com/testing/digital-act/graphing",
-        preset: "desmos-calculator"
-      })
-    ]);
+    expect(saved.externalTools).toHaveLength(1);
+    expect(saved.externalTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "desmos-graphing",
+          label: "Desmos Graphing Calculator",
+          url: "https://www.desmos.com/calculator",
+          preset: "desmos-graphing"
+        })
+      ])
+    );
 
     const setting = assessmentToQuizSebSetting((await repos.value.assessments.get("classicquiz_defaulted"))!);
     expect(setting).toMatchObject({

@@ -657,7 +657,16 @@ function isBlockedIdentityProviderHostname(hostname: string): boolean {
     normalized === "sso.canvaslms.com" ||
     normalized === "www.google.com" ||
     normalized === "www.youtube.com" ||
-    normalized === "www.googleapis.com"
+    normalized === "www.googleapis.com" ||
+    normalized === "login.microsoftonline.com" ||
+    normalized === "login.live.com" ||
+    normalized === "login.okta.com" ||
+    normalized === "login.salesforce.com" ||
+    normalized === "appleid.apple.com" ||
+    normalized === "auth0.com" ||
+    normalized.endsWith(".auth0.com") ||
+    normalized.endsWith(".okta.com") ||
+    normalized.endsWith(".onelogin.com")
   );
 }
 

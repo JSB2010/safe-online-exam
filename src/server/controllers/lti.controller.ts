@@ -399,7 +399,9 @@ export class LtiController {
           quizSebSettings[item.id] = toSebSettingView(setting, this.config.value.seb.defaultQuitPassword);
         }
       }
-      const courseDefaults = await this.courseSettings.getDefaults(courseId);
+      // New courses are created here, after a verified instructor launch, so
+      // the complete catalog is persisted without mutating ordinary reads.
+      const courseDefaults = await this.courseSettings.ensureDefaults(courseId);
       return renderAppShell({
         title: "Safe Exam Browser Manager",
         view: "teacher",

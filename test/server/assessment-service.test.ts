@@ -776,13 +776,13 @@ describe("AssessmentService", () => {
       customDomains: ["domain:docs.example.edu"],
       urlRules: [{ match: "domain", value: "docs.example.edu" }],
       externalTools: [
-        {
-          id: "desmos-calculator",
-          label: "Desmos Test Mode",
-          url: "https://www.desmos.com/testing/digital-act/graphing",
+        expect.objectContaining({
+          id: "desmos-graphing",
+          label: "Desmos Graphing Calculator",
+          url: "https://www.desmos.com/calculator",
           enabled: true,
-          preset: "desmos-calculator"
-        }
+          preset: "desmos-graphing"
+        })
       ]
     });
   });
@@ -806,23 +806,6 @@ describe("AssessmentService", () => {
         { id: "wildcard", match: "domain", value: "*.*" },
         { id: "exact", match: "exact", value: "https://tool.example.edu/start" },
         { id: "docs", match: "domain", value: "Docs.Example.Edu" }
-      ],
-      externalTools: [
-        {
-          id: "regex-tool",
-          label: "Unsafe tool",
-          url: "https://evil.example.edu/",
-          enabled: true,
-          matchType: "regex",
-          allowedPattern: "^https://.+$"
-        },
-        {
-          id: "desmos-calculator",
-          label: "Changed",
-          url: "https://evil.example.edu/",
-          enabled: true,
-          preset: "desmos-calculator"
-        }
       ]
     });
 
@@ -836,15 +819,7 @@ describe("AssessmentService", () => {
         { id: "exact", match: "exact", value: "https://tool.example.edu/start" },
         { id: "docs", match: "domain", value: "docs.example.edu" }
       ],
-      externalTools: [
-        {
-          id: "desmos-calculator",
-          label: "Desmos Test Mode",
-          url: "https://www.desmos.com/testing/digital-act/graphing",
-          enabled: true,
-          preset: "desmos-calculator"
-        }
-      ]
+      externalTools: []
     });
   });
 
@@ -899,16 +874,18 @@ describe("AssessmentService", () => {
     expect(Buffer.from(enabled.configKeySalt || "", "base64")).toHaveLength(32);
     expect(enabled.urlRules).toEqual([{ id: "docs", match: "domain", value: "docs.example.edu" }]);
     expect(enabled.customDomains).toEqual(["domain:docs.example.edu"]);
-    expect(enabled.externalTools).toEqual([
-      {
-        id: "calc",
-        label: "Calculator",
-        url: "https://calc.example.edu/",
-        enabled: true,
-        preset: null,
-        allowedDomains: []
-      }
-    ]);
+    expect(enabled.externalTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "calc",
+          label: "Calculator",
+          url: "https://calc.example.edu/",
+          enabled: true,
+          preset: null,
+          allowedDomains: []
+        })
+      ])
+    );
   });
 
   it("invalidates stored Config Keys when SEB-affecting settings change", async () => {

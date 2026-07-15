@@ -99,12 +99,14 @@ describe("StaticJsController", () => {
     expect(script).not.toContain("/api/seb/tools/");
     expect(script).toContain("seb-exam-tools-sidebar");
     expect(script).toContain("makeExamToolsDraggable");
+    expect(script).toContain("clampExamToolsPosition");
+    expect(script).toContain("aria-expanded");
     expect(script).toContain("examToolWindows: new Map()");
     expect(script).toContain("focusExamToolWindow(existingWindow)");
-    expect(script).toContain("window.open('about:blank', windowName)");
+    expect(script).toContain("window.open(tool.url, windowName)");
     expect(script).toContain("openedWindow.opener = null");
-    expect(script).toContain("openedWindow.location.replace(tool.url)");
-    expect(script).toContain("window.open(tool.url, '_blank', 'noopener,noreferrer')");
+    expect(script).not.toContain("window.open('about:blank', windowName)");
+    expect(script).not.toContain("openedWindow.location.replace(tool.url)");
   });
 
   it("uses the configured app base URL for detector API calls when available", async () => {

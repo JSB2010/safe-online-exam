@@ -1611,17 +1611,29 @@ describe("Canvas SEB detector script", () => {
     expect(context.document.body.textContent).not.toContain("Bad Tool");
     expect(context.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/seb/tools/"), expect.anything());
 
+    const collapse = context.document.querySelector<HTMLButtonElement>(".seb-tools-icon-button");
+    expect(collapse?.tagName).toBe("BUTTON");
+    expect(collapse?.getAttribute("aria-expanded")).toBe("true");
+    collapse?.click();
+    expect(context.document.getElementById("seb-exam-tools-sidebar")?.classList.contains("is-collapsed")).toBe(true);
+    expect(collapse?.getAttribute("aria-expanded")).toBe("false");
+    collapse?.click();
+    expect(collapse?.getAttribute("aria-expanded")).toBe("true");
+
     buttons[0].click();
     buttons[0].click();
 
     expect(context.openWindow).toHaveBeenCalledTimes(1);
-    expect(context.openWindow).toHaveBeenCalledWith("about:blank", expect.stringMatching(/^seb_exam_tool_/u));
-    expect(toolWindow.location.replace).toHaveBeenCalledWith("https://calc.example.edu");
+    expect(context.openWindow).toHaveBeenCalledWith(
+      "https://calc.example.edu",
+      expect.stringMatching(/^seb_exam_tool_/u)
+    );
+    expect(toolWindow.location.replace).not.toHaveBeenCalled();
     expect(toolWindow.opener).toBeNull();
     expect(toolWindow.focus).toHaveBeenCalled();
   });
 
-  it("abandons the named broker when opener isolation cannot be verified", async () => {
+  it("keeps the direct named window when a browser does not expose opener isolation", async () => {
     const toolWindow = {
       closed: false,
       close: vi.fn(),
@@ -1633,8 +1645,7 @@ describe("Canvas SEB detector script", () => {
       get: () => ({ retained: true }),
       set: vi.fn()
     });
-    const fallbackWindow = { closed: false, focus: vi.fn(), opener: null };
-    const openWindow = vi.fn().mockReturnValueOnce(toolWindow).mockReturnValueOnce(fallbackWindow);
+    const openWindow = vi.fn().mockReturnValueOnce(toolWindow);
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?debug=true",
       debugResponse: { enabled: true },
@@ -1662,8 +1673,8 @@ describe("Canvas SEB detector script", () => {
     context.document.querySelector<HTMLButtonElement>(".seb-tool-button")?.click();
 
     expect(toolWindow.location.replace).not.toHaveBeenCalled();
-    expect(toolWindow.close).toHaveBeenCalled();
-    expect(openWindow).toHaveBeenNthCalledWith(2, "https://calc.example.edu", "_blank", "noopener,noreferrer");
+    expect(toolWindow.close).not.toHaveBeenCalled();
+    expect(openWindow).toHaveBeenCalledWith("https://calc.example.edu", expect.stringMatching(/^seb_exam_tool_/u));
   });
 
   it("emits only structural console markers when server debug mode is enabled", async () => {

@@ -47,7 +47,7 @@ describe("SebConfigurationService", () => {
       contentId: "classicquiz_quiz-1",
       startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1/take",
       accessCode: "CODE123",
-      allowedDomains: ["https://www.desmos.com/calculator", "https://www.desmos.com/assets/build/*"],
+      allowedDomains: ["exact:https://www.desmos.com/calculator", "https://www.desmos.com/assets/build/*"],
       quitPassword: "unique-exit-passphrase"
     });
     const parsed = plist.parse(config.toString("utf8")) as Record<string, any>;

@@ -23,12 +23,15 @@ import {
   isUnsafeBroadUrlPattern,
   isStudent,
   legacyDomainsToUrlRules,
+  normalizeCourseExternalTools,
   normalizeExternalTools,
   normalizeUrlRules,
   newQuizContentId,
   parseNewQuizContentId,
   quizToAssessmentRecord,
   quizToContentItem,
+  resolveExternalToolsForAssessment,
+  seedCourseExternalTools,
   urlRulesToAllowedEntries
 } from "../../src/shared/models.js";
 
@@ -201,10 +204,10 @@ describe("content id helpers", () => {
     expect(rewritten.canvas.metadata).toBeNull();
   });
 
-  it("normalizes enabled external exam tools and derives allowlist domains", () => {
+  it("migrates only the retired Desmos ACT/testing preset to the standard calculator", () => {
     const tools = normalizeExternalTools([
       {
-        id: "Desmos Calculator",
+        id: "desmos-calculator",
         label: "Attacker-controlled label",
         url: "https://evil.example.edu/cheat",
         enabled: true,
@@ -218,11 +221,16 @@ describe("content id helpers", () => {
 
     expect(tools).toEqual([
       {
-        id: "desmos-calculator",
-        label: "Desmos Test Mode",
-        url: "https://www.desmos.com/testing/digital-act/graphing",
+        id: "desmos-graphing",
+        label: "Desmos Graphing Calculator",
+        url: "https://www.desmos.com/calculator",
         enabled: true,
-        preset: "desmos-calculator",
+        preset: "desmos-graphing",
+        allowedRules: [
+          { id: "desmos-build", value: "https://www.desmos.com/assets/build/*", match: "path" },
+          { id: "desmos-graphing-images", value: "https://www.desmos.com/assets/img/apps/graphing/*", match: "path" },
+          { id: "desmos-pwa", value: "https://www.desmos.com/assets/pwa/*", match: "path" }
+        ],
         allowedDomains: [
           "https://www.desmos.com/assets/build/*",
           "https://www.desmos.com/assets/img/apps/graphing/*",
@@ -232,10 +240,89 @@ describe("content id helpers", () => {
     ]);
     expect(enabledExternalTools(tools)).toHaveLength(1);
     expect(allowlistEntriesForExternalTools(tools)).toEqual([
-      "https://www.desmos.com/testing/digital-act/graphing",
+      "exact:https://www.desmos.com/calculator",
       "https://www.desmos.com/assets/build/*",
       "https://www.desmos.com/assets/img/apps/graphing/*",
       "https://www.desmos.com/assets/pwa/*"
+    ]);
+  });
+
+  it("seeds a catalog once, preserves instructor edits and deletion, and resolves only selected tools", () => {
+    const catalog = seedCourseExternalTools([
+      {
+        id: "desmos-graphing",
+        label: "District graphing calculator",
+        url: "https://calculator.example.edu/graphing",
+        enabled: true,
+        preset: "desmos-graphing",
+        allowedRules: [{ id: "assets", match: "path", value: "https://calculator.example.edu/assets/*" }]
+      }
+    ]);
+
+    expect(catalog).toHaveLength(4);
+    expect(catalog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "desmos-graphing",
+          enabled: true,
+          label: "District graphing calculator",
+          url: "https://calculator.example.edu/graphing"
+        }),
+        expect.objectContaining({ id: "desmos-scientific", enabled: false }),
+        expect.objectContaining({ id: "geogebra-graphing", enabled: false }),
+        expect.objectContaining({ id: "geogebra-scientific", enabled: false })
+      ])
+    );
+
+    expect(normalizeCourseExternalTools(catalog.filter((tool) => tool.id !== "desmos-scientific"))).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "desmos-scientific" })])
+    );
+
+    const selected = resolveExternalToolsForAssessment(catalog, ["geogebra-scientific"], [], true);
+    expect(enabledExternalTools(selected)).toEqual([
+      expect.objectContaining({ id: "geogebra-scientific", url: "https://www.geogebra.org/scientific" })
+    ]);
+    expect(allowlistEntriesForExternalTools(selected)).toEqual([
+      "exact:https://www.geogebra.org/scientific",
+      "https://www.geogebra.org/apps/*",
+      "https://cdn.geogebra.org/apps/*"
+    ]);
+  });
+
+  it("keeps custom tool access explicit and rejects identity or regex rules", () => {
+    const tools = normalizeExternalTools([
+      {
+        id: "reference",
+        label: "Formula reference",
+        url: "https://reference.example.edu/exam",
+        enabled: true,
+        allowedRules: [
+          { id: "page", match: "exact", value: "https://reference.example.edu/exam/formulas" },
+          { id: "assets", match: "path", value: "https://cdn.reference.example.edu/assets/*" },
+          { id: "broad", match: "domain", value: "reference.example.edu", broadDomainConfirmed: true },
+          { id: "identity", match: "domain", value: "accounts.google.com" }
+        ]
+      },
+      {
+        id: "regex",
+        label: "Invalid",
+        url: "https://example.edu",
+        enabled: true,
+        matchType: "regex"
+      },
+      {
+        id: "identity-host",
+        label: "Identity",
+        url: "https://login.microsoftonline.com/common",
+        enabled: true
+      }
+    ]);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.allowedRules).toEqual([
+      { id: "page", match: "exact", value: "https://reference.example.edu/exam/formulas" },
+      { id: "assets", match: "path", value: "https://cdn.reference.example.edu/assets/*" },
+      { id: "broad", match: "domain", value: "reference.example.edu", broadDomainConfirmed: true }
     ]);
   });
 
@@ -311,20 +398,18 @@ describe("content id helpers", () => {
     );
 
     expect(defaults.urlRules).toEqual([{ id: "docs", match: "domain", value: "docs.example.edu" }]);
-    expect(defaults.externalTools).toEqual([
-      {
-        id: "desmos-calculator",
-        label: "Desmos Test Mode",
-        url: "https://www.desmos.com/testing/digital-act/graphing",
-        enabled: true,
-        preset: "desmos-calculator",
-        allowedDomains: [
-          "https://www.desmos.com/assets/build/*",
-          "https://www.desmos.com/assets/img/apps/graphing/*",
-          "https://www.desmos.com/assets/pwa/*"
-        ]
-      }
-    ]);
+    expect(defaults.externalTools).toHaveLength(4);
+    expect(defaults.externalTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "desmos-graphing",
+          label: "Desmos Graphing Calculator",
+          url: "https://www.desmos.com/calculator",
+          enabled: true,
+          preset: "desmos-graphing"
+        })
+      ])
+    );
   });
 
   it("applies course defaults while preserving explicit override passwords", () => {
@@ -352,7 +437,7 @@ describe("content id helpers", () => {
       quitPassword: "custom-exit",
       startPassword: "default-start",
       customDomains: ["domain:docs.example.edu"],
-      externalTools: [expect.objectContaining({ id: "calc" })],
+      externalTools: expect.arrayContaining([expect.objectContaining({ id: "calc" })]),
       usesCourseDefaults: true
     });
 
@@ -364,6 +449,7 @@ describe("content id helpers", () => {
           enabled: true,
           usesCourseDefaults: false,
           urlRules: [{ id: "custom", match: "domain", value: "custom.example.edu" }],
+          externalToolIds: null,
           externalTools: []
         },
         defaults
@@ -371,7 +457,8 @@ describe("content id helpers", () => {
     ).toMatchObject({
       startPassword: "default-start",
       customDomains: ["domain:custom.example.edu"],
-      externalTools: [],
+      externalToolIds: null,
+      externalTools: expect.arrayContaining([expect.objectContaining({ id: "calc", enabled: true })]),
       usesCourseDefaults: false
     });
   });
@@ -389,7 +476,7 @@ describe("content id helpers", () => {
       quitPassword: "exit",
       setupCompleted: true,
       urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
-      externalTools: [expect.objectContaining({ id: "calc", url: "https://calc.example.edu/" })]
+      externalTools: expect.arrayContaining([expect.objectContaining({ id: "calc", url: "https://calc.example.edu/" })])
     });
   });
 });

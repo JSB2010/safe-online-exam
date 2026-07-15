@@ -89,6 +89,7 @@ describe("LtiController role routing", () => {
       assessments as any,
       canvasApi as any,
       {
+        ensureDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults("course-1")),
         getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults("course-1"))
       } as any,
       { isRequestFromSeb: vi.fn().mockReturnValue(false) } as any,

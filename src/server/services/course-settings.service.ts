@@ -10,6 +10,7 @@ import {
   canonicalAssessmentId,
   courseDefaultsToRecord,
   courseRecordToDefaults,
+  defaultCourseSebDefaults,
   extractClassicQuizId,
   parseNewQuizContentId
 } from "../../shared/models.js";
@@ -29,6 +30,14 @@ export class CourseSettingsService {
   async getDefaults(courseId: string): Promise<CourseSebDefaults> {
     const existing = await this.repositories.value.courses.get(courseId);
     return courseRecordToDefaults(existing, courseId);
+  }
+
+  /** Creates the persisted catalog for a newly launched instructor course. */
+  async ensureDefaults(courseId: string): Promise<CourseSebDefaults> {
+    const saved = await this.repositories.value.courses.update(courseId, (existing) => {
+      return existing || courseDefaultsToRecord(courseId, defaultCourseSebDefaults(courseId));
+    });
+    return courseRecordToDefaults(saved, courseId);
   }
 
   async saveDefaults(
@@ -75,6 +84,7 @@ export class CourseSettingsService {
           {
             ...existing,
             usesCourseDefaults: true,
+            externalToolIds: null,
             quitPasswordOverride: false,
             startPasswordOverride: false
           },
@@ -95,6 +105,7 @@ export class CourseSettingsService {
         {
           ...existing,
           usesCourseDefaults: true,
+          externalToolIds: null,
           quitPasswordOverride: false,
           startPasswordOverride: false
         },

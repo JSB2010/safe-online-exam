@@ -25,6 +25,7 @@ import {
   defaultQuizSebSetting,
   extractClassicQuizId,
   normalizeExternalTools,
+  normalizeExternalToolIds,
   normalizeUrlRules,
   parseNewQuizContentId,
   quizToAssessmentRecord,
@@ -201,6 +202,7 @@ export class AssessmentService {
           customDomains: setting.customDomains || [],
           urlRules: normalizeUrlRules(setting.urlRules),
           externalTools: normalizeExternalTools(setting.externalTools),
+          externalToolIds: normalizeExternalToolIds(setting.externalToolIds),
           quitPassword: resolveSebPasswordUpdate(existingSetting?.quitPassword, setting.quitPassword)
         };
         assertNewSebPassword(existingSetting?.quitPassword, normalized.quitPassword, "exit");
@@ -229,6 +231,7 @@ export class AssessmentService {
         customDomains: setting.customDomains || [],
         urlRules: normalizeUrlRules(setting.urlRules),
         externalTools: normalizeExternalTools(setting.externalTools),
+        externalToolIds: normalizeExternalToolIds(setting.externalToolIds),
         quitPassword: resolveSebPasswordUpdate(existingSetting?.quitPassword, setting.quitPassword)
       };
       assertNewSebPassword(existingSetting?.quitPassword, normalized.quitPassword, "exit");
@@ -262,7 +265,8 @@ export class AssessmentService {
         educationalToolDomains: existing.educationalToolDomains || [],
         customDomains: existing.customDomains || [],
         urlRules: normalizeUrlRules(existing.urlRules),
-        externalTools: normalizeExternalTools(existing.externalTools)
+        externalTools: normalizeExternalTools(existing.externalTools),
+        externalToolIds: normalizeExternalToolIds(existing.externalToolIds)
       };
     }
     return {
@@ -274,6 +278,9 @@ export class AssessmentService {
   async updateSebConfigurationStructured(request: StructuredSebConfigRequest): Promise<QuizSebSetting> {
     if (!request.quizId) {
       throw new Error("quizId is required");
+    }
+    if (request.externalTools !== undefined) {
+      throw new Error("Exam tool definitions are managed in Course settings");
     }
     const existing = await this.getSebSettingForQuiz(request.quizId);
     return this.saveQuizSebSetting({
@@ -288,7 +295,8 @@ export class AssessmentService {
       educationalToolDomains: request.educationalToolDomains || [],
       customDomains: request.customDomains || urlRulesToAllowedEntries(request.urlRules),
       urlRules: normalizeUrlRules(request.urlRules),
-      externalTools: normalizeExternalTools(request.externalTools),
+      externalTools: normalizeExternalTools(existing?.externalTools),
+      externalToolIds: normalizeExternalToolIds(request.externalToolIds),
       externalToolUrl: request.externalToolUrl || existing?.externalToolUrl || null,
       quitPassword: resolveSebPasswordUpdate(existing?.quitPassword, request.quitPassword),
       startPassword: resolveSebPasswordUpdate(existing?.startPassword, request.startPassword),
@@ -322,7 +330,8 @@ export class AssessmentService {
           educationalToolDomains: existing?.educationalToolDomains || [],
           customDomains: existing?.customDomains || [],
           urlRules: normalizeUrlRules(existing?.urlRules),
-          externalTools: normalizeExternalTools(existing?.externalTools)
+          externalTools: normalizeExternalTools(existing?.externalTools),
+          externalToolIds: normalizeExternalToolIds(existing?.externalToolIds)
         },
         defaults
       );

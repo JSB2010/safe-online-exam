@@ -78,6 +78,12 @@ export interface AssessmentSebState {
   customDomains: string[];
   urlRules: SebUrlRule[];
   externalTools: ExternalToolConfig[];
+  /**
+   * `null` means this assessment inherits the course tool defaults. An array
+   * is an explicit allowlist of course-tool ids, including an empty array when
+   * the instructor wants no tools for this assessment.
+   */
+  externalToolIds?: string[] | null;
 }
 
 export type AssessmentCanvasVerificationStatus = "verified" | "missing" | "stale";
@@ -120,6 +126,7 @@ export interface QuizSebSetting {
   customDomains: string[];
   urlRules?: SebUrlRule[] | null;
   externalTools: ExternalToolConfig[];
+  externalToolIds?: string[] | null;
   canvasDomain?: string | null;
   quitPassword?: string | null;
   startPassword?: string | null;
@@ -152,6 +159,7 @@ export interface ContentSebSetting {
   customDomains: string[];
   urlRules?: SebUrlRule[] | null;
   externalTools: ExternalToolConfig[];
+  externalToolIds?: string[] | null;
   quitPassword?: string | null;
   startPassword?: string | null;
   configKeySalt?: string | null;
@@ -177,6 +185,12 @@ export interface CourseSebDefaults {
   startPassword?: string | null;
   urlRules: SebUrlRule[];
   externalTools: ExternalToolConfig[];
+  /**
+   * Internal persistence marker. A missing marker denotes a pre-catalog
+   * course, which is seeded once; an explicit empty catalog means an
+   * instructor intentionally removed every preloaded tool.
+   */
+  externalToolsInitialized?: boolean;
   setupCompleted: boolean;
   /** Secret-free response hint; never persisted as configuration. */
   hasEffectiveQuitPassword?: boolean;
@@ -204,6 +218,7 @@ export interface CourseRecord {
     startPassword?: string | null;
     urlRules: SebUrlRule[];
     externalTools: ExternalToolConfig[];
+    externalToolsInitialized?: boolean;
   };
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -253,6 +268,7 @@ export interface StructuredSebConfigRequest {
   customDomains?: string[] | null;
   urlRules?: SebUrlRule[] | null;
   externalTools?: ExternalToolConfig[] | null;
+  externalToolIds?: string[] | null;
   externalToolUrl?: string | null;
   quitPassword?: string | null;
   startPassword?: string | null;
@@ -267,22 +283,71 @@ export interface ExternalToolConfig {
   url: string;
   enabled: boolean;
   preset?: string | null;
+  /** Explicit, visible URL access beyond the launch page. */
+  allowedRules?: ExternalToolAccessRule[] | null;
+  /** @deprecated Legacy persisted representation. Normalized into allowedRules. */
   allowedDomains?: string[] | null;
+  /** @deprecated Legacy persisted representation. */
   matchType?: SebUrlRuleMatch | null;
+  /** @deprecated Legacy persisted representation. */
   allowedPattern?: string | null;
+}
+
+export type ExternalToolAccessMatch = "exact" | "path" | "domain";
+
+export interface ExternalToolAccessRule {
+  id: string;
+  value: string;
+  match: ExternalToolAccessMatch;
+  /** Required when a custom rule permits an entire HTTPS domain. */
+  broadDomainConfirmed?: boolean;
 }
 
 export const EXTERNAL_TOOL_PRESETS: ExternalToolConfig[] = [
   {
-    id: "desmos-calculator",
-    label: "Desmos Test Mode",
-    url: "https://www.desmos.com/testing/digital-act/graphing",
+    id: "desmos-graphing",
+    label: "Desmos Graphing Calculator",
+    url: "https://www.desmos.com/calculator",
     enabled: false,
-    preset: "desmos-calculator",
-    allowedDomains: [
-      "https://www.desmos.com/assets/build/*",
-      "https://www.desmos.com/assets/img/apps/graphing/*",
-      "https://www.desmos.com/assets/pwa/*"
+    preset: "desmos-graphing",
+    allowedRules: [
+      { id: "desmos-build", value: "https://www.desmos.com/assets/build/*", match: "path" },
+      { id: "desmos-graphing-images", value: "https://www.desmos.com/assets/img/apps/graphing/*", match: "path" },
+      { id: "desmos-pwa", value: "https://www.desmos.com/assets/pwa/*", match: "path" }
+    ]
+  },
+  {
+    id: "desmos-scientific",
+    label: "Desmos Scientific Calculator",
+    url: "https://www.desmos.com/scientific",
+    enabled: false,
+    preset: "desmos-scientific",
+    allowedRules: [
+      { id: "desmos-build", value: "https://www.desmos.com/assets/build/*", match: "path" },
+      { id: "desmos-scientific-images", value: "https://www.desmos.com/assets/img/apps/scientific/*", match: "path" },
+      { id: "desmos-pwa", value: "https://www.desmos.com/assets/pwa/*", match: "path" }
+    ]
+  },
+  {
+    id: "geogebra-graphing",
+    label: "GeoGebra Graphing Calculator",
+    url: "https://www.geogebra.org/graphing",
+    enabled: false,
+    preset: "geogebra-graphing",
+    allowedRules: [
+      { id: "geogebra-apps", value: "https://www.geogebra.org/apps/*", match: "path" },
+      { id: "geogebra-cdn-apps", value: "https://cdn.geogebra.org/apps/*", match: "path" }
+    ]
+  },
+  {
+    id: "geogebra-scientific",
+    label: "GeoGebra Scientific Calculator",
+    url: "https://www.geogebra.org/scientific",
+    enabled: false,
+    preset: "geogebra-scientific",
+    allowedRules: [
+      { id: "geogebra-apps", value: "https://www.geogebra.org/apps/*", match: "path" },
+      { id: "geogebra-cdn-apps", value: "https://cdn.geogebra.org/apps/*", match: "path" }
     ]
   }
 ];
@@ -350,7 +415,8 @@ export function defaultAssessmentSebState(): AssessmentSebState {
     educationalToolDomains: [],
     customDomains: [],
     urlRules: [],
-    externalTools: []
+    externalTools: [],
+    externalToolIds: null
   };
 }
 
@@ -517,6 +583,7 @@ export function assessmentToQuizSebSetting(record: AssessmentRecord): QuizSebSet
     customDomains: seb.customDomains,
     urlRules: seb.urlRules,
     externalTools: seb.externalTools,
+    externalToolIds: seb.externalToolIds,
     canvasDomain: null,
     quitPassword: seb.quitPassword || null,
     startPassword: seb.startPassword || null,
@@ -552,6 +619,7 @@ export function assessmentToContentSebSetting(record: AssessmentRecord): Content
     customDomains: seb.customDomains,
     urlRules: seb.urlRules,
     externalTools: seb.externalTools,
+    externalToolIds: seb.externalToolIds,
     quitPassword: seb.quitPassword || null,
     startPassword: seb.startPassword || null,
     configKeySalt: seb.configKeySalt || null,
@@ -635,7 +703,8 @@ export function defaultQuizSebSetting(quizId: string, courseId?: string | null):
     educationalToolDomains: [],
     customDomains: [],
     urlRules: [],
-    externalTools: []
+    externalTools: [],
+    externalToolIds: null
   };
 }
 
@@ -654,7 +723,8 @@ export function defaultContentSebSetting(contentId: string, courseId?: string | 
     educationalToolDomains: [],
     customDomains: [],
     urlRules: [],
-    externalTools: []
+    externalTools: [],
+    externalToolIds: null
   };
 }
 
@@ -665,7 +735,8 @@ export function defaultCourseSebDefaults(courseId: string): CourseSebDefaults {
     quitPassword: null,
     startPassword: null,
     urlRules: [],
-    externalTools: [],
+    externalTools: seedCourseExternalTools(),
+    externalToolsInitialized: true,
     setupCompleted: false
   };
 }
@@ -678,7 +749,8 @@ export function courseRecordToDefaults(record: CourseRecord | null | undefined, 
     quitPassword: record?.sebDefaults?.quitPassword || null,
     startPassword: record?.sebDefaults?.startPassword || null,
     urlRules: record?.sebDefaults?.urlRules || [],
-    externalTools: record?.sebDefaults?.externalTools || [],
+    externalTools: record?.sebDefaults?.externalTools,
+    externalToolsInitialized: record?.sebDefaults?.externalToolsInitialized === true,
     createdAt: record?.createdAt,
     updatedAt: record?.updatedAt
   });
@@ -704,7 +776,8 @@ export function courseDefaultsToRecord(
       quitPassword: normalized.quitPassword,
       startPassword: normalized.startPassword,
       urlRules: normalized.urlRules,
-      externalTools: normalized.externalTools
+      externalTools: normalized.externalTools,
+      externalToolsInitialized: true
     },
     createdAt: existing?.createdAt,
     updatedAt: existing?.updatedAt
@@ -721,7 +794,11 @@ export function normalizeCourseSebDefaults(input: Partial<CourseSebDefaults> | n
     quitPassword: normalizeOptionalText(input?.quitPassword),
     startPassword: normalizeOptionalText(input?.startPassword),
     urlRules: normalizeUrlRules(input?.urlRules),
-    externalTools: normalizeExternalTools(input?.externalTools),
+    externalTools:
+      input?.externalToolsInitialized === true
+        ? normalizeCourseExternalTools(input?.externalTools)
+        : seedCourseExternalTools(input?.externalTools),
+    externalToolsInitialized: input?.externalToolsInitialized === true,
     setupCompleted: !!input?.setupCompleted
   };
 }
@@ -733,13 +810,19 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
   const seen = new Set<string>();
   return input.slice(0, 16).flatMap((tool, index) => {
     const requestedId = sanitizeToolId(tool.id || tool.preset || `tool-${index + 1}`);
-    const preset = EXTERNAL_TOOL_PRESETS.find((entry) => entry.id === requestedId || entry.preset === tool.preset);
-    if (preset) {
-      if (seen.has(preset.id)) {
+    // The retired ACT/testing preset is the only server-side conversion we
+    // retain. Current preloaded tools are normal course records: instructors
+    // may rename, retarget, edit their resources, or delete them.
+    if (requestedId === "desmos-calculator" || tool.preset === "desmos-calculator") {
+      const replacement = findExternalToolPreset("desmos-graphing");
+      if (!replacement || seen.has(replacement.id)) {
         return [];
       }
-      seen.add(preset.id);
-      return [{ ...preset, enabled: !!tool.enabled, allowedDomains: [...(preset.allowedDomains || [])] }];
+      seen.add(replacement.id);
+      return [cloneExternalTool({ ...replacement, enabled: !!tool.enabled })];
+    }
+    if (tool.matchType === "regex" || typeof tool.allowedPattern === "string") {
+      return [];
     }
     const label = tool.label?.trim();
     const url = normalizeToolUrl(tool.url);
@@ -748,17 +831,11 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
     }
     const id = sanitizeToolId(tool.id || label || `tool-${index + 1}`);
     const uniqueId = seen.has(id) ? `${id}-${index + 1}` : id;
-    const matchType = normalizeUrlRuleMatch(tool.matchType);
-    if (matchType === "regex") {
-      return [];
-    }
-    const allowedDomains: string[] = [];
-    if (matchType === "domain") {
-      const domain = domainFromUrl(url);
-      if (domain) {
-        allowedDomains.push(`domain:${domain}`);
-      }
-    }
+    const allowedRules = normalizeExternalToolAccessRules(
+      Array.isArray(tool.allowedRules) && tool.allowedRules.length
+        ? tool.allowedRules
+        : legacyToolAccessRules(tool, url)
+    );
     seen.add(uniqueId);
     return [
       {
@@ -766,12 +843,68 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
         label,
         url,
         enabled: !!tool.enabled,
-        preset: null,
-        allowedDomains: uniqueStrings(allowedDomains),
-        ...(matchType === "exact" || matchType === "domain" ? { matchType } : {})
+        preset: findExternalToolPreset(requestedId, tool.preset)?.preset || null,
+        allowedRules,
+        allowedDomains: toolAllowlistEntries(allowedRules)
       }
     ];
   });
+}
+
+/** Normalizes a stored course catalog without restoring deleted entries. */
+export function normalizeCourseExternalTools(input?: ExternalToolConfig[] | null): ExternalToolConfig[] {
+  const normalized = normalizeExternalTools(input);
+  return normalized.slice(0, 16);
+}
+
+/** Supplies the four templates only while initializing a legacy/new course. */
+export function seedCourseExternalTools(input?: ExternalToolConfig[] | null): ExternalToolConfig[] {
+  const normalized = normalizeExternalTools(input);
+  const byPreset = new Map(
+    normalized
+      .map((tool) => [tool.preset || tool.id, tool] as const)
+      .filter(([key]) => EXTERNAL_TOOL_PRESETS.some((preset) => preset.id === key || preset.preset === key))
+  );
+  const seeded = EXTERNAL_TOOL_PRESETS.map(
+    (preset) => byPreset.get(preset.preset || preset.id) || cloneExternalTool(preset)
+  );
+  const presetIds = new Set(seeded.map((tool) => tool.id));
+  return [...seeded, ...normalized.filter((tool) => !presetIds.has(tool.id))].slice(0, 16);
+}
+
+export function normalizeExternalToolIds(input?: string[] | null): string[] | null | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (input === null) {
+    return null;
+  }
+  if (!Array.isArray(input)) {
+    return null;
+  }
+  return uniqueStrings(
+    input
+      .slice(0, 16)
+      .map((id) => sanitizeToolId(id))
+      .filter(Boolean)
+  );
+}
+
+export function resolveExternalToolsForAssessment(
+  courseTools?: ExternalToolConfig[] | null,
+  externalToolIds?: string[] | null,
+  legacyTools?: ExternalToolConfig[] | null,
+  usesCourseDefaults = true
+): ExternalToolConfig[] {
+  const catalog = normalizeCourseExternalTools(courseTools);
+  if (externalToolIds === undefined) {
+    return usesCourseDefaults ? catalog : normalizeExternalTools(legacyTools);
+  }
+  if (externalToolIds === null) {
+    return catalog;
+  }
+  const selected = new Set(normalizeExternalToolIds(externalToolIds) || []);
+  return catalog.map((tool) => ({ ...tool, enabled: selected.has(tool.id) }));
 }
 
 export function enabledExternalTools(input?: ExternalToolConfig[] | null): ExternalToolConfig[] {
@@ -781,9 +914,9 @@ export function enabledExternalTools(input?: ExternalToolConfig[] | null): Exter
 export function allowlistEntriesForExternalTools(input?: ExternalToolConfig[] | null): string[] {
   const entries = new Set<string>();
   for (const tool of enabledExternalTools(input)) {
-    entries.add(tool.url);
-    for (const domain of tool.allowedDomains || []) {
-      entries.add(domain);
+    entries.add(`exact:${tool.url}`);
+    for (const entry of toolAllowlistEntries(tool.allowedRules || [])) {
+      entries.add(entry);
     }
   }
   return Array.from(entries);
@@ -901,6 +1034,7 @@ export function applyCourseDefaultsToQuizSetting(
   const quitPasswordOverride = setting.quitPasswordOverride === true;
   const startPasswordOverride = setting.startPasswordOverride === true;
   const urlRules = usesDefaults ? normalizedDefaults?.urlRules || [] : normalizeUrlRules(setting.urlRules);
+  const externalToolIds = normalizeExternalToolIds(setting.externalToolIds);
   return {
     ...setting,
     ssoDomains: setting.ssoDomains || [],
@@ -911,9 +1045,13 @@ export function applyCourseDefaultsToQuizSetting(
         ? setting.customDomains
         : urlRulesToAllowedEntries(urlRules),
     urlRules,
-    externalTools: usesDefaults
-      ? normalizeExternalTools(normalizedDefaults?.externalTools)
-      : normalizeExternalTools(setting.externalTools),
+    externalTools: resolveExternalToolsForAssessment(
+      normalizedDefaults?.externalTools,
+      externalToolIds,
+      setting.externalTools,
+      usesDefaults
+    ),
+    ...(externalToolIds !== undefined ? { externalToolIds } : {}),
     quitPassword: quitPasswordOverride
       ? normalizeOptionalText(setting.quitPassword)
       : normalizedDefaults?.quitPassword || null,
@@ -935,6 +1073,7 @@ export function applyCourseDefaultsToContentSetting(
   const quitPasswordOverride = setting.quitPasswordOverride === true;
   const startPasswordOverride = setting.startPasswordOverride === true;
   const urlRules = usesDefaults ? normalizedDefaults?.urlRules || [] : normalizeUrlRules(setting.urlRules);
+  const externalToolIds = normalizeExternalToolIds(setting.externalToolIds);
   return {
     ...setting,
     ssoDomains: setting.ssoDomains || [],
@@ -945,9 +1084,13 @@ export function applyCourseDefaultsToContentSetting(
         ? setting.customDomains
         : urlRulesToAllowedEntries(urlRules),
     urlRules,
-    externalTools: usesDefaults
-      ? normalizeExternalTools(normalizedDefaults?.externalTools)
-      : normalizeExternalTools(setting.externalTools),
+    externalTools: resolveExternalToolsForAssessment(
+      normalizedDefaults?.externalTools,
+      externalToolIds,
+      setting.externalTools,
+      usesDefaults
+    ),
+    ...(externalToolIds !== undefined ? { externalToolIds } : {}),
     quitPassword: quitPasswordOverride
       ? normalizeOptionalText(setting.quitPassword)
       : normalizedDefaults?.quitPassword || null,
@@ -976,7 +1119,8 @@ function quizSebSettingToAssessmentSebState(setting: QuizSebSetting): Assessment
     educationalToolDomains: setting.educationalToolDomains || [],
     customDomains: setting.customDomains || [],
     urlRules: setting.urlRules || [],
-    externalTools: setting.externalTools || []
+    externalTools: setting.externalTools || [],
+    externalToolIds: setting.externalToolIds
   });
 }
 
@@ -996,7 +1140,8 @@ function contentSebSettingToAssessmentSebState(setting: ContentSebSetting): Asse
     educationalToolDomains: setting.educationalToolDomains || [],
     customDomains: setting.customDomains || [],
     urlRules: setting.urlRules || [],
-    externalTools: setting.externalTools || []
+    externalTools: setting.externalTools || [],
+    externalToolIds: setting.externalToolIds
   });
 }
 
@@ -1021,8 +1166,97 @@ function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null)
     educationalToolDomains: normalizeConcreteDomains(input?.educationalToolDomains),
     customDomains: urlRulesToAllowedEntries(urlRules),
     urlRules,
-    externalTools: normalizeExternalTools(input?.externalTools)
+    externalTools: normalizeExternalTools(input?.externalTools),
+    externalToolIds: normalizeExternalToolIds(input?.externalToolIds)
   };
+}
+
+export function normalizeExternalToolAccessRules(input?: ExternalToolAccessRule[] | null): ExternalToolAccessRule[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  return input.slice(0, 12).flatMap((rule, index) => {
+    const match = rule?.match;
+    const value = typeof rule?.value === "string" ? rule.value.trim() : "";
+    const id = sanitizeToolId(rule?.id || `resource-${index + 1}`);
+    let normalized: string | null = null;
+    if (match === "exact") {
+      normalized = normalizeToolUrl(value);
+    } else if (match === "path") {
+      normalized = normalizeToolPathRule(value);
+    } else if (match === "domain") {
+      normalized = normalizeToolDomainRule(value);
+    }
+    if (!normalized) {
+      return [];
+    }
+    const key = `${match}:${normalized}`;
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [
+      {
+        id,
+        value: normalized,
+        match,
+        ...(match === "domain" && rule.broadDomainConfirmed === true ? { broadDomainConfirmed: true } : {})
+      }
+    ];
+  });
+}
+
+function legacyToolAccessRules(tool: ExternalToolConfig, url: string): ExternalToolAccessRule[] {
+  if (tool.matchType === "domain") {
+    return [{ id: "legacy-domain", value: url, match: "domain" }];
+  }
+  if (!Array.isArray(tool.allowedDomains)) {
+    return [];
+  }
+  return tool.allowedDomains.flatMap<ExternalToolAccessRule>((entry, index): ExternalToolAccessRule[] => {
+    const value = entry.trim();
+    if (value.startsWith("domain:")) {
+      return [{ id: `legacy-domain-${index + 1}`, value: value.slice("domain:".length), match: "domain" as const }];
+    }
+    if (value.startsWith("exact:")) {
+      return [{ id: `legacy-exact-${index + 1}`, value: value.slice("exact:".length), match: "exact" as const }];
+    }
+    if (value.endsWith("/*")) {
+      return [{ id: `legacy-path-${index + 1}`, value, match: "path" as const }];
+    }
+    return [{ id: `legacy-exact-${index + 1}`, value, match: "exact" as const }];
+  });
+}
+
+function toolAllowlistEntries(input: ExternalToolAccessRule[]): string[] {
+  return input.flatMap((rule) => {
+    if (rule.match === "exact") {
+      return [`exact:${rule.value}`];
+    }
+    if (rule.match === "path") {
+      return [rule.value];
+    }
+    if (rule.match === "domain") {
+      return [`domain:${rule.value}`];
+    }
+    return [];
+  });
+}
+
+function cloneExternalTool(tool: ExternalToolConfig): ExternalToolConfig {
+  const allowedRules = normalizeExternalToolAccessRules(tool.allowedRules);
+  return {
+    ...tool,
+    allowedRules,
+    allowedDomains: toolAllowlistEntries(allowedRules)
+  };
+}
+
+function findExternalToolPreset(id: string, preset?: string | null): ExternalToolConfig | undefined {
+  const requested = preset || id;
+  const canonicalId = requested === "desmos-calculator" ? "desmos-graphing" : requested;
+  return EXTERNAL_TOOL_PRESETS.find((entry) => entry.id === canonicalId || entry.preset === canonicalId);
 }
 
 function normalizeToolUrl(value?: string | null): string | null {
@@ -1038,7 +1272,8 @@ function normalizeToolUrl(value?: string | null): string | null {
       parsed.username ||
       parsed.password ||
       parsed.port ||
-      !normalizeConcreteHostname(parsed.hostname)
+      !normalizeConcreteHostname(parsed.hostname) ||
+      isBlockedToolHostname(parsed.hostname)
     ) {
       return null;
     }
@@ -1046,6 +1281,54 @@ function normalizeToolUrl(value?: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function normalizeToolPathRule(value: string): string | null {
+  const candidate = value.endsWith("/*") ? value.slice(0, -1) : value;
+  const url = normalizeToolUrl(candidate);
+  if (!url) {
+    return null;
+  }
+  const parsed = new URL(url);
+  if (parsed.pathname === "/" || parsed.search || parsed.hash) {
+    return null;
+  }
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/u, "")}/*`;
+}
+
+function normalizeToolDomainRule(value: string): string | null {
+  const candidate = value.includes("://") ? normalizeToolUrl(value) : normalizeToolUrl(`https://${value}`);
+  if (!candidate) {
+    return null;
+  }
+  const parsed = new URL(candidate);
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    return null;
+  }
+  return isBlockedToolHostname(parsed.hostname) ? null : parsed.hostname;
+}
+
+function isBlockedToolHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    new Set([
+      "accounts.google.com",
+      "accounts.youtube.com",
+      "sso.canvaslms.com",
+      "www.google.com",
+      "www.youtube.com",
+      "www.googleapis.com",
+      "login.microsoftonline.com",
+      "login.live.com",
+      "login.okta.com",
+      "login.salesforce.com",
+      "appleid.apple.com"
+    ]).has(normalized) ||
+    normalized === "auth0.com" ||
+    normalized.endsWith(".auth0.com") ||
+    normalized.endsWith(".okta.com") ||
+    normalized.endsWith(".onelogin.com")
+  );
 }
 
 function normalizeUrlRule(entry: SebUrlRule | string, index: number): SebUrlRule | null {
@@ -1149,14 +1432,6 @@ function normalizeConcreteHostname(value: string): string | null {
 
 function stripRulePrefix(value: string): string {
   return value.trim().replace(/^(?:exact|domain|regex):/iu, "");
-}
-
-function domainFromUrl(value: string): string | null {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
 }
 
 function normalizeOptionalText(value?: string | null): string | null {

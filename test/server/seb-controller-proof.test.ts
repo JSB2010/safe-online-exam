@@ -96,6 +96,56 @@ describe("SEB access proof validation", () => {
     });
   });
 
+  it("releases only selected tools after proof and binds proof to their exact URL rules", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const selectedTool = {
+        id: "desmos-graphing",
+        label: "Desmos Graphing Calculator",
+        url: "https://www.desmos.com/calculator",
+        enabled: true,
+        preset: "desmos-graphing",
+        allowedRules: [{ id: "assets", match: "path" as const, value: "https://www.desmos.com/assets/build/*" }]
+      };
+      const { controller } = controllerWithSetting({
+        quizId: "23455",
+        courseId: "11825",
+        configKey: classicConfigKey("11825", "23455", "ACCESS-CODE", [
+          "exact:https://www.desmos.com/calculator",
+          "https://www.desmos.com/assets/build/*"
+        ]),
+        externalTools: [
+          selectedTool,
+          {
+            id: "desmos-scientific",
+            label: "Desmos Scientific Calculator",
+            url: "https://www.desmos.com/scientific",
+            enabled: false,
+            preset: "desmos-scientific"
+          }
+        ]
+      });
+      const url = `${CANVAS_URL}/courses/11825/quizzes/23455/take`;
+      const proof = await controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+        configKeyHash: configKey.hashForUrl(
+          url,
+          classicConfigKey("11825", "23455", "ACCESS-CODE", [
+            "exact:https://www.desmos.com/calculator",
+            "https://www.desmos.com/assets/build/*"
+          ])
+        ),
+        url
+      });
+
+      await expect(
+        controller.accessCode("11825", "23455", proof.proofToken as string, requestWithHeaders())
+      ).resolves.toMatchObject({
+        success: true,
+        tools: [{ id: "desmos-graphing", url: "https://www.desmos.com/calculator" }]
+      });
+    });
+  });
+
   it("accepts a SEB Config Key header for the access-proof request URL", async () => {
     await withConfig(async () => {
       const configKey = new SebConfigKeyService();
@@ -351,14 +401,19 @@ function controllerWithSetting(
   return { controller, proofService, resolvedSetting };
 }
 
-function classicConfigKey(courseId = "11825", quizId = "23455", accessCode = "ACCESS-CODE"): string {
+function classicConfigKey(
+  courseId = "11825",
+  quizId = "23455",
+  accessCode = "ACCESS-CODE",
+  allowedDomains: string[] = []
+): string {
   const config = new AppConfig();
   const generated = new SebConfigurationService(config).generateSebConfiguration({
     courseId,
     contentId: `classicquiz_${quizId}`,
     startUrl: `${CANVAS_URL}/courses/${courseId}/quizzes/${quizId}/take`,
     accessCode,
-    allowedDomains: [],
+    allowedDomains,
     quitPassword: null
   });
   return new SebConfigKeyService().computeConfigKey(generated);

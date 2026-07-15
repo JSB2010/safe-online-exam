@@ -1,4 +1,5 @@
 import {
+  enabledExternalTools,
   normalizeExternalTools,
   normalizeUrlRules,
   type ContentSebSetting,
@@ -37,6 +38,8 @@ export function sebConfigFingerprint(setting: SebConfigSetting): string {
     educationalToolDomains: setting.educationalToolDomains || [],
     customDomains: setting.customDomains || [],
     urlRules: normalizeUrlRules(setting.urlRules),
-    externalTools: normalizeExternalTools(setting.externalTools)
+    // Disabled course catalog entries are not part of a particular exam's
+    // policy. Only resolved, selected tools bind the configuration/proof.
+    externalTools: enabledExternalTools(normalizeExternalTools(setting.externalTools))
   });
 }

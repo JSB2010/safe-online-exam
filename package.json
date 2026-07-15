@@ -22,6 +22,7 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "security:purge-new-quiz-metadata": "node scripts/purge-legacy-new-quiz-metadata.mjs",
+    "migrate:exam-tools": "tsx scripts/migrate-exam-tools.ts",
     "generate:lti-key": "node scripts/generate-lti-private-key.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run build",

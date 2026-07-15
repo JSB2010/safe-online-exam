@@ -134,6 +134,193 @@ p {
   border-radius: 8px;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 16px;
+  padding: 4px;
+  overflow-x: auto;
+  background: #eef2f6;
+  border-radius: 10px;
+}
+
+.settings-tab {
+  min-height: 34px;
+  padding: 7px 11px;
+  color: #475467;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-tab.active {
+  color: #172033;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 12%);
+}
+
+.button.small {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.tool-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #dbe2ea;
+  border-radius: 10px;
+}
+
+.tool-card-header,
+.tool-access-heading,
+.tool-card-actions,
+.quiz-tool-selector-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-enabled > span:last-child,
+.tool-access-heading small,
+.quiz-tool-option small {
+  display: grid;
+  gap: 2px;
+}
+
+.tool-badge {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.tool-badge.preset {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.tool-badge.custom {
+  color: #027a48;
+  background: #ecfdf3;
+}
+
+.tool-launch-url {
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+}
+
+.tool-launch-url code {
+  overflow-wrap: anywhere;
+  color: #344054;
+}
+
+.tool-custom-fields {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.55fr) minmax(220px, 1.45fr);
+  gap: 10px;
+}
+
+.tool-custom-fields label,
+.tool-access-heading strong,
+.tool-access-heading small {
+  display: block;
+}
+
+.tool-custom-fields label {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tool-custom-fields input {
+  margin-top: 5px;
+}
+
+.tool-access-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #eaecf0;
+}
+
+.tool-access-heading small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tool-access-rule {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.65fr) minmax(0, 1.35fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-access-rule.broad select,
+.tool-access-rule.broad input {
+  border-color: #fdb022;
+  background: #fffaeb;
+}
+
+.tool-blocked-note {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.quiz-tool-selector,
+.quiz-tool-list {
+  display: grid;
+  gap: 10px;
+}
+
+.quiz-tool-selector-copy {
+  align-items: flex-start;
+}
+
+.quiz-tool-selector-copy p {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+}
+
+.quiz-tool-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.quiz-tool-option input {
+  width: 16px;
+  min-width: 16px;
+}
+
+.quiz-tool-option strong {
+  display: block;
+}
+
+.quiz-tool-option small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .brand-mark {
   width: 42px;
   height: 42px;
@@ -1108,6 +1295,15 @@ select:disabled {
 
   .tool-row {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .tool-custom-fields,
+  .tool-access-rule {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-access-rule .icon-button {
+    justify-self: start;
   }
 
   .tool-regex-field,

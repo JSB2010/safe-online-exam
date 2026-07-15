@@ -1361,10 +1361,16 @@
         collapseButton.className = 'seb-tools-icon-button';
         collapseButton.title = 'Collapse tools';
         collapseButton.setAttribute('aria-label', 'Collapse exam tools');
+        collapseButton.setAttribute('aria-expanded', String(!sidebar.classList.contains('is-collapsed')));
         collapseButton.textContent = '-';
         collapseButton.addEventListener('click', () => {
             sidebar.classList.toggle('is-collapsed');
-            collapseButton.textContent = sidebar.classList.contains('is-collapsed') ? '+' : '-';
+            const collapsed = sidebar.classList.contains('is-collapsed');
+            collapseButton.textContent = collapsed ? '+' : '-';
+            collapseButton.title = collapsed ? 'Expand tools' : 'Collapse tools';
+            collapseButton.setAttribute('aria-label', collapsed ? 'Expand exam tools' : 'Collapse exam tools');
+            collapseButton.setAttribute('aria-expanded', String(!collapsed));
+            clampExamToolsPosition(sidebar);
             persistExamToolsState(storageKey, sidebar);
         });
         controls.append(collapseButton);
@@ -1396,7 +1402,14 @@
         sidebar.append(header, body);
         document.body.appendChild(sidebar);
         collapseButton.textContent = sidebar.classList.contains('is-collapsed') ? '+' : '-';
+        clampExamToolsPosition(sidebar);
         makeExamToolsDraggable(sidebar, header, storageKey);
+        window.addEventListener('resize', () => {
+            if (document.getElementById(EXAM_TOOLS_SIDEBAR_ID) === sidebar) {
+                clampExamToolsPosition(sidebar);
+                persistExamToolsState(storageKey, sidebar);
+            }
+        }, { passive: true });
     }
 
     function openExamTool(event, tool) {
@@ -1415,25 +1428,21 @@
             return;
         }
 
-        const openedWindow = window.open('about:blank', windowName);
+        // SEB's macOS WKWebView can create a window for about:blank but ignore
+        // a later cross-origin location.replace(), leaving an empty window. A
+        // direct user-gesture navigation is both reliable and subject to the
+        // generated URL filter.
+        const openedWindow = window.open(tool.url, windowName);
         if (!openedWindow) {
-            window.open(tool.url, '_blank', 'noopener,noreferrer');
+            debugLog('Exam tool window could not be opened: ' + tool.label, 'warn');
             return;
         }
         try {
             openedWindow.opener = null;
-            if (openedWindow.opener !== null) {
-                throw new Error('Unable to isolate exam tool opener');
-            }
-            openedWindow.location.replace(tool.url);
         } catch (error) {
-            try {
-                openedWindow.close();
-            } catch (closeError) {
-                // Best-effort cleanup of the unopened same-origin broker.
-            }
-            window.open(tool.url, '_blank', 'noopener,noreferrer');
-            return;
+            // Some embedded browser engines do not expose opener across a
+            // newly-created cross-origin window. The named window remains
+            // safe to reuse and SEB's allowlist remains the enforcement layer.
         }
         state.examToolWindows.set(windowName, openedWindow);
         focusExamToolWindow(openedWindow);
@@ -1456,7 +1465,7 @@
 
     function getExamToolWindowName(tool) {
         let hash = 0;
-        const source = tool.url || tool.label || 'tool';
+        const source = tool.id || tool.url || tool.label || 'tool';
         for (let index = 0; index < source.length; index += 1) {
             hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
         }
@@ -1625,6 +1634,20 @@
         };
         handle.addEventListener('pointerup', finish);
         handle.addEventListener('pointercancel', finish);
+    }
+
+    function clampExamToolsPosition(sidebar) {
+        const rect = sidebar.getBoundingClientRect();
+        const hasStoredPosition = sidebar.style.left && sidebar.style.top;
+        if (!hasStoredPosition) {
+            return;
+        }
+        const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+        const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+        sidebar.style.left = Math.min(Math.max(8, rect.left), maxLeft) + 'px';
+        sidebar.style.top = Math.min(Math.max(8, rect.top), maxTop) + 'px';
+        sidebar.style.right = 'auto';
+        sidebar.style.bottom = 'auto';
     }
 
     function readExamToolsState(storageKey) {
