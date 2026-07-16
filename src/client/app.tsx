@@ -4,6 +4,7 @@ import {
   BookOpen,
   Calculator,
   Check,
+  ChevronDown,
   Eye,
   EyeOff,
   ExternalLink,
@@ -177,8 +178,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   const [query, setQuery] = useState("");
   const [activeItem, setActiveItem] = useState<QuizView | null>(null);
   const [showDefaults, setShowDefaults] = useState(false);
+  const [defaultsInitialSection, setDefaultsInitialSection] = useState<"password" | "urls" | "tools">("password");
   const [showSetupWizard, setShowSetupWizard] = useState(data.showSetupWizard === true);
-  const [setupInitialStep, setSetupInitialStep] = useState<InstructorSetupStep>("security");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [recovery, setRecovery] = useState<OnboardingRecovery | null>(null);
@@ -204,12 +205,9 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   const courseSecurityReady =
     onboarding.courseSecurityReady === true || canEnableSebAssessment(undefined, courseDefaults);
 
-  const openCourseSettings = () => {
+  const openCourseSettings = (section: "password" | "urls" | "tools" = "password") => {
+    setDefaultsInitialSection(section);
     setShowDefaults(true);
-  };
-  const openSetupWizard = (step: InstructorSetupStep = courseSecurityReady ? "tools" : "security") => {
-    setSetupInitialStep(step);
-    setShowSetupWizard(true);
   };
   const handleRecovery = (value: unknown) => {
     const next = onboardingRecovery(value, "instructor");
@@ -230,8 +228,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
   async function toggleSeb(item: QuizView) {
     const enabled = !!settings[item.id]?.sebRequired;
     if (!enabled && !canEnableSebAssessment(settings[item.id], courseDefaults)) {
-      openSetupWizard("security");
-      pushToast("error", "Complete exit security before enabling SEB.");
+      openCourseSettings("password");
+      pushToast("error", "Set an exit password in Settings before enabling SEB.");
       return;
     }
     setBusyId(item.id);
@@ -333,11 +331,12 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           >
             <RefreshCw size={18} />
           </button>
-          <button className="icon-button" type="button" onClick={openCourseSettings} title="Course settings">
-            <Settings size={18} />
-          </button>
-          <button className="button secondary" onClick={() => openSetupWizard()}>
-            <ShieldCheck size={16} /> Course setup
+          <button
+            className="button secondary header-settings-button"
+            type="button"
+            onClick={() => openCourseSettings()}
+          >
+            <Settings size={16} /> Settings
           </button>
         </div>
       </header>
@@ -348,7 +347,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           defaults={courseDefaults}
           securityReady={courseSecurityReady}
           enabledAssessmentCount={onboarding.enabledAssessmentCount || activeCount}
-          initialStep={setupInitialStep}
+          required={onboarding.courseSetupComplete !== true && courseDefaults.setupCompleted !== true}
           onClose={() => setShowSetupWizard(false)}
           onComplete={completeSetupWizard}
         />
@@ -356,11 +355,12 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
 
       {recovery && <RecoveryNotice recovery={recovery} onDismiss={() => setRecovery(null)} />}
 
-      <section className="work-surface">
+      <section className="work-surface assessment-surface">
         <div className="list-header">
           <div>
-            <h2>Quizzes</h2>
-            <p>Choose which quizzes require SEB and select the course tools they may use.</p>
+            <span className="section-kicker">Assessment access</span>
+            <h2>Assessments</h2>
+            <p>Turn Safe Exam Browser on only for the quizzes that need it.</p>
           </div>
           <div className="search">
             <Search size={18} />
@@ -380,14 +380,17 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
             return (
               <article className="content-row teacher-row" key={item.id}>
                 <div className="content-main">
-                  <span
-                    className={clsx("status-dot", enabled && "on")}
-                    title={enabled ? "SEB active" : "Not enabled"}
-                    aria-label={enabled ? "SEB active" : "Not enabled"}
-                  />
+                  <span className={clsx("assessment-icon", enabled && "enabled")} aria-hidden="true">
+                    {enabled ? <ShieldCheck size={18} /> : <BookOpen size={18} />}
+                  </span>
                   <div>
                     <h3>{item.title}</h3>
-                    <p>{item.quizTypeDisplay || item.contentType || "Canvas content"}</p>
+                    <p>
+                      {item.quizTypeDisplay || item.contentType || "Canvas content"}
+                      <span className={clsx("assessment-status", enabled && "enabled")}>
+                        {enabled ? "SEB enabled" : "SEB off"}
+                      </span>
+                    </p>
                   </div>
                 </div>
                 <div className="row-actions">
@@ -456,6 +459,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           defaults={courseDefaults}
           courseId={data.courseId}
           authToken={data.authToken}
+          initialSection={defaultsInitialSection}
           onClose={() => setShowDefaults(false)}
           onSave={async (next) => {
             await saveCourseDefaults({ ...next, setupCompleted: courseDefaults.setupCompleted === true });
@@ -598,7 +602,7 @@ function InstructorSetupWizard({
   defaults,
   securityReady,
   enabledAssessmentCount,
-  initialStep,
+  required,
   onClose,
   onComplete
 }: {
@@ -606,14 +610,14 @@ function InstructorSetupWizard({
   defaults: CourseSebDefaults;
   securityReady: boolean;
   enabledAssessmentCount: number;
-  initialStep: InstructorSetupStep;
+  required: boolean;
   onClose: () => void;
   onComplete: (defaults: CourseSebDefaults) => Promise<void>;
 }) {
-  useEscapeToClose(onClose);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  useDialogInitialFocus(closeButtonRef);
-  const [step, setStep] = useState<InstructorSetupStep>(initialStep);
+  useEscapeToClose(required ? undefined : onClose);
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogInitialFocus(dialogRef);
+  const [step, setStep] = useState<InstructorSetupStep>("security");
   const [draft, setDraft] = useDefaultsDraft(defaults);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState("");
@@ -670,30 +674,34 @@ function InstructorSetupWizard({
   return (
     <div className="dialog-backdrop" role="presentation">
       <section
+        ref={dialogRef}
         className="dialog instructor-setup-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="setup-wizard-title"
+        tabIndex={-1}
       >
         <header className="dialog-header">
           <div>
             <span className="section-kicker">Guided course setup</span>
             <h2 id="setup-wizard-title">Set up Safe Exam Browser</h2>
           </div>
-          <button
-            ref={closeButtonRef}
-            className="icon-button"
-            type="button"
-            onClick={onClose}
-            title="Finish setup later"
-            aria-label="Finish setup later"
-          >
-            <X size={17} />
-          </button>
+          {!required && (
+            <button
+              className="icon-button"
+              type="button"
+              onClick={onClose}
+              title="Close setup"
+              aria-label="Close setup"
+            >
+              <X size={17} />
+            </button>
+          )}
         </header>
         <p className="setup-wizard-course">
-          {courseName} is connected to Canvas. Complete these steps here, then manage future changes from Course
-          settings.
+          {required
+            ? `${courseName} is connected to Canvas. Complete the required course policy before managing assessments.`
+            : `${courseName} is connected to Canvas. Review these steps, then manage future changes from Settings.`}
         </p>
         <ol className="setup-wizard-progress" aria-label="Course setup progress">
           {steps.map((candidate, index) => (
@@ -722,9 +730,11 @@ function InstructorSetupWizard({
           )}
         </section>
         <footer className="dialog-actions setup-wizard-actions">
-          <button className="button secondary" type="button" onClick={onClose}>
-            Finish later
-          </button>
+          {!required && (
+            <button className="button secondary" type="button" onClick={onClose}>
+              Finish later
+            </button>
+          )}
           {previousStep && (
             <button className="button secondary" type="button" onClick={() => setStep(previousStep)}>
               <ArrowLeft size={16} /> Back
@@ -1310,24 +1320,47 @@ function DefaultsDialog({
           endpoint={`/api/quizzes/course/${encodeURIComponent(courseId)}/passwords/reveal`}
           authToken={authToken}
         />
-        <nav className="settings-tabs" aria-label="Course settings">
-          {[
-            ["password", "Security"],
-            ["urls", "Allowed URLs"],
-            ["tools", "Exam tools"]
-          ].map(([id, label]) => (
+        <div className="settings-layout">
+          <nav className="settings-navigation" aria-label="Course settings sections">
             <button
-              className={clsx("settings-tab", section === id && "active")}
-              key={id}
+              className={clsx("settings-navigation-item", section === "password" && "active")}
               type="button"
-              aria-selected={section === id}
-              onClick={() => setSection(id as "password" | "urls" | "tools")}
+              aria-current={section === "password" ? "page" : undefined}
+              onClick={() => setSection("password")}
             >
-              {label}
+              <Shield size={17} />
+              <span>
+                <strong>Security</strong>
+                <small>Passwords and exits</small>
+              </span>
             </button>
-          ))}
-        </nav>
-        <DefaultsEditor draft={draft} setDraft={setDraft} visibleSection={section} />
+            <button
+              className={clsx("settings-navigation-item", section === "urls" && "active")}
+              type="button"
+              aria-current={section === "urls" ? "page" : undefined}
+              onClick={() => setSection("urls")}
+            >
+              <ExternalLink size={17} />
+              <span>
+                <strong>Allowed URLs</strong>
+                <small>Extra assessment resources</small>
+              </span>
+            </button>
+            <button
+              className={clsx("settings-navigation-item", section === "tools" && "active")}
+              type="button"
+              aria-current={section === "tools" ? "page" : undefined}
+              onClick={() => setSection("tools")}
+            >
+              <Calculator size={17} />
+              <span>
+                <strong>Exam tools</strong>
+                <small>Approved student tools</small>
+              </span>
+            </button>
+          </nav>
+          <DefaultsEditor draft={draft} setDraft={setDraft} visibleSection={section} />
+        </div>
         {error && (
           <div className="notice error">
             <AlertCircle size={17} /> {error}
@@ -1392,7 +1425,7 @@ function DefaultsEditor({
             />
             <span>
               <strong>Require a start password</strong>
-              <small>Students enter this before SEB opens a quiz.</small>
+              <small>Add a second check before an assessment opens in Safe Exam Browser.</small>
             </span>
           </label>
           <input
@@ -1407,7 +1440,7 @@ function DefaultsEditor({
           />
           {startPasswordEnabled && <small>{passwordRequirementText("exit")}</small>}
 
-          <SectionHeading title="Exit password" />
+          <SectionHeading title="Exit security" />
           <label className="toggle-row compact">
             <input
               type="checkbox"
@@ -1415,10 +1448,8 @@ function DefaultsEditor({
               onChange={(event) => updateQuitPasswordEnabled(event.target.checked)}
             />
             <span>
-              <strong>Set a course exit password</strong>
-              <small>
-                An exit password is required before SEB can be enabled unless the server supplies a managed default.
-              </small>
+              <strong>Protect exits with a course password</strong>
+              <small>An exit password is required before SEB can be enabled unless your school supplies one.</small>
             </span>
           </label>
           <input
@@ -1449,13 +1480,7 @@ function DefaultsEditor({
       )}
       {showTools && (
         <section className="settings-section">
-          <SectionHeading
-            title="Exam tools"
-            actionLabel="Add tool"
-            onAction={() =>
-              setDraft((current) => ({ ...current, externalTools: [...current.externalTools, newCustomTool()] }))
-            }
-          />
+          <SectionHeading title="Exam tools" />
           <ToolEditor
             tools={draft.externalTools}
             onChange={(externalTools) => setDraft((current) => ({ ...current, externalTools }))}
@@ -1636,112 +1661,156 @@ function ToolEditor({
   onChange: (tools: ExternalToolConfig[]) => void;
   disabled?: boolean;
 }) {
+  const [expandedToolIds, setExpandedToolIds] = useState<string[]>([]);
   const update = (id: string, patch: Partial<ExternalToolConfig>) =>
     onChange(tools.map((tool) => (tool.id === id ? { ...tool, ...patch } : tool)));
+  const toggleExpanded = (id: string) =>
+    setExpandedToolIds((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]
+    );
+  const addTool = () => {
+    const tool = newCustomTool();
+    onChange([...tools, tool]);
+    setExpandedToolIds((current) => [...current, tool.id]);
+  };
 
   return (
     <div className="tool-list">
-      {tools.map((tool) => (
-        <article className="tool-card" key={tool.id}>
-          <header className="tool-card-header">
-            <label className="tool-enabled">
-              <input
-                type="checkbox"
-                checked={tool.enabled}
-                disabled={disabled}
-                onChange={(event) => update(tool.id, { enabled: event.target.checked })}
-              />
-              <span className="tool-icon">
-                <Calculator size={16} />
-              </span>
-              <span>
-                <strong>{tool.label || "New custom tool"}</strong>
-                <small>{tool.enabled ? "Enabled by default for new SEB quizzes" : "Disabled by default"}</small>
-              </span>
-            </label>
-            <span className={clsx("tool-badge", tool.preset ? "preset" : "custom")}>
-              {tool.preset ? "Preloaded" : "Custom"}
-            </span>
-          </header>
-
-          <div className="tool-custom-fields">
-            <label>
-              Name
-              <input
-                value={tool.label}
-                disabled={disabled}
-                onChange={(event) => update(tool.id, { label: event.target.value })}
-                placeholder="Tool name"
-              />
-            </label>
-            <label>
-              Exact launch URL
-              <input
-                value={tool.url}
-                disabled={disabled}
-                onChange={(event) => update(tool.id, { url: event.target.value })}
-                placeholder="https://example.edu/tool"
-              />
-            </label>
-          </div>
-
-          <section className="tool-access-list">
-            <div className="tool-access-heading">
-              <div>
-                <strong>Allowed in SEB</strong>
-                <small>The launch page plus these exact resources are the only extra pages this tool can use.</small>
+      <div className="tool-list-intro">
+        <p>
+          Choose which course tools are available by default. Open a tool only when you need to edit its launch URL or
+          allowed resources.
+        </p>
+        <button className="button secondary small" type="button" disabled={disabled} onClick={addTool}>
+          <Plus size={14} /> Add tool
+        </button>
+      </div>
+      {tools.map((tool) => {
+        const expanded = expandedToolIds.includes(tool.id);
+        const detailId = `tool-details-${tool.id}`;
+        return (
+          <article className={clsx("tool-card", expanded && "expanded")} key={tool.id}>
+            <header className="tool-card-header">
+              <label className="tool-enabled">
+                <input
+                  type="checkbox"
+                  checked={tool.enabled}
+                  disabled={disabled}
+                  onChange={(event) => update(tool.id, { enabled: event.target.checked })}
+                />
+                <span className="tool-icon">
+                  <Calculator size={16} />
+                </span>
+                <span>
+                  <strong>{tool.label || "New custom tool"}</strong>
+                  <small>{tool.enabled ? "Enabled by default" : "Disabled by default"}</small>
+                </span>
+              </label>
+              <div className="tool-card-summary-actions">
+                <span className={clsx("tool-badge", tool.preset ? "preset" : "custom")}>
+                  {tool.preset ? "Preloaded" : "Custom"}
+                </span>
+                <button
+                  className="tool-expand-button"
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-controls={detailId}
+                  onClick={() => toggleExpanded(tool.id)}
+                >
+                  {expanded ? "Close" : "Edit"} <ChevronDown size={16} />
+                </button>
               </div>
-              <button
-                className="button secondary small"
-                type="button"
-                disabled={disabled}
-                onClick={() =>
-                  update(tool.id, {
-                    allowedRules: [...(tool.allowedRules || []), newToolAccessRule()]
-                  })
-                }
-              >
-                <Plus size={14} /> Add resource
-              </button>
-            </div>
-            <p className="tool-launch-url">
-              <code>{tool.url || "Exact launch URL required"}</code>
-            </p>
-            {(tool.allowedRules || []).map((rule) => (
-              <ToolAccessRuleEditor
-                disabled={disabled}
-                key={rule.id}
-                rule={rule}
-                onChange={(patch) =>
-                  update(tool.id, {
-                    allowedRules: (tool.allowedRules || []).map((entry) =>
-                      entry.id === rule.id ? { ...entry, ...patch } : entry
-                    )
-                  })
-                }
-                onRemove={() =>
-                  update(tool.id, { allowedRules: (tool.allowedRules || []).filter((entry) => entry.id !== rule.id) })
-                }
-              />
-            ))}
-            {(tool.allowedRules || []).length === 0 && <p className="empty-line">No additional resource paths.</p>}
-            <p className="tool-blocked-note">
-              Everything else—including sign-in, saved work, sharing, and other sites—is blocked.
-            </p>
-          </section>
+            </header>
 
-          <footer className="tool-card-actions">
-            <button
-              className="button danger small"
-              disabled={disabled}
-              type="button"
-              onClick={() => onChange(tools.filter((entry) => entry.id !== tool.id))}
-            >
-              <Trash2 size={14} /> Remove tool
-            </button>
-          </footer>
-        </article>
-      ))}
+            {expanded && (
+              <div className="tool-card-details" id={detailId}>
+                <div className="tool-custom-fields">
+                  <label>
+                    Name
+                    <input
+                      value={tool.label}
+                      disabled={disabled}
+                      onChange={(event) => update(tool.id, { label: event.target.value })}
+                      placeholder="Tool name"
+                    />
+                  </label>
+                  <label>
+                    Exact launch URL
+                    <input
+                      value={tool.url}
+                      disabled={disabled}
+                      onChange={(event) => update(tool.id, { url: event.target.value })}
+                      placeholder="https://example.edu/tool"
+                    />
+                  </label>
+                </div>
+
+                <section className="tool-access-list">
+                  <div className="tool-access-heading">
+                    <div>
+                      <strong>Allowed in SEB</strong>
+                      <small>
+                        The launch page plus these exact resources are the only extra pages this tool can use.
+                      </small>
+                    </div>
+                    <button
+                      className="button secondary small"
+                      type="button"
+                      disabled={disabled}
+                      onClick={() =>
+                        update(tool.id, {
+                          allowedRules: [...(tool.allowedRules || []), newToolAccessRule()]
+                        })
+                      }
+                    >
+                      <Plus size={14} /> Add resource
+                    </button>
+                  </div>
+                  <p className="tool-launch-url">
+                    <code>{tool.url || "Exact launch URL required"}</code>
+                  </p>
+                  {(tool.allowedRules || []).map((rule) => (
+                    <ToolAccessRuleEditor
+                      disabled={disabled}
+                      key={rule.id}
+                      rule={rule}
+                      onChange={(patch) =>
+                        update(tool.id, {
+                          allowedRules: (tool.allowedRules || []).map((entry) =>
+                            entry.id === rule.id ? { ...entry, ...patch } : entry
+                          )
+                        })
+                      }
+                      onRemove={() =>
+                        update(tool.id, {
+                          allowedRules: (tool.allowedRules || []).filter((entry) => entry.id !== rule.id)
+                        })
+                      }
+                    />
+                  ))}
+                  {(tool.allowedRules || []).length === 0 && (
+                    <p className="empty-line">No additional resource paths.</p>
+                  )}
+                  <p className="tool-blocked-note">
+                    Everything else—including sign-in, saved work, sharing, and other sites—is blocked.
+                  </p>
+                </section>
+
+                <footer className="tool-card-actions">
+                  <button
+                    className="button danger small"
+                    disabled={disabled}
+                    type="button"
+                    onClick={() => onChange(tools.filter((entry) => entry.id !== tool.id))}
+                  >
+                    <Trash2 size={14} /> Remove tool
+                  </button>
+                </footer>
+              </div>
+            )}
+          </article>
+        );
+      })}
       {tools.length === 0 && <p className="empty-line">No tools configured.</p>}
     </div>
   );
@@ -2418,8 +2487,9 @@ function MessagePage({
   );
 }
 
-function useEscapeToClose(onClose: () => void) {
+function useEscapeToClose(onClose?: () => void) {
   useEffect(() => {
+    if (!onClose) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -2431,8 +2501,9 @@ function useEscapeToClose(onClose: () => void) {
   }, [onClose]);
 }
 
-function useDialogInitialFocus(ref: RefObject<HTMLElement | null>) {
+function useDialogInitialFocus(ref?: RefObject<HTMLElement | null>) {
   useEffect(() => {
+    if (!ref) return;
     const timer = window.setTimeout(() => ref.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [ref]);
