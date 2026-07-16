@@ -241,14 +241,56 @@ describe("LtiController role routing", () => {
     );
   });
 
-  it("rejects OIDC login attempts for an unconfigured deployment or attacker target URI", async () => {
+  it("explains how to authorize an otherwise valid Canvas deployment", async () => {
+    const response = responseDouble();
+    const request = {
+      query: {
+        iss: "https://canvas.example.test",
+        login_hint: "hint-1",
+        target_link_uri: "https://tool.example.test/lti/launch",
+        lti_deployment_id: "new-course-deployment"
+      },
+      session: {}
+    } as any;
+
+    await controller.loginGet(request, response);
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("LTI Deployment Configuration Required"));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("LTI_DEPLOYMENT_ID"));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("without removing existing IDs"));
+    expect(ltiState.createState).not.toHaveBeenCalled();
+  });
+
+  it("accepts an unlisted Canvas deployment at login when checking is explicitly disabled", async () => {
+    (controller as any).config.value.lti.deploymentIdCheckingEnabled = false;
+    const response = responseDouble();
+    const request = {
+      query: {
+        iss: "https://canvas.example.test",
+        login_hint: "hint-1",
+        target_link_uri: "https://tool.example.test/lti/launch",
+        lti_deployment_id: "course-installed-deployment"
+      },
+      session: {}
+    } as any;
+
+    await controller.loginGet(request, response);
+
+    expect(response.redirect).toHaveBeenCalled();
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({ deploymentId: "course-installed-deployment" })
+    );
+  });
+
+  it("keeps invalid platform or target errors generic", async () => {
     const response = responseDouble();
     const request = {
       query: {
         iss: "https://canvas.example.test",
         login_hint: "hint-1",
         target_link_uri: "https://attacker.example/lti/launch",
-        lti_deployment_id: "attacker-deployment"
+        lti_deployment_id: "deployment-1"
       },
       session: {}
     } as any;
@@ -257,6 +299,7 @@ describe("LtiController role routing", () => {
 
     expect(response.status).toHaveBeenCalledWith(400);
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Invalid LTI platform or target"));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining("LTI Deployment Configuration Required"));
     expect(ltiState.createState).not.toHaveBeenCalled();
   });
 

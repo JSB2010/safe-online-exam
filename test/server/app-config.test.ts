@@ -25,6 +25,18 @@ describe("AppConfig", () => {
   it("uses a school-neutral local Canvas placeholder outside Cloud Run", () => {
     const config = loadConfigFromEnv({});
     expect(config.canvas.domain).toBe("https://canvas.example.test");
+    expect(config.lti.deploymentIdCheckingEnabled).toBe(true);
+  });
+
+  it("permits a hardened runtime without a deployment allowlist only when checking is explicitly disabled", () => {
+    const env = productionRuntimeEnv({
+      LTI_DEPLOYMENT_ID: undefined,
+      LTI_DEPLOYMENT_ID_CHECKING_ENABLED: "false"
+    });
+    const config = loadConfigFromEnv(env);
+
+    expect(config.lti.deploymentIdCheckingEnabled).toBe(false);
+    expect(validateRuntimeConfig(config, env)).not.toContain("LTI_DEPLOYMENT_ID is required in production");
   });
 
   it("does not synthesize development secrets and validates missing config in non-Cloud production", () => {

@@ -28,6 +28,7 @@ export interface AppConfigSnapshot {
     authUrl: string;
     clientId?: string;
     deploymentId?: string;
+    deploymentIdCheckingEnabled: boolean;
     toolUrl?: string;
     privateKey?: string;
   };
@@ -145,6 +146,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       authUrl: firstPresent(env.LTI_AUTH_URL, "https://sso.canvaslms.com/api/lti/authorize_redirect")!,
       clientId: firstPresent(env.LTI_CLIENT_ID, env.DEV_LTI_CLIENT_ID, env.PROD_LTI_CLIENT_ID, env.lti_client_id),
       deploymentId: firstPresent(env.LTI_DEPLOYMENT_ID, env.DEPLOYMENT_ID),
+      deploymentIdCheckingEnabled: parseBoolean(firstPresent(env.LTI_DEPLOYMENT_ID_CHECKING_ENABLED), true),
       toolUrl: sanitizeToolUrl(
         firstPresent(env.TOOL_URL, env.DEV_TOOL_URL, env.PROD_TOOL_URL, env.SERVICE_URL, env.APP_BASE_URL)
       ),
@@ -230,7 +232,9 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
     "LTI_PRIVATE_KEY",
     runtimeLabel
   );
-  requirePresent(errors, env, ["LTI_DEPLOYMENT_ID", "DEPLOYMENT_ID"], "LTI_DEPLOYMENT_ID", runtimeLabel);
+  if (snapshot.lti.deploymentIdCheckingEnabled) {
+    requirePresent(errors, env, ["LTI_DEPLOYMENT_ID", "DEPLOYMENT_ID"], "LTI_DEPLOYMENT_ID", runtimeLabel);
+  }
   requirePresent(errors, env, ["SESSION_SECRET", "SESSION_SECRET_FILE"], "SESSION_SECRET", runtimeLabel);
   requirePresent(
     errors,

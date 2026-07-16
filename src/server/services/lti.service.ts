@@ -59,7 +59,10 @@ export class LtiService {
     if (!payload[LTI_CLAIMS.deploymentId]) {
       throw new Error("Missing LTI deployment id");
     }
-    if (!isAllowedDeploymentId(this.config.value.lti.deploymentId, payload[LTI_CLAIMS.deploymentId])) {
+    if (
+      this.config.value.lti.deploymentIdCheckingEnabled !== false &&
+      !isAllowedDeploymentId(this.config.value.lti.deploymentId, payload[LTI_CLAIMS.deploymentId])
+    ) {
       throw new Error("Invalid LTI deployment id");
     }
     if (!payload[LTI_CLAIMS.targetLinkUri]) {

@@ -884,7 +884,7 @@ export class SebController {
         const launchData = await this.ltiService.validateToken(idToken, consumed.nonce);
         if (
           consumed.issuer !== launchData.issuer ||
-          consumed.deploymentId !== launchData.deploymentId ||
+          (consumed.deploymentId && consumed.deploymentId !== launchData.deploymentId) ||
           consumed.targetLinkUri !== launchData.targetLinkUri
         ) {
           throw new Error("LTI launch does not match the initiating login");

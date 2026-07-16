@@ -21,14 +21,14 @@ curl -fsS "${TOOL_URL}/js/canvas-seb-detector.js" | head
 
 ## Values To Record
 
-| Value                      | Canvas source                                                | Runtime destination              |
-| -------------------------- | ------------------------------------------------------------ | -------------------------------- |
-| `CANVAS_DOMAIN`            | The Canvas base origin, such as `https://canvas.example.edu` | `CANVAS_DOMAIN`                  |
-| `LTI_CLIENT_ID`            | LTI 1.3 Developer Key client ID                              | `LTI_CLIENT_ID`                  |
-| `LTI_DEPLOYMENT_ID`        | External App deployment ID after installation                | `LTI_DEPLOYMENT_ID`              |
-| `CANVAS_API_CLIENT_ID`     | API OAuth Developer Key client ID                            | `CANVAS_API_CLIENT_ID`           |
-| `CANVAS_API_CLIENT_SECRET` | API OAuth Developer Key secret                               | `CANVAS_API_CLIENT_SECRET`       |
-| `CANVAS_REDIRECT_URI`      | OAuth callback registration                                  | `${TOOL_URL}/api/oauth2callback` |
+| Value                      | Canvas source                                                | Runtime destination                          |
+| -------------------------- | ------------------------------------------------------------ | -------------------------------------------- |
+| `CANVAS_DOMAIN`            | The Canvas base origin, such as `https://canvas.example.edu` | `CANVAS_DOMAIN`                              |
+| `LTI_CLIENT_ID`            | LTI 1.3 Developer Key client ID                              | `LTI_CLIENT_ID`                              |
+| `LTI_DEPLOYMENT_ID`        | External App deployment ID after installation                | `LTI_DEPLOYMENT_ID` when checking is enabled |
+| `CANVAS_API_CLIENT_ID`     | API OAuth Developer Key client ID                            | `CANVAS_API_CLIENT_ID`                       |
+| `CANVAS_API_CLIENT_SECRET` | API OAuth Developer Key secret                               | `CANVAS_API_CLIENT_SECRET`                   |
+| `CANVAS_REDIRECT_URI`      | OAuth callback registration                                  | `${TOOL_URL}/api/oauth2callback`             |
 
 The LTI client ID and Canvas API OAuth client ID come from different registrations. Mixing them breaks either signed LTI launches or Canvas API authorization.
 
@@ -88,7 +88,9 @@ Enable the key and record its client ID as `LTI_CLIENT_ID`.
 
 At the root account or the desired account scope, open the external-app configuration area and add the app by client ID. Paste the LTI client ID from the previous step, approve the registration, and record the deployment ID Canvas assigns.
 
-Set the deployment ID in `LTI_DEPLOYMENT_ID`, update the LTI client ID secret/value, and deploy a new service revision before testing. On Google Cloud, add numbered Secret Manager versions and submit Cloud Build with those exact version pins. On Docker/VPS, update the protected environment or mounted secret and recreate the application container. The application rejects launches from a deployment ID that is not explicitly configured.
+By default, set the deployment ID in `LTI_DEPLOYMENT_ID`, update the LTI client ID secret/value, and deploy a new service revision before testing. On Google Cloud, add numbered Secret Manager versions and submit Cloud Build with those exact version pins. On Docker/VPS, update the protected environment or mounted secret and recreate the application container. The default policy rejects launches from a deployment ID that is not explicitly configured.
+
+For a controlled self-service rollout where instructors may add this exact registered app to their own courses, set `LTI_DEPLOYMENT_ID_CHECKING_ENABLED=false` on the service and deploy it. This accepts any non-empty deployment ID in a Canvas-signed launch from the configured issuer and client ID; it does not bypass token signatures, issuer/audience, nonce, target-link, or browser/state validation. Only use it if everyone able to install this client ID in Canvas is trusted to grant access to the tool.
 
 Use an account-level installation for a broad rollout. Use a course-level installation for an isolated pilot. Do not install the same registration both account-wide and course-local in the same course unless duplicate navigation entries are intentional.
 
@@ -145,11 +147,12 @@ See [Testing](testing.md) for the full acceptance sequence and [Certificate mana
 
 ## Common Integration Failures
 
-| Symptom                                                       | Check                                                                                                                                                                        |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Canvas reports an LTI configuration/identity error            | Refresh the registration from `/lti/config`; confirm the launch includes the signed numeric Canvas user custom field and that `LTI_DEPLOYMENT_ID` matches the installed app. |
-| Instructor is asked to authorize repeatedly                   | Confirm the API OAuth redirect URI exactly matches `${TOOL_URL}/api/oauth2callback`, the OAuth key is enabled, and the configured client ID/secret are the API-key values.   |
-| Student cannot connect Canvas or configuration download fails | Confirm the exact session-token scope shown earlier is allowed and that the student is authorizing the same Canvas environment as the LTI launch.                            |
-| Access code is not filled in SEB                              | Confirm a fresh configuration was downloaded, the detector loaded on the actual assessment route, Config Key proof succeeded, and the Canvas prompt is not ambiguous.        |
-| Detector never loads                                          | Check the active account theme, inherited theme behavior, browser console/CSP, and that the public detector URL returns JavaScript.                                          |
-| A launch works in one environment but not another             | Treat client IDs, deployment IDs, URLs, OAuth keys, secrets, and PostgreSQL databases as environment-specific; do not mix them.                                              |
+| Symptom                                                       | Check                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LTI Deployment Configuration Required                         | Deployment-ID checking is enabled and Canvas installed this app with an ID not yet allowed by the service. Retrieve the `deployment_id` from Canvas's External Tools API for that course/account app, append it to `LTI_DEPLOYMENT_ID` without replacing existing IDs, deploy a new revision, then reopen the tool. For an intentional self-service rollout, an administrator can instead set `LTI_DEPLOYMENT_ID_CHECKING_ENABLED=false`. |
+| Canvas reports an LTI configuration/identity error            | Refresh the registration from `/lti/config`; confirm the launch includes the signed numeric Canvas user custom field and that `LTI_DEPLOYMENT_ID` matches the installed app.                                                                                                                                                                                                                                                              |
+| Instructor is asked to authorize repeatedly                   | Confirm the API OAuth redirect URI exactly matches `${TOOL_URL}/api/oauth2callback`, the OAuth key is enabled, and the configured client ID/secret are the API-key values.                                                                                                                                                                                                                                                                |
+| Student cannot connect Canvas or configuration download fails | Confirm the exact session-token scope shown earlier is allowed and that the student is authorizing the same Canvas environment as the LTI launch.                                                                                                                                                                                                                                                                                         |
+| Access code is not filled in SEB                              | Confirm a fresh configuration was downloaded, the detector loaded on the actual assessment route, Config Key proof succeeded, and the Canvas prompt is not ambiguous.                                                                                                                                                                                                                                                                     |
+| Detector never loads                                          | Check the active account theme, inherited theme behavior, browser console/CSP, and that the public detector URL returns JavaScript.                                                                                                                                                                                                                                                                                                       |
+| A launch works in one environment but not another             | Treat client IDs, deployment IDs, URLs, OAuth keys, secrets, and PostgreSQL databases as environment-specific; do not mix them.                                                                                                                                                                                                                                                                                                           |

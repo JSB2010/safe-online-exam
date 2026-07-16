@@ -119,7 +119,7 @@ export class LtiController {
       const launchData = await this.ltiService.validateToken(body.id_token, state.nonce);
       if (
         state.issuer !== launchData.issuer ||
-        state.deploymentId !== launchData.deploymentId ||
+        (state.deploymentId && state.deploymentId !== launchData.deploymentId) ||
         state.targetLinkUri !== launchData.targetLinkUri
       ) {
         throw new Error("LTI launch does not match the initiating login");
@@ -331,24 +331,33 @@ export class LtiController {
     if (
       issuer !== this.config.value.lti.issuer ||
       (params.client_id && params.client_id !== configuredClientId) ||
-      !isAllowedTargetLinkUri(targetLinkUri, this.config.getRequiredToolUrl()) ||
-      !isAllowedDeploymentId(this.config.value.lti.deploymentId, params.lti_deployment_id)
+      !isAllowedTargetLinkUri(targetLinkUri, this.config.getRequiredToolUrl())
     ) {
       response
         .status(400)
         .send(renderFallbackHtml("LTI Login Error", "<h1>LTI Login Error</h1><p>Invalid LTI platform or target.</p>"));
       return;
     }
+    if (
+      this.config.value.lti.deploymentIdCheckingEnabled !== false &&
+      !isAllowedDeploymentId(this.config.value.lti.deploymentId, params.lti_deployment_id)
+    ) {
+      response.status(400).send(renderDeploymentConfigurationError());
+      return;
+    }
     const nonce = randomUUID();
     const browserTransaction = createLtiOidcBrowserTransaction();
-    const state = await this.ltiState.createState({
+    const statePayload: Record<string, string> = {
       nonce,
       targetLinkUri,
       issuer,
-      deploymentId: params.lti_deployment_id,
       [LTI_OIDC_TRANSACTION_ID_FIELD]: browserTransaction.transactionId,
       [LTI_OIDC_BROWSER_BINDING_FIELD]: browserTransaction.bindingHash
-    });
+    };
+    if (params.lti_deployment_id) {
+      statePayload.deploymentId = params.lti_deployment_id;
+    }
+    const state = await this.ltiState.createState(statePayload);
     const redirectUri = `${this.config.getRequiredToolUrl()}/lti/launch`;
     const authUrl = new URL(this.config.value.lti.authUrl);
     authUrl.searchParams.set("scope", "openid");
@@ -805,6 +814,24 @@ function isAllowedTargetLinkUri(targetLinkUri: string, toolUrl: string): boolean
   } catch {
     return false;
   }
+}
+
+function renderDeploymentConfigurationError(): string {
+  return renderFallbackHtml(
+    "LTI Deployment Configuration Required",
+    [
+      "<h1>LTI Deployment Configuration Required</h1>",
+      "<p>Canvas launched this tool with a deployment ID that this service does not yet allow.</p>",
+      "<p>This usually means the tool was installed in another Canvas course or account after the service was configured.</p>",
+      "<h2>For the Canvas and service administrator</h2>",
+      "<ol>",
+      "<li>Find the installed external app's Canvas <code>deployment_id</code>. The Canvas External Tools API returns it for the course or account app.</li>",
+      "<li>Add that ID to the service's <code>LTI_DEPLOYMENT_ID</code> allowlist without removing existing IDs.</li>",
+      "<li>Deploy a new service revision, then reopen this tool from Canvas.</li>",
+      "</ol>",
+      "<p>For a deliberate self-service rollout, an administrator may instead set <code>LTI_DEPLOYMENT_ID_CHECKING_ENABLED=false</code>. That accepts any signed deployment from this configured Canvas issuer and client ID.</p>"
+    ].join("")
+  );
 }
 
 function hasBoundedLtiLoginEnvelope(params: Record<string, string>): boolean {

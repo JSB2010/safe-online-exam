@@ -429,7 +429,12 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
               </article>
             );
           })}
-          {filtered.length === 0 && <EmptyState title="No quizzes found" message="Try a different search." />}
+          {filtered.length === 0 && (
+            <EmptyState
+              title={items.length === 0 ? "No quizzes in this course" : "No quizzes found"}
+              message={items.length === 0 ? undefined : "Try a different search."}
+            />
+          )}
         </div>
       </section>
 
@@ -2578,12 +2583,12 @@ function SectionHeading({
   );
 }
 
-function EmptyState({ title, message }: { title: string; message: string }) {
+function EmptyState({ title, message }: { title: string; message?: string }) {
   return (
     <div className="empty-state">
       <BookOpen size={22} />
       <strong>{title}</strong>
-      <span>{message}</span>
+      {message && <span>{message}</span>}
     </div>
   );
 }

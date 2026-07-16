@@ -49,23 +49,28 @@ Run `npm run db:migrate` before a new application revision. Run `npm run db:clea
 
 ## Required Application Values
 
-| Variable                         | Purpose                                                 | Hardened requirement                                                 |
-| -------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
-| `NODE_ENV`                       | Node runtime mode.                                      | `production` for the deployed image.                                 |
-| `APP_ENV`                        | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                  |
-| `PORT`                           | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                         |
-| `TOOL_URL`                       | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                   |
-| `CANVAS_DOMAIN`                  | Connected Canvas origin.                                | HTTPS origin only.                                                   |
-| `LTI_CLIENT_ID`                  | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                            |
-| `LTI_PRIVATE_KEY`                | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                    |
-| `LTI_DEPLOYMENT_ID`              | Installed External App deployment ID.                   | Required; comma/newline allowlist supported.                         |
-| `CANVAS_API_CLIENT_ID`           | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                              |
-| `CANVAS_API_CLIENT_SECRET`       | Canvas API OAuth secret.                                | Required secret.                                                     |
-| `SESSION_SECRET`                 | Express session signing secret.                         | At least 32 characters and different from state encryption.          |
-| `STATE_ENCRYPTION_KEY`           | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.           |
-| `SEB_CONFIG_ENCRYPTION_CERT_PEM` | Public X.509 certificate used to encrypt `.seb` output. | Valid end-entity RSA certificate whose Key Usage permits encryption. |
+| Variable                             | Purpose                                                 | Hardened requirement                                                                       |
+| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `NODE_ENV`                           | Node runtime mode.                                      | `production` for the deployed image.                                                       |
+| `APP_ENV`                            | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                                        |
+| `PORT`                               | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                                               |
+| `TOOL_URL`                           | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                                         |
+| `CANVAS_DOMAIN`                      | Connected Canvas origin.                                | HTTPS origin only.                                                                         |
+| `LTI_CLIENT_ID`                      | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                                                  |
+| `LTI_PRIVATE_KEY`                    | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                                          |
+| `LTI_DEPLOYMENT_ID_CHECKING_ENABLED` | Enforce the configured deployment-ID allowlist.         | Defaults to `true`. Set `false` only for a controlled self-service course-install rollout. |
+| `LTI_DEPLOYMENT_ID`                  | Installed External App deployment ID.                   | Required when checking is enabled; comma/newline allowlist supported.                      |
+| `CANVAS_API_CLIENT_ID`               | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                                                    |
+| `CANVAS_API_CLIENT_SECRET`           | Canvas API OAuth secret.                                | Required secret.                                                                           |
+| `SESSION_SECRET`                     | Express session signing secret.                         | At least 32 characters and different from state encryption.                                |
+| `STATE_ENCRYPTION_KEY`               | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.                                 |
+| `SEB_CONFIG_ENCRYPTION_CERT_PEM`     | Public X.509 certificate used to encrypt `.seb` output. | Valid end-entity RSA certificate whose Key Usage permits encryption.                       |
 
 `SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients.
+
+## Deployment-ID Policy
+
+`LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true` is the default and restricts launches to the IDs in `LTI_DEPLOYMENT_ID`. Set it to `false` only when the configured Canvas issuer and LTI client ID are intentionally trusted to create course-level installations. Disabled mode still requires Canvas's signed deployment-ID claim and retains token signature, issuer, audience, nonce, target-link, and browser/state binding validation; it removes only the preconfigured deployment-ID allowlist.
 
 ## File-Based Secrets
 

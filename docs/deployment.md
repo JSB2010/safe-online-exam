@@ -314,7 +314,7 @@ The first pass replaces the placeholder service with the real container, creates
 ```bash
 gcloud builds submit \
   --config=cloudbuild-dev.yaml \
-  --substitutions=_CANVAS_DOMAIN_SECRET_VERSION=1,_LTI_CLIENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_SECRET_VERSION=1,_TOOL_URL_SECRET_VERSION=1,_LTI_PRIVATE_KEY_SECRET_VERSION=1,_SESSION_SECRET_VERSION=1,_STATE_ENCRYPTION_KEY_SECRET_VERSION=1,_CANVAS_API_CLIENT_ID_SECRET_VERSION=1,_CANVAS_API_CLIENT_SECRET_VERSION=1,_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
+  --substitutions=_CANVAS_DOMAIN_SECRET_VERSION=1,_LTI_CLIENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_TOOL_URL_SECRET_VERSION=1,_LTI_PRIVATE_KEY_SECRET_VERSION=1,_SESSION_SECRET_VERSION=1,_STATE_ENCRYPTION_KEY_SECRET_VERSION=1,_CANVAS_API_CLIENT_ID_SECRET_VERSION=1,_CANVAS_API_CLIENT_SECRET_VERSION=1,_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
 ```
 
 The Dockerfile performs install, typecheck, lint, format verification, coverage tests, build, production prune, and runtime assembly. BuildKit inline cache metadata and the Dockerfile's independent verification/production-dependency stages allow reusable or independent work to avoid unnecessary serialization. Cloud Build also runs the real PostgreSQL migration and concurrency suite. It pushes an immutable image digest, waits for the migration job, deploys the cleanup job, and deploys the service only after migration succeeds.
@@ -402,7 +402,7 @@ gcloud run jobs executions list \
 ```bash
 gcloud builds submit \
   --config=cloudbuild-prod.yaml \
-  --substitutions=_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
+  --substitutions=_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true
 ```
 
 `cloudbuild-school.yaml` is the parameterized template for another installation. With `_SECRET_PREFIX=canvas_seb`, it expects the same suffixes shown above under `canvas_seb_*` secret names:
@@ -410,7 +410,7 @@ gcloud builds submit \
 ```bash
 gcloud builds submit \
   --config=cloudbuild-school.yaml \
-  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
+  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
 ```
 
 Inspect every substitution and referenced secret before the first build.

@@ -177,6 +177,29 @@ describe("LtiService.validateToken", () => {
     });
   });
 
+  it("accepts an otherwise valid signed deployment outside the allowlist when deployment checking is disabled", async () => {
+    const service = makeLtiService(localJwks, false);
+    const token = await signLaunch(
+      privateKey,
+      launchPayload({
+        "https://purl.imsglobal.org/spec/lti/claim/deployment_id": "course-installed-deployment"
+      })
+    );
+
+    await expect(service.validateToken(token, NONCE)).resolves.toMatchObject({
+      deploymentId: "course-installed-deployment"
+    });
+  });
+
+  it("still requires Canvas to sign a deployment ID when deployment checking is disabled", async () => {
+    const service = makeLtiService(localJwks, false);
+    const payload = launchPayload();
+    delete payload["https://purl.imsglobal.org/spec/lti/claim/deployment_id"];
+    const token = await signLaunch(privateKey, payload);
+
+    await expect(service.validateToken(token, NONCE)).rejects.toThrow("Missing LTI deployment id");
+  });
+
   it("rejects RS384 even when the token has otherwise valid claims and a known key id", async () => {
     const keyPair = await generateKeyPair("RS384");
     const token = await new SignJWT(launchPayload())
@@ -238,13 +261,14 @@ describe("LtiService.validateToken", () => {
   });
 });
 
-function makeLtiService(jwks: ReturnType<typeof createLocalJWKSet>): LtiService {
+function makeLtiService(jwks: ReturnType<typeof createLocalJWKSet>, deploymentIdCheckingEnabled = true): LtiService {
   const config = {
     value: {
       lti: {
         issuer: ISSUER,
         clientId: CLIENT_ID,
         deploymentId: DEPLOYMENT_ID,
+        deploymentIdCheckingEnabled,
         keySetUrl: "https://canvas.example.com/api/lti/security/jwks"
       }
     }
