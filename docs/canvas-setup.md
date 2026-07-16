@@ -1,8 +1,8 @@
 # Canvas Setup
 
-This guide installs a deployed Canvas Safe Exam Browser LTI service in Canvas. Complete [Configuration](configuration.md) and the initial deployment first: the public `TOOL_URL` must be final before creating Canvas registrations.
+This guide installs a deployed Canvas Safe Exam Browser LTI service in Canvas. Complete [Configuration](configuration.md) and the initial deployment first: the public `TOOL_URL` must be final before creating Canvas registrations. For a new Google Cloud installation, follow the stable-URL and two-pass LTI bootstrap in [Deployment](deployment.md); for Docker/VPS, establish DNS and TLS before creating the keys.
 
-The service is portable across Canvas environments, but each deployment is configured for one Canvas origin. Keep separate client IDs, deployment IDs, OAuth credentials, Firestore databases, and service URLs for environments that must remain isolated.
+The service is portable across Canvas environments, but each deployment is configured for one Canvas origin. Keep separate client IDs, deployment IDs, OAuth credentials, PostgreSQL databases, secrets, and service URLs for environments that must remain isolated.
 
 ## Prerequisites
 
@@ -88,7 +88,7 @@ Enable the key and record its client ID as `LTI_CLIENT_ID`.
 
 At the root account or the desired account scope, open the external-app configuration area and add the app by client ID. Paste the LTI client ID from the previous step, approve the registration, and record the deployment ID Canvas assigns.
 
-Set the deployment ID in `LTI_DEPLOYMENT_ID`, update the LTI client ID secret/value if necessary, and deploy a new service revision before testing. The application rejects launches from a deployment ID that is not explicitly configured.
+Set the deployment ID in `LTI_DEPLOYMENT_ID`, update the LTI client ID secret/value, and deploy a new service revision before testing. On Google Cloud, add numbered Secret Manager versions and submit Cloud Build with those exact version pins. On Docker/VPS, update the protected environment or mounted secret and recreate the application container. The application rejects launches from a deployment ID that is not explicitly configured.
 
 Use an account-level installation for a broad rollout. Use a course-level installation for an isolated pilot. Do not install the same registration both account-wide and course-local in the same course unless duplicate navigation entries are intentional.
 
@@ -152,4 +152,4 @@ See [Testing](testing.md) for the full acceptance sequence and [Certificate mana
 | Student cannot connect Canvas or configuration download fails | Confirm the exact session-token scope shown earlier is allowed and that the student is authorizing the same Canvas environment as the LTI launch.                            |
 | Access code is not filled in SEB                              | Confirm a fresh configuration was downloaded, the detector loaded on the actual assessment route, Config Key proof succeeded, and the Canvas prompt is not ambiguous.        |
 | Detector never loads                                          | Check the active account theme, inherited theme behavior, browser console/CSP, and that the public detector URL returns JavaScript.                                          |
-| A launch works in one environment but not another             | Treat client IDs, deployment IDs, URLs, OAuth keys, secrets, and Firestore databases as environment-specific; do not mix them.                                               |
+| A launch works in one environment but not another             | Treat client IDs, deployment IDs, URLs, OAuth keys, secrets, and PostgreSQL databases as environment-specific; do not mix them.                                              |

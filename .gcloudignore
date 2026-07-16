@@ -3,6 +3,7 @@
 .idea
 .vscode
 .claude
+.worktrees/
 node_modules
 dist
 coverage
@@ -14,6 +15,9 @@ target
 .env
 .env.*
 !.env.example
+!.env.compose.secrets.example
+secrets/
+postgres-data/
 .local/
 *.p12
 *.pfx

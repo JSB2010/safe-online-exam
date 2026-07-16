@@ -4,11 +4,16 @@ coverage/
 test-results/
 playwright-report/
 .turbo/
+.worktrees/
 *.tsbuildinfo
 
 .env
 .env.*
 !.env.example
+!.env.compose.example
+!.env.compose.secrets.example
+secrets/
+postgres-data/
 .local/
 *.p12
 *.pfx

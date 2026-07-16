@@ -5,7 +5,10 @@ import { JwkController } from "../../src/server/controllers/jwk.controller.js";
 
 describe("public utility controllers", () => {
   it("serves health and launch fallback responses", () => {
-    const controller = new HomeController({ getRequiredToolUrl: () => "https://tool.example.edu" } as any);
+    const controller = new HomeController(
+      { getRequiredToolUrl: () => "https://tool.example.edu" } as any,
+      { assertReady: vi.fn().mockResolvedValue(undefined) } as any
+    );
 
     expect(controller.home()).toContain('"view":"service-status"');
     expect(controller.health()).toEqual({ status: "UP" });

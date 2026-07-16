@@ -4,19 +4,19 @@ Canonical guidance for coding agents working in this repository.
 
 ## First Principles
 
-This is a TypeScript Canvas Safe Exam Browser LTI integration. Preserve its Canvas LTI URLs, Cloud Run service names, Firestore database IDs, SEB configuration behavior, and public compatibility endpoints.
+This is a TypeScript Canvas Safe Exam Browser LTI integration. Preserve its Canvas LTI URLs, Cloud Run service names, PostgreSQL schema/data behavior, SEB configuration behavior, and public compatibility endpoints.
 
-Preserve behavior before refactoring. Canvas LTI URLs, Cloud Run service names, Firestore database IDs, SEB configuration behavior, and public compatibility endpoints are part of the product contract.
+Preserve behavior before refactoring. Canvas LTI URLs, Cloud Run service names, migration ordering, PostgreSQL concurrency semantics, SEB configuration behavior, and public compatibility endpoints are part of the product contract.
 
 ## Current Stack
 
-- Runtime: Node.js 24 on Google Cloud Run Gen2.
+- Runtime: Node.js 24 container; Docker Compose and Google Cloud Run Gen2 are maintained deployment targets.
 - Package manager: npm, pinned with `packageManager` in `package.json`.
 - Backend: NestJS on Express under `src/server`.
 - Frontend: React and Vite under `src/client`.
 - Shared models: `src/shared`.
-- Data: Google Cloud Firestore through `src/server/data/repositories.ts`.
-- Tests: Vitest for unit/service tests and Playwright for browser smoke tests.
+- Data: PostgreSQL 17+ through `src/server/data`; in-memory repositories are local/test only.
+- Tests: Vitest for unit/service and real-PostgreSQL tests, plus Playwright browser smoke tests.
 - Formatting and linting: Prettier and ESLint.
 
 ## Commands
@@ -35,6 +35,7 @@ npm run lint
 npm run format:check
 npm run test:coverage
 npm run build
+npm run verify:postgres
 npm run test:e2e
 ```
 
@@ -70,14 +71,15 @@ Keep these targets unless the user explicitly requests a migration:
 - Dev Cloud Run service: `canvas-seb-dev`
 - Prod Cloud Run service: `canvas-seb-prod`
 - Region: `us-central1`
-- Dev Firestore DB: `seb-canvaslti-dev`
-- Prod Firestore DB: `seb-canvaslti-prod`
+- Default dev Cloud SQL instance: `canvas-seb-dev`
+- Default prod Cloud SQL instance: `canvas-seb-prod`
+- Default PostgreSQL database: `canvas_seb`
 
 Canvas points at the Cloud Run service URLs. Changing service URLs is a Canvas integration change, not an internal refactor.
 
 ## Build and CI
 
-Cloud Build should behave as the deployment CI gate. The Dockerfile owns the install, typecheck, lint, format check, coverage tests, build, production prune, and runtime assembly. Cloud Build should not duplicate those npm steps outside Docker.
+Cloud Build should behave as the deployment CI gate. The Dockerfile owns install, typecheck, lint, format check, coverage tests, build, production prune, and runtime assembly. A separate Cloud Build step runs real PostgreSQL migration/concurrency tests. Deploy the migration job and wait for it before deploying the service.
 
 The Cloud Build configs pull the previous Artifact Registry image and pass `--cache-from` to Docker. This keeps the deterministic Docker build while allowing dependency and build layers to be reused when possible.
 
@@ -94,7 +96,7 @@ Reasons:
 - `npm ci` gives deterministic frozen installs from `package-lock.json`.
 - Cloud Build and Docker stay simple.
 
-Do not migrate to pnpm, Bun, or Turborepo only for novelty. Revisit pnpm workspaces or Turborepo if the repo splits into multiple packages, shared libraries, or multiple deployables. Revisit Bun only after validating NestJS, Firestore, jose, Playwright, and Cloud Run behavior under Bun in a separate branch.
+Do not migrate to pnpm, Bun, or Turborepo only for novelty. Revisit pnpm workspaces or Turborepo if the repo splits into multiple packages, shared libraries, or multiple deployables. Revisit Bun only after validating NestJS, PostgreSQL, jose, Playwright, and Cloud Run behavior under Bun in a separate branch.
 
 ## Environment Management
 
@@ -115,8 +117,13 @@ Important variables:
 - `CANVAS_API_CLIENT_ID`
 - `CANVAS_API_CLIENT_SECRET`
 - `CANVAS_REDIRECT_URI`
-- `GCP_PROJECT_ID`
-- `FIRESTORE_DATABASE_ID`
+- `DATABASE_HOST`
+- `DATABASE_PORT`
+- `DATABASE_NAME`
+- `DATABASE_USER`
+- `DATABASE_PASSWORD` or `DATABASE_PASSWORD_FILE`
+- `DATABASE_SSL_MODE`
+- `DATABASE_POOL_MAX`
 - `ADMIN_PASSWORD` or `SESSION_SECRET`
 - `STATE_ENCRYPTION_KEY`
 
@@ -139,7 +146,7 @@ Important variables:
   - `GET /seb/config/:courseId/:contentId.seb`
 - Config Key proof and one-time access-code flow:
   - `POST /api/seb/access-proof/:courseId/:quizId`
-  - `GET /api/seb/access-code/:courseId/:quizId`
+  - `POST /api/seb/access-code/:courseId/:quizId`
 - Detector script compatibility paths:
   - `GET /js/canvas-seb-detector.js`
   - `GET /api/seb/canvas-detector.js`
@@ -157,7 +164,7 @@ src/
     assets/            Canvas detector script
     config/            environment config
     controllers/       HTTP controllers
-    data/              Firestore and in-memory repositories
+    data/              PostgreSQL migrations/repositories and in-memory test repositories
     http/              app shell, CORS, URL, and API error helpers
     services/          Canvas, LTI, quiz, content, SEB behavior
     types/             Express/session type augmentation

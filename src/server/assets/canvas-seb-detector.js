@@ -3576,21 +3576,13 @@
     function debugSafeUrl(value) {
         try {
             const url = new URL(value);
-            const sensitiveParams = [
-                'access_token',
-                'canvas_url',
-                'code',
-                'id_token',
-                'login_hint',
-                'state',
-                'user_id'
-            ];
-            sensitiveParams.forEach((param) => {
-                if (url.searchParams.has(param)) {
-                    url.searchParams.set(param, '[redacted]');
-                }
-            });
+            url.search = '';
             url.hash = '';
+            if (url.pathname.startsWith('/seb/exit/session/')) {
+                const segments = url.pathname.split('/');
+                segments[segments.length - 1] = '[redacted]';
+                url.pathname = segments.join('/');
+            }
             return url.toString();
         } catch (error) {
             return '[unparseable-url]';

@@ -20,6 +20,8 @@ async function bootstrap(): Promise<void> {
   const repositories = app.get(RepositoryProvider);
   const expressApp = app.getHttpAdapter().getInstance() as express.Express;
 
+  app.enableShutdownHooks(["SIGTERM", "SIGINT"]);
+
   expressApp.disable("x-powered-by");
   expressApp.set("trust proxy", 1);
   expressApp.use((_request, response, next) => {
@@ -60,7 +62,13 @@ async function bootstrap(): Promise<void> {
     callback(null, corsOptionsForRequest(request, config))
   );
 
-  await app.listen(config.port, process.env.HOST || "0.0.0.0");
+  try {
+    await repositories.assertReady();
+    await app.listen(config.port, process.env.HOST || "0.0.0.0");
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 }
 
 function shouldUseSecureCookies(config: AppConfig): boolean {

@@ -2,25 +2,47 @@ substitutions:
   _LOCATION: us-central1
   _REPOSITORY: canvas-seb-repo
   _IMAGE: canvas-seb-dev
-  _TAG: latest
+  _CACHE_TAG: cache
+  _CLOUD_SQL_INSTANCE: canvas-seb-dev
+  _DATABASE_NAME: canvas_seb
+  _DATABASE_USER: canvas_seb
+  _DATABASE_POOL_MAX: "5"
+  _CANVAS_DOMAIN_SECRET_VERSION: "1"
+  _LTI_CLIENT_ID_SECRET_VERSION: "3"
+  _LTI_DEPLOYMENT_ID_SECRET_VERSION: "1"
+  _TOOL_URL_SECRET_VERSION: "13"
+  _LTI_PRIVATE_KEY_SECRET_VERSION: "3"
+  _SESSION_SECRET_VERSION: "1"
+  _STATE_ENCRYPTION_KEY_SECRET_VERSION: "1"
+  _CANVAS_API_CLIENT_ID_SECRET_VERSION: "1"
+  _CANVAS_API_CLIENT_SECRET_VERSION: "1"
+  _SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION: "1"
+  _DATABASE_PASSWORD_SECRET_VERSION: "1"
 
 steps:
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "pull"
-      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
     allowFailure: true
 
   - name: "gcr.io/cloud-builders/docker"
+    env:
+      - "DOCKER_BUILDKIT=1"
     args:
       - "build"
+      - "--build-arg"
+      - "BUILDKIT_INLINE_CACHE=1"
       - "-t"
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
       - "-t"
-      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
       - "--cache-from"
-      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
       - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"
 
   - name: "gcr.io/cloud-builders/docker"
     entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
@@ -31,20 +53,65 @@ steps:
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
 
-  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
       - "/workspace/canvas-seb-dev.digest"
+      - "job"
+      - "canvas-seb-dev-migrate"
+      - "--region=${_LOCATION}"
+      - "--command=/nodejs/bin/node"
+      - "--args=dist/server/server/data/migrate.js"
+      - "--max-retries=0"
+      - "--task-timeout=10m"
+      - "--set-cloudsql-instances=$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE}"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
+      - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:${_CANVAS_DOMAIN_SECRET_VERSION},LTI_CLIENT_ID=dev_lti_client_id:${_LTI_CLIENT_ID_SECRET_VERSION},LTI_DEPLOYMENT_ID=dev_lti_deployment_id:${_LTI_DEPLOYMENT_ID_SECRET_VERSION},TOOL_URL=dev_tool_url:${_TOOL_URL_SECRET_VERSION},LTI_PRIVATE_KEY=dev_lti_private_key:${_LTI_PRIVATE_KEY_SECRET_VERSION},SESSION_SECRET=dev_session_secret:${_SESSION_SECRET_VERSION},STATE_ENCRYPTION_KEY=dev_state_encryption_key:${_STATE_ENCRYPTION_KEY_SECRET_VERSION},CANVAS_API_CLIENT_ID=dev_api_client_id:${_CANVAS_API_CLIENT_ID_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=dev_api_client_secret:${_CANVAS_API_CLIENT_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:${_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION},DATABASE_PASSWORD=dev_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
+      - "--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com"
+
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "jobs"
+      - "execute"
+      - "canvas-seb-dev-migrate"
+      - "--region=${_LOCATION}"
+      - "--wait"
+
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+    entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
+    args:
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
+      - "/workspace/canvas-seb-dev.digest"
+      - "job"
+      - "canvas-seb-dev-cleanup"
+      - "--region=${_LOCATION}"
+      - "--command=/nodejs/bin/node"
+      - "--args=dist/server/server/data/cleanup.js,--drain"
+      - "--max-retries=1"
+      - "--task-timeout=10m"
+      - "--set-cloudsql-instances=$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE}"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
+      - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:${_CANVAS_DOMAIN_SECRET_VERSION},LTI_CLIENT_ID=dev_lti_client_id:${_LTI_CLIENT_ID_SECRET_VERSION},LTI_DEPLOYMENT_ID=dev_lti_deployment_id:${_LTI_DEPLOYMENT_ID_SECRET_VERSION},TOOL_URL=dev_tool_url:${_TOOL_URL_SECRET_VERSION},LTI_PRIVATE_KEY=dev_lti_private_key:${_LTI_PRIVATE_KEY_SECRET_VERSION},SESSION_SECRET=dev_session_secret:${_SESSION_SECRET_VERSION},STATE_ENCRYPTION_KEY=dev_state_encryption_key:${_STATE_ENCRYPTION_KEY_SECRET_VERSION},CANVAS_API_CLIENT_ID=dev_api_client_id:${_CANVAS_API_CLIENT_ID_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=dev_api_client_secret:${_CANVAS_API_CLIENT_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:${_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION},DATABASE_PASSWORD=dev_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
+      - "--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com"
+
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+    entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
+    args:
+      - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
+      - "/workspace/canvas-seb-dev.digest"
+      - "service"
       - "canvas-seb-dev"
       - "--region=${_LOCATION}"
       - "--execution-environment=gen2"
       - "--platform=managed"
-      - "--allow-unauthenticated"
-      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=true,GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=seb-canvaslti-dev"
-      - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:latest,LTI_CLIENT_ID=dev_lti_client_id:latest,LTI_DEPLOYMENT_ID=dev_lti_deployment_id:latest,TOOL_URL=dev_tool_url:latest,LTI_PRIVATE_KEY=dev_lti_private_key:latest,SESSION_SECRET=dev_session_secret:latest,STATE_ENCRYPTION_KEY=dev_state_encryption_key:latest,CANVAS_API_CLIENT_ID=dev_api_client_id:latest,CANVAS_API_CLIENT_SECRET=dev_api_client_secret:latest,SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:latest"
+      - "--add-cloudsql-instances=$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE}"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=dev,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
+      - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:${_CANVAS_DOMAIN_SECRET_VERSION},LTI_CLIENT_ID=dev_lti_client_id:${_LTI_CLIENT_ID_SECRET_VERSION},LTI_DEPLOYMENT_ID=dev_lti_deployment_id:${_LTI_DEPLOYMENT_ID_SECRET_VERSION},TOOL_URL=dev_tool_url:${_TOOL_URL_SECRET_VERSION},LTI_PRIVATE_KEY=dev_lti_private_key:${_LTI_PRIVATE_KEY_SECRET_VERSION},SESSION_SECRET=dev_session_secret:${_SESSION_SECRET_VERSION},STATE_ENCRYPTION_KEY=dev_state_encryption_key:${_STATE_ENCRYPTION_KEY_SECRET_VERSION},CANVAS_API_CLIENT_ID=dev_api_client_id:${_CANVAS_API_CLIENT_ID_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=dev_api_client_secret:${_CANVAS_API_CLIENT_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:${_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION},DATABASE_PASSWORD=dev_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--memory=2Gi"
       - "--cpu=2"
       - "--min-instances=0"
@@ -54,4 +121,4 @@ steps:
 
 images:
   - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
-  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_TAG}"
+  - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"

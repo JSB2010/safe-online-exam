@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import session from "express-session";
-import type { CollectionStore, SessionRecord } from "./repositories.js";
-import { isExpired } from "./repositories.js";
+import { isExpired } from "./document-values.js";
+import type { CollectionStore, SessionRecord } from "./repository-contracts.js";
 
 export class RepositorySessionStore extends session.Store {
   constructor(

@@ -8,7 +8,7 @@ Do not disable either control to work around a rollout problem.
 
 | Component                                   | Holds                                                            | Must not hold                                                           |
 | ------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Cloud Run service                           | Public X.509 certificate or permitted local public-key fallback  | Private key, `.p12`, client identity passphrase.                        |
+| Application runtime                         | Public X.509 certificate or permitted local public-key fallback  | Private key, `.p12`, client identity passphrase.                        |
 | Secret manager runtime secret               | Public certificate PEM                                           | Private key or `.p12`.                                                  |
 | Device-management system / restricted vault | Private identity and its protection material                     | Broad user, instructor, or runtime access.                              |
 | Approved SEB client                         | Non-extractable, SEB-restricted private identity where supported | An exportable identity available to a student account or unrelated app. |
@@ -44,7 +44,7 @@ Immediately move the private PEM, `.p12`, and passphrase file into approved rest
 
 ## Configure The Service
 
-Store the public certificate in Secret Manager and inject it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`; alternatively, provide a protected runtime file through `SEB_CONFIG_ENCRYPTION_CERT_PATH` where the deployment model supports it.
+On Google Cloud, store the public certificate in Secret Manager and inject it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`. On Docker/VPS or another orchestrator, provide a protected runtime file through `SEB_CONFIG_ENCRYPTION_CERT_PATH`. [Deployment](deployment.md) shows both procedures.
 
 The service validates the X.509 certificate when it starts and when it creates a download. In a hardened runtime:
 
@@ -81,7 +81,7 @@ An unmanaged or student-administered device cannot provide the same non-extracta
 
 Before a rollout window:
 
-1. Confirm the active Cloud Run revision has encryption enabled and the expected public-certificate secret version.
+1. Confirm the active application revision has encryption enabled and the expected public-certificate secret version or mounted file.
 2. Request the public certificate endpoint and record its `x-seb-public-key-hash`.
 3. Confirm the client profile reports installed on every intended test device.
 4. On an approved test device, run the application’s setup check and open the encrypted setup configuration.

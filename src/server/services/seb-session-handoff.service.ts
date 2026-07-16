@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { isExpired, RepositoryProvider, type TransientStateRecord } from "../data/repositories.js";
+import { isExpired } from "../data/document-values.js";
+import { RepositoryProvider } from "../data/repositories.js";
+import type { TransientStateRecord } from "../data/repository-contracts.js";
 import { SebConfigKeyService } from "./seb-config-key.service.js";
 
 const HANDOFF_CONFIG_TTL_SECONDS = 12 * 60 * 60;

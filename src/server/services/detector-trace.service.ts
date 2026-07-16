@@ -16,6 +16,11 @@ interface SafeTraceEvent {
 }
 
 const MAX_DETAILS_LENGTH = 6_000;
+const MAX_DETAIL_STRING_LENGTH = 400;
+const SENSITIVE_DETAIL_KEY =
+  /(?:access.?code|authorization|config.?key|cookie|encryption.?key|grant|id.?token|jwt|password|private.?key|proof(?:.?token)?|secret|token|(?:^|[_-])state(?:$|[_-]))/iu;
+const URL_IN_TEXT = /https?:\/\/[^\s"'<>]+/giu;
+const JWT_IN_TEXT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu;
 
 @Injectable()
 export class DetectorTraceService {
@@ -69,7 +74,7 @@ function toSafeEvent(value: unknown, includeDetails: boolean): SafeTraceEvent | 
 
 function safeDetails(value: unknown): string {
   try {
-    const serialized = JSON.stringify(value);
+    const serialized = JSON.stringify(sanitizeDetailValue(value));
     if (typeof serialized !== "string") {
       return "[unserializable]";
     }
@@ -78,6 +83,55 @@ function safeDetails(value: unknown): string {
       : serialized;
   } catch {
     return "[unserializable]";
+  }
+}
+
+function sanitizeDetailValue(value: unknown, key = "", depth = 0): unknown {
+  if (SENSITIVE_DETAIL_KEY.test(key)) {
+    return "[redacted]";
+  }
+  if (value === null || value === undefined || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return sanitizeDetailString(value);
+  }
+  if (depth >= 4) {
+    return "[max-depth]";
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => sanitizeDetailValue(item, key, depth + 1));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 30)
+        .map(([entryKey, entryValue]) => [entryKey, sanitizeDetailValue(entryValue, entryKey, depth + 1)])
+    );
+  }
+  return sanitizeDetailString(String(value));
+}
+
+function sanitizeDetailString(value: string): string {
+  const redacted = value.replace(JWT_IN_TEXT, "[redacted-jwt]").replace(URL_IN_TEXT, sanitizeDiagnosticUrl);
+  return redacted.length > MAX_DETAIL_STRING_LENGTH
+    ? redacted.slice(0, MAX_DETAIL_STRING_LENGTH) + "...[truncated]"
+    : redacted;
+}
+
+function sanitizeDiagnosticUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.search = "";
+    url.hash = "";
+    if (url.pathname.startsWith("/seb/exit/session/")) {
+      const segments = url.pathname.split("/");
+      segments[segments.length - 1] = "[redacted]";
+      url.pathname = segments.join("/");
+    }
+    return url.toString();
+  } catch {
+    return "[unparseable-url]";
   }
 }
 

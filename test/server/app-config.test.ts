@@ -9,11 +9,17 @@ import {
 } from "../../src/server/config/app-config.js";
 
 describe("AppConfig", () => {
-  it("honors Spring profile compatibility and Firestore database defaults", () => {
+  it("honors Spring profile compatibility and PostgreSQL defaults", () => {
     expect(resolveProfile({ SPRING_PROFILES_ACTIVE: "dev" })).toBe("dev");
     expect(resolveProfile({ SPRING_PROFILES_ACTIVE: "prod" })).toBe("prod");
-    expect(loadConfigFromEnv({ SPRING_PROFILES_ACTIVE: "prod" }).firestoreDatabaseId).toBe("seb-canvaslti-prod");
-    expect(loadConfigFromEnv({ SPRING_PROFILES_ACTIVE: "dev" }).firestoreDatabaseId).toBe("seb-canvaslti-dev");
+    expect(loadConfigFromEnv({ SPRING_PROFILES_ACTIVE: "prod" }).database).toMatchObject({
+      host: "127.0.0.1",
+      port: 5432,
+      name: "canvas_seb",
+      user: "canvas_seb",
+      sslMode: "disable",
+      poolMax: 5
+    });
   });
 
   it("uses a school-neutral local Canvas placeholder outside Cloud Run", () => {
@@ -39,8 +45,10 @@ describe("AppConfig", () => {
         "STATE_ENCRYPTION_KEY is required in production",
         "CANVAS_API_CLIENT_ID is required in production",
         "CANVAS_API_CLIENT_SECRET is required in production",
-        "GCP_PROJECT_ID is required in production",
-        "FIRESTORE_DATABASE_ID is required in production"
+        "DATABASE_HOST is required in production",
+        "DATABASE_NAME is required in production",
+        "DATABASE_USER is required in production",
+        "DATABASE_PASSWORD is required in production"
       ])
     );
 
@@ -76,11 +84,11 @@ describe("AppConfig", () => {
     );
   });
 
-  it("allows detector diagnostics on dev Cloud Run but rejects them in production profiles", () => {
+  it("activates hardened validation for production and every Cloud Run revision", () => {
     const prodEnv = productionRuntimeEnv({ APP_DETECTOR_DIAGNOSTICS_ENABLED: "true" });
     expect(loadConfigFromEnv(prodEnv).security.detectorDiagnosticsEnabled).toBe(true);
     expect(validateRuntimeConfig(loadConfigFromEnv(prodEnv), prodEnv)).toEqual(
-      expect.arrayContaining(["APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in production deployments"])
+      expect.arrayContaining(["APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in production"])
     );
 
     const devCloudRunEnv = productionRuntimeEnv({
@@ -90,7 +98,9 @@ describe("AppConfig", () => {
     });
     const devConfig = loadConfigFromEnv(devCloudRunEnv);
     expect(requiresHardenedRuntimeValidation(devConfig, devCloudRunEnv)).toBe(true);
-    expect(validateRuntimeConfig(devConfig, devCloudRunEnv)).toEqual([]);
+    expect(validateRuntimeConfig(devConfig, devCloudRunEnv)).toEqual(
+      expect.arrayContaining(["APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in Cloud Run"])
+    );
   });
 
   it("preserves a fully configured non-Cloud production runtime", () => {
@@ -217,32 +227,50 @@ describe("AppConfig", () => {
     });
   });
 
-  it("uses the reset Firestore collection names", () => {
-    expect(loadConfigFromEnv({}).firestoreCollections).toEqual({
-      assessments: "assessments",
-      courses: "courses",
-      oauthTokens: "canvasOAuthTokens",
-      sessions: "sessions",
-      transientStates: "transientStates",
-      operationLocks: "operationLocks"
-    });
+  it("parses bounded PostgreSQL connection settings", () => {
     expect(
       loadConfigFromEnv({
-        FIRESTORE_ASSESSMENTS_COLLECTION: "testAssessments",
-        FIRESTORE_COURSES_COLLECTION: "testCourses",
-        FIRESTORE_OAUTH_TOKENS_COLLECTION: "testTokens",
-        FIRESTORE_SESSIONS_COLLECTION: "testSessions",
-        FIRESTORE_TRANSIENT_STATES_COLLECTION: "testTransient",
-        FIRESTORE_OPERATION_LOCKS_COLLECTION: "testLocks"
-      }).firestoreCollections
+        DATABASE_HOST: "/cloudsql/project:region:instance",
+        DATABASE_PORT: "5433",
+        DATABASE_NAME: "canvas_prod",
+        DATABASE_USER: "canvas_runtime",
+        DATABASE_PASSWORD: "database-secret",
+        DATABASE_SSL_MODE: "require",
+        DATABASE_POOL_MAX: "7",
+        DATABASE_CONNECTION_TIMEOUT_MS: "12000",
+        DATABASE_STATEMENT_TIMEOUT_MS: "45000"
+      }).database
     ).toEqual({
-      assessments: "testAssessments",
-      courses: "testCourses",
-      oauthTokens: "testTokens",
-      sessions: "testSessions",
-      transientStates: "testTransient",
-      operationLocks: "testLocks"
+      host: "/cloudsql/project:region:instance",
+      port: 5433,
+      name: "canvas_prod",
+      user: "canvas_runtime",
+      password: "database-secret",
+      sslMode: "require",
+      poolMax: 7,
+      connectionTimeoutMs: 12000,
+      statementTimeoutMs: 45000
     });
+  });
+
+  it("rejects malformed and out-of-range PostgreSQL connection settings", () => {
+    const env = productionRuntimeEnv({
+      DATABASE_PORT: "not-a-port",
+      DATABASE_POOL_MAX: "101",
+      DATABASE_CONNECTION_TIMEOUT_MS: "99",
+      DATABASE_STATEMENT_TIMEOUT_MS: "600001",
+      DATABASE_SSL_MODE: "prefer"
+    });
+
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual(
+      expect.arrayContaining([
+        "DATABASE_PORT must be an integer between 1 and 65535 in production",
+        "DATABASE_POOL_MAX must be an integer between 1 and 100 in production",
+        "DATABASE_CONNECTION_TIMEOUT_MS must be an integer between 100 and 120000 in production",
+        "DATABASE_STATEMENT_TIMEOUT_MS must be an integer between 100 and 600000 in production",
+        "DATABASE_SSL_MODE must be disable, require, verify-ca, or verify-full in production"
+      ])
+    );
   });
 
   it("sanitizes tool and Canvas URLs for Cloud Run", () => {
@@ -271,8 +299,9 @@ describe("AppConfig", () => {
     ).toBe("-----BEGIN CERTIFICATE-----\n...");
   });
 
-  it("requires school-specific runtime config in Cloud Run", () => {
-    expect(validateRuntimeConfig(loadConfigFromEnv({ K_SERVICE: "canvas-seb" }), { K_SERVICE: "canvas-seb" })).toEqual(
+  it("requires school-specific runtime config in production Cloud Run", () => {
+    const emptyCloudRunEnv = { APP_ENV: "prod", K_SERVICE: "canvas-seb" };
+    expect(validateRuntimeConfig(loadConfigFromEnv(emptyCloudRunEnv), emptyCloudRunEnv)).toEqual(
       expect.arrayContaining([
         "TOOL_URL is required in Cloud Run",
         "CANVAS_DOMAIN is required in Cloud Run",
@@ -283,12 +312,15 @@ describe("AppConfig", () => {
         "STATE_ENCRYPTION_KEY is required in Cloud Run",
         "CANVAS_API_CLIENT_ID is required in Cloud Run",
         "CANVAS_API_CLIENT_SECRET is required in Cloud Run",
-        "GCP_PROJECT_ID is required in Cloud Run",
-        "FIRESTORE_DATABASE_ID is required in Cloud Run"
+        "DATABASE_HOST is required in Cloud Run",
+        "DATABASE_NAME is required in Cloud Run",
+        "DATABASE_USER is required in Cloud Run",
+        "DATABASE_PASSWORD is required in Cloud Run"
       ])
     );
 
     const env = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://tool.example.edu",
       CANVAS_DOMAIN: "https://school.instructure.com",
@@ -299,8 +331,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: "k".repeat(48),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_CERT_PEM: "test-certificate"
     };
 
@@ -309,6 +340,7 @@ describe("AppConfig", () => {
 
   it("rejects weak runtime secrets and non-origin production URLs", () => {
     const env = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://user:password@tool.example.edu/path",
       CANVAS_DOMAIN: "http://school.instructure.com/courses/1",
@@ -319,8 +351,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: "also-short",
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_CERT_PEM: "test-certificate"
     };
 
@@ -336,6 +367,7 @@ describe("AppConfig", () => {
 
   it("rejects Canvas API bases that could receive bearer tokens on another origin", () => {
     const baseEnv = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://tool.example.edu",
       CANVAS_DOMAIN: "https://school.instructure.com",
@@ -346,8 +378,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: "k".repeat(48),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_CERT_PEM: "test-certificate"
     };
 
@@ -371,6 +402,7 @@ describe("AppConfig", () => {
   it("requires independent session-signing and state-encryption keys", () => {
     const sharedSecret = "x".repeat(48);
     const env = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://tool.example.edu",
       CANVAS_DOMAIN: "https://school.instructure.com",
@@ -381,8 +413,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: sharedSecret,
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_CERT_PEM: "test-certificate"
     };
 
@@ -393,6 +424,7 @@ describe("AppConfig", () => {
 
   it("pins the Canvas OAuth callback to the configured tool origin", () => {
     const baseEnv = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://tool.example.edu",
       CANVAS_DOMAIN: "https://school.instructure.com",
@@ -403,8 +435,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: "k".repeat(48),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_CERT_PEM: "test-certificate"
     };
 
@@ -427,6 +458,7 @@ describe("AppConfig", () => {
 
   it("fails closed on unencrypted SEB configs and unsafe required-domain wildcards in Cloud Run", () => {
     const env = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://tool.example.edu",
       CANVAS_DOMAIN: "https://school.instructure.com",
@@ -437,8 +469,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: "k".repeat(48),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_ENABLED: "false",
       SEB_REQUIRED_DOMAINS: "*.example.edu,accounts.google.com"
     };
@@ -454,6 +485,7 @@ describe("AppConfig", () => {
 
   it("does not accept a bare public key in place of a validity-checked Cloud Run certificate", () => {
     const env = {
+      APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
       TOOL_URL: "https://tool.example.edu",
       CANVAS_DOMAIN: "https://school.instructure.com",
@@ -464,8 +496,7 @@ describe("AppConfig", () => {
       STATE_ENCRYPTION_KEY: "k".repeat(48),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
-      GCP_PROJECT_ID: "project-id",
-      FIRESTORE_DATABASE_ID: "school-firestore",
+      ...databaseRuntimeEnv(),
       SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM: "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
     };
 
@@ -487,10 +518,23 @@ function productionRuntimeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Process
     STATE_ENCRYPTION_KEY: "k".repeat(48),
     CANVAS_API_CLIENT_ID: "api-client",
     CANVAS_API_CLIENT_SECRET: "api-secret",
-    GCP_PROJECT_ID: "project-id",
-    FIRESTORE_DATABASE_ID: "school-firestore",
+    ...databaseRuntimeEnv(),
     SEB_CONFIG_ENCRYPTION_CERT_PEM: "test-certificate",
     ...overrides
+  };
+}
+
+function databaseRuntimeEnv(): NodeJS.ProcessEnv {
+  return {
+    DATABASE_HOST: "127.0.0.1",
+    DATABASE_PORT: "5432",
+    DATABASE_NAME: "canvas_seb",
+    DATABASE_USER: "canvas_runtime",
+    DATABASE_PASSWORD: "database-secret",
+    DATABASE_SSL_MODE: "disable",
+    DATABASE_POOL_MAX: "5",
+    DATABASE_CONNECTION_TIMEOUT_MS: "10000",
+    DATABASE_STATEMENT_TIMEOUT_MS: "30000"
   };
 }
 

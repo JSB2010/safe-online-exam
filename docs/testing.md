@@ -29,10 +29,20 @@ npm run verify
 Run the full local gate:
 
 ```bash
-npm run verify:e2e
+npm run verify
+npm run verify:postgres
+npm run test:e2e
 ```
 
-`npm run verify` runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. The Dockerfile uses the same gate during a Cloud Build image build.
+`npm run verify` runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. `npm run verify:postgres` starts PostgreSQL 17, applies migrations in isolated schemas, and runs repository atomicity/concurrency tests. The deploy pipeline runs both layers before promotion.
+
+Verify the production topology separately:
+
+```bash
+bash scripts/compose-smoke.sh
+```
+
+That smoke builds the exact runtime image, waits for the migration/app readiness gates, writes a safe row, restarts the app, and confirms the named PostgreSQL volume retained it.
 
 ## Test Coverage By Layer
 
@@ -41,7 +51,7 @@ npm run verify:e2e
 | Shared domain policy                   | `test/server/models.test.ts` and related tests              | Content IDs, roles, URL-rule/tool normalization, course defaults, and password-state behavior.                                                 |
 | Configuration and deployment artifacts | `app-config.test.ts`, `deployment-hardening-static.test.ts` | Runtime validation, public/private artifact handling, image-digest deployment, and documentation-backed deployment invariants.                 |
 | LTI and OAuth                          | LTI/OAuth controller and service tests                      | Signed-claim validation, browser binding, state replay prevention, role routing, OAuth state binding, and token ownership.                     |
-| Persistence and concurrency            | repository/session/assessment tests                         | Firestore-style atomic claims, TTL behavior, session storage, assessment update locks, and Canvas/Firestore consistency.                       |
+| Persistence and concurrency            | repository/session/assessment and PostgreSQL tests          | Atomic claims, one-time consumption, cleanup, session storage, distributed locks, and Canvas/database consistency.                             |
 | SEB configuration and proof            | `seb-*.test.ts`                                             | Plist generation, encryption, Config Key validation, configuration grants, proof redemption, handoff records, exit grants, and password rules. |
 | Detector                               | `canvas-seb-detector-script.test.ts`, static-asset tests    | Loading, Canvas route handling, access-code flow, approved tools, completion detection, exit behavior, and stable script paths.                |
 | Browser app shell                      | `test/e2e/app-shell.spec.ts`                                | Built server startup, public metadata routes, React routes, desktop/mobile rendering, and browser console errors.                              |
@@ -58,7 +68,23 @@ Do not rely on a high coverage percentage alone. The most sensitive assurance is
 
 It runs Chromium in desktop and mobile projects. It confirms public health/JWKS/LTI metadata, detector availability on both supported URLs, selected React app-shell behavior, and error-free page rendering. It does not contact Canvas or start a native SEB client.
 
-If browser binaries are not installed, install Playwright’s required browser through the repository’s normal development setup before retrying. Keep the e2e command separate from deploy builds unless the CI environment is explicitly configured for browser execution.
+If Chromium is not installed, add the Playwright-managed browser before retrying:
+
+```bash
+npx playwright install chromium
+```
+
+On a disposable Linux CI host that also needs system packages, use `npx playwright install --with-deps chromium`. Keep the e2e command separate from deploy builds unless the CI environment is explicitly configured for browser execution.
+
+## Fresh Development Database Test
+
+When a feature must be tested from a completely empty Google Cloud development database, first create an on-demand Cloud SQL backup if the current state may be needed, then run the guarded reset command:
+
+```bash
+npm run db:reset:gcloud:dev -- --project PROJECT_ID
+```
+
+Read and confirm the displayed project, instance, and database before accepting the prompt. The command is dev-only and permanently destroys all records in that database before recreating it and applying migrations. Never automate it, use it in CI, or run it against production. After reset, verify `/ready`, complete Canvas OAuth again, refresh assessments, and exercise the clean-install workflow under test.
 
 ## Local Production-Build Smoke Run
 
@@ -83,7 +109,7 @@ curl -fsS http://127.0.0.1:8080/lti/config
 curl -fsS http://127.0.0.1:8080/js/canvas-seb-detector.js | head
 ```
 
-This mode cannot validate Canvas OAuth, Firestore, certificate decryption, or SEB runtime behavior.
+This mode cannot validate Canvas OAuth, PostgreSQL, certificate decryption, or SEB runtime behavior.
 
 ## Canvas And SEB Acceptance Sequence
 
@@ -127,14 +153,14 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 
 Before merge or release, ensure all applicable items are true:
 
-- `npm run verify` passes; run `npm run test:e2e` when client/app-shell behavior is affected.
+- `npm run verify`, `npm run verify:postgres`, and the relevant Compose/Playwright checks pass.
 - Public LTI, JWKS, health, detector, and Canvas OAuth callback URLs are unchanged or Canvas configuration has been updated intentionally.
 - A settings change has tests showing stale configuration/proof behavior is rejected.
 - Instructor and learner roles cannot reach each other’s privileged endpoints or UI paths.
 - Classic Quiz and New Quiz are both exercised when changing common assessment, configuration, or detector code.
 - The current certificate, configuration encryption, Config Key proof, student session handoff, start password, exit password, and URL-tool policy work together on supported client devices.
 - The browser console is clean on desktop and mobile app-shell routes.
-- The release uses the intended immutable image digest, runtime service account, Firestore database, secret versions, and public service URL.
+- The release uses the intended immutable image digest, runtime service account, PostgreSQL database, numbered secret versions, and public service URL.
 
 ## Test Data And Safety
 

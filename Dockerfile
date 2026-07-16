@@ -9,6 +9,15 @@ FROM base AS deps
 COPY package*.json .npmrc ./
 RUN npm ci
 
+FROM deps AS postgres-tests
+
+COPY . .
+CMD ["npm", "run", "test:postgres"]
+
+FROM deps AS production-deps
+
+RUN npm prune --omit=dev
+
 FROM deps AS verify
 
 COPY . .
@@ -18,11 +27,9 @@ RUN npm run format:check
 RUN npm run test:coverage
 RUN npm run build
 
-FROM verify AS production-deps
-
-RUN npm prune --omit=dev
-
 FROM gcr.io/distroless/nodejs24-debian13:nonroot AS runtime
+
+STOPSIGNAL SIGTERM
 
 WORKDIR /app
 
@@ -31,7 +38,7 @@ ENV PORT=8080
 
 COPY --from=production-deps /app/package*.json ./
 COPY --from=production-deps /app/node_modules ./node_modules
-COPY --from=production-deps /app/dist ./dist
+COPY --from=verify /app/dist ./dist
 
 EXPOSE 8080
 

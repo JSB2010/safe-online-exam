@@ -1,7 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { sebPasswordPolicyViolation } from "../services/seb-password-policy.js";
+import { resolveSecretValue } from "./secret-value.js";
 
 export type AppProfile = "dev" | "prod" | "test";
+export type DatabaseSslMode = "disable" | "require" | "verify-ca" | "verify-full";
 
 const LOCAL_CANVAS_DOMAIN = "https://canvas.example.test";
 const DEFAULT_SEB_REQUIRED_DOMAINS = "";
@@ -9,15 +11,16 @@ const DEFAULT_SEB_REQUIRED_DOMAINS = "";
 export interface AppConfigSnapshot {
   profile: AppProfile;
   port: number;
-  projectId?: string;
-  firestoreDatabaseId: string;
-  firestoreCollections: {
-    assessments: string;
-    courses: string;
-    oauthTokens: string;
-    sessions: string;
-    transientStates: string;
-    operationLocks: string;
+  database: {
+    host: string;
+    port: number;
+    name: string;
+    user: string;
+    password?: string;
+    sslMode: DatabaseSslMode;
+    poolMax: number;
+    connectionTimeoutMs: number;
+    statementTimeoutMs: number;
   };
   lti: {
     issuer: string;
@@ -119,26 +122,22 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
     firstPresent(env.CANVAS_DOMAIN, env.CANVAS_BASE_URL, env.APP_CANVAS_BASE_URL, LOCAL_CANVAS_DOMAIN)!
   );
   const canvasApiBaseUrl = firstPresent(env.CANVAS_API_BASE_URL, `${canvasDomain}/api/v1`)!;
-  const projectId = firstPresent(env.GCP_PROJECT_ID, env.GOOGLE_CLOUD_PROJECT);
-  const firestoreDatabaseId = firstPresent(
-    env.FIRESTORE_DATABASE_ID,
-    profile === "prod" ? "seb-canvaslti-prod" : "seb-canvaslti-dev"
-  )!;
   const debugEnabled = parseBoolean(firstPresent(env.APP_DEBUG_ENABLED, env.DEBUG_ENABLED), false);
   const detectorDiagnosticsEnabled = parseBoolean(firstPresent(env.APP_DETECTOR_DIAGNOSTICS_ENABLED), false);
 
   return {
     profile,
     port: parseInteger(env.PORT, 8080),
-    projectId,
-    firestoreDatabaseId,
-    firestoreCollections: {
-      assessments: firstPresent(env.FIRESTORE_ASSESSMENTS_COLLECTION, "assessments")!,
-      courses: firstPresent(env.FIRESTORE_COURSES_COLLECTION, "courses")!,
-      oauthTokens: firstPresent(env.FIRESTORE_OAUTH_TOKENS_COLLECTION, "canvasOAuthTokens")!,
-      sessions: firstPresent(env.FIRESTORE_SESSIONS_COLLECTION, "sessions")!,
-      transientStates: firstPresent(env.FIRESTORE_TRANSIENT_STATES_COLLECTION, "transientStates")!,
-      operationLocks: firstPresent(env.FIRESTORE_OPERATION_LOCKS_COLLECTION, "operationLocks")!
+    database: {
+      host: firstPresent(env.DATABASE_HOST, "127.0.0.1")!,
+      port: parseInteger(env.DATABASE_PORT, 5432),
+      name: firstPresent(env.DATABASE_NAME, "canvas_seb")!,
+      user: firstPresent(env.DATABASE_USER, "canvas_seb")!,
+      password: resolveSecretValue("DATABASE_PASSWORD", env),
+      sslMode: parseDatabaseSslMode(env.DATABASE_SSL_MODE),
+      poolMax: parseInteger(env.DATABASE_POOL_MAX, 5),
+      connectionTimeoutMs: parseInteger(env.DATABASE_CONNECTION_TIMEOUT_MS, 10_000),
+      statementTimeoutMs: parseInteger(env.DATABASE_STATEMENT_TIMEOUT_MS, 30_000)
     },
     lti: {
       issuer: firstPresent(env.LTI_ISSUER, "https://canvas.instructure.com")!,
@@ -149,14 +148,18 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       toolUrl: sanitizeToolUrl(
         firstPresent(env.TOOL_URL, env.DEV_TOOL_URL, env.PROD_TOOL_URL, env.SERVICE_URL, env.APP_BASE_URL)
       ),
-      privateKey: firstPresent(env.LTI_PRIVATE_KEY, env.DEV_LTI_PRIVATE_KEY, env.PROD_LTI_PRIVATE_KEY)
+      privateKey: firstPresent(
+        resolveSecretValue("LTI_PRIVATE_KEY", env),
+        env.DEV_LTI_PRIVATE_KEY,
+        env.PROD_LTI_PRIVATE_KEY
+      )
     },
     canvas: {
       apiBaseUrl: canvasApiBaseUrl,
       domain: canvasDomain,
       oauthClientId: firstPresent(env.CANVAS_API_CLIENT_ID, env.DEV_API_CLIENT_ID, env.PROD_API_CLIENT_ID),
       oauthClientSecret: firstPresent(
-        env.CANVAS_API_CLIENT_SECRET,
+        resolveSecretValue("CANVAS_API_CLIENT_SECRET", env),
         env.DEV_API_CLIENT_SECRET,
         env.PROD_API_CLIENT_SECRET
       ),
@@ -165,17 +168,20 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
     security: {
       sessionSecret:
         firstPresent(
-          env.SESSION_SECRET,
+          resolveSecretValue("SESSION_SECRET", env),
           env.ADMIN_PASSWORD,
           profile === "prod" ? undefined : "seb-canvas-session-dev-secret"
         ) || "",
       stateEncryptionKey:
-        firstPresent(env.STATE_ENCRYPTION_KEY, profile === "prod" ? undefined : "seb-canvas-dev-state-key") || "",
+        firstPresent(
+          resolveSecretValue("STATE_ENCRYPTION_KEY", env),
+          profile === "prod" ? undefined : "seb-canvas-dev-state-key"
+        ) || "",
       debugEnabled,
       detectorDiagnosticsEnabled
     },
     seb: {
-      defaultQuitPassword: firstPresent(env.SEB_QUIT_PASSWORD, env.DEFAULT_SEB_QUIT_PASSWORD),
+      defaultQuitPassword: firstPresent(resolveSecretValue("SEB_QUIT_PASSWORD", env), env.DEFAULT_SEB_QUIT_PASSWORD),
       requiredDomains: splitList(firstPresent(env.SEB_REQUIRED_DOMAINS, DEFAULT_SEB_REQUIRED_DOMAINS)),
       configEncryption: {
         enabled: parseBoolean(firstPresent(env.SEB_CONFIG_ENCRYPTION_ENABLED), true),
@@ -220,13 +226,19 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
   requirePresent(
     errors,
     env,
-    ["LTI_PRIVATE_KEY", "DEV_LTI_PRIVATE_KEY", "PROD_LTI_PRIVATE_KEY"],
+    ["LTI_PRIVATE_KEY", "LTI_PRIVATE_KEY_FILE", "DEV_LTI_PRIVATE_KEY", "PROD_LTI_PRIVATE_KEY"],
     "LTI_PRIVATE_KEY",
     runtimeLabel
   );
   requirePresent(errors, env, ["LTI_DEPLOYMENT_ID", "DEPLOYMENT_ID"], "LTI_DEPLOYMENT_ID", runtimeLabel);
-  requirePresent(errors, env, ["SESSION_SECRET"], "SESSION_SECRET", runtimeLabel);
-  requirePresent(errors, env, ["STATE_ENCRYPTION_KEY"], "STATE_ENCRYPTION_KEY", runtimeLabel);
+  requirePresent(errors, env, ["SESSION_SECRET", "SESSION_SECRET_FILE"], "SESSION_SECRET", runtimeLabel);
+  requirePresent(
+    errors,
+    env,
+    ["STATE_ENCRYPTION_KEY", "STATE_ENCRYPTION_KEY_FILE"],
+    "STATE_ENCRYPTION_KEY",
+    runtimeLabel
+  );
   requirePresent(
     errors,
     env,
@@ -237,12 +249,32 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
   requirePresent(
     errors,
     env,
-    ["CANVAS_API_CLIENT_SECRET", "DEV_API_CLIENT_SECRET", "PROD_API_CLIENT_SECRET"],
+    ["CANVAS_API_CLIENT_SECRET", "CANVAS_API_CLIENT_SECRET_FILE", "DEV_API_CLIENT_SECRET", "PROD_API_CLIENT_SECRET"],
     "CANVAS_API_CLIENT_SECRET",
     runtimeLabel
   );
-  requirePresent(errors, env, ["GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT"], "GCP_PROJECT_ID", runtimeLabel);
-  requirePresent(errors, env, ["FIRESTORE_DATABASE_ID"], "FIRESTORE_DATABASE_ID", runtimeLabel);
+  requirePresent(errors, env, ["DATABASE_HOST"], "DATABASE_HOST", runtimeLabel);
+  requirePresent(errors, env, ["DATABASE_NAME"], "DATABASE_NAME", runtimeLabel);
+  requirePresent(errors, env, ["DATABASE_USER"], "DATABASE_USER", runtimeLabel);
+  requirePresent(errors, env, ["DATABASE_PASSWORD", "DATABASE_PASSWORD_FILE"], "DATABASE_PASSWORD", runtimeLabel);
+
+  if (!isIntegerSettingInRange(env.DATABASE_PORT, snapshot.database.port, 1, 65_535)) {
+    errors.push(`DATABASE_PORT must be an integer between 1 and 65535 in ${runtimeLabel}`);
+  }
+  if (!isIntegerSettingInRange(env.DATABASE_POOL_MAX, snapshot.database.poolMax, 1, 100)) {
+    errors.push(`DATABASE_POOL_MAX must be an integer between 1 and 100 in ${runtimeLabel}`);
+  }
+  if (
+    !isIntegerSettingInRange(env.DATABASE_CONNECTION_TIMEOUT_MS, snapshot.database.connectionTimeoutMs, 100, 120_000)
+  ) {
+    errors.push(`DATABASE_CONNECTION_TIMEOUT_MS must be an integer between 100 and 120000 in ${runtimeLabel}`);
+  }
+  if (!isIntegerSettingInRange(env.DATABASE_STATEMENT_TIMEOUT_MS, snapshot.database.statementTimeoutMs, 100, 600_000)) {
+    errors.push(`DATABASE_STATEMENT_TIMEOUT_MS must be an integer between 100 and 600000 in ${runtimeLabel}`);
+  }
+  if (env.DATABASE_SSL_MODE !== undefined && !isDatabaseSslMode(env.DATABASE_SSL_MODE)) {
+    errors.push(`DATABASE_SSL_MODE must be disable, require, verify-ca, or verify-full in ${runtimeLabel}`);
+  }
 
   if (!isHttpsOrigin(snapshot.lti.toolUrl)) {
     errors.push(`TOOL_URL must be an HTTPS origin without credentials, path, query, or fragment in ${runtimeLabel}`);
@@ -294,8 +326,8 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
     errors.push(`APP_DEBUG_ENABLED must be false in ${runtimeLabel}`);
   }
 
-  if (snapshot.security.detectorDiagnosticsEnabled && snapshot.profile === "prod") {
-    errors.push(`APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in production deployments`);
+  if (snapshot.security.detectorDiagnosticsEnabled) {
+    errors.push(`APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in ${runtimeLabel}`);
   }
 
   if (parseBoolean(env.USE_IN_MEMORY_STORE, false)) {
@@ -486,11 +518,26 @@ function parseInteger(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function isIntegerSettingInRange(raw: string | undefined, parsed: number, minimum: number, maximum: number): boolean {
+  if (raw !== undefined && !/^[+-]?\d+$/u.test(raw.trim())) {
+    return false;
+  }
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum;
+}
+
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) {
     return fallback;
   }
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function parseDatabaseSslMode(value: string | undefined): DatabaseSslMode {
+  return value !== undefined && isDatabaseSslMode(value) ? value : "disable";
+}
+
+function isDatabaseSslMode(value: string | undefined): value is DatabaseSslMode {
+  return value !== undefined && ["disable", "require", "verify-ca", "verify-full"].includes(value);
 }
 
 function splitList(value?: string): string[] {

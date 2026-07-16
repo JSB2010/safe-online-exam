@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AppConfig } from "./config/app-config.js";
 import { RepositoryProvider } from "./data/repositories.js";
+import { PostgresDatabase } from "./data/postgres-client.js";
 import { DebugController } from "./controllers/debug.controller.js";
 import { HomeController } from "./controllers/home.controller.js";
 import { JwkController } from "./controllers/jwk.controller.js";
@@ -38,6 +39,7 @@ import { DistributedAdmissionService } from "./security/distributed-admission.js
   ],
   providers: [
     AppConfig,
+    PostgresDatabase,
     RepositoryProvider,
     AssessmentService,
     AssessmentAuthorizationService,

@@ -9,9 +9,13 @@ playwright-report
 .idea
 .vscode
 .claude
+.worktrees/
 .DS_Store
 .env
 .env.*
+!.env.compose.secrets.example
+secrets/
+postgres-data/
 .local/
 *.p12
 *.pfx

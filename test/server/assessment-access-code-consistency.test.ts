@@ -15,9 +15,9 @@ const USER_ID = "user-1";
 const OLD_CODE = "OLD-ACCESS-CODE";
 
 describe("AssessmentService access-code consistency", () => {
-  it("removes a newly applied Classic code when the first Firestore save fails", async () => {
+  it("removes a newly applied Classic code when the first persistence save fails", async () => {
     const { service, repositories, canvas } = fixture();
-    const persistenceError = new Error("Firestore unavailable");
+    const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
     await expect(service.enableSebWithAccessCode(COURSE_ID, QUIZ_ID, USER_ID)).rejects.toBe(persistenceError);
@@ -27,9 +27,9 @@ describe("AssessmentService access-code consistency", () => {
     await expect(repositories.assessments.get(`classicquiz_${QUIZ_ID}`)).resolves.toBeNull();
   });
 
-  it("removes a newly applied New Quiz code when its first Firestore save fails", async () => {
+  it("removes a newly applied New Quiz code when its first persistence save fails", async () => {
     const { service, repositories, canvas } = fixture();
-    const persistenceError = new Error("Firestore unavailable");
+    const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
     await expect(service.enableContentSebWithAccessCode(COURSE_ID, CONTENT_ID, ASSIGNMENT_ID, USER_ID)).rejects.toBe(
@@ -44,7 +44,7 @@ describe("AssessmentService access-code consistency", () => {
   it("restores the Classic code when disabling succeeds in Canvas but persistence fails", async () => {
     const { service, repositories, canvas } = fixture();
     await service.saveQuizSebSetting(classicSetting());
-    const persistenceError = new Error("Firestore unavailable");
+    const persistenceError = new Error("Persistence unavailable");
     const updateSpy = vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
     await expect(service.disableSebWithAccessCode(COURSE_ID, QUIZ_ID, USER_ID)).rejects.toBe(persistenceError);
@@ -65,7 +65,7 @@ describe("AssessmentService access-code consistency", () => {
   it("restores the New Quiz code when disabling succeeds in Canvas but persistence fails", async () => {
     const { service, repositories, canvas } = fixture();
     await service.saveContentSebSetting(contentSetting());
-    const persistenceError = new Error("Firestore unavailable");
+    const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
     await expect(service.disableContentSebWithAccessCode(COURSE_ID, CONTENT_ID, ASSIGNMENT_ID, USER_ID)).rejects.toBe(
@@ -115,7 +115,7 @@ describe("AssessmentService access-code consistency", () => {
   it("restores the prior New Quiz code when regenerated-code persistence fails", async () => {
     const { service, repositories, canvas } = fixture();
     await service.saveContentSebSetting(contentSetting());
-    const persistenceError = new Error("Firestore unavailable");
+    const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
     await expect(service.regenerateContentAccessCode(COURSE_ID, CONTENT_ID, ASSIGNMENT_ID, USER_ID)).rejects.toBe(
@@ -127,7 +127,7 @@ describe("AssessmentService access-code consistency", () => {
     await expect(service.getContentSebSetting(CONTENT_ID)).resolves.toMatchObject({ accessCode: OLD_CODE });
   });
 
-  it("accepts an ambiguously reported Firestore write only after reading back the desired code", async () => {
+  it("accepts an ambiguously reported persistence write only after reading back the desired code", async () => {
     const { service, repositories, canvas } = fixture();
     const originalUpdate = repositories.assessments.update.bind(repositories.assessments);
     vi.spyOn(repositories.assessments, "update").mockImplementationOnce(async (id, updater) => {
@@ -142,9 +142,9 @@ describe("AssessmentService access-code consistency", () => {
     await expect(service.getSebSettingForQuiz(QUIZ_ID)).resolves.toMatchObject({ accessCode: enabled.accessCode });
   });
 
-  it("raises an explicit consistency error when Firestore fails and Canvas compensation also fails", async () => {
+  it("raises an explicit consistency error when persistence fails and Canvas compensation also fails", async () => {
     const { service, repositories, canvas } = fixture();
-    vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(new Error("Firestore unavailable"));
+    vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(new Error("Persistence unavailable"));
     canvas.removeQuizAccessCode.mockRejectedValueOnce(new Error("Canvas rollback unavailable"));
 
     await expect(service.enableSebWithAccessCode(COURSE_ID, QUIZ_ID, USER_ID)).rejects.toBeInstanceOf(

@@ -96,4 +96,38 @@ describe("DetectorTraceService", () => {
     expect(entry.events[1].details).toContain("...[truncated]");
     expect(entry.events[1].details!.length).toBeLessThanOrEqual(6_020);
   });
+
+  it("removes URL credentials, query tokens, JWTs, and exit grants from diagnostic details", () => {
+    const logSpy = vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+    const service = new DetectorTraceService();
+    const jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZW5zaXRpdmUifQ.signaturevalue";
+    const grant = "A23456789012345678901234567890123456789012";
+
+    service.recordEvent(
+      {
+        traceId: "trace-3",
+        events: [
+          {
+            seq: 1,
+            event: "diagnostic-dom-snapshot",
+            details: {
+              iframe: `https://sso.example.edu/login?jwt=${jwt}&state=sensitive`,
+              exitUrl: `https://tool.example.edu/seb/exit/session/course-1/quiz-1/${grant}`,
+              nestedText: `open https://canvas.example.edu/path?token=secret and jwt ${jwt}`,
+              proofToken: "never-log-this"
+            }
+          }
+        ]
+      },
+      { includeDetails: true }
+    );
+
+    const rendered = String(logSpy.mock.calls[0][0]);
+    expect(rendered).not.toContain(jwt);
+    expect(rendered).not.toContain(grant);
+    expect(rendered).not.toContain("sensitive");
+    expect(rendered).not.toContain("never-log-this");
+    expect(rendered).not.toContain("?jwt=");
+    expect(rendered).toContain("[redacted]");
+  });
 });

@@ -1,123 +1,119 @@
 # Configuration Reference
 
-This application reads configuration from process environment variables. The checked-in [.env.example](../.env.example) is a local reference only; the process does not load `.env` files itself. In Cloud Run, supply ordinary values with `--set-env-vars` and secrets with `--set-secrets`.
+The application reads process environment variables. It does not load `.env` files itself; [.env.example](../.env.example) is a reference and Compose explicitly loads an environment file. Protect local production files with `chmod 600 .env` and keep them outside version control.
 
 ## Profiles And Validation
 
-`APP_ENV` determines the application profile:
+Profile resolution uses the first non-empty value from `APP_ENV`, `NODE_ENV`, and the compatibility alias `SPRING_PROFILES_ACTIVE`:
 
-| Value                    | Result                                              |
-| ------------------------ | --------------------------------------------------- |
-| `prod` or `production`   | Production profile. Hardened validation is enabled. |
-| `test`                   | Test profile. The in-memory repository is selected. |
-| Any other value or unset | Development profile.                                |
+| Resolved value                       | Result                                             |
+| ------------------------------------ | -------------------------------------------------- |
+| `prod` or `production`               | Production profile and hardened validation.        |
+| `test`                               | Test profile; in-memory repositories are selected. |
+| Any other value, or all values unset | Development profile.                               |
 
-Cloud Run always enables hardened validation, including when `APP_ENV=dev`. A failing validation stops startup before the service listens. In a hardened runtime, the app requires real Canvas/LTI/OAuth values, Firestore, configuration encryption, and independent secrets; it rejects an in-memory store, debug mode, unsafe URLs, wildcard required domains, and a mismatched OAuth callback.
+Cloud Run is always treated as hardened, including an isolated `APP_ENV=dev` service. Hardened validation requires real database, Canvas, LTI, OAuth, secret, URL, and certificate values. Startup fails before listening if the configuration is unsafe or incomplete.
 
-`NODE_ENV` controls Node/build behavior and is normally `production` in the runtime image. Set `APP_ENV` explicitly when the desired application profile differs from the Node environment.
+## PostgreSQL
 
-## Required Runtime Values
+PostgreSQL 17 or newer is the supported durable store. The application uses ordinary PostgreSQL protocol settings and is not tied to a managed provider.
 
-| Variable                         | Purpose                                                      | Hardened-runtime requirements                                                         |
-| -------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| `NODE_ENV`                       | Node runtime mode.                                           | Set to `production` for the Cloud Run image.                                          |
-| `APP_ENV`                        | Application profile.                                         | Use `dev` for an isolated non-production service or `prod` for production.            |
-| `PORT`                           | HTTP listener port.                                          | Defaults to `8080`; Cloud Run provides it.                                            |
-| `GCP_PROJECT_ID`                 | Google Cloud project used by Firestore.                      | Required. `GOOGLE_CLOUD_PROJECT` is accepted as an alias.                             |
-| `FIRESTORE_DATABASE_ID`          | Firestore database ID.                                       | Required.                                                                             |
-| `TOOL_URL`                       | Public base URL of this deployment.                          | Required HTTPS origin only; no path, query, fragment, or credentials.                 |
-| `CANVAS_DOMAIN`                  | Base URL of the connected Canvas tenant.                     | Required HTTPS origin only; no path, query, fragment, or credentials.                 |
-| `LTI_CLIENT_ID`                  | Canvas LTI 1.3 Developer Key client ID.                      | Required.                                                                             |
-| `LTI_PRIVATE_KEY`                | RSA private JWK used to publish the tool JWKS.               | Required. Must be RSA, at least 2048 bits, exponent 65537, and compatible with RS256. |
-| `LTI_DEPLOYMENT_ID`              | Canvas External App deployment ID.                           | Required. A comma/newline-separated allowlist is accepted.                            |
-| `CANVAS_API_CLIENT_ID`           | Canvas API OAuth Developer Key client ID.                    | Required. This is distinct from `LTI_CLIENT_ID`.                                      |
-| `CANVAS_API_CLIENT_SECRET`       | Canvas API OAuth Developer Key secret.                       | Required and must be treated as a secret.                                             |
-| `SESSION_SECRET`                 | Express session signing secret.                              | Required, at least 32 characters, and different from `STATE_ENCRYPTION_KEY`.          |
-| `STATE_ENCRYPTION_KEY`           | AES-GCM key material used to protect opaque LTI/OAuth state. | Required, at least 32 characters, and different from `SESSION_SECRET`.                |
-| `SEB_CONFIG_ENCRYPTION_CERT_PEM` | PEM X.509 public certificate for `.seb` encryption.          | One certificate source is required and must be currently valid.                       |
+| Variable                         | Default      | Notes                                                                                            |
+| -------------------------------- | ------------ | ------------------------------------------------------------------------------------------------ |
+| `DATABASE_HOST`                  | `127.0.0.1`  | Hostname, IP, or Unix socket directory. Required in hardened runtimes.                           |
+| `DATABASE_PORT`                  | `5432`       | Integer from 1–65535. For Cloud SQL sockets this remains `5432`.                                 |
+| `DATABASE_NAME`                  | `canvas_seb` | Dedicated application database. Required in hardened runtimes.                                   |
+| `DATABASE_USER`                  | `canvas_seb` | Application role. Required in hardened runtimes.                                                 |
+| `DATABASE_PASSWORD`              | Unset        | Required in hardened runtimes. Prefer `DATABASE_PASSWORD_FILE`.                                  |
+| `DATABASE_PASSWORD_FILE`         | Unset        | Absolute/readable file containing the password. Conflicts with the direct variable.              |
+| `DATABASE_SSL_MODE`              | `disable`    | `disable`, `require`, `verify-ca`, or `verify-full`. Use verification over untrusted networks.   |
+| `DATABASE_POOL_MAX`              | `5`          | Per-process maximum, 1–100. Size the database for pool max multiplied by app instances/jobs.     |
+| `DATABASE_CONNECTION_TIMEOUT_MS` | `10000`      | Connection acquisition timeout, 100–120000 ms.                                                   |
+| `DATABASE_STATEMENT_TIMEOUT_MS`  | `30000`      | Server-side statement timeout, 100–600000 ms.                                                    |
+| `DATABASE_CLEANUP_BATCH_SIZE`    | `500`        | Cleanup-job batch size, 1–10000. This is read by the cleanup command rather than normal startup. |
 
-`SEB_CONFIG_ENCRYPTION_CERT_PATH` is the file-based alternative to `SEB_CONFIG_ENCRYPTION_CERT_PEM`. Both hold public material only. [Certificate management](certificate-management.md) explains the required client private-identity handling.
+Cloud Run connects to Cloud SQL with `DATABASE_HOST=/cloudsql/PROJECT:REGION:INSTANCE` and `DATABASE_SSL_MODE=disable`; the authenticated Unix socket is local to the Cloud Run sandbox. A VM or external managed PostgreSQL connection should normally use `verify-full` with a trusted certificate chain. If the provider uses a private certificate authority, mount the CA file and set Node's `NODE_EXTRA_CA_CERTS` to that path before process startup.
+
+The migration ledger is `schema_migrations`. Application/runtime data uses six tables:
+
+| Table                 | Contents                                                     |
+| --------------------- | ------------------------------------------------------------ |
+| `assessments`         | Assessment discovery state and SEB settings.                 |
+| `courses`             | Course defaults and exam-tool catalog.                       |
+| `canvas_oauth_tokens` | Canvas OAuth tokens and student setup preference.            |
+| `sessions`            | Express session records with expiry.                         |
+| `transient_states`    | One-time states, grants, proofs, handoffs, and rate budgets. |
+| `operation_locks`     | Short assessment-update leases.                              |
+
+Run `npm run db:migrate` before a new application revision. Run `npm run db:cleanup` on a schedule to remove expired rows in bounded batches. Readiness returns failure when PostgreSQL is unavailable or the checked-in migrations have not all been applied.
+
+## Required Application Values
+
+| Variable                         | Purpose                                                 | Hardened requirement                                                 |
+| -------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
+| `NODE_ENV`                       | Node runtime mode.                                      | `production` for the deployed image.                                 |
+| `APP_ENV`                        | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                  |
+| `PORT`                           | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                         |
+| `TOOL_URL`                       | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                   |
+| `CANVAS_DOMAIN`                  | Connected Canvas origin.                                | HTTPS origin only.                                                   |
+| `LTI_CLIENT_ID`                  | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                            |
+| `LTI_PRIVATE_KEY`                | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                    |
+| `LTI_DEPLOYMENT_ID`              | Installed External App deployment ID.                   | Required; comma/newline allowlist supported.                         |
+| `CANVAS_API_CLIENT_ID`           | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                              |
+| `CANVAS_API_CLIENT_SECRET`       | Canvas API OAuth secret.                                | Required secret.                                                     |
+| `SESSION_SECRET`                 | Express session signing secret.                         | At least 32 characters and different from state encryption.          |
+| `STATE_ENCRYPTION_KEY`           | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.           |
+| `SEB_CONFIG_ENCRYPTION_CERT_PEM` | Public X.509 certificate used to encrypt `.seb` output. | Valid end-entity RSA certificate whose Key Usage permits encryption. |
+
+`SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients.
+
+## File-Based Secrets
+
+The following secret values accept a mutually exclusive `_FILE` alternative:
+
+- `DATABASE_PASSWORD_FILE`
+- `LTI_PRIVATE_KEY_FILE`
+- `CANVAS_API_CLIENT_SECRET_FILE`
+- `SESSION_SECRET_FILE`
+- `STATE_ENCRYPTION_KEY_FILE`
+- `SEB_QUIT_PASSWORD_FILE`
+
+Files are read once during configuration startup. The app rejects a direct value and its `_FILE` alternative being set together and reports unreadable paths without echoing secret contents. Required-value validation rejects a missing or empty result. Docker/Kubernetes secret mounts work without provider-specific SDKs.
+
+The checked-in `compose.secrets.yaml` override clears direct secret variables and supplies these file paths to the app, migration, and cleanup processes. It also gives the PostgreSQL image the same database password through its native `POSTGRES_PASSWORD_FILE` input. Start it with `.env.compose.secrets.example`. On a Linux host, keep the containing directory mode `0700`; Compose mounts only the named files into each service, and container-readable source files can be mode `0644` within that protected directory.
 
 ## Canvas And LTI Endpoints
 
-The normal Canvas cloud defaults are built in. Override them only for a Canvas environment with different LTI endpoints.
+Canvas cloud defaults are built in. Override them only for a Canvas environment with different LTI endpoints.
 
-| Variable              | Default                                                | Notes                                                                                        |
-| --------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `LTI_ISSUER`          | `https://canvas.instructure.com`                       | HTTPS issuer URL; a path is permitted, query/fragment/credentials are not.                   |
-| `LTI_KEY_SET_URL`     | `https://sso.canvaslms.com/api/lti/security/jwks`      | HTTPS endpoint. Installation-specific query parameters are permitted.                        |
-| `LTI_AUTH_URL`        | `https://sso.canvaslms.com/api/lti/authorize_redirect` | HTTPS endpoint. Installation-specific query parameters are permitted.                        |
-| `CANVAS_API_BASE_URL` | `${CANVAS_DOMAIN}/api/v1`                              | In a hardened runtime it must be exactly the configured Canvas origin followed by `/api/v1`. |
-| `CANVAS_REDIRECT_URI` | `${TOOL_URL}/api/oauth2callback`                       | If provided, it must equal that exact callback in a hardened runtime.                        |
+| Variable              | Default                                                | Notes                                                            |
+| --------------------- | ------------------------------------------------------ | ---------------------------------------------------------------- |
+| `LTI_ISSUER`          | `https://canvas.instructure.com`                       | HTTPS issuer URL.                                                |
+| `LTI_KEY_SET_URL`     | `https://sso.canvaslms.com/api/lti/security/jwks`      | Canvas platform JWKS endpoint.                                   |
+| `LTI_AUTH_URL`        | `https://sso.canvaslms.com/api/lti/authorize_redirect` | Canvas OIDC authorization endpoint.                              |
+| `CANVAS_API_BASE_URL` | `${CANVAS_DOMAIN}/api/v1`                              | Must match the configured Canvas origin in hardened runtimes.    |
+| `CANVAS_REDIRECT_URI` | `${TOOL_URL}/api/oauth2callback`                       | If supplied, must equal the exact callback in hardened runtimes. |
 
-The deployed registration document is `GET ${TOOL_URL}/lti/config`. It publishes `${TOOL_URL}/lti/login`, `${TOOL_URL}/lti/launch`, and `${TOOL_URL}/.well-known/jwks.json`.
+The registration document is `${TOOL_URL}/lti/config` and publishes the login, launch, and JWKS endpoints.
 
-## SEB Policy Values
+## SEB And Diagnostics
 
-| Variable                                | Default | Notes                                                                                                                                   |
-| --------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEB_QUIT_PASSWORD`                     | Unset   | Optional managed exit-password fallback. It must pass the password policy and must not be reused as a start password.                   |
-| `SEB_REQUIRED_DOMAINS`                  | Empty   | Comma/newline list of concrete, reviewed hostnames required by every configuration. Wildcards and identity-provider hosts are rejected. |
-| `SEB_CONFIG_ENCRYPTION_ENABLED`         | `true`  | Must remain `true` in a hardened runtime.                                                                                               |
-| `SEB_CONFIG_ENCRYPTION_CERT_PEM`        | Unset   | Preferred public X.509 certificate input. Literal `\\n` is normalized to newlines.                                                      |
-| `SEB_CONFIG_ENCRYPTION_CERT_PATH`       | Unset   | Public X.509 certificate file path.                                                                                                     |
-| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM`  | Unset   | Public-key fallback for local development. It is not enough for hardened runtime validation, which requires a certificate.              |
-| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH` | Unset   | File-based public-key fallback for local development.                                                                                   |
+| Variable                                | Default   | Notes                                                                            |
+| --------------------------------------- | --------- | -------------------------------------------------------------------------------- |
+| `SEB_QUIT_PASSWORD`                     | Unset     | Optional managed exit-password fallback; must pass password policy.              |
+| `SEB_REQUIRED_DOMAINS`                  | Empty     | Concrete reviewed hostnames; wildcards and identity-provider hosts are rejected. |
+| `SEB_CONFIG_ENCRYPTION_ENABLED`         | `true`    | Must remain true in hardened runtimes.                                           |
+| `SEB_CONFIG_ENCRYPTION_CERT_PATH`       | Unset     | Public certificate path; used by the Compose secret mount.                       |
+| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM`  | Unset     | Local-development fallback; insufficient for hardened validation.                |
+| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH` | Unset     | File form of the local public-key fallback.                                      |
+| `HOST`                                  | `0.0.0.0` | Bind address.                                                                    |
+| `USE_IN_MEMORY_STORE`                   | `false`   | Local/test only; hardened runtimes reject it.                                    |
+| `APP_DEBUG_ENABLED`                     | `false`   | Hardened runtimes reject true.                                                   |
+| `APP_DETECTOR_DIAGNOSTICS_ENABLED`      | `false`   | Sanitized detector detail; production profile rejects true.                      |
+| `APP_ASSET_VERSION`                     | Unset     | Optional client cache version; `K_REVISION` is used when present.                |
 
-The password policy allows 8–128 characters and requires at least five distinct letters or numbers. It rejects common words, simple sequences, repetitive values, and control characters. The application preserves an existing password when an update field is blank; explicit UI controls remove a password.
+## Secret Rotation
 
-## Firestore Collections
+Rotate one secret at a time and create a new immutable secret version. Update the runtime to the numbered version, deploy, smoke test, then disable the old version. Rotating `SESSION_SECRET` invalidates sessions; rotating `STATE_ENCRYPTION_KEY` invalidates outstanding opaque state; rotating LTI signing material requires Canvas/JWKS coordination; rotating the SEB certificate requires distributing the matching new private identity and issuing fresh configurations.
 
-These names default to the values below and can be overridden for an isolated deployment:
-
-| Variable                                | Default collection  | Contents                                                                |
-| --------------------------------------- | ------------------- | ----------------------------------------------------------------------- |
-| `FIRESTORE_ASSESSMENTS_COLLECTION`      | `assessments`       | Assessment discovery state and SEB settings.                            |
-| `FIRESTORE_COURSES_COLLECTION`          | `courses`           | Course defaults and exam-tool catalog.                                  |
-| `FIRESTORE_OAUTH_TOKENS_COLLECTION`     | `canvasOAuthTokens` | Canvas OAuth tokens and student setup-prompt preference.                |
-| `FIRESTORE_SESSIONS_COLLECTION`         | `sessions`          | Express session records.                                                |
-| `FIRESTORE_TRANSIENT_STATES_COLLECTION` | `transientStates`   | One-time state, grants, proofs, session handoff, and admission budgets. |
-| `FIRESTORE_OPERATION_LOCKS_COLLECTION`  | `operationLocks`    | Short assessment-update leases.                                         |
-
-Configure Firestore TTL on the `expiresAt` field for `sessions`, `transientStates`, and `operationLocks`. Application logic checks expiry immediately; Firestore TTL is the eventual cleanup mechanism.
-
-## Diagnostics And Local Values
-
-| Variable                           | Default   | Notes                                                                                                 |
-| ---------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
-| `HOST`                             | `0.0.0.0` | Bind address for a local process. Use `127.0.0.1` for local smoke tests.                              |
-| `USE_IN_MEMORY_STORE`              | `false`   | Set to `true` only for local development or tests. Cloud Run rejects it.                              |
-| `APP_DEBUG_ENABLED`                | `false`   | Enables readable detector serving and detector diagnostics behavior. Hardened runtime rejects `true`. |
-| `APP_DETECTOR_DIAGNOSTICS_ENABLED` | `false`   | Records sanitized detector traces with more detail. Production profile rejects it.                    |
-| `APP_ASSET_VERSION`                | Unset     | Optional cache-busting version for the React app shell; `K_REVISION` is used when present.            |
-
-`ADMIN_PASSWORD` is accepted only as a local-development compatibility alias for `SESSION_SECRET`; do not use it in a deployed environment. Older aliases for LTI, Canvas API, project, or URL values are accepted by the config parser for transition purposes, but new deployments should use the canonical variables listed here.
-
-## Secret Handling
-
-Put the following in a secret manager rather than source control, shell history, build substitutions, or client-side code:
-
-- `LTI_PRIVATE_KEY`
-- `CANVAS_API_CLIENT_SECRET`
-- `SESSION_SECRET`
-- `STATE_ENCRYPTION_KEY`
-- `SEB_QUIT_PASSWORD`, if used
-- the public certificate value when organizational policy classifies it as a secret
-
-The matching configuration-encryption private key and `.p12` identity are not runtime secrets. They must never be added to Cloud Run. See [Certificate management](certificate-management.md).
-
-## Local Example
-
-For route and UI smoke testing, this minimal shell environment is sufficient:
-
-```bash
-HOST=127.0.0.1 \
-USE_IN_MEMORY_STORE=true \
-TOOL_URL=http://localhost:8080 \
-LTI_CLIENT_ID=test-client \
-CANVAS_API_CLIENT_ID=test-client-id \
-CANVAS_API_CLIENT_SECRET=test-client-secret \
-npm start
-```
-
-Use actual Canvas, OAuth, Firestore, and certificate values only in a controlled integration environment. The local defaults are intentionally not a substitute for a real LTI or SEB configuration test.
+For Cloud Run, the checked-in builds deliberately use numbered Secret Manager versions and never `latest`. The exact dev, prod, and parameterized secret names and bootstrap order are documented in [Deployment](deployment.md).

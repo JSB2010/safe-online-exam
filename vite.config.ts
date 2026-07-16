@@ -29,7 +29,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    exclude: ["test/e2e/**", "node_modules/**", "dist/**"],
+    exclude: ["test/e2e/**", "node_modules/**", "dist/**", ".worktrees/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
@@ -48,10 +48,15 @@ export default defineConfig({
         "src/server/services/**/*.ts"
       ],
       exclude: [
+        ".worktrees/**",
         "dist/**",
         "src/client/**",
         "src/server/assets/**",
         "src/server/app.module.ts",
+        "src/server/data/cleanup.ts",
+        "src/server/data/migrate.ts",
+        "src/server/data/postgres-repositories.ts",
+        "src/server/data/schema.ts",
         "test/**",
         "src/server/main.ts"
       ]

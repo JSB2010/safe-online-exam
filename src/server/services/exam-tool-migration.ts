@@ -26,7 +26,7 @@ export interface CourseExamToolMigration {
 
 /**
  * Converts one course's legacy quiz-owned external tools to the course catalog.
- * This is deliberately pure so dry runs cannot alter Firestore records and the
+ * This is deliberately pure so dry runs cannot alter persisted records and the
  * result can be verified independently of the migration command.
  */
 export function migrateCourseExamTools(

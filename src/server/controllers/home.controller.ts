@@ -1,10 +1,14 @@
-import { Controller, Get, Header } from "@nestjs/common";
+import { Controller, Get, Header, HttpCode, ServiceUnavailableException } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
+import { RepositoryProvider } from "../data/repositories.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 
 @Controller()
 export class HomeController {
-  constructor(private readonly config: AppConfig) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly repositories: RepositoryProvider
+  ) {}
 
   @Get("/")
   @Header("content-type", "text/html; charset=utf-8")
@@ -55,6 +59,20 @@ export class HomeController {
   @Get("/health")
   health(): Record<string, string> {
     return { status: "UP" };
+  }
+
+  @Get("/favicon.ico")
+  @HttpCode(204)
+  favicon(): void {}
+
+  @Get("/ready")
+  async ready(): Promise<Record<string, string>> {
+    try {
+      await this.repositories.assertReady();
+      return { status: "UP" };
+    } catch {
+      throw new ServiceUnavailableException({ status: "DOWN" });
+    }
   }
 
   @Get("/login/health")

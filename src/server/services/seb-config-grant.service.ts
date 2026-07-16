@@ -3,7 +3,8 @@ import { Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
 import { classicQuizContentId, extractClassicQuizId, parseNewQuizContentId } from "../../shared/models.js";
-import { RepositoryProvider, type TransientStateRecord } from "../data/repositories.js";
+import { RepositoryProvider } from "../data/repositories.js";
+import type { TransientStateRecord } from "../data/repository-contracts.js";
 import { DistributedAdmissionService } from "../security/distributed-admission.js";
 import {
   isVerifiedInstructor,

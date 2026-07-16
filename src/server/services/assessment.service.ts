@@ -674,7 +674,7 @@ export class AssessmentService {
         throw error;
       }
       throw new AssessmentAccessCodeConsistencyError(
-        "Canvas changed, but Firestore contains an unexpected access-code state. Manual reconciliation is required.",
+        "Canvas changed, but persistence contains an unexpected access-code state. Manual reconciliation is required.",
         error
       );
     }

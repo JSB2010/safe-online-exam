@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { isExpired, RepositoryProvider } from "../data/repositories.js";
+import { isExpired } from "../data/document-values.js";
+import { RepositoryProvider } from "../data/repositories.js";
 
 @Injectable()
 export class SebAccessProofService {

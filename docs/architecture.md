@@ -16,7 +16,7 @@ The service is not a general Canvas proxy. A deployment is configured for one Ca
 flowchart LR
   Canvas["Canvas"] -->|"OIDC login and signed LTI launch"| App["NestJS service"]
   Canvas -->|"OAuth and REST/New Quiz APIs"| App
-  App -->|"assessment, course, token, session, state"| Firestore["Firestore"]
+  App -->|"assessment, course, token, session, state"| PostgreSQL["PostgreSQL 17+"]
   App -->|"React app shell"| Browser["Instructor or student browser"]
   Canvas -->|"theme loader"| Detector["Canvas detector script"]
   Detector -->|"Config Key proof and one-time redemption"| App
@@ -24,7 +24,13 @@ flowchart LR
   SEB -->|"Canvas session URL and assessment"| Canvas
 ```
 
-The application is one Node.js process. NestJS controllers expose HTTP endpoints, services own protocol and business behavior, repositories provide Firestore/in-memory storage, and React renders page views supplied by the server app shell. The detector is a separately served browser asset that runs on Canvas quiz pages.
+The application is one Node.js process. NestJS controllers expose HTTP endpoints, services own protocol and business behavior, repositories provide PostgreSQL storage in deployed environments and in-memory storage for local/test work, and React renders page views supplied by the server app shell. The detector is a separately served browser asset that runs on Canvas quiz pages.
+
+### Deployment portability
+
+The production image has no runtime dependency on a Google Cloud SDK. Durable state is in PostgreSQL, application configuration is read from environment variables or mounted files, and the HTTP process listens on a configurable host and port. Multiple instances share sessions, one-time claims, admission budgets, and operation locks through PostgreSQL, so sticky sessions and a writable application filesystem are not required.
+
+Cloud Run, Cloud SQL, Artifact Registry, Secret Manager, and Cloud Build are the recommended managed deployment, not application requirements. Another platform can run the same image when it provides PostgreSQL 17+, public HTTPS ingress, secret injection, an exact-image migration job before traffic, and a scheduled cleanup job. [Deployment](deployment.md) defines both supported operating models.
 
 ## Code Ownership
 
@@ -37,7 +43,7 @@ The application is one Node.js process. NestJS controllers expose HTTP endpoints
 | Assessment policy         | `quiz.controller.ts`, `assessment.service.ts`, `course-settings.service.ts` | Discovery, Canvas access-code mutations, course defaults, per-assessment overrides, exam tools.                    |
 | SEB lifecycle             | `seb.controller.ts`, `seb-configuration.service.ts`, `seb-*.service.ts`     | Configuration grants, configuration generation, proof, access-code redemption, setup check, exit grants.           |
 | Browser detector          | `src/server/assets/canvas-seb-detector.js`, `static-js.controller.ts`       | Quiz-page launch UI, access-code filling, approved tools, completion detection, diagnostic reporting.              |
-| Persistence               | `src/server/data/repositories.ts`, `session-store.ts`                       | Firestore documents, atomic consumption/claims, distributed rate budgets, locks, Express sessions.                 |
+| Persistence               | `src/server/data/`, `session-store.ts`                                      | PostgreSQL migrations, atomic consumption/claims, distributed rate budgets, locks, Express sessions.               |
 
 ## Identity And Authorization
 
@@ -51,7 +57,7 @@ Canvas posts an ID token to `/lti/launch`. The service validates:
 - issuer, audience, nonce, token age, issued/expiry timestamps, LTI version, message type, and deployment ID;
 - the target link URI and initiation state tuple;
 - the initiating browser transaction cookie; and
-- a durable, atomic state claim in Firestore to prevent replay.
+- a durable, atomic PostgreSQL state claim to prevent replay.
 
 After successful validation, the server regenerates the Express session and stores a verified LTI principal. The principal contains only signed launch claims: issuer, deployment, subject, numeric Canvas user ID, course ID, roles, and custom fields. Query parameters and request bodies cannot substitute for it.
 
@@ -64,7 +70,7 @@ An LTI launch authenticates a person but does not authorize Canvas API calls. Th
 1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from an existing verified launch.
 2. The service records encrypted, one-time state and redirects to Canvas.
 3. `/api/oauth2callback` verifies state and exchanges the authorization code.
-4. Firestore stores the token by numeric Canvas user ID; `CanvasApiService` refreshes it when necessary.
+4. PostgreSQL stores the token by numeric Canvas user ID; `CanvasApiService` refreshes it when necessary.
 
 Students use the same OAuth mechanism only to obtain the narrow Canvas session-token permission required for the SEB session handoff: `url:GET|/api/v1/login/session_token`. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
 
@@ -72,20 +78,20 @@ Students use the same OAuth mechanism only to obtain the narrow Canvas session-t
 
 ### Identifiers
 
-All persisted assessment documents use a canonical public content ID:
+All persisted assessment records use a canonical public content ID:
 
 | Assessment type | Canonical ID                        | Canvas mutation target   |
 | --------------- | ----------------------------------- | ------------------------ |
 | Classic Quiz    | `classicquiz_{quizId}`              | Quiz access-code API     |
 | New Quiz        | `newquiz:{courseId}:{assignmentId}` | New Quiz access-code API |
 
-The `assessments` collection stores Canvas discovery data, availability verification, and SEB state. `courses` stores course-level defaults and its exam-tool catalog. Course defaults can provide URL policy, start/exit password policy, and selected exam tools; an assessment may inherit defaults or retain an explicit list of course tool IDs.
+The `assessments` table stores Canvas discovery data, availability verification, and SEB state. `courses` stores course-level defaults and its exam-tool catalog. Course defaults can provide URL policy, start/exit password policy, and selected exam tools; an assessment may inherit defaults or retain an explicit list of course tool IDs.
 
 ### Canvas discovery and availability
 
 Instructor discovery refreshes Classic and New Quiz data from Canvas. A learner can use an assessment only when its cached Canvas verification is current, explicitly verified, published, and within its global unlock/lock window. The verification window is 24 hours. Missing records are retained for instructor reconciliation but fail closed for learners; a failed refresh marks the cached discovery stale.
 
-Assessment updates use short-lived Firestore operation locks while Canvas and Firestore state are changed. This prevents concurrent updates from leaving the Canvas access code and the persisted SEB setting out of sync.
+Assessment updates use short-lived PostgreSQL operation locks while Canvas and database state are changed. Atomic compare-and-delete/insert operations prevent overlapping workers from owning the same lease and help keep Canvas access codes aligned with persisted SEB settings.
 
 ### Exam tools and URL policy
 
@@ -139,23 +145,25 @@ On Windows, the configuration requests the OS-session and SEB-service controls u
 
 ## Persistence And Expiration
 
-| Collection          | Contents                                                                                            | Expiration behavior                                           |
-| ------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `assessments`       | Canvas discovery and per-assessment SEB state                                                       | Durable until intentionally changed.                          |
-| `courses`           | Course defaults, setup state, and exam-tool catalog                                                 | Durable until intentionally changed.                          |
-| `canvasOAuthTokens` | Canvas access and refresh tokens                                                                    | Durable; lifecycle is driven by Canvas authorization/refresh. |
-| `sessions`          | Express session payloads keyed by a hashed session ID                                               | 30-minute session TTL.                                        |
-| `transientStates`   | LTI replay claims, OAuth state, configuration grants, proofs, session-handoff records, rate budgets | Every record has `expiresAt`; configure Firestore TTL.        |
-| `operationLocks`    | Short assessment-update leases                                                                      | Every record has `expiresAt`; configure Firestore TTL.        |
+| Table                 | Contents                                                                                            | Expiration behavior                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `assessments`         | Canvas discovery and per-assessment SEB state                                                       | Durable until intentionally changed.                          |
+| `courses`             | Course defaults, setup state, and exam-tool catalog                                                 | Durable until intentionally changed.                          |
+| `canvas_oauth_tokens` | Canvas access and refresh tokens                                                                    | Durable; lifecycle is driven by Canvas authorization/refresh. |
+| `sessions`            | Express session payloads keyed by a hashed session ID                                               | Expired rows are removed by bounded cleanup.                  |
+| `transient_states`    | LTI replay claims, OAuth state, configuration grants, proofs, session-handoff records, rate budgets | Expired rows are removed by bounded cleanup.                  |
+| `operation_locks`     | Short assessment-update leases                                                                      | Expired rows are removed by bounded cleanup.                  |
 
-Firestore transactions implement atomic state claims, token consumption, rate-budget increments, and operation locks. This is why a production deployment can serve more than one Cloud Run instance without moving runtime state into process memory.
+PostgreSQL transactions and row locks implement atomic state claims, one-time token consumption, rate-budget increments, and operation-lock ownership. Claim/consume operations use conditional mutations so two app instances cannot both win. Cleanup selects bounded batches with `FOR UPDATE SKIP LOCKED`, allowing safe overlap without long table locks. This is why multiple app instances can share runtime state without sticky sessions.
+
+Schema changes are explicit, ordered migrations recorded with checksums in `schema_migrations`. The application never mutates schema on ordinary startup; `/ready` fails until all checked-in migrations are applied. A migration job must complete before traffic reaches a new image.
 
 ## HTTP And Security Controls
 
 - Security headers are applied before application routes; Express disables `x-powered-by` and trusts one proxy hop.
 - Sessions use `HttpOnly` cookies and use `Secure; SameSite=None` when the configured tool URL is HTTPS or the profile is production.
 - Sensitive proof, access-code, and password-reveal responses are no-store and are bound to the verified session/principal.
-- LTI initiation and token validation use process-local and Firestore-backed admission budgets. Configuration-grant minting is rate-limited per principal and IP.
+- LTI initiation and token validation use process-local and PostgreSQL-backed admission budgets. Configuration-grant minting is rate-limited per principal and IP.
 - Canvas API calls are constrained to the configured Canvas origin and `/api/v1` base. Responses have size limits and upstream deadlines; a `401` triggers at most one safe token refresh/retry.
 - The public detector script has two stable paths. Debug or diagnostic modes serve a readable, non-cacheable asset; normal production mode serves the built minified asset from the same public path.
 
