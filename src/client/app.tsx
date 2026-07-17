@@ -865,8 +865,8 @@ function AdminSetupPage({ data }: { data: Record<string, any> }) {
               Canvas installation is complete.
             </li>
             <li>
-              Create the Canvas API Developer Key with the quiz access-code scopes and the student session-token scope,
-              then configure the OAuth callback at <code>{data.toolUrl}/api/oauth2callback</code>.
+              Create the Canvas API Developer Key with the complete application scope set, including the session-token
+              scope, then configure the OAuth callback at <code>{data.toolUrl}/api/oauth2callback</code>.
             </li>
             <li>
               Create or refresh the LTI 1.3 Developer Key from the public LTI configuration URL, install it by Client

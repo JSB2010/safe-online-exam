@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import type { ContentItem, OAuthToken, Quiz } from "../../shared/models.js";
-import { newQuizContentId } from "../../shared/models.js";
+import { CANVAS_OAUTH_SCOPE_VERSION, CANVAS_REQUIRED_OAUTH_SCOPES, newQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import {
@@ -51,6 +51,10 @@ interface StoreAccessTokenOptions {
   scope?: string | null;
   expiresIn?: number | null;
   expiresAt?: string | null;
+  requestedScopes?: string[] | null;
+  oauthScopeVersion?: number | null;
+  displayName?: string | null;
+  email?: string | null;
 }
 
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -198,15 +202,22 @@ export class CanvasApiService {
   }
 
   async hasAccessToken(userId: string): Promise<boolean> {
+    const token = await this.getStoredToken(userId);
+    if (!hasCurrentRequiredScopes(token)) {
+      return false;
+    }
     return !!(await this.getAccessToken(userId));
   }
 
   async hasSessionTokenAccess(userId: string): Promise<boolean> {
+    const token = await this.getStoredToken(userId);
+    if (!hasCurrentRequiredScopes(token)) {
+      return false;
+    }
     const accessToken = await this.getAccessToken(userId);
     if (!accessToken) {
       return false;
     }
-    const token = await this.getStoredToken(userId);
     // Some Canvas installations omit scope from an OAuth response. In that
     // case the readiness request verifies the endpoint rather than rejecting
     // a potentially valid credential based on incomplete metadata alone.
@@ -232,17 +243,57 @@ export class CanvasApiService {
   ): Promise<OAuthToken> {
     const options = normalizeStoreAccessTokenOptions(scopeOrOptions);
     const existing = await this.repositories.value.oauthTokens.get(userId);
+    const now = new Date().toISOString();
+    const storesIdentity = options.displayName !== undefined || options.email !== undefined;
     const token: OAuthToken = {
       id: userId,
       userId,
       accessToken,
       refreshToken: options.refreshToken || null,
       scope: options.scope || null,
+      requestedScopes: options.requestedScopes ?? existing?.requestedScopes ?? null,
+      oauthScopeVersion: options.oauthScopeVersion ?? existing?.oauthScopeVersion ?? null,
       expiresAt: options.expiresAt || expiresAtFromSeconds(options.expiresIn),
+      displayName: options.displayName ?? existing?.displayName ?? null,
+      email: options.email ?? existing?.email ?? null,
+      identityUpdatedAt: storesIdentity ? now : existing?.identityUpdatedAt || null,
       studentReadinessPromptDismissedAt: existing?.studentReadinessPromptDismissedAt || null,
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
     return this.repositories.value.oauthTokens.save(userId, token);
+  }
+
+  /**
+   * Retains the current signed LTI identity beside an existing OAuth token.
+   * A launch before OAuth authorization intentionally creates no user record.
+   */
+  async updateStoredIdentity(
+    userId: string,
+    identity: { displayName?: string | null; email?: string | null }
+  ): Promise<void> {
+    const displayName = normalizedIdentityValue(identity.displayName, 512);
+    const email = normalizedIdentityValue(identity.email, 320);
+    if (displayName === undefined && email === undefined) {
+      return;
+    }
+    await this.repositories.value.oauthTokens.update(userId, (current) => {
+      if (!current?.accessToken) {
+        return current;
+      }
+      const nextDisplayName = displayName ?? current.displayName ?? null;
+      const nextEmail = email ?? current.email ?? null;
+      if (nextDisplayName === (current.displayName ?? null) && nextEmail === (current.email ?? null)) {
+        return current;
+      }
+      const now = new Date().toISOString();
+      return {
+        ...current,
+        displayName: nextDisplayName,
+        email: nextEmail,
+        identityUpdatedAt: now,
+        updatedAt: now
+      };
+    });
   }
 
   async hasDismissedStudentReadinessPrompt(userId: string): Promise<boolean> {
@@ -613,6 +664,21 @@ function shouldRefreshToken(token: OAuthToken): boolean {
   }
   const expiresAt = Date.parse(token.expiresAt);
   return Number.isFinite(expiresAt) && expiresAt - TOKEN_REFRESH_SKEW_MS <= Date.now();
+}
+
+function hasCurrentRequiredScopes(token: OAuthToken | null | undefined): boolean {
+  if (token?.oauthScopeVersion !== CANVAS_OAUTH_SCOPE_VERSION || !token.requestedScopes) {
+    return false;
+  }
+  return CANVAS_REQUIRED_OAUTH_SCOPES.every((scope) => token.requestedScopes!.includes(scope));
+}
+
+function normalizedIdentityValue(value: string | null | undefined, maximumLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\s+/gu, " ");
+  return normalized && normalized.length <= maximumLength ? normalized : undefined;
 }
 
 function isSafeReadMethod(method?: string): boolean {

@@ -26,13 +26,18 @@ test("preserves a New Quiz content ID on the nonterminal exit page", async ({ pa
   await expect(page.getByText("Return to the submitted assessment results page")).toBeVisible();
 });
 
-test("serves the detector script from both compatibility paths", async ({ request }) => {
+test("serves detector scripts from stable and Canvas-theme paths", async ({ request }) => {
   for (const path of ["/js/canvas-seb-detector.js", "/api/seb/canvas-detector.js"]) {
     const response = await request.get(path);
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toContain("application/javascript");
     expect(await response.text()).toContain("Canvas SEB Detector");
   }
+
+  const loader = await request.get("/js/canvas-seb-theme-loader.js");
+  expect(loader.status()).toBe(200);
+  expect(loader.headers()["content-type"]).toContain("application/javascript");
+  expect(await loader.text()).toContain("data-canvas-seb-detector");
 });
 
 test("serves health, JWKS, and Canvas LTI registration metadata", async ({ request }) => {

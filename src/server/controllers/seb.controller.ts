@@ -895,6 +895,10 @@ export class SebController {
         request.session!.launchData = launchData;
         request.session!.verifiedLtiPrincipal = createVerifiedLtiPrincipal(launchData);
         request.session!.canvas_user_id = launchData.canvasUserId || launchData.userId;
+        await this.canvasApi?.updateStoredIdentity?.(launchData.canvasUserId || launchData.userId, {
+          displayName: launchData.fullName,
+          email: launchData.email
+        });
       } catch {
         if (await this.redirectStaleSebLaunchToCanvas(response, contentId)) {
           return;

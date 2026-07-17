@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Controller, Get, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
+import { CANVAS_OAUTH_SCOPE_VERSION, CANVAS_REQUIRED_OAUTH_SCOPES } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { renderAppShell } from "../http/app-shell.js";
 import { discardResponseBody, readBoundedUtf8Response } from "../http/bounded-response.js";
@@ -140,7 +141,10 @@ export class OAuthController {
       await this.canvasApi.storeAccessToken(tokenOwner, token.access_token, {
         refreshToken: token.refresh_token || null,
         scope: token.scope || null,
-        expiresIn: token.expires_in
+        requestedScopes: canvasScopes(),
+        oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION,
+        expiresIn: token.expires_in,
+        ...identityForVerifiedLaunch(request, principal, token.user?.name)
       });
       if (state.purpose === "canvas-student-session-oauth-v1") {
         response.send(
@@ -255,7 +259,7 @@ export class OAuthController {
     refresh_token?: string;
     scope?: string;
     expires_in?: number;
-    user?: { id?: string | number };
+    user?: { id?: string | number; name?: string };
   }> {
     if (!code) {
       throw new Error("Missing OAuth code");
@@ -359,8 +363,10 @@ function parseOAuthTokenResponse(text: string): {
   ) {
     throw new Error("Invalid Canvas OAuth token response");
   }
-  const userId = user === undefined ? undefined : (user as Record<string, unknown>).id;
-  if (userId !== undefined && typeof userId !== "string" && typeof userId !== "number") {
+  const userRecord = user === undefined ? undefined : (user as Record<string, unknown>);
+  const userId = userRecord?.id;
+  const userName = userRecord === undefined ? undefined : optionalBoundedString(userRecord.name, 512);
+  if ((userId !== undefined && typeof userId !== "string" && typeof userId !== "number") || userName === null) {
     throw new Error("Invalid Canvas OAuth token response");
   }
   return {
@@ -368,7 +374,36 @@ function parseOAuthTokenResponse(text: string): {
     ...(refreshToken === undefined ? {} : { refresh_token: refreshToken }),
     ...(scope === undefined ? {} : { scope }),
     ...(expiresIn === undefined ? {} : { expires_in: Number(expiresIn) }),
-    ...(user === undefined ? {} : { user: { id: userId as string | number | undefined } })
+    ...(user === undefined
+      ? {}
+      : {
+          user: {
+            id: userId as string | number | undefined,
+            ...(userName === undefined ? {} : { name: userName })
+          }
+        })
+  };
+}
+
+function identityForVerifiedLaunch(
+  request: Request,
+  principal: NonNullable<ReturnType<typeof verifiedLtiPrincipal>>,
+  oauthDisplayName?: string
+): { displayName?: string; email?: string } {
+  const launchData = request.session?.launchData;
+  if (
+    !launchData ||
+    launchData.canvasUserId !== principal.canvasUserId ||
+    launchData.ltiSubject !== principal.subject ||
+    launchData.courseId !== principal.courseId ||
+    launchData.issuer !== principal.issuer ||
+    launchData.deploymentId !== principal.deploymentId
+  ) {
+    return oauthDisplayName ? { displayName: oauthDisplayName } : {};
+  }
+  return {
+    ...(oauthDisplayName || launchData.fullName ? { displayName: oauthDisplayName || launchData.fullName! } : {}),
+    ...(launchData.email ? { email: launchData.email } : {})
   };
 }
 
@@ -414,15 +449,9 @@ function oauthSessionBinding(sessionId: string): string {
 }
 
 export function canvasScopes(): string[] {
-  return [
-    "url:GET|/api/v1/courses/:course_id/quizzes",
-    "url:GET|/api/v1/courses/:course_id/assignments",
-    "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
-    "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
-    "url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id"
-  ];
+  return [...CANVAS_REQUIRED_OAUTH_SCOPES];
 }
 
 export function studentSessionScopes(): string[] {
-  return ["url:GET|/api/v1/login/session_token"];
+  return canvasScopes();
 }

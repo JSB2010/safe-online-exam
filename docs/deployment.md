@@ -407,10 +407,17 @@ gcloud builds submit \
 
 `cloudbuild-school.yaml` is the parameterized template for another installation. With `_SECRET_PREFIX=canvas_seb`, it expects the same suffixes shown above under `canvas_seb_*` secret names:
 
+For a self-hosted Canvas platform, override its authorization and JWKS endpoints. The Canvas cloud defaults are intentionally retained in the template, but their authorization endpoint redirects a self-hosted launch to `sso.canvaslms.com` and will fail inside the Canvas iframe. Do not infer `_LTI_ISSUER` from the Canvas hostname: retain its default unless the actual Canvas launch's `iss` field differs.
+
+```text
+_LTI_KEY_SET_URL=https://canvas.example.edu/api/lti/security/jwks
+_LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect
+```
+
 ```bash
 gcloud builds submit \
   --config=cloudbuild-school.yaml \
-  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
+  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_LTI_KEY_SET_URL=https://canvas.example.edu/api/lti/security/jwks,_LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
 ```
 
 Inspect every substitution and referenced secret before the first build.
@@ -461,6 +468,7 @@ curl -fsS "${TOOL_URL}/ready"
 curl -fsS "${TOOL_URL}/.well-known/jwks.json"
 curl -fsS "${TOOL_URL}/lti/config"
 curl -fsS "${TOOL_URL}/js/canvas-seb-detector.js" | head
+curl -fsS "${TOOL_URL}/js/canvas-seb-theme-loader.js" | head
 
 gcloud run services describe "$SERVICE" \
   --region="$REGION"
@@ -652,6 +660,7 @@ curl -fsS https://seb.example.edu/ready
 curl -fsS https://seb.example.edu/.well-known/jwks.json
 curl -fsS https://seb.example.edu/lti/config
 curl -fsS https://seb.example.edu/js/canvas-seb-detector.js | head
+curl -fsS https://seb.example.edu/js/canvas-seb-theme-loader.js | head
 ```
 
 Do not expose port 8080 directly, publish port 5432, or use a public HTTP `TOOL_URL`.

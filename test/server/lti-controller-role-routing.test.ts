@@ -19,6 +19,7 @@ describe("LtiController role routing", () => {
     hasAccessToken: ReturnType<typeof vi.fn>;
     hasSessionTokenAccess: ReturnType<typeof vi.fn>;
     hasDismissedStudentReadinessPrompt: ReturnType<typeof vi.fn>;
+    updateStoredIdentity: ReturnType<typeof vi.fn>;
   };
   let ltiService: { validateToken: ReturnType<typeof vi.fn> };
   let ltiState: {
@@ -45,7 +46,8 @@ describe("LtiController role routing", () => {
     canvasApi = {
       hasAccessToken: vi.fn().mockResolvedValue(true),
       hasSessionTokenAccess: vi.fn().mockResolvedValue(true),
-      hasDismissedStudentReadinessPrompt: vi.fn().mockResolvedValue(false)
+      hasDismissedStudentReadinessPrompt: vi.fn().mockResolvedValue(false),
+      updateStoredIdentity: vi.fn().mockResolvedValue(undefined)
     };
     ltiService = { validateToken: vi.fn() };
     ltiState = {
@@ -493,6 +495,8 @@ describe("LtiController role routing", () => {
       userId: "42",
       courseId: "course-1",
       roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      fullName: "Canvas Teacher",
+      email: "teacher@example.edu",
       deploymentId: "deployment-1",
       targetLinkUri: "https://tool.example.test/lti/launch",
       messageType: "LtiResourceLinkRequest"
@@ -509,6 +513,10 @@ describe("LtiController role routing", () => {
 
     expect(launchResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
     expect(request.session.verifiedLtiPrincipal).toMatchObject({ canvasUserId: "42", courseId: "course-1" });
+    expect(canvasApi.updateStoredIdentity).toHaveBeenCalledWith("42", {
+      displayName: "Canvas Teacher",
+      email: "teacher@example.edu"
+    });
 
     request.header = (name: string) =>
       ({
@@ -637,6 +645,18 @@ describe("LtiController role routing", () => {
 
     expect(ltiService.validateToken).toHaveBeenCalledTimes(5);
     expect(ltiState.claimState).not.toHaveBeenCalled();
+  });
+
+  it("explains an undersized Canvas platform signing key without exposing verifier details", async () => {
+    ltiService.validateToken.mockRejectedValue(new Error("RS256 requires key modulusLength to be 2048 bits or larger"));
+    const response = responseDouble();
+
+    await controller.launchPost(emptySessionRequest(), response, { id_token: "token", state: "state" });
+
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Canvas Signing-Key Error"));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining("smaller than 2048 bits"));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining("modulusLength"));
   });
 
   it("does not claim state or install a principal when signed launch claims differ from the login context", async () => {

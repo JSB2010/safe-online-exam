@@ -104,6 +104,17 @@ describe("deployment hardening artifacts", () => {
     }
   });
 
+  it("allows a school deployment to configure its own Canvas LTI platform endpoints", () => {
+    const config = source("cloudbuild-school.yaml");
+
+    expect(config).toContain("_LTI_ISSUER: https://canvas.instructure.com");
+    expect(config).toContain("_LTI_KEY_SET_URL: https://sso.canvaslms.com/api/lti/security/jwks");
+    expect(config).toContain("_LTI_AUTH_URL: https://sso.canvaslms.com/api/lti/authorize_redirect");
+    expect(config.match(/LTI_ISSUER=\$\{_LTI_ISSUER\}/gu)).toHaveLength(3);
+    expect(config.match(/LTI_KEY_SET_URL=\$\{_LTI_KEY_SET_URL\}/gu)).toHaveLength(3);
+    expect(config.match(/LTI_AUTH_URL=\$\{_LTI_AUTH_URL\}/gu)).toHaveLength(3);
+  });
+
   it("gates Cloud Run deployments on PostgreSQL integration tests and Cloud SQL migrations", () => {
     const integration = source("scripts/cloud-build-postgres-integration.sh");
 

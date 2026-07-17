@@ -89,7 +89,7 @@ The checked-in `compose.secrets.yaml` override clears direct secret variables an
 
 ## Canvas And LTI Endpoints
 
-Canvas cloud defaults are built in. Override them only for a Canvas environment with different LTI endpoints.
+Canvas cloud defaults are built in. Override the authorization and JWKS URLs for a Canvas environment with different LTI endpoints. `LTI_ISSUER` must equal the `iss` value in that Canvas's launch request; do not assume it equals `CANVAS_DOMAIN`, because a self-hosted Canvas can retain the standard Canvas issuer.
 
 | Variable              | Default                                                | Notes                                                            |
 | --------------------- | ------------------------------------------------------ | ---------------------------------------------------------------- |

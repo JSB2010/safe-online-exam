@@ -53,7 +53,7 @@ That smoke builds the exact runtime image, waits for the migration/app readiness
 | LTI and OAuth                          | LTI/OAuth controller and service tests                      | Signed-claim validation, browser binding, state replay prevention, role routing, OAuth state binding, and token ownership.                     |
 | Persistence and concurrency            | repository/session/assessment and PostgreSQL tests          | Atomic claims, one-time consumption, cleanup, session storage, distributed locks, and Canvas/database consistency.                             |
 | SEB configuration and proof            | `seb-*.test.ts`                                             | Plist generation, encryption, Config Key validation, configuration grants, proof redemption, handoff records, exit grants, and password rules. |
-| Detector                               | `canvas-seb-detector-script.test.ts`, static-asset tests    | Loading, Canvas route handling, access-code flow, approved tools, completion detection, exit behavior, and stable script paths.                |
+| Detector                               | `canvas-seb-detector-script.test.ts`, static-asset tests    | Loading, Canvas route handling, access-code flow, approved tools, completion detection, exit behavior, and stable detector/theme-loader paths. |
 | Browser app shell                      | `test/e2e/app-shell.spec.ts`                                | Built server startup, public metadata routes, React routes, desktop/mobile rendering, and browser console errors.                              |
 
 Do not rely on a high coverage percentage alone. The most sensitive assurance is that a test exercises the same trust boundary it claims to protect: signed LTI data for identity, server proof for access-code release, and Canvas-authored completion for exit behavior.
@@ -119,7 +119,7 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 
 1. Confirm `/health`, `/lti/config`, JWKS, and detector endpoints on the deployed URL.
 2. Confirm Canvas stores the current LTI client ID, deployment ID, login URL, target link URI, and JWKS URL from `/lti/config`.
-3. Confirm the API OAuth key has the instructor scopes and the exact student session-token scope described in [Canvas setup](canvas-setup.md).
+3. Confirm the API OAuth key has the complete application scope set, including the exact session-token scope, described in [Canvas setup](canvas-setup.md).
 4. Confirm the active Canvas theme loads the detector asset on a Classic Quiz `/take` page and a New Quiz assignment route.
 5. Confirm the client certificate profile is installed on an approved test device and the active public-key hash matches the service.
 

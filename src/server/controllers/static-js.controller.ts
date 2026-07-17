@@ -29,10 +29,52 @@ export class StaticJsController {
       .replaceAll("${SEB_API_KEY}", "");
   }
 
+  /**
+   * A Canvas theme-safe loader hosted by the tool rather than by Canvas Files.
+   *
+   * Some self-hosted Canvas deployments reject a locally stored theme .js file
+   * with Rails' InvalidCrossOriginRequest protection. Pointing the theme's
+   * js_overrides setting at this endpoint avoids that Canvas attachment route
+   * while retaining the normal quiz-page-only detector loading behavior.
+   */
+  @Get("/js/canvas-seb-theme-loader.js")
+  @Header("content-type", "application/javascript; charset=utf-8")
+  canvasThemeLoader(@Req() request: Request, @Res({ passthrough: true }) response?: Response): string {
+    const debugEnabled = this.config?.value.security.debugEnabled ?? true;
+    setDetectorCacheHeaders(response, debugEnabled);
+
+    const baseUrl = this.config?.getApplicationBaseUrl() || requestBaseUrl(request);
+    return renderCanvasThemeLoader(baseUrl);
+  }
+
   @Get("/js/health")
   health(): Record<string, string> {
     return { status: "UP" };
   }
+}
+
+export function renderCanvasThemeLoader(baseUrl: string): string {
+  const detectorUrl = `${baseUrl}/js/canvas-seb-detector.js`;
+  return `(function () {
+  "use strict";
+
+  const detectorUrl = ${JSON.stringify(detectorUrl)};
+  const assessmentPath = /^\\/courses\\/\\d+\\/(?:quizzes\\/\\d+\\/take|assignments\\/\\d+)(?:\\/|$)/;
+
+  if (!assessmentPath.test(window.location.pathname)) {
+    return;
+  }
+  if (document.querySelector('script[data-canvas-seb-detector="true"]')) {
+    return;
+  }
+
+  const script = document.createElement("script");
+  script.src = detectorUrl;
+  script.async = true;
+  script.dataset.canvasSebDetector = "true";
+  document.head.appendChild(script);
+})();
+`;
 }
 
 export function detectorAssetCandidates(

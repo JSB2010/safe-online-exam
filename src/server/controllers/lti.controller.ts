@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Logger, Post, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type { ContentItem, ContentSebSetting, LtiLaunchData, Quiz, QuizSebSetting } from "../../shared/models.js";
 import { isInstructor, isStudent, parseNewQuizContentId } from "../../shared/models.js";
@@ -39,6 +39,8 @@ import { SebDetector } from "../services/seb-detector.service.js";
 
 @Controller()
 export class LtiController {
+  private readonly logger = new Logger(LtiController.name);
+
   constructor(
     private readonly config: AppConfig,
     private readonly ltiService: LtiService,
@@ -129,6 +131,10 @@ export class LtiController {
       await regenerateSession(request);
       storeLaunchData(request, launchData);
       request.session!.verifiedLtiPrincipal = createVerifiedLtiPrincipal(launchData);
+      await this.canvasApi.updateStoredIdentity?.(request.session!.verifiedLtiPrincipal.canvasUserId, {
+        displayName: launchData.fullName,
+        email: launchData.email
+      });
 
       if (launchData.messageType === "LtiDeepLinkingRequest") {
         response
@@ -193,14 +199,9 @@ export class LtiController {
           );
         return;
       }
-      response
-        .status(400)
-        .send(
-          renderFallbackHtml(
-            "Invalid LTI Launch",
-            "<h1>Invalid LTI Launch</h1><p>The signed Canvas launch could not be verified. Reopen the tool from Canvas.</p>"
-          )
-        );
+      const failure = describeLtiLaunchFailure(error);
+      this.logger.warn(`LTI launch verification failed: ${failure.logMessage}`);
+      response.status(400).send(renderFallbackHtml(failure.title, failure.html));
     }
   }
 
@@ -753,6 +754,22 @@ export class LtiController {
       sessionId: request.sessionID
     });
   }
+}
+
+function describeLtiLaunchFailure(error: unknown): { logMessage: string; title: string; html: string } {
+  const message = error instanceof Error ? error.message : "";
+  if (/RS256 requires key modulusLength to be 2048 bits or larger/i.test(message)) {
+    return {
+      logMessage: "platform signing key modulus is below 2048 bits",
+      title: "Canvas Signing-Key Error",
+      html: "<h1>Canvas Signing-Key Error</h1><p>Canvas signed this launch with an RSA key smaller than 2048 bits, so the tool rejected it.</p><p>A Canvas administrator must rotate the platform LTI signing keys, restart Canvas's web service, and reopen the tool to issue a fresh launch. Do not lower the tool's signature-verification requirements.</p>"
+    };
+  }
+  return {
+    logMessage: "token verification failed",
+    title: "Invalid LTI Launch",
+    html: "<h1>Invalid LTI Launch</h1><p>The signed Canvas launch could not be verified. Reopen the tool from Canvas.</p><p>If this continues, ask a Canvas administrator to check the tool registration, deployment ID, issuer, and platform signing keys.</p>"
+  };
 }
 
 function storeLaunchData(request: Request, launchData: LtiLaunchData): void {

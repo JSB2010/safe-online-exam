@@ -128,6 +128,7 @@ These routes must stay stable unless Canvas and managed clients are updated toge
 - `GET /.well-known/jwks.json`
 - `GET /health` and `GET /ready`
 - `GET /js/canvas-seb-detector.js`
+- `GET /js/canvas-seb-theme-loader.js`
 - `GET /api/seb/canvas-detector.js`
 - `GET /api/oauth2callback`
 - `GET /seb/config/:courseId/:contentId.seb`

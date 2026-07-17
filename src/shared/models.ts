@@ -1,5 +1,21 @@
 export type ContentType = "CLASSIC_QUIZ" | "NEW_QUIZ" | "ASSIGNMENT" | "DISCUSSION" | "EXTERNAL_TOOL" | "PAGE";
 
+/**
+ * Every OAuth connection receives this complete capability set so a Canvas
+ * user can later launch the tool in either a learner or instructor context.
+ */
+export const CANVAS_REQUIRED_OAUTH_SCOPES = [
+  "url:GET|/api/v1/courses/:course_id/quizzes",
+  "url:GET|/api/v1/courses/:course_id/assignments",
+  "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
+  "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
+  "url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
+  "url:GET|/api/v1/login/session_token"
+] as const;
+
+/** Increment when a new required Canvas OAuth capability is introduced. */
+export const CANVAS_OAUTH_SCOPE_VERSION = 2;
+
 export interface Quiz {
   id: string;
   title: string;
@@ -230,7 +246,17 @@ export interface OAuthToken {
   accessToken: string;
   refreshToken?: string | null;
   scope?: string | null;
+  /** Scopes this application requested; Canvas may omit scope from its response. */
+  requestedScopes?: string[] | null;
+  /** App-owned required-scope contract for reconnect decisions. */
+  oauthScopeVersion?: number | null;
   expiresAt?: string | null;
+  /** Latest display name from the verified Canvas OAuth/LTI identity. */
+  displayName?: string | null;
+  /** Latest email address from the verified Canvas LTI identity, when provided. */
+  email?: string | null;
+  /** When the stored display name or email last changed. */
+  identityUpdatedAt?: string | null;
   /**
    * UI-only preference. This never represents device trust or readiness; it
    * only prevents the optional student setup-check prompt from reappearing.

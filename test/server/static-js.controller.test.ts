@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { AppConfig } from "../../src/server/config/app-config.js";
-import { detectorAssetCandidates, StaticJsController } from "../../src/server/controllers/static-js.controller.js";
+import {
+  detectorAssetCandidates,
+  renderCanvasThemeLoader,
+  StaticJsController
+} from "../../src/server/controllers/static-js.controller.js";
 
 describe("StaticJsController", () => {
   it("injects forwarded Cloud Run base URL without API key placeholders", async () => {
@@ -209,6 +213,25 @@ describe("StaticJsController", () => {
     const [firstCandidate] = detectorAssetCandidates(false, "production", "/repo");
 
     expect(firstCandidate).toBe("/repo/dist/server/server/assets/canvas-seb-detector.min.js");
+  });
+
+  it("serves a hosted theme loader that loads the detector only on Canvas assessment routes", () => {
+    const script = renderCanvasThemeLoader("https://seb.example.edu");
+
+    expect(script).toContain('const detectorUrl = "https://seb.example.edu/js/canvas-seb-detector.js";');
+    expect(script).toContain("quizzes\\/\\d+\\/take");
+    expect(script).toContain("assignments\\/\\d+");
+    expect(script).toContain('script.dataset.canvasSebDetector = "true";');
+  });
+
+  it("uses the configured canonical URL for the hosted theme loader", () => {
+    const controller = new StaticJsController(createConfig(false));
+    const response = createResponse();
+
+    const script = controller.canvasThemeLoader(createRequest(), response as any);
+
+    expect(script).toContain('const detectorUrl = "https://configured.example.com/js/canvas-seb-detector.js";');
+    expect(response.headers.get("cache-control")).toBe("no-cache, must-revalidate");
   });
 });
 

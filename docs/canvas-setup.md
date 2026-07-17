@@ -4,6 +4,44 @@ This guide installs a deployed Canvas Safe Exam Browser LTI service in Canvas. C
 
 The service is portable across Canvas environments, but each deployment is configured for one Canvas origin. Keep separate client IDs, deployment IDs, OAuth credentials, PostgreSQL databases, secrets, and service URLs for environments that must remain isolated.
 
+### Why a second Canvas needs a second deployment
+
+The service has one active LTI platform configuration: `CANVAS_DOMAIN`, `LTI_ISSUER`, `LTI_KEY_SET_URL`, `LTI_AUTH_URL`, `LTI_CLIENT_ID`, and `LTI_DEPLOYMENT_ID`. Canvas cloud values are the defaults. If a service configured with those defaults is registered in a self-hosted Canvas, `/lti/login` redirects the embedded tool frame to `sso.canvaslms.com`; that page is intentionally not embeddable by the self-hosted Canvas and the browser shows `sso.canvaslms.com refused to connect`.
+
+Deploy a separate service for each independent Canvas instance. For self-hosted Canvas, set its JWKS and authorization endpoints (normally `${CANVAS_DOMAIN}/api/lti/security/jwks` and `${CANVAS_DOMAIN}/api/lti/authorize_redirect`). Set `LTI_ISSUER` to the exact `iss` value Canvas sends, not by inferring it from `CANVAS_DOMAIN`: a self-hosted Canvas can still use `https://canvas.instructure.com` as its issuer. See [Configuration](configuration.md#canvas-and-lti-endpoints) and the self-hosted overrides in [Deployment](deployment.md#cloud-build-deployment).
+
+### Self-hosted Canvas signing keys
+
+Canvas must sign LTI launch tokens with an RSA key of at least 2048 bits. Before registering a tool, inspect `${CANVAS_DOMAIN}/api/lti/security/jwks`; do not use the legacy sample JWKs shipped with some Canvas Docker configurations. A verifier must reject undersized `RS256` keys rather than accepting a weaker platform signature.
+
+For a running Canvas instance, rotate the three platform keys through Canvas's own `Lti::KeyStorage` and restart its web service so its JWKS response reloads the new keys. For example, run this in the Canvas web container:
+
+```bash
+bundle exec rails runner '
+  store = Lti::KeyStorage
+  values = {
+    CanvasSecurity::KeyStorage::PAST => CanvasSecurity::KeyStorage.new_key,
+    CanvasSecurity::KeyStorage::PRESENT => CanvasSecurity::KeyStorage.new_key,
+    CanvasSecurity::KeyStorage::FUTURE => CanvasSecurity::KeyStorage.new_key
+  }
+  store.send(:consul_proxy).set_keys(values, global: true)
+  DynamicSettings.reset_cache!
+'
+```
+
+After the web-service restart, verify that every key at `${CANVAS_DOMAIN}/api/lti/security/jwks` has a 2048-bit (or larger) modulus, then reopen the external tool to make Canvas issue a fresh launch token. Rotating all three keys invalidates a launch that was already in an open iframe; this is expected.
+
+### LTI launch recovery
+
+Use the visible error state to choose the next check:
+
+| What appears in Canvas                 | Meaning                                                                                                               | Recovery                                                                                                                                          |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sso.canvaslms.com refused to connect` | The tool is using Canvas cloud's authorization endpoint for a self-hosted Canvas.                                     | Set `LTI_AUTH_URL` and `LTI_KEY_SET_URL` to the self-hosted Canvas endpoints, deploy the tool, and relaunch it.                                   |
+| `Canvas Signing-Key Error`             | Canvas's platform JWKS contains an RSA key smaller than 2048 bits.                                                    | Rotate the three `Lti::KeyStorage` keys above, restart Canvas web, verify the public JWKS, and reopen the tool.                                   |
+| `Invalid LTI Launch`                   | The tool could not verify the signed launch for another reason.                                                       | Reopen the tool. If it repeats, compare the deployment ID, issuer, client ID, target-link URI, and public JWKS URL with the Canvas Developer Key. |
+| `Connect Canvas`                       | The LTI launch succeeded but the current user has not yet granted Canvas API access to this separate Canvas instance. | Select **Connect Canvas** and complete the Canvas authorization flow.                                                                             |
+
 ## Prerequisites
 
 Have a Canvas administrator who can manage Developer Keys, external apps, account themes, and OAuth scopes. You also need the deployed service URL and access to the secret store that supplies its runtime values.
@@ -42,7 +80,7 @@ In the root account’s Developer Keys area, create an API key with this redirec
 ${TOOL_URL}/api/oauth2callback
 ```
 
-If the Canvas instance supports enforced scopes, allow these instructor scopes:
+If the Canvas instance supports enforced scopes, allow this complete application scope set:
 
 ```text
 url:GET|/api/v1/courses/:course_id/quizzes
@@ -50,15 +88,12 @@ url:GET|/api/v1/courses/:course_id/assignments
 url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id
 url:PUT|/api/v1/courses/:course_id/quizzes/:id
 url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id
-```
-
-Also allow the student session-handoff scope:
-
-```text
 url:GET|/api/v1/login/session_token
 ```
 
-The service requests only the applicable subset: instructors authorize the assessment scopes and students authorize the session-token scope. Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, then verify it with a student test account.
+Every Canvas connection requests this same scope set, regardless of the user’s role in the course that initiated authorization. This prevents a person who is an instructor in one course and a student in another from retaining an incompatible role-specific grant. Canvas continues to enforce the authorizing user’s actual account and course permissions.
+
+Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have every existing user select **Reconnect Canvas** once. Scope changes apply only to newly issued tokens.
 
 Store the API key’s client ID and secret in the deployment’s secret manager as `CANVAS_API_CLIENT_ID` and `CANVAS_API_CLIENT_SECRET`. If you change the redirect URI or scope set, affected users must reauthorize.
 
@@ -129,6 +164,32 @@ Create a small JavaScript loader, replacing `${TOOL_URL}` before upload:
 The pattern includes Classic Quiz `/take` pages and New Quiz assignment routes, including their Canvas-generated descendants. `script.src` must be a plain JavaScript URL string, not a Markdown link.
 
 Upload the loader as the account theme’s desktop JavaScript and apply the theme at the intended account scope. Theme upload capability and inherited themes vary by Canvas configuration; if the upload control is unavailable, resolve that account setting before treating the detector as installed. Retest the loader after significant Canvas theme, CSP, or quiz-rendering changes.
+
+### Self-hosted Canvas local-file workaround
+
+Some self-hosted Canvas deployments store an uploaded theme JavaScript file as a local `/accounts/:accountId/files/:fileId/download` attachment. Rails can reject that JavaScript response with `ActionController::InvalidCrossOriginRequest` (HTTP `422`), so the loader never reaches this service. This is a Canvas attachment-serving limitation, not an LTI, detector, or deployment-ID failure.
+
+When the browser console shows that `422`, do **not** disable Canvas CSRF protection globally. Instead, configure the account theme's `js_overrides` value to this externally hosted loader URL:
+
+```text
+${TOOL_URL}/js/canvas-seb-theme-loader.js
+```
+
+The hosted loader keeps the same quiz-route scope as the uploaded file and loads the full detector only on Canvas Classic Quiz `/take` pages and New Quiz assignment routes. Canvas's Theme Editor does not provide a direct URL field, so set this value through your Canvas provisioning or administration path and preserve it on future theme saves. For a one-off root-account recovery, run this inside the Canvas web container after replacing the account ID and URL:
+
+```bash
+bundle exec rails runner '
+account = Account.find(1)
+current = account.brand_config || BrandConfig.default
+attrs = current.attributes.slice(*BrandConfig::ATTRS_TO_INCLUDE_IN_MD5.map(&:to_s))
+attrs["js_overrides"] = "https://seb.example.edu/js/canvas-seb-theme-loader.js"
+replacement = BrandConfig.for(attrs.symbolize_keys)
+replacement.save_unless_dup!
+replacement.sync_to_s3_and_save_to_account!(nil, account)
+'
+```
+
+For a broader Canvas deployment, configure S3-compatible attachment storage and re-upload the theme file. Canvas then serves uploaded theme assets from object storage instead of the local files controller. That is the durable solution for arbitrary uploaded theme JavaScript, CSS, and similar assets; the hosted loader is the smallest safe fix for this integration.
 
 The service also exposes `/api/seb/canvas-detector.js` for an existing installation that uses that path, but new loaders should use `/js/canvas-seb-detector.js`.
 

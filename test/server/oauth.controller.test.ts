@@ -2,23 +2,25 @@ import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthController, canvasScopes, studentSessionScopes } from "../../src/server/controllers/oauth.controller.js";
 import { UpstreamRequestTimeoutError } from "../../src/server/http/upstream-deadline.js";
+import { CANVAS_OAUTH_SCOPE_VERSION } from "../../src/shared/models.js";
 
 const instructorRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor";
 const learnerRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner";
 
 describe("canvasScopes", () => {
-  it("requests the Canvas API scopes needed for quiz SEB enforcement", () => {
+  it("requests every Canvas OAuth scope required across instructor and student launches", () => {
     expect(canvasScopes()).toEqual([
       "url:GET|/api/v1/courses/:course_id/quizzes",
       "url:GET|/api/v1/courses/:course_id/assignments",
       "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
       "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
-      "url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id"
+      "url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
+      "url:GET|/api/v1/login/session_token"
     ]);
   });
 
-  it("uses a separate least-privilege scope for student session handoff", () => {
-    expect(studentSessionScopes()).toEqual(["url:GET|/api/v1/login/session_token"]);
+  it("requests the same durable capability set from the student connection flow", () => {
+    expect(studentSessionScopes()).toEqual(canvasScopes());
   });
 });
 
@@ -268,6 +270,8 @@ describe("OAuthController", () => {
     expect(canvasApi.storeAccessToken).toHaveBeenCalledWith("1", "access-token", {
       refreshToken: "refresh-token",
       scope: "scope-1",
+      requestedScopes: canvasScopes(),
+      oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION,
       expiresIn: 3600
     });
     expect(request.session).toEqual({
@@ -283,6 +287,35 @@ describe("OAuthController", () => {
       }
     });
     expect(response.redirect).toHaveBeenCalledWith("/lti/launch");
+  });
+
+  it("stores the verified Canvas name and bound LTI email alongside an OAuth token", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      tokenResponse({
+        access_token: "access-token",
+        user: { id: 1, name: "Canvas Display Name" }
+      })
+    );
+    ltiState.peekState.mockReturnValue(validState());
+    const request = verifiedRequest();
+    Object.assign(request.session.launchData, {
+      canvasUserId: "1",
+      ltiSubject: "lti-subject-1",
+      issuer: "https://canvas.example.edu",
+      fullName: "LTI Display Name",
+      email: "learner@example.edu"
+    });
+
+    await controller.callback(request, responseDouble(), { code: "oauth-code", state: "state" });
+
+    expect(canvasApi.storeAccessToken).toHaveBeenCalledWith(
+      "1",
+      "access-token",
+      expect.objectContaining({
+        displayName: "Canvas Display Name",
+        email: "learner@example.edu"
+      })
+    );
   });
 
   it("does not create an iframe-resume marker for an unrelated safe local redirect", async () => {

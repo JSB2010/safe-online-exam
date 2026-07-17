@@ -72,7 +72,7 @@ An LTI launch authenticates a person but does not authorize Canvas API calls. Th
 3. `/api/oauth2callback` verifies state and exchanges the authorization code.
 4. PostgreSQL stores the token by numeric Canvas user ID; `CanvasApiService` refreshes it when necessary.
 
-Students use the same OAuth mechanism only to obtain the narrow Canvas session-token permission required for the SEB session handoff: `url:GET|/api/v1/login/session_token`. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
+Every Canvas OAuth connection requests the same complete application scope set, including the session-token permission required for SEB handoff: `url:GET|/api/v1/login/session_token`. This keeps one durable grant valid when a person is an instructor in one course and a student in another; Canvas still enforces their actual course permissions. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
 
 ## Assessment And Course Model
 
@@ -183,12 +183,12 @@ Schema changes are explicit, ordered migrations recorded with checksums in `sche
 
 ### Canvas OAuth routes
 
-| Route                                                    | Caller and purpose                                                 |
-| -------------------------------------------------------- | ------------------------------------------------------------------ |
-| `GET /api/oauth2authorize`, `GET /api/oauth2reauthorize` | Verified instructor begins or repeats Canvas API authorization.    |
-| `GET /api/student-session-authorize`                     | Verified student begins the narrow session-handoff authorization.  |
-| `GET /api/oauth2callback`                                | Canvas OAuth redirect URI; state and launch session are validated. |
-| `GET /api/oauth2status`                                  | Verified instructor checks stored authorization availability.      |
+| Route                                                    | Caller and purpose                                                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `GET /api/oauth2authorize`, `GET /api/oauth2reauthorize` | Verified instructor begins or repeats Canvas API authorization.                                    |
+| `GET /api/student-session-authorize`                     | Verified student begins the complete application authorization and returns to the session handoff. |
+| `GET /api/oauth2callback`                                | Canvas OAuth redirect URI; state and launch session are validated.                                 |
+| `GET /api/oauth2status`                                  | Verified instructor checks stored authorization availability.                                      |
 
 ### Instructor assessment routes
 
@@ -233,10 +233,11 @@ All routes below are under `/api/quizzes` and require the verified instructor/re
 
 ### Detector and diagnostics routes
 
-| Route                                   | Purpose                                                                            |
-| --------------------------------------- | ---------------------------------------------------------------------------------- |
-| `GET /js/canvas-seb-detector.js`        | Stable detector script URL for new Canvas theme loaders.                           |
-| `GET /api/seb/canvas-detector.js`       | Stable compatibility alias for an existing loader.                                 |
-| `POST /api/debug/canvas-detector-trace` | Accepts sanitized detector diagnostics only when debug/diagnostic mode is enabled. |
+| Route                                   | Purpose                                                                                               |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `GET /js/canvas-seb-detector.js`        | Stable detector script URL for new Canvas theme loaders.                                              |
+| `GET /js/canvas-seb-theme-loader.js`    | Hosted, quiz-route-limited loader for Canvas deployments that cannot serve uploaded theme JavaScript. |
+| `GET /api/seb/canvas-detector.js`       | Stable compatibility alias for an existing loader.                                                    |
+| `POST /api/debug/canvas-detector-trace` | Accepts sanitized detector diagnostics only when debug/diagnostic mode is enabled.                    |
 
 The route handlers are the source of truth for parameters and response schemas. Treat unlisted query parameters or output fields as implementation details.

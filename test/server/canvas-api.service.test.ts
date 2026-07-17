@@ -7,6 +7,12 @@ import {
   CANVAS_OAUTH_RESPONSE_MAX_BYTES,
   CanvasApiService
 } from "../../src/server/services/canvas-api.service.js";
+import { CANVAS_OAUTH_SCOPE_VERSION, CANVAS_REQUIRED_OAUTH_SCOPES } from "../../src/shared/models.js";
+
+const currentOAuthScopeOptions = {
+  requestedScopes: [...CANVAS_REQUIRED_OAUTH_SCOPES],
+  oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION
+};
 
 describe("CanvasApiService", () => {
   let service: CanvasApiService;
@@ -255,17 +261,45 @@ describe("CanvasApiService", () => {
     });
   });
 
-  it("does not treat an explicitly non-session-scoped token as a student session connection", async () => {
+  it("keeps verified identity fields in the OAuth token document", async () => {
+    const saved = await service.storeAccessToken("identity-user", "identity-token", {
+      displayName: "Ada Lovelace",
+      email: "ada@example.edu"
+    });
+
+    expect(saved).toMatchObject({
+      displayName: "Ada Lovelace",
+      email: "ada@example.edu",
+      identityUpdatedAt: expect.any(String)
+    });
+
+    await service.updateStoredIdentity("identity-user", {
+      displayName: "  Ada   Byron  ",
+      email: "ada.byron@example.edu"
+    });
+
+    await expect(repositories.oauthTokens.get("identity-user")).resolves.toMatchObject({
+      accessToken: "identity-token",
+      displayName: "Ada Byron",
+      email: "ada.byron@example.edu",
+      identityUpdatedAt: expect.any(String)
+    });
+  });
+
+  it("requires the current unified OAuth scope contract for student session handoff", async () => {
     await service.storeAccessToken("scoped-user", "scoped-token", {
       scope: "url:GET|/api/v1/courses/:course_id/quizzes"
     });
 
     await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(false);
+    await expect(service.hasAccessToken("scoped-user")).resolves.toBe(false);
 
     await service.storeAccessToken("scoped-user", "session-token", {
-      scope: "url:GET|/api/v1/login/session_token"
+      scope: "url:GET|/api/v1/login/session_token",
+      ...currentOAuthScopeOptions
     });
     await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(true);
+    await expect(service.hasAccessToken("scoped-user")).resolves.toBe(true);
   });
 
   it("persists a student setup-check dismissal without treating it as device trust", async () => {
@@ -282,7 +316,8 @@ describe("CanvasApiService", () => {
   it("refreshes expired OAuth access tokens before calling Canvas APIs", async () => {
     await service.storeAccessToken("refresh-user", "old-token", {
       refreshToken: "refresh-token",
-      expiresAt: new Date(Date.now() - 1000).toISOString()
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+      ...currentOAuthScopeOptions
     });
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -312,7 +347,8 @@ describe("CanvasApiService", () => {
     );
     await expect(repositories.oauthTokens.get("refresh-user")).resolves.toMatchObject({
       accessToken: "new-token",
-      refreshToken: "new-refresh-token"
+      refreshToken: "new-refresh-token",
+      ...currentOAuthScopeOptions
     });
   });
 
