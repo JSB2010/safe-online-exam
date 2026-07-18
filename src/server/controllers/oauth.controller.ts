@@ -1,13 +1,18 @@
 import { createHash } from "node:crypto";
 import { Controller, Get, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import { CANVAS_OAUTH_SCOPE_VERSION, CANVAS_REQUIRED_OAUTH_SCOPES } from "../../shared/models.js";
+import {
+  CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES,
+  CANVAS_OAUTH_SCOPE_VERSION,
+  CANVAS_REQUIRED_OAUTH_SCOPES
+} from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { renderAppShell } from "../http/app-shell.js";
 import { discardResponseBody, readBoundedUtf8Response } from "../http/bounded-response.js";
 import { isUpstreamRequestTimeout, withUpstreamDeadline } from "../http/upstream-deadline.js";
 import {
   isCanvasRestUserId,
+  isVerifiedAccountAdmin,
   isVerifiedInstructor,
   isVerifiedStudent,
   verifiedLtiPrincipal
@@ -64,7 +69,14 @@ export class OAuthController {
       response.status(403).send("OAuth identity does not match the validated Canvas launch");
       return;
     }
-    await this.beginAuthorization(request, response, principal, "canvas-oauth-v2", canvasScopes(), query.redirect_url);
+    await this.beginAuthorization(
+      request,
+      response,
+      principal,
+      "canvas-oauth-v2",
+      await this.scopesForUser(principal.canvasUserId, canvasScopes()),
+      query.redirect_url
+    );
   }
 
   @Get("/student-session-authorize")
@@ -74,6 +86,7 @@ export class OAuthController {
       response.status(401).send("A validated Canvas launch is required");
       return;
     }
+    const studentPrincipal = principal;
     if (!isVerifiedStudent(principal) || isVerifiedInstructor(principal)) {
       response.status(403).send("Student access is required");
       return;
@@ -85,10 +98,35 @@ export class OAuthController {
     await this.beginAuthorization(
       request,
       response,
-      principal,
+      studentPrincipal,
       "canvas-student-session-oauth-v1",
-      studentSessionScopes(),
-      this.studentReturnUrl(request, principal)
+      await this.scopesForUser(studentPrincipal.canvasUserId, studentSessionScopes()),
+      this.studentReturnUrl(request, studentPrincipal)
+    );
+  }
+
+  @Get("/admin/oauth2authorize")
+  async adminAuthorize(@Req() request: Request, @Res() response: Response): Promise<void> {
+    const principal = verifiedLtiPrincipal(request);
+    if (!principal) {
+      response.status(401).send("A validated Canvas launch is required");
+      return;
+    }
+    if (!isVerifiedAccountAdmin(principal)) {
+      response.status(403).send("Root-account administrator access is required");
+      return;
+    }
+    if (!request.sessionID) {
+      response.status(401).send("A validated Canvas session is required");
+      return;
+    }
+    await this.beginAuthorization(
+      request,
+      response,
+      principal,
+      "canvas-admin-oauth-v1",
+      adminScopes(),
+      "/lti/launch?connected=1"
     );
   }
 
@@ -119,7 +157,9 @@ export class OAuthController {
           ? isVerifiedInstructor(principal)
           : state.purpose === "canvas-student-session-oauth-v1"
             ? isVerifiedStudent(principal) && !isVerifiedInstructor(principal)
-            : false;
+            : state.purpose === "canvas-admin-oauth-v1"
+              ? isVerifiedAccountAdmin(principal)
+              : false;
       if (
         !expectedRole ||
         !request.sessionID ||
@@ -127,6 +167,7 @@ export class OAuthController {
         state.canvasUserId !== principal.canvasUserId ||
         state.ltiSubject !== principal.subject ||
         state.courseId !== principal.courseId ||
+        (state.purpose === "canvas-admin-oauth-v1" && state.accountId !== principal.accountId) ||
         state.issuer !== principal.issuer ||
         state.deploymentId !== principal.deploymentId
       ) {
@@ -138,10 +179,13 @@ export class OAuthController {
       if (!tokenOwner || tokenOwner !== principal.canvasUserId) {
         throw new Error("Canvas OAuth token owner does not match the validated LTI user");
       }
+      const requestedScopes = state.oauthScopeProfile === "admin" ? adminScopes() : scopesForPurpose(state.purpose);
+      const grantType = hasAdminScopeProfile(requestedScopes) ? "account_admin" : "instructor";
       await this.canvasApi.storeAccessToken(tokenOwner, token.access_token, {
+        ...(grantType === "account_admin" ? { grantType } : {}),
         refreshToken: token.refresh_token || null,
         scope: token.scope || null,
-        requestedScopes: canvasScopes(),
+        requestedScopes,
         oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION,
         expiresIn: token.expires_in,
         ...identityForVerifiedLaunch(request, principal, token.user?.name)
@@ -222,7 +266,7 @@ export class OAuthController {
     request: Request,
     response: Response,
     principal: NonNullable<ReturnType<typeof verifiedLtiPrincipal>>,
-    purpose: "canvas-oauth-v2" | "canvas-student-session-oauth-v1",
+    purpose: "canvas-oauth-v2" | "canvas-student-session-oauth-v1" | "canvas-admin-oauth-v1",
     scopes: string[],
     redirectUrl?: string
   ): Promise<void> {
@@ -237,9 +281,11 @@ export class OAuthController {
       canvasUserId: principal.canvasUserId,
       ltiSubject: principal.subject,
       courseId: principal.courseId,
+      ...(principal.contextType === "account" ? { accountId: principal.accountId } : {}),
       issuer: principal.issuer,
       deploymentId: principal.deploymentId,
       sessionBinding: oauthSessionBinding(request.sessionID),
+      oauthScopeProfile: hasAdminScopeProfile(scopes) ? "admin" : "application",
       redirectUrl: safeLocalRedirect(redirectUrl)
     });
     const authUrl = new URL(`${this.config.getCanvasDomain()}/login/oauth2/auth`);
@@ -249,6 +295,10 @@ export class OAuthController {
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("scope", scopes.join(" "));
     response.redirect(authUrl.toString());
+  }
+
+  private async scopesForUser(userId: string, defaultScopes: string[]): Promise<string[]> {
+    return (await this.canvasApi.hasAdminScopeGrant(userId)) ? adminScopes() : defaultScopes;
   }
 
   private async exchangeCode(
@@ -454,4 +504,16 @@ export function canvasScopes(): string[] {
 
 export function studentSessionScopes(): string[] {
   return canvasScopes();
+}
+
+export function adminScopes(): string[] {
+  return [...CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES, ...canvasScopes()];
+}
+
+function scopesForPurpose(purpose: string): string[] {
+  return purpose === "canvas-admin-oauth-v1" ? adminScopes() : canvasScopes();
+}
+
+function hasAdminScopeProfile(scopes: readonly string[]): boolean {
+  return CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES.every((scope) => scopes.includes(scope));
 }

@@ -1,18 +1,35 @@
 import type { Request } from "express";
 import type { LtiLaunchData } from "../../shared/models.js";
-import { isInstructor, isStudent } from "../../shared/models.js";
+import { isAccountAdministrator, isInstructor, isStudent } from "../../shared/models.js";
 
-export interface VerifiedLtiPrincipal {
+interface VerifiedLtiPrincipalBase {
   version: 1;
   issuer: string;
   deploymentId: string;
   subject: string;
   canvasUserId: string;
-  courseId: string;
   roles: string[];
   custom: Record<string, string>;
   authenticatedAt: string;
 }
+
+export interface VerifiedCourseLtiPrincipal extends VerifiedLtiPrincipalBase {
+  contextType?: "course";
+  courseId: string;
+  accountId?: string;
+  rootAccountId?: string;
+  isRootAccountAdmin?: false;
+}
+
+export interface VerifiedAccountAdminPrincipal extends VerifiedLtiPrincipalBase {
+  contextType: "account";
+  courseId: "";
+  accountId: string;
+  rootAccountId: string;
+  isRootAccountAdmin: true;
+}
+
+export type VerifiedLtiPrincipal = VerifiedCourseLtiPrincipal | VerifiedAccountAdminPrincipal;
 
 export class CanvasLtiConfigurationError extends Error {
   constructor() {
@@ -33,8 +50,40 @@ export function createVerifiedLtiPrincipal(launchData: LtiLaunchData): VerifiedL
   if (!isCanvasRestUserId(canvasUserId)) {
     throw new CanvasLtiConfigurationError();
   }
-  if (!subject || !issuer || !deploymentId || !courseId) {
+  if (!subject || !issuer || !deploymentId) {
     throw new Error("Validated LTI launch is missing required principal claims");
+  }
+  const custom = { ...(launchData.custom || {}) };
+  if (custom.seb_launch_surface === "account_admin") {
+    const accountId = custom.canvas_account_id;
+    const rootAccountId = custom.canvas_root_account_id;
+    if (!isCanvasRestUserId(accountId) || !isCanvasRestUserId(rootAccountId)) {
+      throw new Error("Validated root-account launch is missing signed numeric account identifiers");
+    }
+    if (custom.canvas_user_is_root_account_admin !== "true") {
+      throw new Error("Validated root-account launch does not identify a Canvas root-account administrator");
+    }
+    if (!isAccountAdministrator({ roles: launchData.roles, custom })) {
+      throw new Error("Validated root-account launch is missing a signed Canvas administrator role");
+    }
+    return {
+      version: 1,
+      contextType: "account",
+      issuer,
+      deploymentId,
+      subject,
+      canvasUserId,
+      courseId: "",
+      accountId,
+      rootAccountId,
+      isRootAccountAdmin: true,
+      roles: [...launchData.roles],
+      custom,
+      authenticatedAt: new Date().toISOString()
+    };
+  }
+  if (!courseId) {
+    throw new Error("Validated course launch is missing required course context");
   }
   return {
     version: 1,
@@ -44,7 +93,7 @@ export function createVerifiedLtiPrincipal(launchData: LtiLaunchData): VerifiedL
     canvasUserId,
     courseId,
     roles: [...launchData.roles],
-    custom: { ...(launchData.custom || {}) },
+    custom,
     authenticatedAt: new Date().toISOString()
   };
 }
@@ -57,20 +106,39 @@ export function verifiedLtiPrincipal(request: Request): VerifiedLtiPrincipal | n
     !principal.deploymentId ||
     !principal.subject ||
     !principal.canvasUserId ||
-    !principal.courseId ||
     !Array.isArray(principal.roles) ||
     !principal.custom ||
     typeof principal.custom !== "object"
   ) {
     return null;
   }
+  if (principal.contextType === "account") {
+    if (
+      principal.courseId !== "" ||
+      !isCanvasRestUserId(principal.accountId) ||
+      !isCanvasRestUserId(principal.rootAccountId) ||
+      principal.isRootAccountAdmin !== true
+    ) {
+      return null;
+    }
+  } else if (!principal.courseId) {
+    return null;
+  }
   return principal;
 }
 
-export function isVerifiedInstructor(principal: VerifiedLtiPrincipal): boolean {
-  return isInstructor({ roles: principal.roles, custom: principal.custom });
+export function isVerifiedInstructor(principal: VerifiedLtiPrincipal): principal is VerifiedCourseLtiPrincipal {
+  return principal.contextType !== "account" && isInstructor({ roles: principal.roles, custom: principal.custom });
 }
 
-export function isVerifiedStudent(principal: VerifiedLtiPrincipal): boolean {
-  return isStudent({ roles: principal.roles, custom: principal.custom });
+export function isVerifiedStudent(principal: VerifiedLtiPrincipal): principal is VerifiedCourseLtiPrincipal {
+  return principal.contextType !== "account" && isStudent({ roles: principal.roles, custom: principal.custom });
+}
+
+export function isVerifiedAccountAdmin(principal: VerifiedLtiPrincipal): principal is VerifiedAccountAdminPrincipal {
+  return (
+    principal.contextType === "account" &&
+    principal.isRootAccountAdmin === true &&
+    isAccountAdministrator({ roles: principal.roles, custom: principal.custom })
+  );
 }

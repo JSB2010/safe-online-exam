@@ -3,6 +3,7 @@ import { AppConfig } from "./config/app-config.js";
 import { RepositoryProvider } from "./data/repositories.js";
 import { PostgresDatabase } from "./data/postgres-client.js";
 import { DebugController } from "./controllers/debug.controller.js";
+import { AdminController } from "./controllers/admin.controller.js";
 import { HomeController } from "./controllers/home.controller.js";
 import { JwkController } from "./controllers/jwk.controller.js";
 import { LtiController } from "./controllers/lti.controller.js";
@@ -11,6 +12,7 @@ import { QuizController } from "./controllers/quiz.controller.js";
 import { SebController } from "./controllers/seb.controller.js";
 import { StaticJsController } from "./controllers/static-js.controller.js";
 import { AssessmentService } from "./services/assessment.service.js";
+import { AdminAuthorizationService } from "./services/admin-authorization.service.js";
 import { AssessmentAuthorizationService } from "./services/assessment-authorization.service.js";
 import { CanvasApiService } from "./services/canvas-api.service.js";
 import { CourseSettingsService } from "./services/course-settings.service.js";
@@ -28,6 +30,7 @@ import { DistributedAdmissionService } from "./security/distributed-admission.js
 
 @Module({
   controllers: [
+    AdminController,
     DebugController,
     HomeController,
     JwkController,
@@ -42,6 +45,7 @@ import { DistributedAdmissionService } from "./security/distributed-admission.js
     PostgresDatabase,
     RepositoryProvider,
     AssessmentService,
+    AdminAuthorizationService,
     AssessmentAuthorizationService,
     CanvasApiService,
     CourseSettingsService,

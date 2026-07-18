@@ -2,11 +2,12 @@
 
 ## System Purpose
 
-Canvas Safe Exam Browser LTI is an LTI 1.3 tool for requiring Safe Exam Browser (SEB) on Canvas Classic Quizzes and New Quizzes. It has three connected responsibilities:
+Canvas Safe Exam Browser LTI is an LTI 1.3 tool for requiring Safe Exam Browser (SEB) on Canvas Classic Quizzes and New Quizzes. It has four connected responsibilities:
 
 1. Give instructors a course-scoped interface for discovering Canvas assessments and managing SEB policy.
-2. Generate protected SEB configurations and establish a Canvas session inside SEB without transferring a normal-browser session cookie.
-3. Release the Canvas access code and approved web-tool capability only when SEB proves that it is using the current configuration.
+2. Give verified root-account administrators a Canvas-embedded, school-wide recovery interface with controlled password reveal, active-course connection, and bulk tool rollout.
+3. Generate protected SEB configurations and establish a Canvas session inside SEB without transferring a normal-browser session cookie.
+4. Release the Canvas access code and approved web-tool capability only when SEB proves that it is using the current configuration.
 
 The service is not a general Canvas proxy. A deployment is configured for one Canvas origin and one LTI deployment boundary. All identity and authorization data used for a request comes from a validated LTI launch or a server-issued, bound capability.
 
@@ -39,7 +40,8 @@ Cloud Run, Cloud SQL, Artifact Registry, Secret Manager, and Cloud Build are the
 | Bootstrap and HTTP policy | `src/server/main.ts`, `src/server/http/`                                    | Express session setup, CORS, security headers, app-shell rendering, request integrity, bounded upstream responses. |
 | Configuration             | `src/server/config/app-config.ts`                                           | Environment parsing, normalizing aliases, and hardened-runtime validation.                                         |
 | LTI                       | `lti.controller.ts`, `lti.service.ts`, `lti-state.service.ts`               | OIDC initiation, signed token validation, state encryption/replay claim, role routing, dynamic registration.       |
-| Canvas OAuth and APIs     | `oauth.controller.ts`, `canvas-api.service.ts`                              | Instructor/student authorization, token refresh, bounded Canvas REST/New Quiz requests, session-token handoff.     |
+| Canvas OAuth and APIs     | `oauth.controller.ts`, `canvas-api.service.ts`                              | Purpose-scoped instructor/student/admin authorization, token refresh, bounded Canvas REST/New Quiz requests.       |
+| Account administration    | `admin.controller.ts`, `admin-authorization.service.ts`                     | Root-scoped course connections, recovery actions, password reveal, account-bound authorization, and tool rollout.  |
 | Assessment policy         | `quiz.controller.ts`, `assessment.service.ts`, `course-settings.service.ts` | Discovery, Canvas access-code mutations, course defaults, per-assessment overrides, exam tools.                    |
 | SEB lifecycle             | `seb.controller.ts`, `seb-configuration.service.ts`, `seb-*.service.ts`     | Configuration grants, configuration generation, proof, access-code redemption, setup check, exit grants.           |
 | Browser detector          | `src/server/assets/canvas-seb-detector.js`, `static-js.controller.ts`       | Quiz-page launch UI, access-code filling, approved tools, completion detection, diagnostic reporting.              |
@@ -59,9 +61,9 @@ Canvas posts an ID token to `/lti/launch`. The service validates:
 - the initiating browser transaction cookie; and
 - a durable, atomic PostgreSQL state claim to prevent replay.
 
-After successful validation, the server regenerates the Express session and stores a verified LTI principal. The principal contains only signed launch claims: issuer, deployment, subject, numeric Canvas user ID, course ID, roles, and custom fields. Query parameters and request bodies cannot substitute for it.
+After successful validation, the server regenerates the Express session and stores a verified LTI principal. A course principal contains the signed issuer, deployment, subject, numeric Canvas user ID, course ID, roles, and custom fields. A root-account administrator principal instead contains signed numeric account/root-account IDs and Canvas's root-admin substitution. Query parameters and request bodies cannot substitute for either principal.
 
-Instructors receive the management view. Students receive a launch-only flow and never receive instructor management actions. A signed Canvas numeric user ID is required for Canvas REST authorization; a Canvas administrator must refresh the LTI registration if Canvas does not supply it.
+Instructors receive the course management view. Students receive a launch-only flow and never receive management actions. The school dashboard is available only through the root-account navigation placement and requires both a standard signed LTI Administrator role and Canvas's signed root-account-admin value. A signed Canvas numeric user ID is required for Canvas REST authorization; a Canvas administrator must refresh the LTI registration if Canvas does not supply the configured substitutions.
 
 ### Canvas OAuth
 
@@ -70,9 +72,11 @@ An LTI launch authenticates a person but does not authorize Canvas API calls. Th
 1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from an existing verified launch.
 2. The service records encrypted, one-time state and redirects to Canvas.
 3. `/api/oauth2callback` verifies state and exchanges the authorization code.
-4. PostgreSQL stores the token by numeric Canvas user ID; `CanvasApiService` refreshes it when necessary.
+4. PostgreSQL stores one OAuth grant per Canvas user ID. Administrator authorization upgrades that same record to the complete application-plus-administrator scope set, and `CanvasApiService` refreshes it when necessary.
 
 Every Canvas OAuth connection requests the same complete application scope set, including the session-token permission required for SEB handoff: `url:GET|/api/v1/login/session_token`. This keeps one durable grant valid when a person is an instructor in one course and a student in another; Canvas still enforces their actual course permissions. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
+
+Root-account administrators use `/api/admin/oauth2authorize` to upgrade their existing user grant with administrator scopes. The upgraded grant retains every instructor, student-session, and assessment scope, so the same Canvas user never needs a second token record. Later course or student reauthorization preserves the administrator scope profile instead of replacing it with a narrower grant. The dashboard stores a root-account course index and browses active Canvas courses in bounded, server-filtered pages; it never imports the complete historical catalog. Summary, course list, selected-course detail, tool presets, and the Canvas course catalog are independent resources. Every admin mutation also requires a short-lived HMAC action token bound to the LTI subject, Canvas user, root account, deployment, and current Express session.
 
 ## Assessment And Course Model
 
@@ -85,7 +89,7 @@ All persisted assessment records use a canonical public content ID:
 | Classic Quiz    | `classicquiz_{quizId}`              | Quiz access-code API     |
 | New Quiz        | `newquiz:{courseId}:{assignmentId}` | New Quiz access-code API |
 
-The `assessments` table stores Canvas discovery data, availability verification, and SEB state. `courses` stores course-level defaults and its exam-tool catalog. Course defaults can provide URL policy, start/exit password policy, and selected exam tools; an assessment may inherit defaults or retain an explicit list of course tool IDs.
+The `assessments` table stores Canvas discovery data, availability verification, and SEB state. `courses` stores course-level defaults and its exam-tool catalog. Course defaults can provide URL policy, start/exit password policy, and selected exam tools; an assessment may inherit defaults, retain an explicit list of course tool IDs, and add quiz-only tool definitions.
 
 ### Canvas discovery and availability
 
@@ -96,6 +100,8 @@ Assessment updates use short-lived PostgreSQL operation locks while Canvas and d
 ### Exam tools and URL policy
 
 Course-owned exam tools have an exact HTTPS launch URL and typed resource rules: exact URL, a path and descendants, or an explicitly confirmed whole-domain rule. User-entered general rules are restricted to exact HTTPS URLs or concrete domains. Wildcards, credentials, identity-provider hosts, arbitrary regular expressions, and unsafe historical patterns are rejected or quarantined.
+
+Root administrators can create reusable school presets in `admin_tool_presets` and assign them to individual courses. An assigned definition is synchronized into the course catalog as school-managed: instructors may enable or disable it but cannot silently change its launch URL or resource access. Updating or deleting the preset synchronizes every assigned course and invalidates affected configuration fingerprints. Quiz-only definitions remain on the assessment record and never become course defaults.
 
 The detector sidebar is an affordance only. The SEB URL filter in the generated configuration is the control that determines what can load. Changing any selected tool or URL policy changes the configuration fingerprint; students must download a new configuration.
 
@@ -145,14 +151,17 @@ On Windows, the configuration requests the OS-session and SEB-service controls u
 
 ## Persistence And Expiration
 
-| Table                 | Contents                                                                                            | Expiration behavior                                           |
-| --------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `assessments`         | Canvas discovery and per-assessment SEB state                                                       | Durable until intentionally changed.                          |
-| `courses`             | Course defaults, setup state, and exam-tool catalog                                                 | Durable until intentionally changed.                          |
-| `canvas_oauth_tokens` | Canvas access and refresh tokens                                                                    | Durable; lifecycle is driven by Canvas authorization/refresh. |
-| `sessions`            | Express session payloads keyed by a hashed session ID                                               | Expired rows are removed by bounded cleanup.                  |
-| `transient_states`    | LTI replay claims, OAuth state, configuration grants, proofs, session-handoff records, rate budgets | Expired rows are removed by bounded cleanup.                  |
-| `operation_locks`     | Short assessment-update leases                                                                      | Expired rows are removed by bounded cleanup.                  |
+| Table                           | Contents                                                                                            | Expiration behavior                                           |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `assessments`                   | Canvas discovery and per-assessment SEB state                                                       | Durable until intentionally changed.                          |
+| `courses`                       | Course defaults, setup state, and exam-tool catalog                                                 | Durable until intentionally changed.                          |
+| `canvas_oauth_tokens`           | Canvas access and refresh tokens                                                                    | Durable; lifecycle is driven by Canvas authorization/refresh. |
+| `admin_course_connections`      | Root-account-scoped cached Canvas course metadata and assessment counts                             | Durable until a course connection is intentionally removed.   |
+| `admin_tool_presets`            | Root-account tool definitions                                                                       | Durable until an administrator changes or deletes the preset. |
+| `admin_tool_preset_assignments` | Per-course desired state, rollout status, and retry information                                     | Durable until the preset is deleted.                          |
+| `sessions`                      | Express session payloads keyed by a hashed session ID                                               | Expired rows are removed by bounded cleanup.                  |
+| `transient_states`              | LTI replay claims, OAuth state, configuration grants, proofs, session-handoff records, rate budgets | Expired rows are removed by bounded cleanup.                  |
+| `operation_locks`               | Short assessment-update leases                                                                      | Expired rows are removed by bounded cleanup.                  |
 
 PostgreSQL transactions and row locks implement atomic state claims, one-time token consumption, rate-budget increments, and operation-lock ownership. Claim/consume operations use conditional mutations so two app instances cannot both win. Cleanup selects bounded batches with `FOR UPDATE SKIP LOCKED`, allowing safe overlap without long table locks. This is why multiple app instances can share runtime state without sticky sessions.
 
@@ -187,8 +196,35 @@ Schema changes are explicit, ordered migrations recorded with checksums in `sche
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `GET /api/oauth2authorize`, `GET /api/oauth2reauthorize` | Verified instructor begins or repeats Canvas API authorization.                                    |
 | `GET /api/student-session-authorize`                     | Verified student begins the complete application authorization and returns to the session handoff. |
+| `GET /api/admin/oauth2authorize`                         | Verified root administrator upgrades the user's shared grant with account scopes.                  |
 | `GET /api/oauth2callback`                                | Canvas OAuth redirect URI; state and launch session are validated.                                 |
 | `GET /api/oauth2status`                                  | Verified instructor checks stored authorization availability.                                      |
+
+### Root-account administrator routes
+
+All routes below are under `/api/admin`, require a verified root-account administrator principal, and validate each target course against Canvas's root-account boundary. Mutations additionally require the session-bound administrator action token.
+
+| Route                                                                             | Purpose                                                           |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `GET /api/admin/summary`                                                          | Read lightweight account and configured-course totals.            |
+| `GET /api/admin/courses`                                                          | Search and cursor-page the root-account course index.             |
+| `GET /api/admin/courses/:courseId`                                                | Read one connected course and its assessments.                    |
+| `GET /api/admin/course-catalog`                                                   | Browse active Canvas courses in bounded, filtered pages.          |
+| `GET /api/admin/terms`                                                            | Read active Canvas enrollment terms for the course picker.        |
+| `POST /api/admin/courses/connect`                                                 | Validate, connect, and initially synchronize selected courses.    |
+| `POST /api/admin/courses/:courseId/refresh`                                       | Refresh one course's Classic and New Quiz discovery.              |
+| `POST /api/admin/courses/:courseId/passwords/reveal`                              | Controlled, no-store course password reveal.                      |
+| `POST /api/admin/courses/:courseId/quit-password/rotate`                          | Generate, apply, and briefly reveal a new course exit password.   |
+| `POST /api/admin/courses/:courseId/assessments/:assessmentId/passwords/reveal`    | Controlled, no-store assessment secret reveal.                    |
+| `POST /api/admin/courses/:courseId/assessments/:assessmentId/quit-password/reset` | Reset only the assessment exit password to its effective default. |
+| `POST /api/admin/courses/:courseId/assessments/:assessmentId/reset-defaults`      | Reset an assessment to its course defaults.                       |
+| `POST /api/admin/courses/:courseId/assessments/:assessmentId/regenerate-code`     | Rotate the Canvas access code.                                    |
+| `PUT /api/admin/courses/:courseId/assessments/:assessmentId/seb`                  | Enable or disable SEB enforcement.                                |
+| `POST /api/admin/tool-presets`                                                    | Create a validated school tool preset.                            |
+| `PUT`, `DELETE /api/admin/tool-presets/:presetId`                                 | Update or delete a school tool preset and synchronize courses.    |
+| `PUT /api/admin/tool-presets/:presetId/courses/:courseId`                         | Assign or unassign a preset for one Canvas course.                |
+| `PUT /api/admin/tool-presets/:presetId/assignments`                               | Queue a selected-course or all-course preset rollout.             |
+| `POST /api/admin/tool-presets/:presetId/assignments/reconcile`                    | Process or retry a bounded rollout batch.                         |
 
 ### Instructor assessment routes
 

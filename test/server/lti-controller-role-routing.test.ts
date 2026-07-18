@@ -104,6 +104,85 @@ describe("LtiController role routing", () => {
     );
   });
 
+  it("renders the school dashboard only from a verified root-account administrator launch", async () => {
+    const response = responseDouble();
+    const request = {
+      sessionID: "session-1",
+      session: {
+        launchData: {
+          ltiSubject: "admin-subject",
+          canvasUserId: "42",
+          userId: "42",
+          courseId: "",
+          issuer: "https://canvas.example.test",
+          deploymentId: "deployment-1",
+          roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator"],
+          custom: {}
+        },
+        verifiedLtiPrincipal: {
+          version: 1,
+          contextType: "account",
+          issuer: "https://canvas.example.test",
+          deploymentId: "deployment-1",
+          subject: "admin-subject",
+          canvasUserId: "42",
+          courseId: "",
+          accountId: "7",
+          rootAccountId: "7",
+          isRootAccountAdmin: true,
+          roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator"],
+          custom: {},
+          authenticatedAt: "2026-07-16T00:00:00.000Z"
+        }
+      }
+    } as any;
+
+    await controller.launchGet(request, response);
+
+    expect(canvasApi.hasAccessToken).toHaveBeenCalledWith("42", "account_admin");
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"admin"'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"rootAccountId":"7"'));
+    expect(assessments.refreshCourseContent).not.toHaveBeenCalled();
+  });
+
+  it("creates and persists an account principal from a signed administrator placement launch", async () => {
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "admin-subject",
+      canvasUserId: "42",
+      issuer: "https://canvas.example.test",
+      userId: "42",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator"],
+      deploymentId: "deployment-1",
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      messageType: "LtiResourceLinkRequest",
+      custom: {
+        seb_launch_surface: "account_admin",
+        canvas_account_id: "7",
+        canvas_root_account_id: "7",
+        canvas_user_is_root_account_admin: "true"
+      }
+    });
+    const response = responseDouble();
+    const request = emptySessionRequest();
+    request.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "cross-site"
+      })[name.toLowerCase()];
+
+    await controller.launchPost(request, response, { id_token: "token", state: "state" });
+
+    expect(request.session.verifiedLtiPrincipal).toMatchObject({
+      contextType: "account",
+      canvasUserId: "42",
+      accountId: "7",
+      rootAccountId: "7",
+      courseId: ""
+    });
+    expect(request.session.launchData).toMatchObject({ courseId: "" });
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"admin"'));
+  });
+
   it("renders the student view for learner launches", async () => {
     const response = responseDouble();
     await controller.launchGet(
@@ -383,6 +462,18 @@ describe("LtiController role routing", () => {
                   canvas_course_id: "$Canvas.course.id",
                   canvas_user_id: "$Canvas.user.id"
                 })
+              }),
+              expect.objectContaining({
+                placement: "account_navigation",
+                visibility: "admins",
+                root_account_only: true,
+                target_link_uri: "https://tool.example.test/lti/launch",
+                custom_fields: expect.objectContaining({
+                  seb_launch_surface: "account_admin",
+                  canvas_account_id: "$Canvas.account.id",
+                  canvas_root_account_id: "$Canvas.rootAccount.id",
+                  canvas_user_is_root_account_admin: "$Canvas.user.isRootAccountAdmin"
+                })
               })
             ]
           })
@@ -397,6 +488,11 @@ describe("LtiController role routing", () => {
       (candidate: { placement?: string }) => candidate.placement === "course_navigation"
     );
     expect(placement).not.toHaveProperty("windowTarget");
+    const adminPlacement = metadata.extensions[0].settings.placements.find(
+      (candidate: { placement?: string }) => candidate.placement === "account_navigation"
+    );
+    expect(adminPlacement.custom_fields).not.toHaveProperty("canvas_membership_roles");
+    expect(adminPlacement.custom_fields).not.toHaveProperty("canvas_lis_membership_roles");
   });
 
   it("accepts a cross-site signed POST and returns removed deep-linking guidance", async () => {
@@ -453,7 +549,7 @@ describe("LtiController role routing", () => {
       await controller.launchPost(request, response, { id_token: "token", state: "stolen-state" });
 
       expect(response.status).toHaveBeenCalledWith(400);
-      expect(response.send).toHaveBeenCalledWith(expect.stringContaining("signed Canvas launch could not be verified"));
+      expect(response.send).toHaveBeenCalledWith(expect.stringContaining("Canvas Launch Cookie Blocked"));
       expect(distributedAdmission.consumeLtiStateValidationAttempt).not.toHaveBeenCalled();
       expect(ltiService.validateToken).not.toHaveBeenCalled();
       expect(ltiState.claimState).not.toHaveBeenCalled();
@@ -513,10 +609,14 @@ describe("LtiController role routing", () => {
 
     expect(launchResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
     expect(request.session.verifiedLtiPrincipal).toMatchObject({ canvasUserId: "42", courseId: "course-1" });
-    expect(canvasApi.updateStoredIdentity).toHaveBeenCalledWith("42", {
-      displayName: "Canvas Teacher",
-      email: "teacher@example.edu"
-    });
+    expect(canvasApi.updateStoredIdentity).toHaveBeenCalledWith(
+      "42",
+      {
+        displayName: "Canvas Teacher",
+        email: "teacher@example.edu"
+      },
+      "instructor"
+    );
 
     request.header = (name: string) =>
       ({

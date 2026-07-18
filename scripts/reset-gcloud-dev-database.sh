@@ -67,8 +67,9 @@ DANGER: this permanently deletes every row in the development database.
   Database:  $DATABASE
   Service:   $SERVICE
 
-Assessment settings, course settings, Canvas OAuth tokens, sessions, one-time
-proof state, grants, rate budgets, and operation locks will all be destroyed.
+Assessment settings, course settings, administrator course connections and tool rollouts, Canvas OAuth
+tokens, sessions, one-time proof state, grants, rate budgets, and operation locks
+will all be destroyed.
 The dev service may return errors until the database is recreated and migrated.
 
 Type this exact phrase to continue:

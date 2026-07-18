@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { StructuredSebConfigRequest } from "../../shared/models.js";
+import type { ExternalToolConfig, StructuredSebConfigRequest } from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
@@ -202,6 +202,7 @@ export class QuizController {
         error_code: "QUIZ_TOOL_DEFINITIONS_NOT_ALLOWED"
       });
     }
+    assertSafePolicyInput(body as unknown as Record<string, unknown>);
     const contentId = body.contentId || body.quizId;
     if (!contentId) {
       return apiError(400, "quizId or contentId is required");
@@ -233,6 +234,7 @@ export class QuizController {
             customDomains: urlRulesToAllowedEntries(urlRules),
             urlRules,
             externalTools: setting.externalTools,
+            quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
             externalToolIds,
             externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
             quitPassword: secretUpdate(
@@ -278,6 +280,7 @@ export class QuizController {
           customDomains: urlRulesToAllowedEntries(urlRules),
           urlRules,
           externalTools: setting.externalTools,
+          quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
           externalToolIds,
           externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
           quitPassword: secretUpdate(body as unknown as Record<string, unknown>, "quitPassword", setting.quitPassword),
@@ -556,7 +559,10 @@ function assertSafePolicyInput(body: Record<string, unknown>): void {
       });
     }
   }
-  const tools = Array.isArray(body.externalTools) ? (body.externalTools as Array<Record<string, unknown>>) : [];
+  const tools = [
+    ...(Array.isArray(body.externalTools) ? (body.externalTools as Array<Record<string, unknown>>) : []),
+    ...(Array.isArray(body.quizOnlyExternalTools) ? (body.quizOnlyExternalTools as Array<Record<string, unknown>>) : [])
+  ];
   if (
     tools.some(
       (tool) =>
@@ -584,6 +590,26 @@ function assertSafePolicyInput(body: Record<string, unknown>): void {
       error_code: "INVALID_SEB_TOOL_POLICY"
     });
   }
+}
+
+function requestedQuizOnlyTools(
+  body: StructuredSebConfigRequest,
+  existing?: ExternalToolConfig[] | null
+): ExternalToolConfig[] {
+  if (!Object.hasOwn(body, "quizOnlyExternalTools")) {
+    return normalizeExternalTools(existing);
+  }
+  if (!Array.isArray(body.quizOnlyExternalTools)) {
+    return apiError(400, "Quiz-only exam tools must be a list", {
+      error_code: "INVALID_SEB_TOOL_POLICY"
+    });
+  }
+  return normalizeExternalTools(body.quizOnlyExternalTools).map((tool) => ({
+    ...tool,
+    enabled: true,
+    managedByAdmin: false,
+    adminPresetId: null
+  }));
 }
 
 function requestedExternalToolIds(

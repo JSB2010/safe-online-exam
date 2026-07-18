@@ -30,6 +30,9 @@ describe("PostgreSQL schema operations", () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY table_name"
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual([
+      "admin_course_connections",
+      "admin_tool_preset_assignments",
+      "admin_tool_presets",
       "assessments",
       "canvas_oauth_tokens",
       "courses",
@@ -44,8 +47,11 @@ describe("PostgreSQL schema operations", () => {
     );
     expect(indexes.rows.map((row) => row.indexname)).toEqual(
       expect.arrayContaining([
+        "admin_course_connections_root_name_idx",
+        "admin_tool_preset_assignments_preset_status_idx",
+        "admin_tool_presets_root_account_id_idx",
         "assessments_course_id_idx",
-        "canvas_oauth_tokens_user_id_idx",
+        "canvas_oauth_tokens_user_id_unique_idx",
         "courses_course_id_idx",
         "operation_locks_expires_at_idx",
         "sessions_expires_at_idx",
@@ -63,10 +69,27 @@ describe("PostgreSQL schema operations", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("pages and summarizes root-account course connections without cross-tenant scans", async () => {
+    const repositories = createPostgresRepositories(testDatabase.database);
+    await repositories.adminCourseConnections.save("7:101", adminCourseConnection("7", "101", "Biology", 3, 2));
+    await repositories.adminCourseConnections.save("7:102", adminCourseConnection("7", "102", "Chemistry", 4, 1));
+    await repositories.adminCourseConnections.save("9:201", adminCourseConnection("9", "201", "Biology II", 9, 9));
+
+    await expect(repositories.adminCourseConnections.listForRoot("7", { search: "bio", limit: 25 })).resolves.toEqual([
+      expect.objectContaining({ courseId: "101", name: "Biology" })
+    ]);
+    await expect(repositories.adminCourseConnections.summarizeForRoot("7")).resolves.toEqual({
+      courseCount: 2,
+      assessmentCount: 7,
+      enabledAssessmentCount: 3,
+      issueCount: 0
+    });
+  });
+
   it("rolls back a failed migration without recording or retaining partial changes", async () => {
     const directory = copyMigrationDirectory();
     writeFileSync(
-      join(directory, "002_broken.sql"),
+      join(directory, "006_broken.sql"),
       "CREATE TABLE must_rollback (id integer);\nSELECT definitely_not_valid;\n",
       "utf8"
     );
@@ -77,10 +100,73 @@ describe("PostgreSQL schema operations", () => {
     );
     expect(table.rows[0]?.exists).toBe(false);
     const ledger = await testDatabase.database.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM schema_migrations WHERE version = 2"
+      "SELECT count(*)::text AS count FROM schema_migrations WHERE version = 6"
     );
     expect(ledger.rows[0]?.count).toBe("0");
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("consolidates purpose-prefixed OAuth rows into one administrator-capable user record", async () => {
+    const consolidationDatabase = await createPostgresTestDatabase();
+    const preConsolidationDirectory = copyMigrationDirectory();
+    rmSync(join(preConsolidationDirectory, "004_unify_canvas_oauth_tokens.sql"));
+    try {
+      await runMigrations(consolidationDatabase.database, preConsolidationDirectory);
+      await consolidationDatabase.database.query(
+        `INSERT INTO canvas_oauth_tokens (id, user_id, document)
+         VALUES
+           ($1, $2, $3::jsonb),
+           ($4, $2, $5::jsonb)`,
+        [
+          "782",
+          "782",
+          JSON.stringify({
+            id: "782",
+            userId: "782",
+            accessToken: "course-token",
+            studentReadinessPromptDismissedAt: "2026-07-17T20:00:00.000Z"
+          }),
+          "account_admin:782",
+          JSON.stringify({
+            id: "account_admin:782",
+            userId: "782",
+            grantType: "account_admin",
+            accessToken: "admin-token",
+            requestedScopes: ["admin-scope"]
+          })
+        ]
+      );
+
+      await runMigrations(consolidationDatabase.database);
+
+      const rows = await consolidationDatabase.database.query<{
+        id: string;
+        user_id: string;
+        document: Record<string, unknown>;
+      }>("SELECT id, user_id, document FROM canvas_oauth_tokens WHERE user_id = $1", ["782"]);
+      expect(rows.rows).toEqual([
+        expect.objectContaining({
+          id: "782",
+          user_id: "782",
+          document: expect.objectContaining({
+            id: "782",
+            userId: "782",
+            grantType: "account_admin",
+            accessToken: "admin-token",
+            studentReadinessPromptDismissedAt: "2026-07-17T20:00:00.000Z"
+          })
+        })
+      ]);
+      await expect(
+        consolidationDatabase.database.query(
+          "INSERT INTO canvas_oauth_tokens (id, user_id, document) VALUES ($1, $2, $3::jsonb)",
+          ["duplicate-782", "782", JSON.stringify({ userId: "782", accessToken: "duplicate" })]
+        )
+      ).rejects.toMatchObject({ code: "23505" });
+    } finally {
+      rmSync(preConsolidationDirectory, { recursive: true, force: true });
+      await consolidationDatabase.cleanup();
+    }
   });
 
   it("deletes expired runtime rows in bounded, concurrent-safe batches", async () => {
@@ -129,6 +215,32 @@ describe("PostgreSQL schema operations", () => {
     }
   });
 });
+
+function adminCourseConnection(
+  rootAccountId: string,
+  courseId: string,
+  name: string,
+  assessmentCount: number,
+  enabledAssessmentCount: number
+) {
+  return {
+    id: `${rootAccountId}:${courseId}`,
+    rootAccountId,
+    canvasOrigin: "https://canvas.example.edu",
+    courseId,
+    name,
+    courseCode: `${name.slice(0, 3).toUpperCase()}-${courseId}`,
+    accountId: rootAccountId,
+    workflowState: "available",
+    termId: "22",
+    termName: "Fall 2026",
+    teacherNames: [],
+    assessmentCount,
+    enabledAssessmentCount,
+    issueCount: 0,
+    connectedByUserId: "42"
+  };
+}
 
 function copyMigrationDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), "seb-postgres-migrations-"));

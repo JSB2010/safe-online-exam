@@ -93,7 +93,19 @@ url:GET|/api/v1/login/session_token
 
 Every Canvas connection requests this same scope set, regardless of the user’s role in the course that initiated authorization. This prevents a person who is an instructor in one course and a student in another from retaining an incompatible role-specific grant. Canvas continues to enforce the authorizing user’s actual account and course permissions.
 
-Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have every existing user select **Reconnect Canvas** once. Scope changes apply only to newly issued tokens.
+For the root-account administrator dashboard, also allow this administrator scope set on the same OAuth key:
+
+```text
+url:GET|/api/v1/accounts/:id
+url:GET|/api/v1/accounts/:account_id/permissions
+url:GET|/api/v1/accounts/:account_id/courses
+url:GET|/api/v1/accounts/:account_id/terms
+url:GET|/api/v1/courses/:id
+```
+
+The administrator authorization requests the complete application scope set—including `url:GET|/api/v1/login/session_token`—plus these administrator scopes. Course and term collection access powers the paginated active-course picker; it does not import or preload the root account's complete historical catalog. Individual course access supports connection, refresh, recovery, and assessment changes. PostgreSQL stores one OAuth grant per Canvas user. Administrator consent upgrades that grant in place, and later instructor or student reauthorization preserves the complete administrator scope profile. A multi-role administrator therefore authorizes once and uses the same refreshable grant in every Canvas context.
+
+Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have each affected administrator select **Reconnect Canvas** once. Administrator-only scope additions do not invalidate ordinary instructor or student connections. Scope changes apply only to newly issued tokens.
 
 Store the API key’s client ID and secret in the deployment’s secret manager as `CANVAS_API_CLIENT_ID` and `CANVAS_API_CLIENT_SECRET`. If you change the redirect URI or scope set, affected users must reauthorize.
 
@@ -105,7 +117,7 @@ Create a separate LTI 1.3 Developer Key and use dynamic registration configurati
 ${TOOL_URL}/lti/config
 ```
 
-The dynamic document supplies the title, course-navigation placement, OIDC initiation URL, target link URI, public JWKS URL, and signed course/user/role custom fields. Prefer it over manually copying fields because the deployed service remains the registration source of truth.
+The dynamic document supplies the title, course-navigation and root-account-navigation placements, OIDC initiation URL, target link URI, public JWKS URL, and signed course/account/user/role custom fields. Prefer it over manually copying fields because the deployed service remains the registration source of truth. The account placement is marked root-account-only and administrator-visible; the server still independently requires the signed LTI Administrator role, Canvas's signed root-admin substitution, numeric account identifiers, and a matching account-admin OAuth grant.
 
 The relevant values are:
 
@@ -127,7 +139,7 @@ By default, set the deployment ID in `LTI_DEPLOYMENT_ID`, update the LTI client 
 
 For a controlled self-service rollout where instructors may add this exact registered app to their own courses, set `LTI_DEPLOYMENT_ID_CHECKING_ENABLED=false` on the service and deploy it. This accepts any non-empty deployment ID in a Canvas-signed launch from the configured issuer and client ID; it does not bypass token signatures, issuer/audience, nonce, target-link, or browser/state validation. Only use it if everyone able to install this client ID in Canvas is trusted to grant access to the tool.
 
-Use an account-level installation for a broad rollout. Use a course-level installation for an isolated pilot. Do not install the same registration both account-wide and course-local in the same course unless duplicate navigation entries are intentional.
+Use a root-account-level installation for a broad rollout and for the school administrator dashboard. Use a course-level installation only for an isolated instructor/student pilot; a course-level installation does not provide the root-account navigation surface. Do not install the same registration both account-wide and course-local in the same course unless duplicate navigation entries are intentional.
 
 ## 4. Load the Detector Script Through the Canvas Theme
 
@@ -197,12 +209,13 @@ The service also exposes `/api/seb/canvas-detector.js` for an existing installat
 
 Use separate administrator, instructor, and student accounts.
 
-1. As an administrator, retrieve `/lti/config`, confirm Canvas has the intended client and deployment IDs, and confirm the app appears in the target course navigation.
-2. As an instructor, launch the tool from Canvas, complete OAuth, refresh assessments, set an effective exit-password policy, and enable one Classic Quiz and one New Quiz.
-3. In a normal browser, open each assessment page and verify that the theme loaded the detector script without console errors.
-4. As a student, launch the course-navigation tool, complete the one-time Canvas connection, and run the optional setup check.
-5. Download a fresh configuration. On an approved SEB client, verify the configuration opens, reaches Canvas, proves its Config Key, fills the Canvas access-code prompt, and makes only selected exam tools available.
-6. For each assessment type, cancel one Canvas submission confirmation and ensure no exit occurs. Then submit successfully and ensure the exit flow begins only after Canvas shows the authoritative completed state.
+1. As a root-account administrator, retrieve `/lti/config`, confirm Canvas has the intended client and deployment IDs, and confirm both **Safe Exam Browser Admin** in root-account navigation and the course app in a target course.
+2. Open **Safe Exam Browser Admin**, complete its separate Canvas authorization, verify school courses load, create and assign a school tool preset, refresh a test course, reveal and rotate a test exit password, reset an assessment exit password, rotate its access code, and confirm each operation appears in recent administrator activity.
+3. As an instructor, launch the tool from Canvas, complete OAuth, refresh assessments, enable the assigned school tool, create one quiz-only tool, set an effective exit-password policy, and enable one Classic Quiz and one New Quiz.
+4. In a normal browser, open each assessment page and verify that the theme loaded the detector script without console errors.
+5. As a student, launch the course-navigation tool, complete the one-time Canvas connection, and run the optional setup check.
+6. Download a fresh configuration. On an approved SEB client, verify the configuration opens, reaches Canvas, proves its Config Key, fills the Canvas access-code prompt, and makes only selected exam tools available.
+7. For each assessment type, cancel one Canvas submission confirmation and ensure no exit occurs. Then submit successfully and ensure the exit flow begins only after Canvas shows the authoritative completed state.
 
 See [Testing](testing.md) for the full acceptance sequence and [Certificate management](certificate-management.md) for the client identity prerequisite.
 
@@ -213,6 +226,7 @@ See [Testing](testing.md) for the full acceptance sequence and [Certificate mana
 | LTI Deployment Configuration Required                         | Deployment-ID checking is enabled and Canvas installed this app with an ID not yet allowed by the service. Retrieve the `deployment_id` from Canvas's External Tools API for that course/account app, append it to `LTI_DEPLOYMENT_ID` without replacing existing IDs, deploy a new revision, then reopen the tool. For an intentional self-service rollout, an administrator can instead set `LTI_DEPLOYMENT_ID_CHECKING_ENABLED=false`. |
 | Canvas reports an LTI configuration/identity error            | Refresh the registration from `/lti/config`; confirm the launch includes the signed numeric Canvas user custom field and that `LTI_DEPLOYMENT_ID` matches the installed app.                                                                                                                                                                                                                                                              |
 | Instructor is asked to authorize repeatedly                   | Confirm the API OAuth redirect URI exactly matches `${TOOL_URL}/api/oauth2callback`, the OAuth key is enabled, and the configured client ID/secret are the API-key values.                                                                                                                                                                                                                                                                |
+| Administrator dashboard is missing or denied                  | Install the LTI app at the root account from the current `/lti/config`, use an actual root-account administrator, confirm Canvas expands the account/root-account/root-admin custom fields, and allow the administrator OAuth scopes above. A course installation or instructor enrollment is intentionally insufficient.                                                                                                                 |
 | Student cannot connect Canvas or configuration download fails | Confirm the exact session-token scope shown earlier is allowed and that the student is authorizing the same Canvas environment as the LTI launch.                                                                                                                                                                                                                                                                                         |
 | Access code is not filled in SEB                              | Confirm a fresh configuration was downloaded, the detector loaded on the actual assessment route, Config Key proof succeeded, and the Canvas prompt is not ambiguous.                                                                                                                                                                                                                                                                     |
 | Detector never loads                                          | Check the active account theme, inherited theme behavior, browser console/CSP, and that the public detector URL returns JavaScript.                                                                                                                                                                                                                                                                                                       |

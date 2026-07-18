@@ -1,11 +1,22 @@
-import type { AssessmentRecord, CourseRecord, OAuthToken } from "../../shared/models.js";
+import type {
+  AdminCourseConnectionRecord,
+  AdminToolPresetRecord,
+  AdminToolPresetAssignmentRecord,
+  AssessmentRecord,
+  CourseRecord,
+  OAuthToken
+} from "../../shared/models.js";
 import { isExpired, prepareDocument, withDocumentId } from "./document-values.js";
 import type {
   AppRepositories,
+  AdminCourseConnectionListOptions,
+  AdminCourseConnectionStore,
+  AdminCourseConnectionSummary,
   CollectionStore,
   OperationLockRecord,
   OperationLockStore,
   QueryFilter,
+  QueryOptions,
   SessionRecord,
   TransientStateRecord,
   TransientStateStore
@@ -15,6 +26,11 @@ export function createInMemoryRepositories(
   seed?: Partial<Record<keyof AppRepositories, Record<string, any>>>
 ): AppRepositories {
   return {
+    adminCourseConnections: new InMemoryAdminCourseConnectionStore(seed?.adminCourseConnections),
+    adminToolPresetAssignments: new InMemoryCollectionStore<AdminToolPresetAssignmentRecord>(
+      seed?.adminToolPresetAssignments
+    ),
+    adminToolPresets: new InMemoryCollectionStore<AdminToolPresetRecord>(seed?.adminToolPresets),
     assessments: new InMemoryCollectionStore<AssessmentRecord>(seed?.assessments),
     courses: new InMemoryCollectionStore<CourseRecord>(seed?.courses),
     oauthTokens: new InMemoryCollectionStore<OAuthToken>(seed?.oauthTokens),
@@ -55,10 +71,14 @@ export class InMemoryCollectionStore<T extends Record<string, any>> implements C
     this.documents.delete(id);
   }
 
-  async find(filters: QueryFilter[] = []): Promise<T[]> {
-    return Array.from(this.documents.entries())
+  async find(filters: QueryFilter[] = [], options: QueryOptions = {}): Promise<T[]> {
+    const values = Array.from(this.documents.entries())
       .filter(([, value]) => filters.every((filter) => matchesFilter(value, filter)))
       .map(([id, value]) => withDocumentId(id, value));
+    const orderBy = options.orderBy || "id";
+    const direction = options.direction === "desc" ? -1 : 1;
+    values.sort((left, right) => String(left[orderBy] || "").localeCompare(String(right[orderBy] || "")) * direction);
+    return values.slice(0, normalizedQueryLimit(options.limit, values.length));
   }
 
   async saveMany(values: Array<{ id: string; value: T }>): Promise<T[]> {
@@ -68,6 +88,60 @@ export class InMemoryCollectionStore<T extends Record<string, any>> implements C
     }
     return saved;
   }
+}
+
+class InMemoryAdminCourseConnectionStore
+  extends InMemoryCollectionStore<AdminCourseConnectionRecord>
+  implements AdminCourseConnectionStore
+{
+  async listForRoot(
+    rootAccountId: string,
+    options: AdminCourseConnectionListOptions
+  ): Promise<AdminCourseConnectionRecord[]> {
+    const search = options.search?.trim().toLocaleLowerCase() || "";
+    return Array.from(this.documents.entries())
+      .map(([id, value]) => withDocumentId(id, value))
+      .filter((course) => course.rootAccountId === rootAccountId)
+      .filter(
+        (course) =>
+          !search ||
+          [course.name, course.courseCode, course.courseId, course.termName, ...course.teacherNames]
+            .filter(Boolean)
+            .some((value) => String(value).toLocaleLowerCase().includes(search))
+      )
+      .sort(compareCourseConnections)
+      .filter(
+        (course) =>
+          !options.afterName || compareCourseCursor(course, options.afterName, options.afterCourseId || "") > 0
+      )
+      .slice(0, Math.min(Math.max(options.limit, 1), 100));
+  }
+
+  async summarizeForRoot(rootAccountId: string): Promise<AdminCourseConnectionSummary> {
+    const courses = Array.from(this.documents.values()).filter((course) => course.rootAccountId === rootAccountId);
+    return courses.reduce(
+      (summary, course) => ({
+        courseCount: summary.courseCount + 1,
+        assessmentCount: summary.assessmentCount + course.assessmentCount,
+        enabledAssessmentCount: summary.enabledAssessmentCount + course.enabledAssessmentCount,
+        issueCount: summary.issueCount + course.issueCount
+      }),
+      { courseCount: 0, assessmentCount: 0, enabledAssessmentCount: 0, issueCount: 0 }
+    );
+  }
+}
+
+function compareCourseConnections(left: AdminCourseConnectionRecord, right: AdminCourseConnectionRecord): number {
+  return compareCourseCursor(left, right.name, right.courseId);
+}
+
+function compareCourseCursor(course: AdminCourseConnectionRecord, name: string, courseId: string): number {
+  const byName = course.name.localeCompare(name, undefined, { sensitivity: "base" });
+  return byName || course.courseId.localeCompare(courseId);
+}
+
+function normalizedQueryLimit(limit: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(limit) && Number(limit) > 0 ? Math.min(Number(limit), 10_000) : fallback;
 }
 
 export class InMemoryTransientStateStore

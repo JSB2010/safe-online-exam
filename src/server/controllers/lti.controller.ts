@@ -4,16 +4,17 @@ import type { Request, Response } from "express";
 import type { ContentItem, ContentSebSetting, LtiLaunchData, Quiz, QuizSebSetting } from "../../shared/models.js";
 import { isInstructor, isStudent, parseNewQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
-import { createActionToken, createSebConfigGrantActionToken } from "../http/action-token.js";
+import { createActionToken, createAdminActionToken, createSebConfigGrantActionToken } from "../http/action-token.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 import { toCourseDefaultsView, toSebSettingView } from "../http/seb-response.js";
 import { sebSchemeUrl } from "../http/request-url.js";
 import {
   CanvasLtiConfigurationError,
   createVerifiedLtiPrincipal,
+  isVerifiedAccountAdmin,
   verifiedLtiPrincipal
 } from "../security/verified-lti-principal.js";
-import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
+import type { VerifiedAccountAdminPrincipal, VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
 import { consumePublicBudget } from "../security/public-admission.js";
 import { DistributedAdmissionService, hasBoundedLtiValidationEnvelope } from "../security/distributed-admission.js";
 import {
@@ -108,17 +109,22 @@ export class LtiController {
       response.status(429).setHeader("retry-after", "60").send("Too many LTI launch attempts");
       return;
     }
+    let verificationStage = "state";
     try {
       const state = this.ltiState.peekState(body.state);
+      verificationStage = "browser-binding";
       const transactionCookieName = matchingLtiOidcBrowserTransactionCookie(request, state);
       if (!transactionCookieName) {
         throw new Error("LTI launch browser binding does not match the initiating login");
       }
+      verificationStage = "state-admission";
       if (!(await this.distributedAdmission.consumeLtiStateValidationAttempt(body.state))) {
         response.status(429).setHeader("retry-after", "60").send("Too many LTI launch attempts");
         return;
       }
+      verificationStage = "token";
       const launchData = await this.ltiService.validateToken(body.id_token, state.nonce);
+      verificationStage = "login-launch-binding";
       if (
         state.issuer !== launchData.issuer ||
         (state.deploymentId && state.deploymentId !== launchData.deploymentId) ||
@@ -126,16 +132,26 @@ export class LtiController {
       ) {
         throw new Error("LTI launch does not match the initiating login");
       }
+      verificationStage = "state-claim";
       await this.ltiState.claimState(body.state);
       clearLtiOidcBrowserTransactionCookie(response, transactionCookieName);
+      verificationStage = "session";
       await regenerateSession(request);
-      storeLaunchData(request, launchData);
-      request.session!.verifiedLtiPrincipal = createVerifiedLtiPrincipal(launchData);
-      await this.canvasApi.updateStoredIdentity?.(request.session!.verifiedLtiPrincipal.canvasUserId, {
-        displayName: launchData.fullName,
-        email: launchData.email
-      });
+      verificationStage = "principal";
+      const principal = createVerifiedLtiPrincipal(launchData);
+      storeLaunchData(request, { ...launchData, courseId: principal.courseId });
+      request.session!.verifiedLtiPrincipal = principal;
+      verificationStage = "identity";
+      await this.canvasApi.updateStoredIdentity?.(
+        principal.canvasUserId,
+        {
+          displayName: launchData.fullName,
+          email: launchData.email
+        },
+        isVerifiedAccountAdmin(principal) ? "account_admin" : "instructor"
+      );
 
+      verificationStage = "response";
       if (launchData.messageType === "LtiDeepLinkingRequest") {
         response
           .status(410)
@@ -145,6 +161,11 @@ export class LtiController {
               "<h1>Deep Linking Removed</h1><p>Use the Safe Exam Browser course navigation app to manage SEB requirements.</p>"
             )
           );
+        return;
+      }
+
+      if (isVerifiedAccountAdmin(principal)) {
+        response.send(await this.renderAdminView(request, principal));
         return;
       }
 
@@ -200,7 +221,7 @@ export class LtiController {
         return;
       }
       const failure = describeLtiLaunchFailure(error);
-      this.logger.warn(`LTI launch verification failed: ${failure.logMessage}`);
+      this.logger.warn(`LTI launch verification failed at ${verificationStage}: ${failure.logMessage}`);
       response.status(400).send(renderFallbackHtml(failure.title, failure.html));
     }
   }
@@ -246,6 +267,10 @@ export class LtiController {
       courseId: principal.courseId,
       roles: [...principal.roles]
     };
+    if (isVerifiedAccountAdmin(principal)) {
+      response.send(await this.renderAdminView(request, principal));
+      return;
+    }
     if (isInstructor(resolvedLaunchData)) {
       response.send(
         await this.renderTeacherView(request, principal.courseId, principal.canvasUserId, resolvedLaunchData)
@@ -267,13 +292,24 @@ export class LtiController {
   @Get("/lti/config")
   ltiConfig(): Record<string, unknown> {
     const toolUrl = this.config.getRequiredToolUrl();
-    const customFields = {
-      canvas_course_id: "$Canvas.course.id",
-      canvas_user_id: "$Canvas.user.id",
+    const identityCustomFields = {
+      canvas_user_id: "$Canvas.user.id"
+    };
+    const courseCustomFields = {
+      ...identityCustomFields,
       canvas_membership_roles: "$Canvas.membership.roles",
       canvas_lis_membership_roles: "$com.Instructure.membership.roles",
+      seb_launch_surface: "course",
+      canvas_course_id: "$Canvas.course.id",
       canvas_membership_permissions:
         "$Canvas.membership.permissions<manage_assignments_add,manage_assignments_edit,manage_course_content_add,manage_course_content_edit,manage_course_content_delete>"
+    };
+    const adminCustomFields = {
+      ...identityCustomFields,
+      seb_launch_surface: "account_admin",
+      canvas_account_id: "$Canvas.account.id",
+      canvas_root_account_id: "$Canvas.rootAccount.id",
+      canvas_user_is_root_account_admin: "$Canvas.user.isRootAccountAdmin"
     };
     return {
       title: "Safe Exam Browser Canvas Integration",
@@ -296,14 +332,57 @@ export class LtiController {
                 visibility: "members",
                 default: "enabled",
                 enabled: true,
-                custom_fields: { ...customFields }
+                custom_fields: { ...courseCustomFields }
+              },
+              {
+                placement: "account_navigation",
+                message_type: "LtiResourceLinkRequest",
+                target_link_uri: `${toolUrl}/lti/launch`,
+                text: "Safe Exam Browser Admin",
+                visibility: "admins",
+                required_permissions: "manage_course_content_edit",
+                default: "enabled",
+                enabled: true,
+                display_type: "full_width_in_context",
+                root_account_only: true,
+                custom_fields: { ...adminCustomFields }
               }
             ]
           }
         }
       ],
-      custom_fields: { ...customFields }
+      // Preserve the original course-level fields for existing Canvas
+      // registrations; placement fields add the launch-surface discriminator.
+      custom_fields: { ...courseCustomFields }
     };
+  }
+
+  private async renderAdminView(request: Request, principal: VerifiedAccountAdminPrincipal): Promise<string> {
+    if (!(await this.canvasApi.hasAccessToken(principal.canvasUserId, "account_admin"))) {
+      return renderAppShell({
+        title: "Canvas Administrator Authorization Required",
+        view: "api-authorization",
+        initialData: {
+          message:
+            "Authorize Canvas access so the school dashboard can discover courses and perform approved recovery actions.",
+          authUrl: "/api/admin/oauth2authorize"
+        }
+      });
+    }
+    return renderAppShell({
+      title: "Safe Exam Browser Administration",
+      view: "admin",
+      initialData: {
+        userId: principal.canvasUserId,
+        accountId: principal.accountId,
+        rootAccountId: principal.rootAccountId,
+        authToken: createAdminActionToken(this.config, principal.canvasUserId, principal.rootAccountId, {
+          subject: principal.subject,
+          deploymentId: principal.deploymentId,
+          sessionId: request.sessionID || ""
+        })
+      }
+    });
   }
 
   private async handleLogin(request: Request, response: Response, params: Record<string, string>): Promise<void> {
@@ -763,6 +842,41 @@ function describeLtiLaunchFailure(error: unknown): { logMessage: string; title: 
       logMessage: "platform signing key modulus is below 2048 bits",
       title: "Canvas Signing-Key Error",
       html: "<h1>Canvas Signing-Key Error</h1><p>Canvas signed this launch with an RSA key smaller than 2048 bits, so the tool rejected it.</p><p>A Canvas administrator must rotate the platform LTI signing keys, restart Canvas's web service, and reopen the tool to issue a fresh launch. Do not lower the tool's signature-verification requirements.</p>"
+    };
+  }
+  if (/LTI launch browser binding does not match the initiating login/i.test(message)) {
+    return {
+      logMessage: "browser transaction cookie was absent or did not match",
+      title: "Canvas Launch Cookie Blocked",
+      html: "<h1>Canvas Launch Cookie Blocked</h1><p>The browser did not return the short-lived security cookie created when Canvas opened this tool.</p><p>Allow third-party cookies for Canvas and this tool, then reopen it from Canvas. If the browser offers an option to open the tool in a new window, that also avoids third-party cookie blocking.</p>"
+    };
+  }
+  if (/Validated root-account launch is missing signed numeric account identifiers/i.test(message)) {
+    return {
+      logMessage: "root-account launch is missing signed numeric account identifiers",
+      title: "Canvas Administrator Launch Configuration Error",
+      html: "<h1>Canvas Administrator Launch Configuration Error</h1><p>Canvas did not provide the signed account identifiers required by the administrator dashboard.</p><p>Refresh the LTI Developer Key from this service's current <code>/lti/config</code>, confirm the app is installed at the root account, and reopen the tool.</p>"
+    };
+  }
+  if (/Validated root-account launch does not identify a Canvas root-account administrator/i.test(message)) {
+    return {
+      logMessage: "root-account administrator flag is absent or false",
+      title: "Canvas Root Administrator Required",
+      html: "<h1>Canvas Root Administrator Required</h1><p>This launch was not signed by Canvas as a root-account administrator.</p><p>Sign in directly as an administrator assigned at the root account. Do not launch while masquerading as another user or from a subaccount administrator account.</p>"
+    };
+  }
+  if (/Validated root-account launch is missing a signed Canvas administrator role/i.test(message)) {
+    return {
+      logMessage: "root-account launch is missing a signed administrator role",
+      title: "Canvas Administrator Role Required",
+      html: "<h1>Canvas Administrator Role Required</h1><p>Canvas marked this user as a root-account administrator but did not include a standard signed administrator role in the LTI launch.</p><p>Confirm the user is assigned an administrator role in the root account and reopen the tool.</p>"
+    };
+  }
+  if (/Validated course launch is missing required course context/i.test(message)) {
+    return {
+      logMessage: "launch placement is missing course or administrator context",
+      title: "Canvas LTI Placement Configuration Error",
+      html: "<h1>Canvas LTI Placement Configuration Error</h1><p>The launch did not include the context fields required for its Canvas placement.</p><p>Refresh the LTI Developer Key from this service's current <code>/lti/config</code>, then reinstall or refresh the root-account app registration.</p>"
     };
   }
   return {

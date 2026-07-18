@@ -3,12 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/server/config/app-config.js";
 import {
   createActionToken,
+  createAdminActionToken,
   createSebConfigGrantActionToken,
   expectedSessionBinding,
   verifyActionToken,
+  verifyAdminActionToken,
   verifySebConfigGrantActionToken
 } from "../../src/server/http/action-token.js";
 import {
+  requireAdminManagementRequestIntegrity,
   requireManagementRequestIntegrity,
   requireSebConfigGrantRequestIntegrity
 } from "../../src/server/http/request-integrity.js";
@@ -66,6 +69,36 @@ describe("action tokens", () => {
     expect(() =>
       requireManagementRequestIntegrity(requestDouble("attacker-session", token), config, principal)
     ).toThrow("Invalid or missing management request token");
+  });
+
+  it("uses a distinct root-account and session-bound token for administrator mutations", () => {
+    const adminPrincipal = {
+      ...principal,
+      contextType: "account" as const,
+      courseId: "" as const,
+      accountId: "root-7",
+      rootAccountId: "root-7",
+      isRootAccountAdmin: true as const
+    };
+    const token = createAdminActionToken(config, "canvas-user-1", "root-7", {
+      subject: "opaque-lti-subject",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    expect(verifyAdminActionToken(config, token)).toMatchObject({
+      purpose: "account-admin-management",
+      userId: "canvas-user-1",
+      rootAccountId: "root-7",
+      sessionBinding: expectedSessionBinding(config, "session-1")
+    });
+    expect(verifyActionToken(config, token)).toBeNull();
+    expect(() =>
+      requireAdminManagementRequestIntegrity(requestDouble("session-1", token), config, adminPrincipal)
+    ).not.toThrow();
+    expect(() =>
+      requireAdminManagementRequestIntegrity(requestDouble("other-session", token), config, adminPrincipal)
+    ).toThrow("Invalid or missing administrator request token");
   });
 
   it("rejects legacy or incomplete signed payload shapes", () => {

@@ -13,7 +13,20 @@ export const CANVAS_REQUIRED_OAUTH_SCOPES = [
   "url:GET|/api/v1/login/session_token"
 ] as const;
 
-/** Increment when a new required Canvas OAuth capability is introduced. */
+/** Additional capabilities requested only by the root-account administrator flow. */
+export const CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES = [
+  "url:GET|/api/v1/accounts/:id",
+  "url:GET|/api/v1/accounts/:account_id/permissions",
+  "url:GET|/api/v1/accounts/:account_id/courses",
+  "url:GET|/api/v1/accounts/:account_id/terms",
+  "url:GET|/api/v1/courses/:id"
+] as const;
+
+/**
+ * Version of the role-independent OAuth scope contract. Administrator-only
+ * additions are detected from requestedScopes so they do not force every
+ * instructor and student to reconnect.
+ */
 export const CANVAS_OAUTH_SCOPE_VERSION = 2;
 
 export interface Quiz {
@@ -94,6 +107,8 @@ export interface AssessmentSebState {
   customDomains: string[];
   urlRules: SebUrlRule[];
   externalTools: ExternalToolConfig[];
+  /** Quiz-owned definitions that are merged with the selected course catalog. */
+  quizOnlyExternalTools: ExternalToolConfig[];
   /**
    * `null` means this assessment inherits the course tool defaults. An array
    * is an explicit allowlist of course-tool ids, including an empty array when
@@ -142,6 +157,7 @@ export interface QuizSebSetting {
   customDomains: string[];
   urlRules?: SebUrlRule[] | null;
   externalTools: ExternalToolConfig[];
+  quizOnlyExternalTools?: ExternalToolConfig[] | null;
   externalToolIds?: string[] | null;
   canvasDomain?: string | null;
   quitPassword?: string | null;
@@ -175,6 +191,7 @@ export interface ContentSebSetting {
   customDomains: string[];
   urlRules?: SebUrlRule[] | null;
   externalTools: ExternalToolConfig[];
+  quizOnlyExternalTools?: ExternalToolConfig[] | null;
   externalToolIds?: string[] | null;
   quitPassword?: string | null;
   startPassword?: string | null;
@@ -243,6 +260,7 @@ export interface CourseRecord {
 export interface OAuthToken {
   id?: string | null;
   userId: string;
+  grantType?: CanvasOAuthGrantType | null;
   accessToken: string;
   refreshToken?: string | null;
   scope?: string | null;
@@ -262,6 +280,58 @@ export interface OAuthToken {
    * only prevents the optional student setup-check prompt from reappearing.
    */
   studentReadinessPromptDismissedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export type CanvasOAuthGrantType = "instructor" | "student_session" | "account_admin";
+
+export interface AdminToolPresetRecord {
+  id: string;
+  rootAccountId: string;
+  name: string;
+  description?: string | null;
+  tool: ExternalToolConfig;
+  createdByUserId: string;
+  updatedByUserId: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface AdminCourseConnectionRecord {
+  id: string;
+  rootAccountId: string;
+  canvasOrigin: string;
+  courseId: string;
+  name: string;
+  courseCode?: string | null;
+  accountId: string;
+  workflowState?: string | null;
+  termId?: string | null;
+  termName?: string | null;
+  teacherNames: string[];
+  assessmentCount: number;
+  enabledAssessmentCount: number;
+  issueCount: number;
+  connectedByUserId: string;
+  lastCanvasCheckedAt?: string | null;
+  lastRefreshedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export type AdminToolPresetAssignmentStatus = "pending" | "applied" | "failed";
+
+export interface AdminToolPresetAssignmentRecord {
+  id: string;
+  rootAccountId: string;
+  presetId: string;
+  courseId: string;
+  desiredAssigned: boolean;
+  status: AdminToolPresetAssignmentStatus;
+  error?: string | null;
+  appliedPresetUpdatedAt?: string | null;
+  updatedByUserId: string;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -299,6 +369,7 @@ export interface StructuredSebConfigRequest {
   customDomains?: string[] | null;
   urlRules?: SebUrlRule[] | null;
   externalTools?: ExternalToolConfig[] | null;
+  quizOnlyExternalTools?: ExternalToolConfig[] | null;
   externalToolIds?: string[] | null;
   externalToolUrl?: string | null;
   quitPassword?: string | null;
@@ -314,6 +385,9 @@ export interface ExternalToolConfig {
   url: string;
   enabled: boolean;
   preset?: string | null;
+  /** Server-owned marker for an administrator-managed school preset. */
+  adminPresetId?: string | null;
+  managedByAdmin?: boolean | null;
   /** Explicit, visible URL access beyond the launch page. */
   allowedRules?: ExternalToolAccessRule[] | null;
   /** @deprecated Legacy persisted representation. Normalized into allowedRules. */
@@ -447,6 +521,7 @@ export function defaultAssessmentSebState(): AssessmentSebState {
     customDomains: [],
     urlRules: [],
     externalTools: [],
+    quizOnlyExternalTools: [],
     externalToolIds: null
   };
 }
@@ -614,6 +689,7 @@ export function assessmentToQuizSebSetting(record: AssessmentRecord): QuizSebSet
     customDomains: seb.customDomains,
     urlRules: seb.urlRules,
     externalTools: seb.externalTools,
+    quizOnlyExternalTools: seb.quizOnlyExternalTools,
     externalToolIds: seb.externalToolIds,
     canvasDomain: null,
     quitPassword: seb.quitPassword || null,
@@ -650,6 +726,7 @@ export function assessmentToContentSebSetting(record: AssessmentRecord): Content
     customDomains: seb.customDomains,
     urlRules: seb.urlRules,
     externalTools: seb.externalTools,
+    quizOnlyExternalTools: seb.quizOnlyExternalTools,
     externalToolIds: seb.externalToolIds,
     quitPassword: seb.quitPassword || null,
     startPassword: seb.startPassword || null,
@@ -735,6 +812,7 @@ export function defaultQuizSebSetting(quizId: string, courseId?: string | null):
     customDomains: [],
     urlRules: [],
     externalTools: [],
+    quizOnlyExternalTools: [],
     externalToolIds: null
   };
 }
@@ -755,6 +833,7 @@ export function defaultContentSebSetting(contentId: string, courseId?: string | 
     customDomains: [],
     urlRules: [],
     externalTools: [],
+    quizOnlyExternalTools: [],
     externalToolIds: null
   };
 }
@@ -766,7 +845,7 @@ export function defaultCourseSebDefaults(courseId: string): CourseSebDefaults {
     quitPassword: null,
     startPassword: null,
     urlRules: [],
-    externalTools: seedCourseExternalTools(),
+    externalTools: [],
     externalToolsInitialized: true,
     setupCompleted: false
   };
@@ -875,6 +954,8 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
         url,
         enabled: !!tool.enabled,
         preset: findExternalToolPreset(requestedId, tool.preset)?.preset || null,
+        adminPresetId: tool.managedByAdmin === true && tool.adminPresetId ? sanitizeToolId(tool.adminPresetId) : null,
+        managedByAdmin: tool.managedByAdmin === true,
         allowedRules,
         allowedDomains: toolAllowlistEntries(allowedRules)
       }
@@ -925,17 +1006,24 @@ export function resolveExternalToolsForAssessment(
   courseTools?: ExternalToolConfig[] | null,
   externalToolIds?: string[] | null,
   legacyTools?: ExternalToolConfig[] | null,
-  usesCourseDefaults = true
+  usesCourseDefaults = true,
+  quizOnlyTools?: ExternalToolConfig[] | null
 ): ExternalToolConfig[] {
   const catalog = normalizeCourseExternalTools(courseTools);
+  let selectedCatalog: ExternalToolConfig[];
   if (externalToolIds === undefined) {
-    return usesCourseDefaults ? catalog : normalizeExternalTools(legacyTools);
+    selectedCatalog = usesCourseDefaults ? catalog : normalizeExternalTools(legacyTools);
+  } else if (externalToolIds === null) {
+    selectedCatalog = catalog;
+  } else {
+    const selected = new Set(normalizeExternalToolIds(externalToolIds) || []);
+    selectedCatalog = catalog.map((tool) => ({ ...tool, enabled: selected.has(tool.id) }));
   }
-  if (externalToolIds === null) {
-    return catalog;
-  }
-  const selected = new Set(normalizeExternalToolIds(externalToolIds) || []);
-  return catalog.map((tool) => ({ ...tool, enabled: selected.has(tool.id) }));
+  const selectedIds = new Set(selectedCatalog.map((tool) => tool.id));
+  const quizOnly = normalizeExternalTools(quizOnlyTools)
+    .filter((tool) => !selectedIds.has(tool.id))
+    .map((tool) => ({ ...tool, enabled: true, managedByAdmin: false, adminPresetId: null }));
+  return [...selectedCatalog, ...quizOnly].slice(0, 16);
 }
 
 export function enabledExternalTools(input?: ExternalToolConfig[] | null): ExternalToolConfig[] {
@@ -1080,8 +1168,10 @@ export function applyCourseDefaultsToQuizSetting(
       normalizedDefaults?.externalTools,
       externalToolIds,
       setting.externalTools,
-      usesDefaults
+      usesDefaults,
+      setting.quizOnlyExternalTools
     ),
+    quizOnlyExternalTools: normalizeExternalTools(setting.quizOnlyExternalTools),
     ...(externalToolIds !== undefined ? { externalToolIds } : {}),
     quitPassword: quitPasswordOverride
       ? normalizeOptionalText(setting.quitPassword)
@@ -1119,8 +1209,10 @@ export function applyCourseDefaultsToContentSetting(
       normalizedDefaults?.externalTools,
       externalToolIds,
       setting.externalTools,
-      usesDefaults
+      usesDefaults,
+      setting.quizOnlyExternalTools
     ),
+    quizOnlyExternalTools: normalizeExternalTools(setting.quizOnlyExternalTools),
     ...(externalToolIds !== undefined ? { externalToolIds } : {}),
     quitPassword: quitPasswordOverride
       ? normalizeOptionalText(setting.quitPassword)
@@ -1151,6 +1243,7 @@ function quizSebSettingToAssessmentSebState(setting: QuizSebSetting): Assessment
     customDomains: setting.customDomains || [],
     urlRules: setting.urlRules || [],
     externalTools: setting.externalTools || [],
+    quizOnlyExternalTools: setting.quizOnlyExternalTools || [],
     externalToolIds: setting.externalToolIds
   });
 }
@@ -1172,6 +1265,7 @@ function contentSebSettingToAssessmentSebState(setting: ContentSebSetting): Asse
     customDomains: setting.customDomains || [],
     urlRules: setting.urlRules || [],
     externalTools: setting.externalTools || [],
+    quizOnlyExternalTools: setting.quizOnlyExternalTools || [],
     externalToolIds: setting.externalToolIds
   });
 }
@@ -1198,6 +1292,7 @@ function normalizeAssessmentSebState(input?: Partial<AssessmentSebState> | null)
     customDomains: urlRulesToAllowedEntries(urlRules),
     urlRules,
     externalTools: normalizeExternalTools(input?.externalTools),
+    quizOnlyExternalTools: normalizeExternalTools(input?.quizOnlyExternalTools),
     externalToolIds: normalizeExternalToolIds(input?.externalToolIds)
   };
 }
@@ -1511,6 +1606,17 @@ export function isStudent(launchData?: RoleAwareLaunchData | null): boolean {
   return launchData.roles.some(isContextStudentRole) || launchData.roles.some(isInstitutionStudentRole);
 }
 
+export function isAccountAdministrator(launchData?: RoleAwareLaunchData | null): boolean {
+  if (!launchData) {
+    return false;
+  }
+  return launchData.roles.some((role) => {
+    const context = parseContextRole(role);
+    const institution = parseInstitutionRole(role);
+    return context?.principal === "administrator" || institution === "administrator" || isSystemAdministratorRole(role);
+  });
+}
+
 /**
  * Canvas custom substitutions are signed, but they are deployment-configurable and are not the
  * interoperable LTI authorization claim. Keep the standard LTI roles claim authoritative and fail
@@ -1594,6 +1700,14 @@ function parseInstitutionRole(role: string): string | null {
     return normalized.slice(institutionPrefix.length);
   }
   return null;
+}
+
+function isSystemAdministratorRole(role: string): boolean {
+  const normalized = role.trim().toLowerCase();
+  return (
+    normalized === "http://purl.imsglobal.org/vocab/lis/v2/system/person#sysadmin" ||
+    normalized === "urn:lti:sysrole:ims/lis/sysadmin"
+  );
 }
 
 function customValues(custom: Record<string, string> | undefined, keys: string[]): string[] {

@@ -1,5 +1,12 @@
-import { Injectable } from "@nestjs/common";
-import type { AssessmentRecord, ContentSebSetting, CourseSebDefaults, QuizSebSetting } from "../../shared/models.js";
+import { BadRequestException, Injectable } from "@nestjs/common";
+import type {
+  AdminToolPresetRecord,
+  AssessmentRecord,
+  ContentSebSetting,
+  CourseSebDefaults,
+  ExternalToolConfig,
+  QuizSebSetting
+} from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
@@ -12,6 +19,7 @@ import {
   courseRecordToDefaults,
   defaultCourseSebDefaults,
   extractClassicQuizId,
+  normalizeCourseExternalTools,
   parseNewQuizContentId
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
@@ -43,14 +51,17 @@ export class CourseSettingsService {
   async saveDefaults(
     courseId: string,
     defaults: Partial<CourseSebDefaults>,
-    options: { propagate?: boolean } = {}
+    options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
   ): Promise<CourseSebDefaults> {
     const existing = await this.repositories.value.courses.get(courseId);
     const existingDefaults = courseRecordToDefaults(existing, courseId);
     const resolvedDefaults = {
       ...defaults,
       quitPassword: resolveSebPasswordUpdate(existingDefaults.quitPassword, defaults.quitPassword),
-      startPassword: resolveSebPasswordUpdate(existingDefaults.startPassword, defaults.startPassword)
+      startPassword: resolveSebPasswordUpdate(existingDefaults.startPassword, defaults.startPassword),
+      externalTools: options.allowAdminToolChanges
+        ? normalizeCourseExternalTools(defaults.externalTools)
+        : mergeInstructorCourseTools(existingDefaults.externalTools, defaults.externalTools)
     };
     assertNewSebPassword(existingDefaults.quitPassword, resolvedDefaults.quitPassword, "exit");
     assertNewSebPassword(existingDefaults.startPassword, resolvedDefaults.startPassword, "start");
@@ -71,6 +82,42 @@ export class CourseSettingsService {
     return persisted;
   }
 
+  async pushAdminToolPreset(courseId: string, preset: AdminToolPresetRecord): Promise<CourseSebDefaults> {
+    const existing = await this.getDefaults(courseId);
+    const tool = adminManagedTool(preset);
+    const current = existing.externalTools.find((entry) => entry.adminPresetId === preset.id);
+    if (!current && existing.externalTools.length >= 16) {
+      throw new BadRequestException({
+        success: false,
+        statusCode: 400,
+        error_code: "COURSE_TOOL_LIMIT",
+        message: "This course already has the maximum of 16 exam tools. Remove one before assigning another preset."
+      });
+    }
+    const nextTools = [
+      { ...tool, enabled: current?.enabled === true },
+      ...existing.externalTools.filter((entry) => entry.adminPresetId !== preset.id)
+    ];
+    return this.saveDefaults(
+      courseId,
+      { ...existing, externalTools: nextTools, externalToolsInitialized: true },
+      { propagate: true, allowAdminToolChanges: true }
+    );
+  }
+
+  async removeAdminToolPreset(courseId: string, presetId: string): Promise<CourseSebDefaults> {
+    const existing = await this.getDefaults(courseId);
+    return this.saveDefaults(
+      courseId,
+      {
+        ...existing,
+        externalTools: existing.externalTools.filter((entry) => entry.adminPresetId !== presetId),
+        externalToolsInitialized: true
+      },
+      { propagate: true, allowAdminToolChanges: true }
+    );
+  }
+
   async resetQuizToDefaults(courseId: string, quizId: string): Promise<QuizSebSetting | ContentSebSetting | null> {
     const defaults = await this.getDefaults(courseId);
     const assessmentId = canonicalAssessmentId(quizId);
@@ -85,6 +132,7 @@ export class CourseSettingsService {
             ...existing,
             usesCourseDefaults: true,
             externalToolIds: null,
+            quizOnlyExternalTools: [],
             quitPasswordOverride: false,
             startPasswordOverride: false
           },
@@ -106,6 +154,7 @@ export class CourseSettingsService {
           ...existing,
           usesCourseDefaults: true,
           externalToolIds: null,
+          quizOnlyExternalTools: [],
           quitPasswordOverride: false,
           startPasswordOverride: false
         },
@@ -125,6 +174,50 @@ export class CourseSettingsService {
       return assessmentToContentSebSetting(saved);
     }
     return assessmentToQuizSebSetting(saved);
+  }
+
+  async resetQuizQuitPasswordToDefault(
+    courseId: string,
+    quizId: string
+  ): Promise<QuizSebSetting | ContentSebSetting | null> {
+    const defaults = await this.getDefaults(courseId);
+    const assessmentId = canonicalAssessmentId(quizId);
+    const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
+      if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
+        return null;
+      }
+      if (record.contentType !== "CLASSIC_QUIZ") {
+        const existing = assessmentToContentSebSetting(record);
+        const next = applyCourseDefaultsToContentSetting(
+          { ...existing, quitPassword: null, quitPasswordOverride: false },
+          defaults
+        );
+        this.assertAssessmentCanRunSeb(next);
+        return assessmentWithContentSebSetting(record, {
+          ...normalizeSebStartPasswordState(existing, next),
+          configKey: null
+        });
+      }
+      const existing = assessmentToQuizSebSetting(record);
+      if (!existing) {
+        return null;
+      }
+      const next = applyCourseDefaultsToQuizSetting(
+        { ...existing, quitPassword: null, quitPasswordOverride: false },
+        defaults
+      );
+      this.assertAssessmentCanRunSeb(next);
+      return assessmentWithQuizSebSetting(record, {
+        ...normalizeSebStartPasswordState(existing, next),
+        configKey: null
+      });
+    });
+    if (!saved) {
+      return null;
+    }
+    return saved.contentType === "CLASSIC_QUIZ"
+      ? assessmentToQuizSebSetting(saved)
+      : assessmentToContentSebSetting(saved);
   }
 
   private async propagateDefaults(courseId: string, defaults: CourseSebDefaults): Promise<void> {
@@ -209,4 +302,41 @@ function matchesResetTarget(
     record.contentType === "CLASSIC_QUIZ" &&
     (record.canvas.quizId || record.canvas.id) === classicQuizId
   );
+}
+
+function mergeInstructorCourseTools(
+  existingTools: ExternalToolConfig[],
+  submittedTools?: ExternalToolConfig[] | null
+): ExternalToolConfig[] {
+  if (!Array.isArray(submittedTools)) {
+    return normalizeCourseExternalTools(existingTools);
+  }
+  const normalizedSubmitted = normalizeCourseExternalTools(submittedTools);
+  const submittedById = new Map(normalizedSubmitted.map((tool) => [tool.id, tool]));
+  const managed = normalizeCourseExternalTools(existingTools)
+    .filter((tool) => tool.managedByAdmin === true && !!tool.adminPresetId)
+    .map((tool) => ({ ...tool, enabled: submittedById.get(tool.id)?.enabled === true }));
+  const managedIds = new Set(managed.map((tool) => tool.id));
+  const local = normalizedSubmitted
+    .filter((tool) => !managedIds.has(tool.id) && tool.managedByAdmin !== true)
+    .map((tool) => ({ ...tool, managedByAdmin: false, adminPresetId: null }));
+  return [...managed, ...local].slice(0, 16);
+}
+
+function adminManagedTool(preset: AdminToolPresetRecord): ExternalToolConfig {
+  const [normalized] = normalizeCourseExternalTools([
+    {
+      ...preset.tool,
+      id: `school-${preset.id}`,
+      label: preset.name,
+      enabled: false,
+      preset: null,
+      adminPresetId: preset.id,
+      managedByAdmin: true
+    }
+  ]);
+  if (!normalized) {
+    throw new Error("Administrator tool preset is invalid");
+  }
+  return normalized;
 }

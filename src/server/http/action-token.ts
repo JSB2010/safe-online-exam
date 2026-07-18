@@ -3,6 +3,7 @@ import type { AppConfig } from "../config/app-config.js";
 
 const ACTION_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 const ACTION_TOKEN_PURPOSE = "assessment-management";
+const ADMIN_ACTION_TOKEN_PURPOSE = "account-admin-management";
 const SEB_CONFIG_GRANT_TOKEN_PURPOSE = "seb-config-grant";
 
 export interface ActionTokenPayload {
@@ -20,6 +21,17 @@ export interface ActionTokenContext {
   subject: string;
   deploymentId: string;
   sessionId: string;
+}
+
+export interface AdminActionTokenPayload {
+  version: 1;
+  purpose: typeof ADMIN_ACTION_TOKEN_PURPOSE;
+  userId: string;
+  rootAccountId: string;
+  subject: string;
+  deploymentId: string;
+  sessionBinding: string;
+  exp: number;
 }
 
 export interface SebConfigGrantActionTokenPayload {
@@ -69,6 +81,59 @@ export function verifyActionToken(config: AppConfig, token: string | undefined |
       payload.purpose !== ACTION_TOKEN_PURPOSE ||
       !payload.userId ||
       !payload.courseId ||
+      !payload.subject ||
+      !payload.deploymentId ||
+      !payload.sessionBinding ||
+      !payload.exp ||
+      payload.exp < Date.now()
+    ) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export function createAdminActionToken(
+  config: AppConfig,
+  userId: string,
+  rootAccountId: string,
+  context: ActionTokenContext
+): string {
+  const payload: AdminActionTokenPayload = {
+    version: 1,
+    purpose: ADMIN_ACTION_TOKEN_PURPOSE,
+    userId,
+    rootAccountId,
+    subject: context.subject,
+    deploymentId: context.deploymentId,
+    sessionBinding: sessionBinding(config, context.sessionId),
+    exp: Date.now() + ACTION_TOKEN_TTL_MS
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return `${encodedPayload}.${sign(config, encodedPayload)}`;
+}
+
+export function verifyAdminActionToken(
+  config: AppConfig,
+  token: string | undefined | null
+): AdminActionTokenPayload | null {
+  const segments = parseSignedToken(token);
+  if (!segments) {
+    return null;
+  }
+  const [encodedPayload, signature] = segments;
+  if (!constantTimeEquals(signature, sign(config, encodedPayload))) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as AdminActionTokenPayload;
+    if (
+      payload.version !== 1 ||
+      payload.purpose !== ADMIN_ACTION_TOKEN_PURPOSE ||
+      !payload.userId ||
+      !payload.rootAccountId ||
       !payload.subject ||
       !payload.deploymentId ||
       !payload.sessionBinding ||

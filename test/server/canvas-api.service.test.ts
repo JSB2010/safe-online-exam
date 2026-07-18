@@ -61,6 +61,78 @@ describe("CanvasApiService", () => {
     );
   });
 
+  it("browses bounded active administrator course pages with Canvas-side filters", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        Array.from({ length: 25 }, (_, index) => ({
+          id: index + 1,
+          name: `Course ${index + 1}`,
+          course_code: `CODE-${index + 1}`,
+          account_id: 7,
+          root_account_id: 7,
+          workflow_state: "available",
+          enrollment_term_id: 22,
+          term: { id: 22, name: "Fall 2026" },
+          teachers: [{ display_name: "Teacher One" }]
+        }))
+      )
+    );
+
+    const result = await service.getAdminCoursesPage("7", "user-1", {
+      search: "Biology",
+      termId: "22",
+      includeUnpublished: true,
+      perPage: 25
+    });
+    expect(result.courses).toHaveLength(25);
+    expect(result).toMatchObject({
+      courses: expect.arrayContaining([
+        expect.objectContaining({
+          id: "1",
+          accountId: "7",
+          rootAccountId: "7",
+          termId: "22",
+          termName: "Fall 2026",
+          teacherNames: ["Teacher One"]
+        })
+      ]),
+      nextPage: 2
+    });
+    const requested = new URL(String(vi.mocked(fetch).mock.calls[0]?.[0]));
+    expect(requested.pathname).toBe("/api/v1/accounts/7/courses");
+    expect(requested.searchParams.get("completed")).toBe("false");
+    expect(requested.searchParams.get("with_enrollments")).toBe("true");
+    expect(requested.searchParams.get("search_term")).toBe("Biology");
+    expect(requested.searchParams.get("enrollment_term_id")).toBe("22");
+    expect(requested.searchParams.has("published")).toBe(false);
+  });
+
+  it("loads active administrator enrollment terms", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        enrollment_terms: [
+          {
+            id: 22,
+            name: "Fall 2026",
+            start_at: "2026-08-01T00:00:00Z",
+            end_at: "2026-12-20T00:00:00Z",
+            workflow_state: "active"
+          }
+        ]
+      })
+    );
+
+    await expect(service.getAdminEnrollmentTerms("7", "user-1")).resolves.toEqual([
+      {
+        id: "22",
+        name: "Fall 2026",
+        startAt: "2026-08-01T00:00:00Z",
+        endAt: "2026-12-20T00:00:00Z",
+        workflowState: "active"
+      }
+    ]);
+  });
+
   it("reads every bounded Canvas discovery page before treating the collection as complete", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       id: index + 1,
@@ -191,6 +263,42 @@ describe("CanvasApiService", () => {
       userId: "canvas-user",
       accessToken: "new-token"
     });
+  });
+
+  it("upgrades one user token for course, student, and administrator contexts", async () => {
+    repositories = createInMemoryRepositories();
+    service = new CanvasApiService(new AppConfig(), { value: repositories } as RepositoryProvider);
+
+    await service.storeAccessToken("canvas-user", "course-token", currentOAuthScopeOptions);
+    await service.storeAccessToken("canvas-user", "student-token", {
+      grantType: "student_session",
+      scope: CANVAS_REQUIRED_OAUTH_SCOPES.join(" "),
+      ...currentOAuthScopeOptions
+    });
+    await service.dismissStudentReadinessPrompt("canvas-user");
+    await service.storeAccessToken("canvas-user", "admin-token", {
+      grantType: "account_admin",
+      requestedScopes: [
+        "url:GET|/api/v1/accounts/:id",
+        "url:GET|/api/v1/accounts/:account_id/permissions",
+        "url:GET|/api/v1/courses/:id",
+        ...CANVAS_REQUIRED_OAUTH_SCOPES
+      ],
+      oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION
+    });
+
+    await expect(service.getAccessToken("canvas-user", "instructor")).resolves.toBe("admin-token");
+    await expect(service.getAccessToken("canvas-user", "student_session")).resolves.toBe("admin-token");
+    await expect(service.getAccessToken("canvas-user", "account_admin")).resolves.toBe("admin-token");
+    await expect(repositories.oauthTokens.get("canvas-user")).resolves.toMatchObject({
+      grantType: "account_admin",
+      accessToken: "admin-token",
+      studentReadinessPromptDismissedAt: expect.any(String)
+    });
+    await expect(repositories.oauthTokens.get("account_admin:canvas-user")).resolves.toBeNull();
+    await expect(
+      repositories.oauthTokens.find([{ field: "userId", op: "==", value: "canvas-user" }])
+    ).resolves.toHaveLength(1);
   });
 
   it("creates a Canvas session URL only for a return target on the configured Canvas origin", async () => {

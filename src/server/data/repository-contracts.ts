@@ -1,4 +1,11 @@
-import type { AssessmentRecord, CourseRecord, OAuthToken } from "../../shared/models.js";
+import type {
+  AdminCourseConnectionRecord,
+  AdminToolPresetRecord,
+  AdminToolPresetAssignmentRecord,
+  AssessmentRecord,
+  CourseRecord,
+  OAuthToken
+} from "../../shared/models.js";
 
 export type QueryOperator = "==" | "!=" | "in";
 
@@ -8,13 +15,38 @@ export interface QueryFilter {
   value: unknown;
 }
 
+export interface QueryOptions {
+  orderBy?: "id" | "createdAt" | "updatedAt";
+  direction?: "asc" | "desc";
+  limit?: number;
+}
+
 export interface CollectionStore<T extends Record<string, any>> {
   get(id: string): Promise<T | null>;
   save(id: string, value: T): Promise<T>;
   update(id: string, updater: (current: T | null) => T | null): Promise<T | null>;
   delete(id: string): Promise<void>;
-  find(filters?: QueryFilter[]): Promise<T[]>;
+  find(filters?: QueryFilter[], options?: QueryOptions): Promise<T[]>;
   saveMany(values: Array<{ id: string; value: T }>): Promise<T[]>;
+}
+
+export interface AdminCourseConnectionListOptions {
+  search?: string;
+  afterName?: string;
+  afterCourseId?: string;
+  limit: number;
+}
+
+export interface AdminCourseConnectionSummary {
+  courseCount: number;
+  assessmentCount: number;
+  enabledAssessmentCount: number;
+  issueCount: number;
+}
+
+export interface AdminCourseConnectionStore extends CollectionStore<AdminCourseConnectionRecord> {
+  listForRoot(rootAccountId: string, options: AdminCourseConnectionListOptions): Promise<AdminCourseConnectionRecord[]>;
+  summarizeForRoot(rootAccountId: string): Promise<AdminCourseConnectionSummary>;
 }
 
 export interface SessionRecord extends Record<string, any> {
@@ -65,6 +97,9 @@ export interface OperationLockStore extends CollectionStore<OperationLockRecord>
 }
 
 export interface AppRepositories {
+  adminCourseConnections: AdminCourseConnectionStore;
+  adminToolPresetAssignments: CollectionStore<AdminToolPresetAssignmentRecord>;
+  adminToolPresets: CollectionStore<AdminToolPresetRecord>;
   assessments: CollectionStore<AssessmentRecord>;
   courses: CollectionStore<CourseRecord>;
   oauthTokens: CollectionStore<OAuthToken>;

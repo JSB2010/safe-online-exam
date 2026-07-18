@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OAuthController, canvasScopes, studentSessionScopes } from "../../src/server/controllers/oauth.controller.js";
+import {
+  OAuthController,
+  adminScopes,
+  canvasScopes,
+  studentSessionScopes
+} from "../../src/server/controllers/oauth.controller.js";
 import { UpstreamRequestTimeoutError } from "../../src/server/http/upstream-deadline.js";
 import { CANVAS_OAUTH_SCOPE_VERSION } from "../../src/shared/models.js";
 
 const instructorRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor";
 const learnerRole = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner";
+const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator";
 
 describe("canvasScopes", () => {
   it("requests every Canvas OAuth scope required across instructor and student launches", () => {
@@ -22,6 +28,17 @@ describe("canvasScopes", () => {
   it("requests the same durable capability set from the student connection flow", () => {
     expect(studentSessionScopes()).toEqual(canvasScopes());
   });
+
+  it("requests an isolated administrator scope set for account and quiz recovery operations", () => {
+    expect(adminScopes()).toEqual([
+      "url:GET|/api/v1/accounts/:id",
+      "url:GET|/api/v1/accounts/:account_id/permissions",
+      "url:GET|/api/v1/accounts/:account_id/courses",
+      "url:GET|/api/v1/accounts/:account_id/terms",
+      "url:GET|/api/v1/courses/:id",
+      ...canvasScopes()
+    ]);
+  });
 });
 
 describe("OAuthController", () => {
@@ -29,6 +46,7 @@ describe("OAuthController", () => {
     clearAccessToken: ReturnType<typeof vi.fn>;
     storeAccessToken: ReturnType<typeof vi.fn>;
     hasAccessToken: ReturnType<typeof vi.fn>;
+    hasAdminScopeGrant: ReturnType<typeof vi.fn>;
   };
   let ltiState: {
     createState: ReturnType<typeof vi.fn>;
@@ -41,7 +59,8 @@ describe("OAuthController", () => {
     canvasApi = {
       clearAccessToken: vi.fn().mockResolvedValue(undefined),
       storeAccessToken: vi.fn().mockResolvedValue({}),
-      hasAccessToken: vi.fn().mockResolvedValue(true)
+      hasAccessToken: vi.fn().mockResolvedValue(true),
+      hasAdminScopeGrant: vi.fn().mockResolvedValue(false)
     };
     ltiState = {
       createState: vi.fn().mockResolvedValue("oauth-state"),
@@ -76,6 +95,7 @@ describe("OAuthController", () => {
       issuer: "https://canvas.example.edu",
       deploymentId: "deployment-1",
       sessionBinding: sessionBinding("session-1"),
+      oauthScopeProfile: "application",
       redirectUrl: "/custom-return?tab=oauth"
     });
   });
@@ -119,6 +139,31 @@ describe("OAuthController", () => {
 
     expect(ltiState.createState).not.toHaveBeenCalled();
     expect(canvasApi.clearAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("derives administrator OAuth state only from the verified root-account launch", async () => {
+    const response = responseDouble();
+
+    await controller.adminAuthorize(adminVerifiedRequest(), response);
+
+    const redirectUrl = new URL(response.redirect.mock.calls[0][0]);
+    expect(redirectUrl.searchParams.get("scope")).toBe(adminScopes().join(" "));
+    expect(ltiState.createState).toHaveBeenCalledWith({
+      purpose: "canvas-admin-oauth-v1",
+      canvasUserId: "42",
+      ltiSubject: "admin-subject",
+      courseId: "",
+      accountId: "7",
+      issuer: "https://canvas.example.edu",
+      deploymentId: "deployment-1",
+      sessionBinding: sessionBinding("session-1"),
+      oauthScopeProfile: "admin",
+      redirectUrl: "/lti/launch?connected=1"
+    });
+
+    const denied = responseDouble();
+    await controller.adminAuthorize(verifiedRequest(), denied);
+    expect(denied.status).toHaveBeenCalledWith(403);
   });
 
   it("binds student session authorization to the active learner and requests only the session-token scope", async () => {
@@ -231,6 +276,25 @@ describe("OAuthController", () => {
     expect(response.redirect).toHaveBeenCalledOnce();
   });
 
+  it("preserves the complete administrator scope profile during later course reauthorization", async () => {
+    canvasApi.hasAdminScopeGrant.mockResolvedValue(true);
+    const response = responseDouble();
+
+    await controller.reauthorize(verifiedRequest(), response, {
+      user_id: "1",
+      course_id: "course-1"
+    });
+
+    const redirectUrl = new URL(response.redirect.mock.calls[0][0]);
+    expect(redirectUrl.searchParams.get("scope")).toBe(adminScopes().join(" "));
+    expect(ltiState.createState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purpose: "canvas-oauth-v2",
+        oauthScopeProfile: "admin"
+      })
+    );
+  });
+
   it("rejects attacker-selected reauthorization identities without deleting any token", async () => {
     const response = responseDouble();
 
@@ -330,6 +394,60 @@ describe("OAuthController", () => {
 
     expect(request.session.oauthCallbackResume).toBeUndefined();
     expect(response.redirect).toHaveBeenCalledWith("/setup");
+  });
+
+  it("stores an administrator callback as the user's complete shared grant", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      tokenResponse({ access_token: "admin-token", scope: adminScopes().join(" "), user: { id: 42 } })
+    );
+    ltiState.peekState.mockReturnValue(
+      validState({
+        purpose: "canvas-admin-oauth-v1",
+        canvasUserId: "42",
+        ltiSubject: "admin-subject",
+        courseId: "",
+        accountId: "7",
+        oauthScopeProfile: "admin",
+        redirectUrl: "/lti/launch?connected=1"
+      })
+    );
+    const request = adminVerifiedRequest();
+    const response = responseDouble();
+
+    await controller.callback(request, response, { code: "oauth-code", state: "state" });
+
+    expect(canvasApi.storeAccessToken).toHaveBeenCalledWith("42", "admin-token", {
+      grantType: "account_admin",
+      refreshToken: null,
+      scope: adminScopes().join(" "),
+      requestedScopes: adminScopes(),
+      oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION,
+      expiresIn: undefined
+    });
+    expect(request.session.oauthCallbackResume).toMatchObject({
+      canvasUserId: "42",
+      courseId: "",
+      path: "/lti/launch"
+    });
+    expect(response.redirect).toHaveBeenCalledWith("/lti/launch?connected=1");
+  });
+
+  it("keeps the administrator scope profile when a later course callback replaces the token", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      tokenResponse({ access_token: "replacement-token", scope: adminScopes().join(" "), user: { id: 1 } })
+    );
+    ltiState.peekState.mockReturnValue(validState({ oauthScopeProfile: "admin" }));
+
+    await controller.callback(verifiedRequest(), responseDouble(), { code: "oauth-code", state: "state" });
+
+    expect(canvasApi.storeAccessToken).toHaveBeenCalledWith(
+      "1",
+      "replacement-token",
+      expect.objectContaining({
+        grantType: "account_admin",
+        requestedScopes: adminScopes()
+      })
+    );
   });
 
   it("renders a popup completion page after student session authorization", async () => {
@@ -545,6 +663,29 @@ function verifiedRequest(
         custom: {},
         authenticatedAt: "2026-07-13T00:00:00.000Z",
         ...principalOverrides
+      }
+    }
+  };
+}
+
+function adminVerifiedRequest(): any {
+  return {
+    sessionID: "session-1",
+    session: {
+      verifiedLtiPrincipal: {
+        version: 1,
+        contextType: "account",
+        issuer: "https://canvas.example.edu",
+        deploymentId: "deployment-1",
+        subject: "admin-subject",
+        canvasUserId: "42",
+        courseId: "",
+        accountId: "7",
+        rootAccountId: "7",
+        isRootAccountAdmin: true,
+        roles: [administratorRole],
+        custom: {},
+        authenticatedAt: "2026-07-16T00:00:00.000Z"
       }
     }
   };

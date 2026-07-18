@@ -2,6 +2,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import type {
   AssessmentRecord,
+  CanvasOAuthGrantType,
   ContentItem,
   ContentSebSetting,
   CourseSebDefaults,
@@ -73,7 +74,11 @@ export class AssessmentService {
     private readonly config: AppConfig = new AppConfig()
   ) {}
 
-  async refreshCourseContent(courseId: string, userId: string): Promise<CourseAssessmentContent> {
+  async refreshCourseContent(
+    courseId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<CourseAssessmentContent> {
     const syncedAt = new Date().toISOString();
     const existingRecords = await this.getAssessmentRecordsForCourse(courseId);
     // Deny learner release while a discovery pass is in flight. This closes
@@ -83,7 +88,7 @@ export class AssessmentService {
       this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt),
       this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt)
     ]);
-    const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId);
+    const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId, ...canvasGrantArgs(grantType));
     const classicIds = new Set(classicQuizzes.map((quiz) => assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id)));
     const classicRecords = (
       await mapInBatches(classicQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (quiz) =>
@@ -98,7 +103,7 @@ export class AssessmentService {
     let contentRecords: AssessmentRecord[];
     let newQuizzes: ContentItem[];
     try {
-      newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId);
+      newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
     } catch {
       contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
       return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
@@ -202,6 +207,7 @@ export class AssessmentService {
           customDomains: setting.customDomains || [],
           urlRules: normalizeUrlRules(setting.urlRules),
           externalTools: normalizeExternalTools(setting.externalTools),
+          quizOnlyExternalTools: normalizeExternalTools(setting.quizOnlyExternalTools),
           externalToolIds: normalizeExternalToolIds(setting.externalToolIds),
           quitPassword: resolveSebPasswordUpdate(existingSetting?.quitPassword, setting.quitPassword)
         };
@@ -231,6 +237,7 @@ export class AssessmentService {
         customDomains: setting.customDomains || [],
         urlRules: normalizeUrlRules(setting.urlRules),
         externalTools: normalizeExternalTools(setting.externalTools),
+        quizOnlyExternalTools: normalizeExternalTools(setting.quizOnlyExternalTools),
         externalToolIds: normalizeExternalToolIds(setting.externalToolIds),
         quitPassword: resolveSebPasswordUpdate(existingSetting?.quitPassword, setting.quitPassword)
       };
@@ -310,7 +317,8 @@ export class AssessmentService {
     courseId: string,
     quizId: string,
     userId: string,
-    defaults?: CourseSebDefaults | null
+    defaults?: CourseSebDefaults | null,
+    grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<QuizSebSetting> {
     return this.withAssessmentLock(quizId, async () => {
       const accessCode = generateAccessCode();
@@ -338,8 +346,9 @@ export class AssessmentService {
       this.assertAssessmentCanRunSeb(next);
       this.assertPriorAccessCodeIsRecoverable(existing);
       return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId),
-        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing),
+        applyCanvas: () =>
+          this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
+        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
         persist: () => this.saveQuizSebSetting(next),
         readCurrent: () => this.getSebSettingForQuiz(quizId),
         prior: existing,
@@ -356,7 +365,12 @@ export class AssessmentService {
     requireSebQuitPassword(setting, this.config.value.seb.defaultQuitPassword);
   }
 
-  async disableSebWithAccessCode(courseId: string, quizId: string, userId: string): Promise<QuizSebSetting> {
+  async disableSebWithAccessCode(
+    courseId: string,
+    quizId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<QuizSebSetting> {
     return this.withAssessmentLock(quizId, async () => {
       const existing = await this.getSebSettingForQuiz(quizId);
       this.assertPriorAccessCodeIsRecoverable(existing);
@@ -372,8 +386,8 @@ export class AssessmentService {
         configKey: null
       };
       return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.removeQuizAccessCode(courseId, quizId, userId),
-        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing),
+        applyCanvas: () => this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs(grantType)),
+        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
         persist: () => this.saveQuizSebSetting(disabled),
         readCurrent: () => this.getSebSettingForQuiz(quizId),
         prior: existing,
@@ -387,7 +401,8 @@ export class AssessmentService {
     contentId: string,
     assignmentId: string,
     userId: string,
-    defaults?: CourseSebDefaults | null
+    defaults?: CourseSebDefaults | null,
+    grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<ContentSebSetting> {
     return this.withAssessmentLock(contentId, async () => {
       const existing = await this.getContentSebSetting(contentId);
@@ -406,8 +421,15 @@ export class AssessmentService {
       this.assertAssessmentCanRunSeb(next);
       this.assertPriorAccessCodeIsRecoverable(existing);
       return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId),
-        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing),
+        applyCanvas: () =>
+          this.canvasApi.setNewQuizAccessCode(
+            courseId,
+            assignmentId,
+            accessCode,
+            userId,
+            ...canvasGrantArgs(grantType)
+          ),
+        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
         persist: () => this.saveContentSebSetting(next),
         readCurrent: () => this.getContentSebSetting(contentId),
         prior: existing,
@@ -420,7 +442,8 @@ export class AssessmentService {
     courseId: string,
     contentId: string,
     assignmentId: string,
-    userId: string
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<ContentSebSetting> {
     return this.withAssessmentLock(contentId, async () => {
       const existing = await this.getContentSebSetting(contentId);
@@ -434,8 +457,9 @@ export class AssessmentService {
         configKey: null
       };
       return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId),
-        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing),
+        applyCanvas: () =>
+          this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId, ...canvasGrantArgs(grantType)),
+        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
         persist: () => this.saveContentSebSetting(disabled),
         readCurrent: () => this.getContentSebSetting(contentId),
         prior: existing,
@@ -444,7 +468,12 @@ export class AssessmentService {
     });
   }
 
-  async regenerateQuizAccessCode(courseId: string, quizId: string, userId: string): Promise<QuizSebSetting | null> {
+  async regenerateQuizAccessCode(
+    courseId: string,
+    quizId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<QuizSebSetting | null> {
     return this.withAssessmentLock(quizId, async () => {
       const existing = await this.getSebSettingForQuiz(quizId);
       if (!existing?.sebRequired) {
@@ -455,8 +484,9 @@ export class AssessmentService {
       const next = { ...existing, accessCode, configKey: null };
       this.assertAssessmentCanRunSeb(next);
       return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId),
-        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing),
+        applyCanvas: () =>
+          this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
+        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
         persist: () => this.saveQuizSebSetting(next),
         readCurrent: () => this.getSebSettingForQuiz(quizId),
         prior: existing,
@@ -469,7 +499,8 @@ export class AssessmentService {
     courseId: string,
     contentId: string,
     assignmentId: string,
-    userId: string
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<ContentSebSetting | null> {
     return this.withAssessmentLock(contentId, async () => {
       const existing = await this.getContentSebSetting(contentId);
@@ -481,8 +512,15 @@ export class AssessmentService {
       const next = { ...existing, accessCode, configKey: null };
       this.assertAssessmentCanRunSeb(next);
       return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, accessCode, userId),
-        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing),
+        applyCanvas: () =>
+          this.canvasApi.setNewQuizAccessCode(
+            courseId,
+            assignmentId,
+            accessCode,
+            userId,
+            ...canvasGrantArgs(grantType)
+          ),
+        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
         persist: () => this.saveContentSebSetting(next),
         readCurrent: () => this.getContentSebSetting(contentId),
         prior: existing,
@@ -696,22 +734,30 @@ export class AssessmentService {
     courseId: string,
     quizId: string,
     userId: string,
-    prior: QuizSebSetting | null
+    prior: QuizSebSetting | null,
+    grantType: CanvasOAuthGrantType
   ): Promise<unknown> {
     return prior?.sebRequired || prior?.enabled
-      ? this.canvasApi.setQuizAccessCode(courseId, quizId, prior.accessCode!, userId)
-      : this.canvasApi.removeQuizAccessCode(courseId, quizId, userId);
+      ? this.canvasApi.setQuizAccessCode(courseId, quizId, prior.accessCode!, userId, ...canvasGrantArgs(grantType))
+      : this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs(grantType));
   }
 
   private restoreNewQuizCanvasAccessCode(
     courseId: string,
     assignmentId: string,
     userId: string,
-    prior: ContentSebSetting | null
+    prior: ContentSebSetting | null,
+    grantType: CanvasOAuthGrantType
   ): Promise<unknown> {
     return prior?.sebRequired || prior?.enabled
-      ? this.canvasApi.setNewQuizAccessCode(courseId, assignmentId, prior.accessCode!, userId)
-      : this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId);
+      ? this.canvasApi.setNewQuizAccessCode(
+          courseId,
+          assignmentId,
+          prior.accessCode!,
+          userId,
+          ...canvasGrantArgs(grantType)
+        )
+      : this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId, ...canvasGrantArgs(grantType));
   }
 
   private toCourseAssessmentContent(records: AssessmentRecord[]): CourseAssessmentContent {
@@ -909,4 +955,8 @@ function hasSameCanvasAccessState(
   const leftEnabled = !!(left?.sebRequired || left?.enabled);
   const rightEnabled = !!(right?.sebRequired || right?.enabled);
   return leftEnabled === rightEnabled && (!leftEnabled || (left?.accessCode || null) === (right?.accessCode || null));
+}
+
+function canvasGrantArgs(grantType: CanvasOAuthGrantType): [] | [CanvasOAuthGrantType] {
+  return grantType === "instructor" ? [] : [grantType];
 }

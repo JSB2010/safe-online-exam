@@ -142,6 +142,37 @@ describe("launchDataFromPayload", () => {
     ).toThrow("LTI token is missing subject");
   });
 
+  it("does not treat course enrollment substitutions as authorization claims on the account admin surface", () => {
+    expect(
+      launchDataFromPayload({
+        sub: "admin-subject",
+        "https://purl.imsglobal.org/spec/lti/claim/roles": [
+          "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator"
+        ],
+        "https://purl.imsglobal.org/spec/lti/claim/custom": {
+          seb_launch_surface: "account_admin",
+          canvas_user_id: "42",
+          canvas_account_id: "7",
+          canvas_root_account_id: "7",
+          canvas_user_is_root_account_admin: "true",
+          canvas_membership_roles: "TeacherEnrollment,StudentEnrollment",
+          canvas_lis_membership_roles: LEARNER_ROLE
+        }
+      })
+    ).toMatchObject({
+      ltiSubject: "admin-subject",
+      canvasUserId: "42",
+      courseId: undefined,
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator"],
+      custom: {
+        seb_launch_surface: "account_admin",
+        canvas_account_id: "7",
+        canvas_root_account_id: "7",
+        canvas_user_is_root_account_admin: "true"
+      }
+    });
+  });
+
   it("fails closed unless the exact Canvas deployment id is configured", () => {
     expect(isAllowedDeploymentId(undefined, "deployment-1")).toBe(false);
     expect(isAllowedDeploymentId("", "deployment-1")).toBe(false);

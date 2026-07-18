@@ -30,6 +30,7 @@ export function toSebSettingView(
     customDomains: [...(setting.customDomains || [])],
     urlRules: normalizeUrlRules(setting.urlRules),
     externalTools: normalizeExternalTools(setting.externalTools),
+    quizOnlyExternalTools: normalizeExternalTools(setting.quizOnlyExternalTools),
     externalToolIds: setting.externalToolIds === undefined ? null : setting.externalToolIds,
     canvasDomain: "canvasDomain" in setting ? setting.canvasDomain || null : null,
     usesCourseDefaults: setting.usesCourseDefaults === true,

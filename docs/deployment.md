@@ -513,7 +513,7 @@ The repository includes a guarded development-only reset command for cases that 
 npm run db:reset:gcloud:dev -- --project "$PROJECT_ID"
 ```
 
-It targets the maintained dev Cloud SQL database, requires interactive confirmation, drops and recreates the entire database, and reapplies migrations. It permanently removes dev assessment settings, OAuth tokens, sessions, transient state, and locks. Never use it against production, never place it in CI or a scheduler, and take an on-demand backup first when the current dev state might be needed.
+It targets the maintained dev Cloud SQL database, requires interactive confirmation, drops and recreates the entire database, and reapplies migrations. It permanently removes dev assessment settings, course settings, administrator course connections, tool presets and rollout state, OAuth tokens, sessions, transient state, and locks. Never use it against production, never place it in CI or a scheduler, and take an on-demand backup first when the current dev state might be needed.
 
 ## Mode 2: Docker Compose / Budget VM Alternative
 
@@ -750,7 +750,7 @@ docker compose \
   migrate
 ```
 
-Inspect the six application/runtime tables plus `schema_migrations`, and exercise a non-production LTI and assessment smoke flow against an isolated application instance. Record recovery time and the newest restored row timestamp. Drop the drill database only after the result is approved. A backup that has not passed a restore drill is not verified.
+Inspect the eight application/runtime tables plus `schema_migrations`, and exercise a non-production LTI, administrator-dashboard, and assessment smoke flow against an isolated application instance. Record recovery time and the newest restored row timestamp. Drop the drill database only after the result is approved. A backup that has not passed a restore drill is not verified.
 
 ### 8. Upgrade
 

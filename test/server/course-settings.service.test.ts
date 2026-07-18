@@ -29,61 +29,88 @@ afterEach(() => {
 });
 
 describe("CourseSettingsService", () => {
-  it("persists the full disabled preset catalog when an instructor opens a new course", async () => {
+  it("starts new courses without hardcoded tools so the school or instructor can choose the catalog", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);
 
     expect(await repos.value.courses.get("course-1")).toBeNull();
     const defaults = await service.ensureDefaults("course-1");
 
-    expect(defaults.externalTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "desmos-graphing", enabled: false }),
-        expect.objectContaining({ id: "desmos-scientific", enabled: false }),
-        expect.objectContaining({ id: "geogebra-graphing", enabled: false }),
-        expect.objectContaining({ id: "geogebra-scientific", enabled: false })
-      ])
-    );
+    expect(defaults.externalTools).toEqual([]);
     await expect(repos.value.courses.get("course-1")).resolves.toMatchObject({
-      sebDefaults: { externalTools: expect.arrayContaining([expect.objectContaining({ id: "desmos-graphing" })]) }
+      sebDefaults: { externalTools: [], externalToolsInitialized: true }
     });
   });
 
-  it("keeps preloaded tool edits and intentional deletion after a course save", async () => {
+  it("keeps instructor-created course tools editable and intentionally removable", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);
-    const seeded = await service.ensureDefaults("course-1");
-    const editedCatalog = seeded.externalTools
-      .filter((tool) => tool.id !== "desmos-scientific")
-      .map((tool) =>
-        tool.id === "desmos-graphing"
-          ? {
-              ...tool,
-              label: "District Graphing Calculator",
-              url: "https://calculator.example.edu/graphing",
-              allowedRules: [{ id: "assets", match: "path" as const, value: "https://calculator.example.edu/assets/*" }]
-            }
-          : tool
-      );
-
     const saved = await service.saveDefaults("course-1", {
       setupCompleted: true,
-      externalTools: editedCatalog
+      externalTools: [
+        {
+          id: "course-graphing",
+          label: "Course Graphing Calculator",
+          url: "https://calculator.example.edu/graphing",
+          enabled: true,
+          allowedRules: [{ id: "assets", match: "path" as const, value: "https://calculator.example.edu/assets/*" }]
+        }
+      ]
     });
 
-    expect(saved.externalTools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "desmos-graphing",
-          label: "District Graphing Calculator",
-          url: "https://calculator.example.edu/graphing"
-        })
-      ])
-    );
-    expect(saved.externalTools).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "desmos-scientific" })])
-    );
-    await expect(service.getDefaults("course-1")).resolves.toMatchObject({ externalTools: saved.externalTools });
+    expect(saved.externalTools).toEqual([
+      expect.objectContaining({ id: "course-graphing", label: "Course Graphing Calculator", enabled: true })
+    ]);
+    await expect(service.saveDefaults("course-1", { ...saved, externalTools: [] })).resolves.toMatchObject({
+      externalTools: []
+    });
+  });
+
+  it("pushes school presets while preventing instructors from changing or deleting their definitions", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    await service.ensureDefaults("course-1");
+    const preset = {
+      id: "82e95e19-d10f-4dcb-8e06-7e90f21ada8b",
+      rootAccountId: "7",
+      name: "School Desmos",
+      description: "Approved calculator",
+      tool: {
+        id: "template",
+        label: "School Desmos",
+        url: "https://www.desmos.com/calculator",
+        enabled: false,
+        allowedRules: [{ id: "assets", match: "path" as const, value: "https://www.desmos.com/assets/*" }]
+      },
+      assignedCourseIds: ["course-1"],
+      createdByUserId: "42",
+      updatedByUserId: "42"
+    };
+
+    const pushed = await service.pushAdminToolPreset("course-1", preset);
+    const managed = pushed.externalTools.find((tool) => tool.adminPresetId === preset.id)!;
+    expect(managed).toMatchObject({
+      label: "School Desmos",
+      managedByAdmin: true,
+      enabled: false
+    });
+
+    const instructorSave = await service.saveDefaults("course-1", {
+      ...pushed,
+      externalTools: [{ ...managed, label: "Tampered", url: "https://evil.example.edu", enabled: true }]
+    });
+    expect(instructorSave.externalTools).toEqual([
+      expect.objectContaining({
+        id: managed.id,
+        label: "School Desmos",
+        url: "https://www.desmos.com/calculator",
+        managedByAdmin: true,
+        enabled: true
+      })
+    ]);
+
+    const removed = await service.removeAdminToolPreset("course-1", preset.id);
+    expect(removed.externalTools.some((tool) => tool.adminPresetId === preset.id)).toBe(false);
   });
 
   it("rejects course-default and managed-fallback start/exit password collisions", async () => {
@@ -556,5 +583,52 @@ describe("CourseSettingsService", () => {
     const service = new CourseSettingsService({ value: createInMemoryRepositories() } as RepositoryProvider);
 
     await expect(service.resetQuizToDefaults("course-1", "missing")).resolves.toBeNull();
+  });
+
+  it("resets only an assessment exit password while preserving its quiz-only tool policy", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    await service.saveDefaults("course-1", {
+      courseId: "course-1",
+      quitPassword: "course-exit-4829",
+      setupCompleted: true,
+      externalTools: []
+    });
+    await repos.value.assessments.save(
+      "classicquiz_77",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "77",
+        courseId: "course-1",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "canvas-code",
+        configKey: "stale-key",
+        quitPassword: "assessment-exit-5931",
+        quitPasswordOverride: true,
+        usesCourseDefaults: false,
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
+        externalTools: [],
+        externalToolIds: [],
+        quizOnlyExternalTools: [
+          {
+            id: "quiz-reference",
+            label: "Quiz reference",
+            url: "https://reference.example.edu/formulas",
+            enabled: true
+          }
+        ]
+      })
+    );
+
+    await expect(service.resetQuizQuitPasswordToDefault("course-1", "classicquiz_77")).resolves.toMatchObject({
+      quitPassword: "course-exit-4829",
+      quitPasswordOverride: false,
+      usesCourseDefaults: false,
+      configKey: null,
+      quizOnlyExternalTools: [expect.objectContaining({ id: "quiz-reference" })]
+    });
   });
 });

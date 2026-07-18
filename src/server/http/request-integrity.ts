@@ -1,8 +1,14 @@
 import type { Request } from "express";
 import type { AppConfig } from "../config/app-config.js";
 import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
+import type { VerifiedAccountAdminPrincipal } from "../security/verified-lti-principal.js";
 import { apiError } from "./api-error.js";
-import { expectedSessionBinding, verifyActionToken, verifySebConfigGrantActionToken } from "./action-token.js";
+import {
+  expectedSessionBinding,
+  verifyActionToken,
+  verifyAdminActionToken,
+  verifySebConfigGrantActionToken
+} from "./action-token.js";
 
 export function requireManagementRequestIntegrity(
   request: Request,
@@ -45,6 +51,27 @@ export function requireSebConfigGrantRequestIntegrity(
     apiError(403, "Invalid or missing SEB launch request token", { error_code: "REQUEST_INTEGRITY_FAILED" });
   }
   requireSameOriginRequest(request, config, "SEB launch");
+}
+
+export function requireAdminManagementRequestIntegrity(
+  request: Request,
+  config: AppConfig,
+  principal: VerifiedAccountAdminPrincipal
+): void {
+  const token = verifyAdminActionToken(config, request.header("x-auth-token"));
+  const sessionId = request.sessionID;
+  if (
+    !token ||
+    !sessionId ||
+    token.userId !== principal.canvasUserId ||
+    token.rootAccountId !== principal.rootAccountId ||
+    token.subject !== principal.subject ||
+    token.deploymentId !== principal.deploymentId ||
+    token.sessionBinding !== expectedSessionBinding(config, sessionId)
+  ) {
+    apiError(403, "Invalid or missing administrator request token", { error_code: "REQUEST_INTEGRITY_FAILED" });
+  }
+  requireSameOriginRequest(request, config, "administrator management");
 }
 
 export function requireSameOriginRequest(request: Request, config: AppConfig, label: string): void {

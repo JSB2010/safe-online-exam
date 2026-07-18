@@ -50,9 +50,13 @@ describe("PostgreSQL migrations", () => {
     ]);
   });
 
-  it("declares the initial schema as version one", () => {
-    expect(EXPECTED_SCHEMA_VERSION).toBe(1);
-    expect(discoverMigrations().map((migration) => migration.version)).toEqual([1]);
+  it("declares the current schema including scalable administrator resources", () => {
+    expect(EXPECTED_SCHEMA_VERSION).toBe(5);
+    const migrations = discoverMigrations();
+    expect(migrations.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(migrations.at(-1)?.sql).toContain("admin_course_connections");
+    expect(migrations.at(-1)?.sql).toContain("admin_tool_preset_assignments");
+    expect(migrations.at(-1)?.sql).toContain("DROP TABLE IF EXISTS admin_audit_logs");
   });
 
   it("locks, applies pending migrations transactionally, and unlocks", async () => {

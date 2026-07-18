@@ -19,11 +19,12 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Unlock,
   X
 } from "lucide-react";
-import type { ReactNode, RefObject, SetStateAction } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import type {
@@ -34,6 +35,7 @@ import type {
   SebUrlRuleMatch
 } from "../shared/models.js";
 import {
+  EXTERNAL_TOOL_PRESETS,
   canEnableSebAssessment,
   legacyDomainsToUrlRules,
   normalizeCourseExternalTools,
@@ -105,6 +107,8 @@ const bootstrap = readBootstrap();
 
 export function App() {
   switch (bootstrap.view) {
+    case "admin":
+      return <AdminDashboard data={bootstrap.data} />;
     case "teacher":
       return <TeacherDashboard data={bootstrap.data} />;
     case "api-authorization":
@@ -135,6 +139,1543 @@ export function App() {
     default:
       return <MessagePage icon={<Shield />} title="Safe Exam Browser" message="This service is running." />;
   }
+}
+
+type AdminAssessmentView = {
+  id: string;
+  title: string;
+  contentType: string;
+  published: boolean;
+  sebRequired: boolean;
+  enabled: boolean;
+  hasAccessCode: boolean;
+  hasStartPassword: boolean;
+  hasQuitPassword: boolean;
+  updatedAt?: string | null;
+};
+
+type AdminCourseView = {
+  id: string;
+  name: string;
+  courseCode?: string | null;
+  workflowState?: string | null;
+  termName?: string | null;
+  teacherNames?: string[];
+  setupCompleted?: boolean;
+  hasCourseDefaults?: boolean;
+  assessmentCount: number;
+  enabledAssessmentCount: number;
+  issueCount?: number;
+  lastRefreshedAt?: string | null;
+  adminToolPresetIds?: string[];
+  assessments?: AdminAssessmentView[];
+};
+
+type AdminToolPresetView = {
+  id: string;
+  name: string;
+  description?: string | null;
+  tool: ExternalToolConfig;
+  assignedCourseIds: string[];
+  assignedCourseCount: number;
+  pendingAssignmentCount?: number;
+  failedAssignmentCount?: number;
+  updatedAt?: string | null;
+};
+
+type AdminOverview = {
+  account?: { id?: string; name?: string };
+  summary?: {
+    courseCount?: number;
+    configuredCourseCount?: number;
+    assessmentCount?: number;
+    enabledAssessmentCount?: number;
+    issueCount?: number;
+    toolPresetCount?: number;
+    pendingPresetAssignmentCount?: number;
+    failedPresetAssignmentCount?: number;
+  };
+  courses?: AdminCourseView[];
+  toolPresets?: AdminToolPresetView[];
+  nextCourseCursor?: string | null;
+};
+
+type RevealedSecrets = {
+  expiresAt: number;
+  values: Array<{ label: string; value: string; source?: string }>;
+};
+
+type AdminSection = "courses" | "institution";
+
+const ADMIN_SECTION_STORAGE_KEY = "seb-admin-section";
+const ADMIN_COURSE_STORAGE_KEY = "seb-admin-course";
+
+function AdminDashboard({ data }: { data: Record<string, any> }) {
+  const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [activeSection, setActiveSection] = useState<AdminSection>(() =>
+    window.localStorage.getItem(ADMIN_SECTION_STORAGE_KEY) === "institution" ? "institution" : "courses"
+  );
+  const [selectedCourseId, setSelectedCourseId] = useState(
+    () => window.localStorage.getItem(ADMIN_COURSE_STORAGE_KEY) || ""
+  );
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  const [error, setError] = useState("");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [revealed, setRevealed] = useState<Record<string, RevealedSecrets>>({});
+  const [editingPreset, setEditingPreset] = useState<AdminToolPresetView | "new" | null>(null);
+  const [connectingCourses, setConnectingCourses] = useState(false);
+  const [rolloutPreset, setRolloutPreset] = useState<AdminToolPresetView | null>(null);
+
+  const startBusy = (key: string) => setBusy((current) => new Set(current).add(key));
+  const stopBusy = (key: string) =>
+    setBusy((current) => {
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  const isBusy = (key: string) => busy.has(key);
+
+  const pushToast = (tone: Toast["tone"], message: string) => {
+    const id = clientId("admin-toast");
+    setToasts((current) => [...current, { id, tone, message }]);
+    window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 5200);
+  };
+
+  const loadCourseDetail = async (courseId: string) => {
+    if (!courseId) return;
+    const body = await requestJson(`/api/admin/courses/${encodeURIComponent(courseId)}`);
+    const course = body.course as AdminCourseView;
+    setOverview((current) =>
+      current
+        ? {
+            ...current,
+            courses: (current.courses || []).map((value) => (value.id === course.id ? course : value))
+          }
+        : current
+    );
+  };
+
+  const loadPresets = async () => {
+    const body = await requestJson("/api/admin/tool-presets");
+    setOverview((current) => (current ? { ...current, toolPresets: body.presets || [] } : current));
+  };
+
+  const loadSummary = async () => {
+    const body = await requestJson("/api/admin/summary");
+    setOverview((current) => (current ? { ...current, account: body.account, summary: body.summary } : current));
+  };
+
+  const loadOverview = async (preserveSelection = true, search = query) => {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ limit: "25" });
+      if (search.trim()) params.set("search", search.trim());
+      const [summaryBody, courseBody] = await Promise.all([
+        requestJson("/api/admin/summary"),
+        requestJson(`/api/admin/courses?${params.toString()}`)
+      ]);
+      const courses = (courseBody.courses || []) as AdminCourseView[];
+      const preferred =
+        preserveSelection && !search.trim() && selectedCourseId ? selectedCourseId : courses[0]?.id || "";
+      const [detailBody, presetBody] = await Promise.all([
+        preferred
+          ? requestJson(`/api/admin/courses/${encodeURIComponent(preferred)}`).catch(() => null)
+          : Promise.resolve(null),
+        preferred || activeSection === "institution" ? requestJson("/api/admin/tool-presets") : Promise.resolve(null)
+      ]);
+      const resolvedSelection = detailBody?.course?.id || courses[0]?.id || "";
+      const detailedCourses = detailBody?.course
+        ? courses.some((course) => course.id === detailBody.course.id)
+          ? courses.map((course) => (course.id === detailBody.course.id ? detailBody.course : course))
+          : [detailBody.course, ...courses]
+        : courses;
+      setOverview((current) => ({
+        ...current,
+        account: summaryBody.account,
+        summary: summaryBody.summary,
+        courses: detailedCourses,
+        toolPresets: presetBody?.presets || current?.toolPresets,
+        nextCourseCursor: courseBody.nextCursor || null
+      }));
+      setSelectedCourseId(resolvedSelection);
+    } catch (value) {
+      setError(errorMessage(value, "The school dashboard could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMoreCourses = async () => {
+    const cursor = overview?.nextCourseCursor;
+    if (!cursor) return;
+    const params = new URLSearchParams({ limit: "25", cursor });
+    if (query.trim()) params.set("search", query.trim());
+    const key = "courses:more";
+    startBusy(key);
+    try {
+      const body = await requestJson(`/api/admin/courses?${params.toString()}`);
+      setOverview((current) =>
+        current
+          ? {
+              ...current,
+              courses: [...(current.courses || []), ...(body.courses || [])],
+              nextCourseCursor: body.nextCursor || null
+            }
+          : current
+      );
+    } catch (value) {
+      pushToast("error", errorMessage(value, "More courses could not be loaded."));
+    } finally {
+      stopBusy(key);
+    }
+  };
+
+  useEffect(() => {
+    void loadOverview(true);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, activeSection);
+    if (activeSection === "institution" && !overview?.toolPresets) {
+      void loadPresets();
+    }
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (!selectedCourseId) return;
+    window.localStorage.setItem(ADMIN_COURSE_STORAGE_KEY, selectedCourseId);
+    void loadCourseDetail(selectedCourseId).catch((value) =>
+      pushToast("error", errorMessage(value, "The course details could not be loaded."))
+    );
+  }, [selectedCourseId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadOverview(true, query), 350);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setRevealed((current) =>
+        Object.fromEntries(Object.entries(current).filter(([, secret]) => secret.expiresAt > now))
+      );
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const courses = overview?.courses || [];
+  const filteredCourses = courses;
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId) || null;
+
+  async function mutate(key: string, url: string, init: RequestInit, successMessage: string) {
+    startBusy(key);
+    try {
+      await requestJson(url, {
+        ...init,
+        headers: {
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...actionHeaders(data.authToken),
+          ...init.headers
+        }
+      });
+      pushToast("success", successMessage);
+      await Promise.all([
+        loadCourseDetail(selectedCourseId),
+        loadSummary(),
+        key.startsWith("assign-preset:") ? loadPresets() : Promise.resolve()
+      ]);
+    } catch (value) {
+      pushToast("error", errorMessage(value, "The administrator action could not be completed."));
+    } finally {
+      stopBusy(key);
+    }
+  }
+
+  async function revealSecrets(key: string, url: string) {
+    startBusy(key);
+    try {
+      const body = await requestJson(url, { method: "POST", headers: actionHeaders(data.authToken) });
+      const values = Object.entries((body.passwords || {}) as Record<string, { value?: unknown; source?: unknown }>)
+        .filter(([, secret]) => typeof secret.value === "string" && secret.value.length > 0)
+        .map(([name, secret]) => ({
+          label: name === "accessCode" ? "Canvas access code" : name === "start" ? "Start password" : "Exit password",
+          value: String(secret.value),
+          source: typeof secret.source === "string" ? secret.source : undefined
+        }));
+      setRevealed((current) => ({
+        ...current,
+        [key]: { values, expiresAt: Date.now() + Number(body.expiresInSeconds || 30) * 1000 }
+      }));
+      if (!values.length) pushToast("success", "No passwords are currently configured here.");
+    } catch (value) {
+      pushToast("error", errorMessage(value, "Passwords could not be revealed."));
+    } finally {
+      stopBusy(key);
+    }
+  }
+
+  function storeRevealedSecrets(key: string, body: Record<string, any>) {
+    const values = Object.entries((body.passwords || {}) as Record<string, { value?: unknown; source?: unknown }>)
+      .filter(([, secret]) => typeof secret.value === "string" && secret.value.length > 0)
+      .map(([name, secret]) => ({
+        label: name === "accessCode" ? "Canvas access code" : name === "start" ? "Start password" : "Exit password",
+        value: String(secret.value),
+        source: typeof secret.source === "string" ? secret.source : undefined
+      }));
+    setRevealed((current) => ({
+      ...current,
+      [key]: { values, expiresAt: Date.now() + Number(body.expiresInSeconds || 30) * 1000 }
+    }));
+  }
+
+  async function rotateCourseQuitPassword(course: AdminCourseView) {
+    if (
+      !window.confirm(
+        "Rotate this course exit password? Existing downloaded SEB files will no longer contain the current password."
+      )
+    ) {
+      return;
+    }
+    const key = `course:${course.id}`;
+    const busyKey = `rotate-password:${course.id}`;
+    startBusy(busyKey);
+    try {
+      const body = await requestJson(`/api/admin/courses/${encodeURIComponent(course.id)}/quit-password/rotate`, {
+        method: "POST",
+        headers: actionHeaders(data.authToken)
+      });
+      storeRevealedSecrets(key, body);
+      pushToast("success", "Course exit password rotated and shown for 30 seconds.");
+      await loadCourseDetail(course.id);
+    } catch (value) {
+      pushToast("error", errorMessage(value, "The course exit password could not be rotated."));
+    } finally {
+      stopBusy(busyKey);
+    }
+  }
+
+  async function reconcilePreset(presetId: string, retryFailed = false) {
+    let attempts = 0;
+    let result = await requestJson(`/api/admin/tool-presets/${encodeURIComponent(presetId)}/assignments/reconcile`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
+      body: JSON.stringify({ retryFailed })
+    });
+    while (Number(result.rollout?.pending || 0) > 0 && attempts < 200) {
+      attempts += 1;
+      result = await requestJson(`/api/admin/tool-presets/${encodeURIComponent(presetId)}/assignments/reconcile`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
+        body: JSON.stringify({ retryFailed: false })
+      });
+    }
+    if (Number(result.rollout?.failed || 0) > 0) {
+      throw new Error(
+        `${result.rollout.failed} course${result.rollout.failed === 1 ? "" : "s"} could not be updated. Retry the rollout from the tool card.`
+      );
+    }
+    return result;
+  }
+
+  async function runPresetRollout(presetId: string, assigned: boolean, all: boolean, courseIds: string[]) {
+    const initial = await requestJson(`/api/admin/tool-presets/${encodeURIComponent(presetId)}/assignments`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
+      body: JSON.stringify({ assigned, all, courseIds })
+    });
+    if (Number(initial.rollout?.pending || 0) > 0) {
+      await reconcilePreset(presetId);
+    }
+    if (Number(initial.rollout?.failed || 0) > 0) {
+      await reconcilePreset(presetId, true);
+    }
+    await Promise.all([loadPresets(), loadSummary()]);
+  }
+
+  async function savePreset(input: { name: string; description: string; tool: ExternalToolConfig }) {
+    const current = editingPreset === "new" ? null : editingPreset;
+    const url = current ? `/api/admin/tool-presets/${encodeURIComponent(current.id)}` : "/api/admin/tool-presets";
+    await requestJson(url, {
+      method: current ? "PUT" : "POST",
+      headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
+      body: JSON.stringify(input)
+    });
+    if (current) {
+      await reconcilePreset(current.id);
+    }
+    await loadPresets();
+    setEditingPreset(null);
+    pushToast("success", current ? "School tool preset updated." : "School tool preset created.");
+  }
+
+  async function deletePreset(preset: AdminToolPresetView) {
+    if (
+      !window.confirm(
+        `Delete “${preset.name}”? It will be removed from ${preset.assignedCourseCount} assigned course${preset.assignedCourseCount === 1 ? "" : "s"}.`
+      )
+    ) {
+      return;
+    }
+    const key = `delete-preset:${preset.id}`;
+    startBusy(key);
+    try {
+      if (preset.assignedCourseCount) {
+        await runPresetRollout(preset.id, false, true, []);
+      }
+      await requestJson(`/api/admin/tool-presets/${encodeURIComponent(preset.id)}`, {
+        method: "DELETE",
+        headers: actionHeaders(data.authToken)
+      });
+      pushToast("success", "School tool preset deleted.");
+      await Promise.all([loadPresets(), loadOverview(true)]);
+    } catch (value) {
+      pushToast("error", errorMessage(value, "The school tool preset could not be deleted."));
+    } finally {
+      stopBusy(key);
+    }
+  }
+
+  const summary = overview?.summary || {};
+  const sections: Array<{
+    id: AdminSection;
+    label: string;
+    description: string;
+    count: number;
+    icon: ReactNode;
+  }> = [
+    {
+      id: "courses",
+      label: "Courses",
+      description: "Manage configured courses and assessments",
+      count: summary.configuredCourseCount || 0,
+      icon: <BookOpen size={17} />
+    },
+    {
+      id: "institution",
+      label: "Institution settings",
+      description: "Manage approved exam tools",
+      count: summary.toolPresetCount || overview?.toolPresets?.length || 0,
+      icon: <SlidersHorizontal size={17} />
+    }
+  ];
+
+  function navigateAdminTabs(event: ReactKeyboardEvent<HTMLButtonElement>, currentSection: AdminSection) {
+    const currentIndex = sections.findIndex((section) => section.id === currentSection);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % sections.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + sections.length) % sections.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = sections.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextSection = sections[nextIndex].id;
+    setActiveSection(nextSection);
+    window.requestAnimationFrame(() => document.getElementById(`admin-tab-${nextSection}`)?.focus());
+  }
+
+  return (
+    <main className="app-shell admin-shell">
+      <header className="topbar">
+        <div className="topbar-title">
+          <div className="brand-mark">
+            <ShieldCheck size={20} />
+          </div>
+          <div>
+            <h1>Safe Exam Browser Admin</h1>
+            <p>{overview?.account?.name || `Canvas account ${data.rootAccountId || ""}`}</p>
+          </div>
+        </div>
+        <div className="topbar-actions admin-summary-pills">
+          <div className="stat-pill">
+            <span>Courses</span>
+            <strong>{summary.courseCount || 0}</strong>
+          </div>
+          <div className="stat-pill">
+            <span>Assessments</span>
+            <strong>{summary.assessmentCount || 0}</strong>
+          </div>
+          <div className="stat-pill active">
+            <span>SEB active</span>
+            <strong>{summary.enabledAssessmentCount || 0}</strong>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void loadOverview()}
+            disabled={loading}
+            title="Refresh dashboard"
+          >
+            <RefreshCw size={18} />
+          </button>
+        </div>
+      </header>
+
+      {error && (
+        <div className="notice error" role="alert">
+          <AlertCircle size={17} /> {error}
+        </div>
+      )}
+
+      <nav className="admin-tabs" aria-label="Administrator workspace" role="tablist">
+        {sections.map((section) => (
+          <button
+            key={section.id}
+            id={`admin-tab-${section.id}`}
+            className={clsx("admin-tab", activeSection === section.id && "active")}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === section.id}
+            aria-controls={`admin-panel-${section.id}`}
+            tabIndex={activeSection === section.id ? 0 : -1}
+            onClick={() => setActiveSection(section.id)}
+            onKeyDown={(event) => navigateAdminTabs(event, section.id)}
+          >
+            <span className="admin-tab-icon">{section.icon}</span>
+            <span>
+              <strong>{section.label}</strong>
+              <small>{section.description}</small>
+            </span>
+            <span className="admin-tab-count">{section.count}</span>
+          </button>
+        ))}
+      </nav>
+
+      {activeSection === "courses" && (
+        <section
+          className="work-surface admin-surface"
+          id="admin-panel-courses"
+          role="tabpanel"
+          aria-labelledby="admin-tab-courses"
+        >
+          <aside className="admin-course-sidebar">
+            <div className="admin-sidebar-heading">
+              <div>
+                <span className="section-kicker">Safe Exam Browser</span>
+                <h2>Configured courses</h2>
+              </div>
+              <button className="button primary small" type="button" onClick={() => setConnectingCourses(true)}>
+                <Plus size={14} /> Connect
+              </button>
+            </div>
+            <div className="search admin-search">
+              <Search size={17} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search name, code, teacher, term, or ID"
+                aria-label="Search configured courses"
+              />
+            </div>
+            <div className="admin-course-list">
+              {loading && !overview && (
+                <div className="admin-loading">
+                  <RefreshCw className="spin" size={18} /> Loading configured courses…
+                </div>
+              )}
+              {!loading && !filteredCourses.length && (
+                <div className="empty-line">
+                  {query ? "No matching configured courses." : "No courses have configured Safe Exam Browser yet."}
+                </div>
+              )}
+              {filteredCourses.map((course) => (
+                <button
+                  key={course.id}
+                  type="button"
+                  className={clsx("admin-course-row", selectedCourseId === course.id && "selected")}
+                  onClick={() => setSelectedCourseId(course.id)}
+                >
+                  <span>
+                    <strong>{course.name}</strong>
+                    <small>{course.courseCode || `Course ${course.id}`}</small>
+                  </span>
+                  <span
+                    className={clsx("admin-count", course.enabledAssessmentCount > 0 && "active")}
+                    title={`${course.enabledAssessmentCount} of ${course.assessmentCount} assessments require SEB`}
+                  >
+                    {course.enabledAssessmentCount}/{course.assessmentCount}
+                  </span>
+                </button>
+              ))}
+              {!!overview?.nextCourseCursor && (
+                <button
+                  className="button secondary admin-load-more"
+                  type="button"
+                  disabled={isBusy("courses:more")}
+                  onClick={() => void loadMoreCourses()}
+                >
+                  <ChevronDown size={15} /> {isBusy("courses:more") ? "Loading…" : "Load more courses"}
+                </button>
+              )}
+            </div>
+          </aside>
+
+          <div className="admin-course-detail">
+            {selectedCourse ? (
+              <>
+                <div className="admin-detail-header">
+                  <div>
+                    <span className="section-kicker">Course {selectedCourse.id}</span>
+                    <h2>{selectedCourse.name}</h2>
+                    <p>
+                      {selectedCourse.courseCode || "No course code"} ·{" "}
+                      {selectedCourse.workflowState || "unknown state"}
+                    </p>
+                  </div>
+                  <div className="admin-detail-actions">
+                    <button
+                      className="button secondary compact"
+                      type="button"
+                      disabled={isBusy(`course:${selectedCourse.id}`)}
+                      onClick={() =>
+                        void revealSecrets(
+                          `course:${selectedCourse.id}`,
+                          `/api/admin/courses/${encodeURIComponent(selectedCourse.id)}/passwords/reveal`
+                        )
+                      }
+                    >
+                      <KeyRound size={15} /> Course passwords
+                    </button>
+                    <button
+                      className="button secondary compact"
+                      type="button"
+                      disabled={isBusy(`rotate-password:${selectedCourse.id}`)}
+                      onClick={() => void rotateCourseQuitPassword(selectedCourse)}
+                    >
+                      <RefreshCw size={15} /> Rotate exit password
+                    </button>
+                    <button
+                      className="button primary compact"
+                      type="button"
+                      disabled={isBusy(`refresh:${selectedCourse.id}`)}
+                      onClick={() =>
+                        void mutate(
+                          `refresh:${selectedCourse.id}`,
+                          `/api/admin/courses/${encodeURIComponent(selectedCourse.id)}/refresh`,
+                          { method: "POST" },
+                          "Course content refreshed from Canvas."
+                        )
+                      }
+                    >
+                      <RefreshCw className={isBusy(`refresh:${selectedCourse.id}`) ? "spin" : ""} size={15} /> Refresh
+                      course
+                    </button>
+                  </div>
+                </div>
+                <SecretPanel secret={revealed[`course:${selectedCourse.id}`]} />
+                {!!overview?.toolPresets?.length && (
+                  <section className="admin-course-presets">
+                    <div className="admin-course-presets-heading">
+                      <div>
+                        <strong>Approved tools for this course</strong>
+                        <small>
+                          Assigned tools are available to instructors course-wide and for individual quizzes.
+                        </small>
+                      </div>
+                      <span>
+                        {selectedCourse.adminToolPresetIds?.length || 0} of {overview.toolPresets.length} assigned
+                      </span>
+                    </div>
+                    <div className="admin-course-preset-list">
+                      {overview.toolPresets.map((preset) => {
+                        const assigned = selectedCourse.adminToolPresetIds?.includes(preset.id) === true;
+                        return (
+                          <label className={clsx("admin-course-preset-option", assigned && "assigned")} key={preset.id}>
+                            <input
+                              type="checkbox"
+                              checked={assigned}
+                              disabled={isBusy(`assign-preset:${preset.id}`)}
+                              onChange={(event) =>
+                                void mutate(
+                                  `assign-preset:${preset.id}`,
+                                  `/api/admin/tool-presets/${encodeURIComponent(preset.id)}/courses/${encodeURIComponent(selectedCourse.id)}`,
+                                  { method: "PUT", body: JSON.stringify({ assigned: event.target.checked }) },
+                                  event.target.checked
+                                    ? `${preset.name} is now available in this course.`
+                                    : `${preset.name} was removed from this course.`
+                                )
+                              }
+                            />
+                            <span className="admin-course-preset-icon">
+                              <Calculator size={16} />
+                            </span>
+                            <span className="admin-course-preset-copy">
+                              <strong>{preset.name}</strong>
+                              <small>{preset.tool.url}</small>
+                            </span>
+                            <span className={clsx("admin-assignment-state", assigned && "assigned")}>
+                              {assigned ? "Assigned" : "Available"}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </section>
+                )}
+                <div className="admin-assessment-heading">
+                  <div>
+                    <h3>Assessments</h3>
+                    <p>Manage Safe Exam Browser only where it is currently required.</p>
+                  </div>
+                  <span>
+                    {selectedCourse.enabledAssessmentCount} active · {selectedCourse.assessmentCount} total
+                  </span>
+                </div>
+                <div className="admin-assessment-list">
+                  {(selectedCourse.assessments || []).map((assessment) => {
+                    const route = `/api/admin/courses/${encodeURIComponent(selectedCourse.id)}/assessments/${encodeURIComponent(assessment.id)}`;
+                    const secretKey = `assessment:${assessment.id}`;
+                    return (
+                      <article
+                        className={clsx("admin-assessment-row", assessment.sebRequired && "enabled")}
+                        key={assessment.id}
+                      >
+                        <div className="admin-assessment-main">
+                          <span className={clsx("status-dot", assessment.sebRequired && "on")} />
+                          <div>
+                            <strong>{assessment.title}</strong>
+                            <small>
+                              {assessment.contentType === "NEW_QUIZ" ? "New Quiz" : "Classic Quiz"} ·{" "}
+                              {assessment.published ? "Published" : "Unpublished"}
+                            </small>
+                          </div>
+                        </div>
+                        <div className="admin-assessment-actions">
+                          <span className={clsx("status-pill", assessment.sebRequired ? "enabled" : "disabled")}>
+                            {assessment.sebRequired ? "SEB required" : "SEB off"}
+                          </span>
+                          {assessment.sebRequired ? (
+                            <>
+                              <button
+                                className="button secondary compact"
+                                type="button"
+                                disabled={isBusy(secretKey)}
+                                onClick={() => void revealSecrets(secretKey, `${route}/passwords/reveal`)}
+                              >
+                                <Eye size={15} /> Reveal passwords
+                              </button>
+                              <button
+                                className="button secondary compact"
+                                type="button"
+                                disabled={isBusy(`reset:${assessment.id}`)}
+                                onClick={() =>
+                                  void mutate(
+                                    `reset:${assessment.id}`,
+                                    `${route}/reset-defaults`,
+                                    { method: "POST" },
+                                    "Assessment reset to the course defaults."
+                                  )
+                                }
+                              >
+                                <RefreshCw size={15} /> Reset settings
+                              </button>
+                              <button
+                                className="button secondary compact"
+                                type="button"
+                                disabled={isBusy(`reset-password:${assessment.id}`)}
+                                onClick={() =>
+                                  window.confirm(
+                                    "Reset this assessment’s exit password to the current course or managed default?"
+                                  ) &&
+                                  void mutate(
+                                    `reset-password:${assessment.id}`,
+                                    `${route}/quit-password/reset`,
+                                    { method: "POST" },
+                                    "Assessment exit password reset to the course default."
+                                  )
+                                }
+                              >
+                                <KeyRound size={15} /> Reset exit password
+                              </button>
+                              <button
+                                className="button secondary compact"
+                                type="button"
+                                disabled={isBusy(`code:${assessment.id}`)}
+                                onClick={() =>
+                                  void mutate(
+                                    `code:${assessment.id}`,
+                                    `${route}/regenerate-code`,
+                                    { method: "POST" },
+                                    "Canvas access code rotated."
+                                  )
+                                }
+                              >
+                                <KeyRound size={15} /> Rotate access code
+                              </button>
+                              <button
+                                className="button danger compact"
+                                type="button"
+                                disabled={isBusy(`seb:${assessment.id}`)}
+                                onClick={() =>
+                                  void mutate(
+                                    `seb:${assessment.id}`,
+                                    `${route}/seb`,
+                                    { method: "PUT", body: JSON.stringify({ required: false }) },
+                                    "SEB disabled for this assessment."
+                                  )
+                                }
+                              >
+                                <Unlock size={15} /> Disable
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              className="button primary compact"
+                              type="button"
+                              disabled={isBusy(`seb:${assessment.id}`)}
+                              onClick={() =>
+                                void mutate(
+                                  `seb:${assessment.id}`,
+                                  `${route}/seb`,
+                                  { method: "PUT", body: JSON.stringify({ required: true }) },
+                                  "SEB enabled for this assessment."
+                                )
+                              }
+                            >
+                              <Lock size={15} /> Enable SEB
+                            </button>
+                          )}
+                        </div>
+                        {assessment.sebRequired && <SecretPanel secret={revealed[secretKey]} compact />}
+                      </article>
+                    );
+                  })}
+                  {!selectedCourse.assessments?.length && (
+                    <div className="empty-state">
+                      <BookOpen size={28} />
+                      <strong>No synced assessments</strong>
+                      <span>Refresh this course to discover Classic Quizzes and New Quizzes.</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">
+                <BookOpen size={30} />
+                <strong>Select a course</strong>
+                <span>Choose a Canvas course to inspect its Safe Exam Browser configuration.</span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {activeSection === "institution" && (
+        <section
+          className="work-surface admin-settings-surface"
+          id="admin-panel-institution"
+          role="tabpanel"
+          aria-labelledby="admin-tab-institution"
+        >
+          <div className="admin-page-heading">
+            <div>
+              <span className="section-kicker">Institution-wide settings</span>
+              <h2>Approved exam tools</h2>
+              <p>
+                Define trusted launch URLs and resource rules once, then assign each tool to the courses that need it.
+              </p>
+            </div>
+            <button className="button primary compact" type="button" onClick={() => setEditingPreset("new")}>
+              <Plus size={15} /> New exam tool
+            </button>
+          </div>
+          <div className="admin-settings-section-heading">
+            <div className="admin-settings-icon">
+              <Calculator size={18} />
+            </div>
+            <div>
+              <strong>Exam tool library</strong>
+              <small>Instructors can use assigned tools without entering domains or URL rules themselves.</small>
+            </div>
+            <span>{overview?.toolPresets?.length || 0} tools</span>
+          </div>
+          <div className="admin-preset-grid">
+            {(overview?.toolPresets || []).map((preset) => (
+              <article className="admin-preset-card" key={preset.id}>
+                <div className="admin-preset-card-header">
+                  <span className="admin-preset-icon">
+                    <Calculator size={18} />
+                  </span>
+                  <div>
+                    <strong>{preset.name}</strong>
+                    <small>{preset.description || "No description"}</small>
+                  </div>
+                </div>
+                <div className="admin-preset-url">
+                  <span>Launch URL</span>
+                  <code title={preset.tool.url}>{preset.tool.url}</code>
+                </div>
+                <footer className="admin-preset-card-footer">
+                  <div className="admin-preset-rollout-status">
+                    <span>
+                      <BookOpen size={14} />
+                      Assigned to {preset.assignedCourseCount} course{preset.assignedCourseCount === 1 ? "" : "s"}
+                    </span>
+                    {!!preset.pendingAssignmentCount && <small>{preset.pendingAssignmentCount} pending</small>}
+                    {!!preset.failedAssignmentCount && (
+                      <small className="error">{preset.failedAssignmentCount} need retry</small>
+                    )}
+                  </div>
+                  <div className="admin-preset-actions">
+                    <button className="button primary compact" type="button" onClick={() => setRolloutPreset(preset)}>
+                      <BookOpen size={15} /> Assign courses
+                    </button>
+                    {!!preset.failedAssignmentCount && (
+                      <button
+                        className="button secondary compact"
+                        type="button"
+                        disabled={isBusy(`retry-preset:${preset.id}`)}
+                        onClick={() => {
+                          const key = `retry-preset:${preset.id}`;
+                          startBusy(key);
+                          void reconcilePreset(preset.id, true)
+                            .then(() => {
+                              pushToast("success", "The failed course updates were retried.");
+                              return loadPresets();
+                            })
+                            .catch((value) =>
+                              pushToast("error", errorMessage(value, "Some course updates still need attention."))
+                            )
+                            .finally(() => stopBusy(key));
+                        }}
+                      >
+                        <RefreshCw size={15} /> Retry
+                      </button>
+                    )}
+                    <button className="button secondary compact" type="button" onClick={() => setEditingPreset(preset)}>
+                      <Settings size={15} /> Edit
+                    </button>
+                    <button
+                      className="button secondary danger compact"
+                      type="button"
+                      disabled={isBusy(`delete-preset:${preset.id}`)}
+                      onClick={() => void deletePreset(preset)}
+                    >
+                      <Trash2 size={15} /> Delete
+                    </button>
+                  </div>
+                </footer>
+              </article>
+            ))}
+            {!overview?.toolPresets?.length && (
+              <div className="empty-state admin-settings-empty">
+                <Calculator size={30} />
+                <strong>No approved exam tools</strong>
+                <span>Create a tool for services such as Desmos or GeoGebra, then assign it from a course.</span>
+                <button className="button primary compact" type="button" onClick={() => setEditingPreset("new")}>
+                  <Plus size={15} /> Create first exam tool
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {editingPreset && (
+        <AdminToolPresetDialog
+          preset={editingPreset === "new" ? undefined : editingPreset}
+          onClose={() => setEditingPreset(null)}
+          onSave={savePreset}
+        />
+      )}
+      {connectingCourses && (
+        <AdminConnectCoursesDialog
+          authToken={data.authToken}
+          onClose={() => setConnectingCourses(false)}
+          onConnected={async () => {
+            setConnectingCourses(false);
+            await loadOverview(false);
+            pushToast("success", "The selected Canvas courses are now connected.");
+          }}
+        />
+      )}
+      {rolloutPreset && (
+        <AdminPresetRolloutDialog
+          preset={rolloutPreset}
+          onClose={() => setRolloutPreset(null)}
+          onApply={async (assigned, all, courseIds) => {
+            await runPresetRollout(rolloutPreset.id, assigned, all, courseIds);
+            setRolloutPreset(null);
+            if (selectedCourseId) await loadCourseDetail(selectedCourseId);
+            pushToast("success", "The exam tool rollout completed.");
+          }}
+        />
+      )}
+      <ToastRegion
+        toasts={toasts}
+        onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))}
+      />
+    </main>
+  );
+}
+
+function SecretPanel({ secret, compact = false }: { secret?: RevealedSecrets; compact?: boolean }) {
+  if (!secret) return null;
+  return (
+    <div className={clsx("admin-secret-panel", compact && "compact")}>
+      <Shield size={16} />
+      {secret.values.length ? (
+        secret.values.map((item) => (
+          <span key={item.label}>
+            <small>{item.label}</small>
+            <code>{item.value}</code>
+            {item.source && <em>{item.source}</em>}
+          </span>
+        ))
+      ) : (
+        <span>No passwords configured.</span>
+      )}
+      <small className="admin-secret-expiry">
+        Hidden automatically in {Math.max(0, Math.ceil((secret.expiresAt - Date.now()) / 1000))}s
+      </small>
+    </div>
+  );
+}
+
+function AdminConnectCoursesDialog({
+  authToken,
+  onClose,
+  onConnected
+}: {
+  authToken?: string;
+  onClose: () => void;
+  onConnected: () => Promise<void>;
+}) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
+  const [terms, setTerms] = useState<Array<{ id: string; name: string; startAt?: string; endAt?: string }>>([]);
+  const [termId, setTermId] = useState("");
+  const [query, setQuery] = useState("");
+  const [includeUnpublished, setIncludeUnpublished] = useState(true);
+  const [courses, setCourses] = useState<Array<AdminCourseView & { connected?: boolean }>>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [directInput, setDirectInput] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadCatalog = async (append = false, cursor?: string | null) => {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        includeUnpublished: String(includeUnpublished),
+        withEnrollments: "true"
+      });
+      if (termId) params.set("termId", termId);
+      if (query.trim()) params.set("search", query.trim());
+      if (cursor) params.set("cursor", cursor);
+      const body = await requestJson(`/api/admin/course-catalog?${params.toString()}`);
+      setCourses((current) => (append ? [...current, ...(body.courses || [])] : body.courses || []));
+      setNextCursor(body.nextCursor || null);
+    } catch (value) {
+      setError(errorMessage(value, "Active Canvas courses could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void requestJson("/api/admin/terms")
+      .then((body) => {
+        const values = (body.terms || []) as typeof terms;
+        setTerms(values);
+        const now = Date.now();
+        const current = values.find((term) => {
+          const start = term.startAt ? Date.parse(term.startAt) : Number.NEGATIVE_INFINITY;
+          const end = term.endAt ? Date.parse(term.endAt) : Number.POSITIVE_INFINITY;
+          return start <= now && end >= now;
+        });
+        setTermId(current?.id || values[0]?.id || "");
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadCatalog(false), 350);
+    return () => window.clearTimeout(timer);
+  }, [query, termId, includeUnpublished]);
+
+  const connect = async (courseIds?: string[]) => {
+    setSaving(true);
+    setError("");
+    try {
+      const body = await requestJson("/api/admin/courses/connect", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...actionHeaders(authToken) },
+        body: JSON.stringify(courseIds?.length ? { courseIds } : { input: directInput })
+      });
+      const failures = (body.results || []).filter((result: any) => result.success !== true);
+      if (failures.length) {
+        setError(
+          failures
+            .slice(0, 4)
+            .map((failure: any) => `Course ${failure.courseId}: ${failure.error || "could not connect"}`)
+            .join(" ")
+        );
+      }
+      if (Number(body.connectedCount || 0) > 0) {
+        await onConnected();
+      }
+    } catch (value) {
+      setError(errorMessage(value, "The selected courses could not be connected."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section
+        className="dialog large admin-connect-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-title"
+      >
+        <header className="dialog-header">
+          <div>
+            <span className="section-kicker">Course connections</span>
+            <h2 id="connect-title">Connect Canvas courses</h2>
+          </div>
+          <button ref={closeButtonRef} className="icon-button" type="button" onClick={onClose} aria-label="Close">
+            <X size={17} />
+          </button>
+        </header>
+        <div className="admin-connect-filters">
+          <label>
+            Term
+            <select value={termId} onChange={(event) => setTermId(event.target.value)}>
+              <option value="">All non-completed terms</option>
+              {terms.map((term) => (
+                <option value={term.id} key={term.id}>
+                  {term.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="admin-connect-search">
+            Search active courses
+            <span className="search">
+              <Search size={16} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Name, code, teacher, SIS ID, or Canvas ID"
+              />
+            </span>
+          </label>
+          <label className="checkbox-line">
+            <input
+              type="checkbox"
+              checked={includeUnpublished}
+              onChange={(event) => setIncludeUnpublished(event.target.checked)}
+            />
+            Include unpublished course shells
+          </label>
+        </div>
+        <div className="admin-connect-results">
+          {courses.map((course) => (
+            <label className={clsx("admin-connect-course", course.connected && "connected")} key={course.id}>
+              <input
+                type="checkbox"
+                checked={selected.has(course.id)}
+                disabled={course.connected}
+                onChange={(event) =>
+                  setSelected((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(course.id);
+                    else next.delete(course.id);
+                    return next;
+                  })
+                }
+              />
+              <span>
+                <strong>{course.name}</strong>
+                <small>
+                  {course.courseCode || `Course ${course.id}`} · {course.termName || "No term"}
+                </small>
+              </span>
+              {course.connected && <em>Connected</em>}
+            </label>
+          ))}
+          {loading && (
+            <div className="admin-loading">
+              <RefreshCw className="spin" size={17} /> Loading courses…
+            </div>
+          )}
+          {!loading && !courses.length && <div className="empty-line">No active courses match these filters.</div>}
+          {nextCursor && (
+            <button
+              className="button secondary"
+              type="button"
+              disabled={loading}
+              onClick={() => void loadCatalog(true, nextCursor)}
+            >
+              <ChevronDown size={15} /> Load more
+            </button>
+          )}
+        </div>
+        <div className="admin-direct-connect">
+          <strong>Connect by URL or ID</strong>
+          <small>Paste one or more Canvas course URLs or IDs, separated by spaces or new lines.</small>
+          <div>
+            <textarea
+              value={directInput}
+              onChange={(event) => setDirectInput(event.target.value)}
+              placeholder={"https://canvas.school.edu/courses/18492\n18493"}
+            />
+            <button
+              className="button secondary"
+              type="button"
+              disabled={saving || !directInput.trim()}
+              onClick={() => void connect()}
+            >
+              Connect entered courses
+            </button>
+          </div>
+        </div>
+        {error && (
+          <div className="notice error" role="alert">
+            <AlertCircle size={17} /> {error}
+          </div>
+        )}
+        <footer className="dialog-actions">
+          <button className="button secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button primary"
+            type="button"
+            disabled={saving || selected.size === 0}
+            onClick={() => void connect([...selected])}
+          >
+            <Plus size={16} /> {saving ? "Connecting…" : `Connect selected (${selected.size})`}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function AdminPresetRolloutDialog({
+  preset,
+  onClose,
+  onApply
+}: {
+  preset: AdminToolPresetView;
+  onClose: () => void;
+  onApply: (assigned: boolean, all: boolean, courseIds: string[]) => Promise<void>;
+}) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
+  const [courses, setCourses] = useState<AdminCourseView[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [assigned, setAssigned] = useState(true);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const loadAll = async () => {
+      const values: AdminCourseView[] = [];
+      let cursor: string | null = null;
+      do {
+        const params = new URLSearchParams({ limit: "50" });
+        if (cursor) params.set("cursor", cursor);
+        const body = await requestJson(`/api/admin/courses?${params.toString()}`);
+        values.push(...(body.courses || []));
+        cursor = body.nextCursor || null;
+      } while (cursor && values.length < 2_000);
+      setCourses(values);
+      setLoading(false);
+    };
+    void loadAll().catch((value) => {
+      setError(errorMessage(value, "Connected courses could not be loaded."));
+      setLoading(false);
+    });
+  }, []);
+
+  const visible = courses.filter((course) =>
+    `${course.name} ${course.courseCode || ""} ${course.id}`.toLowerCase().includes(query.trim().toLowerCase())
+  );
+  const apply = async (all: boolean) => {
+    setSaving(true);
+    setError("");
+    try {
+      await onApply(assigned, all, [...selected]);
+    } catch (value) {
+      setError(errorMessage(value, "The course rollout could not be completed."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section
+        className="dialog large admin-rollout-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rollout-title"
+      >
+        <header className="dialog-header">
+          <div>
+            <span className="section-kicker">Institution exam tool</span>
+            <h2 id="rollout-title">Assign {preset.name}</h2>
+          </div>
+          <button ref={closeButtonRef} className="icon-button" type="button" onClick={onClose} aria-label="Close">
+            <X size={17} />
+          </button>
+        </header>
+        <div className="admin-rollout-controls">
+          <div className="segmented">
+            <button className={clsx(assigned && "active")} type="button" onClick={() => setAssigned(true)}>
+              Assign
+            </button>
+            <button className={clsx(!assigned && "active")} type="button" onClick={() => setAssigned(false)}>
+              Remove
+            </button>
+          </div>
+          <div className="search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter connected courses"
+            />
+          </div>
+        </div>
+        <div className="admin-rollout-list">
+          {visible.map((course) => (
+            <label key={course.id} className="admin-connect-course">
+              <input
+                type="checkbox"
+                checked={selected.has(course.id)}
+                onChange={(event) =>
+                  setSelected((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(course.id);
+                    else next.delete(course.id);
+                    return next;
+                  })
+                }
+              />
+              <span>
+                <strong>{course.name}</strong>
+                <small>{course.courseCode || `Course ${course.id}`}</small>
+              </span>
+              {preset.assignedCourseIds.includes(course.id) && <em>Currently assigned</em>}
+            </label>
+          ))}
+          {loading && (
+            <div className="admin-loading">
+              <RefreshCw className="spin" size={17} /> Loading courses…
+            </div>
+          )}
+        </div>
+        {error && (
+          <div className="notice error" role="alert">
+            <AlertCircle size={17} /> {error}
+          </div>
+        )}
+        <footer className="dialog-actions admin-rollout-actions">
+          <button className="button secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button secondary"
+            type="button"
+            disabled={saving || loading}
+            onClick={() => void apply(true)}
+          >
+            {assigned ? "Assign to all connected courses" : "Remove from all connected courses"}
+          </button>
+          <button
+            className="button primary"
+            type="button"
+            disabled={saving || selected.size === 0}
+            onClick={() => void apply(false)}
+          >
+            {saving ? "Applying…" : `${assigned ? "Assign" : "Remove"} selected (${selected.size})`}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function AdminToolPresetDialog({
+  preset,
+  onClose,
+  onSave
+}: {
+  preset?: AdminToolPresetView;
+  onClose: () => void;
+  onSave: (input: { name: string; description: string; tool: ExternalToolConfig }) => Promise<void>;
+}) {
+  useEscapeToClose(onClose);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogInitialFocus(closeButtonRef);
+  const [name, setName] = useState(preset?.name || "");
+  const [description, setDescription] = useState(preset?.description || "");
+  const [tool, setTool] = useState<ExternalToolConfig>(
+    preset?.tool || { id: "school-preset-template", label: "", url: "", enabled: false, allowedRules: [] }
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await onSave({
+        name,
+        description,
+        tool: {
+          id: tool.id,
+          label: name,
+          url: tool.url,
+          enabled: false,
+          allowedRules: tool.allowedRules || []
+        }
+      });
+    } catch (value) {
+      setError(errorMessage(value, "The school tool preset could not be saved."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section className="dialog large" role="dialog" aria-modal="true" aria-labelledby="admin-preset-title">
+        <header className="dialog-header">
+          <div>
+            <span className="section-kicker">School exam tool</span>
+            <h2 id="admin-preset-title">{preset ? `Edit ${preset.name}` : "Create tool preset"}</h2>
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label="Close tool preset"
+          >
+            <X size={17} />
+          </button>
+        </header>
+        <div className="settings-stack">
+          <section className="settings-section admin-preset-editor">
+            <div className="admin-preset-templates">
+              <strong>Start from an approved template</strong>
+              <div>
+                {EXTERNAL_TOOL_PRESETS.map((template) => (
+                  <button
+                    className="button secondary small"
+                    type="button"
+                    key={template.id}
+                    onClick={() => {
+                      setName(template.label);
+                      setTool(structuredClone(template));
+                    }}
+                  >
+                    <Calculator size={14} /> {template.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="tool-custom-fields">
+              <label>
+                Preset name
+                <input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
+              </label>
+              <label>
+                Exact launch URL
+                <input
+                  value={tool.url}
+                  onChange={(event) => setTool((current) => ({ ...current, url: event.target.value }))}
+                  placeholder="https://www.desmos.com/calculator"
+                />
+              </label>
+            </div>
+            <label>
+              Teacher-facing description
+              <input
+                value={description}
+                maxLength={240}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="Approved graphing calculator"
+              />
+            </label>
+            <div className="tool-access-heading">
+              <div>
+                <strong>Required resource access</strong>
+                <small>Add only the exact assets or paths the tool needs inside SEB.</small>
+              </div>
+              <button
+                className="button secondary small"
+                type="button"
+                onClick={() =>
+                  setTool((current) => ({
+                    ...current,
+                    allowedRules: [...(current.allowedRules || []), newToolAccessRule()]
+                  }))
+                }
+              >
+                <Plus size={14} /> Add resource
+              </button>
+            </div>
+            {(tool.allowedRules || []).map((rule) => (
+              <ToolAccessRuleEditor
+                key={rule.id}
+                rule={rule}
+                disabled={false}
+                onChange={(patch) =>
+                  setTool((current) => ({
+                    ...current,
+                    allowedRules: (current.allowedRules || []).map((entry) =>
+                      entry.id === rule.id ? { ...entry, ...patch } : entry
+                    )
+                  }))
+                }
+                onRemove={() =>
+                  setTool((current) => ({
+                    ...current,
+                    allowedRules: (current.allowedRules || []).filter((entry) => entry.id !== rule.id)
+                  }))
+                }
+              />
+            ))}
+          </section>
+        </div>
+        {error && (
+          <div className="notice error" role="alert">
+            <AlertCircle size={17} /> {error}
+          </div>
+        )}
+        <footer className="dialog-actions">
+          <button className="button secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button primary"
+            type="button"
+            disabled={saving || !name.trim() || !tool.url.trim()}
+            onClick={() => void save()}
+          >
+            <Save size={16} /> {saving ? "Saving…" : "Save preset"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function ServiceStatusPage() {
@@ -830,9 +2371,12 @@ function AdminSetupPage({ data }: { data: Record<string, any> }) {
           <h2>Canvas administrator</h2>
           <strong>Install and verify</strong>
           <p>
-            Create the API and LTI Developer Keys, install by Client ID, record the deployment ID, and add the detector
-            script to the active Canvas theme.
+            Create the API and LTI Developer Keys, install by Client ID at the root account, verify the account and
+            course navigation placements, record the deployment ID, and add the detector script to the active Canvas
+            theme.
           </p>
+          <strong>Required administrator scopes</strong>
+          <code>accounts, account courses, permissions, and course details</code>
           <strong>Required student scope</strong>
           <code>url:GET|/api/v1/login/session_token</code>
         </article>
@@ -865,20 +2409,22 @@ function AdminSetupPage({ data }: { data: Record<string, any> }) {
               Canvas installation is complete.
             </li>
             <li>
-              Create the Canvas API Developer Key with the complete application scope set, including the session-token
-              scope, then configure the OAuth callback at <code>{data.toolUrl}/api/oauth2callback</code>.
+              Create the Canvas API Developer Key with the complete application scope set, including the quiz
+              access-code, root-account discovery, permissions, course-details, and student session-token scopes. Then
+              configure the OAuth callback at <code>{data.toolUrl}/api/oauth2callback</code>.
             </li>
             <li>
-              Create or refresh the LTI 1.3 Developer Key from the public LTI configuration URL, install it by Client
-              ID, and store the Canvas deployment ID in the deployment configuration.
+              Create or refresh the LTI 1.3 Developer Key from the public LTI configuration URL, install it by Client ID
+              at the root account, verify both navigation placements, and store the Canvas deployment ID in the
+              deployment configuration.
             </li>
             <li>
-              Load the detector script through the active Canvas theme, then test a Classic Quiz and New Quiz in a
-              non-production course.
+              Open the administrator dashboard, complete its separate OAuth grant, and test course refresh, secret
+              reveal, reset, code rotation, course connection, and tool rollout in a non-production course.
             </li>
             <li>
-              Have an instructor configure course defaults and a student complete connection, setup check, and a real
-              SEB launch before broader rollout.
+              Load the detector script through the active Canvas theme. Then have an instructor configure course
+              defaults and a student complete connection, setup check, and a real SEB launch before broader rollout.
             </li>
           </ol>
         </section>
@@ -1031,6 +2577,9 @@ function SettingsDialog({
       ? setting.externalToolIds.filter((id: unknown) => typeof id === "string")
       : null
   );
+  const [quizOnlyTools, setQuizOnlyTools] = useState<ExternalToolConfig[]>(() =>
+    normalizeCourseExternalTools(setting.quizOnlyExternalTools).map((tool) => ({ ...tool, enabled: true }))
+  );
   const [passwordOverride, setPasswordOverride] = useState(setting.quitPasswordOverride === true);
   const [quitPassword, setQuitPassword] = useState("");
   const [startPasswordOverride, setStartPasswordOverride] = useState(setting.startPasswordOverride === true);
@@ -1072,6 +2621,7 @@ function SettingsDialog({
         educationalToolDomains: [],
         urlRules,
         externalToolIds,
+        quizOnlyExternalTools: quizOnlyTools,
         quitPassword: passwordOverride ? quitPassword : null,
         startPassword: startPasswordOverride ? startPassword : null,
         usesCourseDefaults: usesDefaults,
@@ -1112,6 +2662,7 @@ function SettingsDialog({
       setUsesDefaults(true);
       setUrlRules(normalizeUrlRules(courseDefaults.urlRules));
       setExternalToolIds(null);
+      setQuizOnlyTools([]);
       setPasswordOverride(false);
       setQuitPassword("");
       setStartPasswordOverride(false);
@@ -1148,6 +2699,11 @@ function SettingsDialog({
           courseTools={courseDefaults.externalTools}
           externalToolIds={externalToolIds}
           setExternalToolIds={customizeExternalToolIds}
+          quizOnlyTools={quizOnlyTools}
+          setQuizOnlyTools={(tools) => {
+            setUsesDefaults(false);
+            setQuizOnlyTools(tools.map((tool) => ({ ...tool, enabled: true })));
+          }}
           quitPassword={quitPassword}
           setQuitPassword={customizeQuitPassword}
           startPassword={startPassword}
@@ -1502,6 +3058,8 @@ function SettingsSections({
   courseTools,
   externalToolIds,
   setExternalToolIds,
+  quizOnlyTools,
+  setQuizOnlyTools,
   quitPassword,
   setQuitPassword,
   startPassword,
@@ -1518,6 +3076,8 @@ function SettingsSections({
   courseTools: ExternalToolConfig[];
   externalToolIds: string[] | null;
   setExternalToolIds: (ids: string[] | null) => void;
+  quizOnlyTools: ExternalToolConfig[];
+  setQuizOnlyTools: (tools: ExternalToolConfig[]) => void;
   quitPassword: string;
   setQuitPassword: (value: string) => void;
   startPassword: string;
@@ -1607,6 +3167,15 @@ function SettingsSections({
       <section className="settings-section">
         <SectionHeading title="Exam tools" />
         <QuizToolSelector tools={courseTools} selectedIds={externalToolIds} onChange={setExternalToolIds} />
+        <div className="quiz-only-tools">
+          <div>
+            <strong>Tools for this quiz only</strong>
+            <small>
+              Add a tool here when it should not appear in the course catalog. Its URL policy applies only to this quiz.
+            </small>
+          </div>
+          <ToolEditor tools={quizOnlyTools} onChange={setQuizOnlyTools} />
+        </div>
       </section>
     </div>
   );
@@ -1692,6 +3261,7 @@ function ToolEditor({
       </div>
       {tools.map((tool) => {
         const expanded = expandedToolIds.includes(tool.id);
+        const definitionLocked = disabled || tool.managedByAdmin === true;
         const detailId = `tool-details-${tool.id}`;
         return (
           <article className={clsx("tool-card", expanded && "expanded")} key={tool.id}>
@@ -1712,8 +3282,10 @@ function ToolEditor({
                 </span>
               </label>
               <div className="tool-card-summary-actions">
-                <span className={clsx("tool-badge", tool.preset ? "preset" : "custom")}>
-                  {tool.preset ? "Preloaded" : "Custom"}
+                <span
+                  className={clsx("tool-badge", tool.managedByAdmin ? "school" : tool.preset ? "preset" : "custom")}
+                >
+                  {tool.managedByAdmin ? "School preset" : tool.preset ? "Preloaded" : "Custom"}
                 </span>
                 <button
                   className="tool-expand-button"
@@ -1722,7 +3294,7 @@ function ToolEditor({
                   aria-controls={detailId}
                   onClick={() => toggleExpanded(tool.id)}
                 >
-                  {expanded ? "Close" : "Edit"} <ChevronDown size={16} />
+                  {expanded ? "Close" : tool.managedByAdmin ? "View" : "Edit"} <ChevronDown size={16} />
                 </button>
               </div>
             </header>
@@ -1734,7 +3306,7 @@ function ToolEditor({
                     Name
                     <input
                       value={tool.label}
-                      disabled={disabled}
+                      disabled={definitionLocked}
                       onChange={(event) => update(tool.id, { label: event.target.value })}
                       placeholder="Tool name"
                     />
@@ -1743,7 +3315,7 @@ function ToolEditor({
                     Exact launch URL
                     <input
                       value={tool.url}
-                      disabled={disabled}
+                      disabled={definitionLocked}
                       onChange={(event) => update(tool.id, { url: event.target.value })}
                       placeholder="https://example.edu/tool"
                     />
@@ -1761,7 +3333,7 @@ function ToolEditor({
                     <button
                       className="button secondary small"
                       type="button"
-                      disabled={disabled}
+                      disabled={definitionLocked}
                       onClick={() =>
                         update(tool.id, {
                           allowedRules: [...(tool.allowedRules || []), newToolAccessRule()]
@@ -1776,7 +3348,7 @@ function ToolEditor({
                   </p>
                   {(tool.allowedRules || []).map((rule) => (
                     <ToolAccessRuleEditor
-                      disabled={disabled}
+                      disabled={definitionLocked}
                       key={rule.id}
                       rule={rule}
                       onChange={(patch) =>
@@ -1797,20 +3369,24 @@ function ToolEditor({
                     <p className="empty-line">No additional resource paths.</p>
                   )}
                   <p className="tool-blocked-note">
-                    Everything else—including sign-in, saved work, sharing, and other sites—is blocked.
+                    {tool.managedByAdmin
+                      ? "This definition is managed by your Canvas administrator. You can enable or disable it for the course."
+                      : "Everything else—including sign-in, saved work, sharing, and other sites—is blocked."}
                   </p>
                 </section>
 
-                <footer className="tool-card-actions">
-                  <button
-                    className="button danger small"
-                    disabled={disabled}
-                    type="button"
-                    onClick={() => onChange(tools.filter((entry) => entry.id !== tool.id))}
-                  >
-                    <Trash2 size={14} /> Remove tool
-                  </button>
-                </footer>
+                {!tool.managedByAdmin && (
+                  <footer className="tool-card-actions">
+                    <button
+                      className="button danger small"
+                      disabled={disabled}
+                      type="button"
+                      onClick={() => onChange(tools.filter((entry) => entry.id !== tool.id))}
+                    >
+                      <Trash2 size={14} /> Remove tool
+                    </button>
+                  </footer>
+                )}
               </div>
             )}
           </article>

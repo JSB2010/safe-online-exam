@@ -75,6 +75,206 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
     enabled: true
   });
   expect(placement).not.toHaveProperty("windowTarget");
+  expect(ltiBody.extensions?.[0]?.settings?.placements?.[1]).toMatchObject({
+    placement: "account_navigation",
+    target_link_uri: "http://localhost:8080/lti/launch",
+    visibility: "admins",
+    root_account_only: true,
+    custom_fields: expect.objectContaining({
+      seb_launch_surface: "account_admin",
+      canvas_root_account_id: "$Canvas.rootAccount.id"
+    })
+  });
+});
+
+test("renders the responsive root-account administrator workspace and controlled secret reveal", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/admin-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "admin",
+          data: { rootAccountId: "7", authToken: "test-admin-token" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  const adminCourse = {
+    id: "101",
+    name: "Biology",
+    courseCode: "BIO-101",
+    workflowState: "available",
+    setupCompleted: true,
+    hasCourseDefaults: true,
+    assessmentCount: 2,
+    enabledAssessmentCount: 1,
+    adminToolPresetIds: ["preset-desmos"],
+    assessments: [
+      {
+        id: "classicquiz_501",
+        title: "Midterm",
+        contentType: "CLASSIC_QUIZ",
+        published: true,
+        sebRequired: true,
+        enabled: true,
+        hasAccessCode: true,
+        hasStartPassword: true,
+        hasQuitPassword: true
+      },
+      {
+        id: "classicquiz_502",
+        title: "Practice quiz",
+        contentType: "CLASSIC_QUIZ",
+        published: true,
+        sebRequired: false,
+        enabled: false,
+        hasAccessCode: false,
+        hasStartPassword: false,
+        hasQuitPassword: false
+      }
+    ]
+  };
+  const adminPreset = {
+    id: "preset-desmos",
+    name: "Desmos Graphing Calculator",
+    description: "Approved graphing calculator",
+    tool: {
+      id: "preset-desmos",
+      label: "Desmos Graphing Calculator",
+      url: "https://www.desmos.com/calculator",
+      enabled: false,
+      allowedRules: []
+    },
+    assignedCourseIds: ["101"],
+    assignedCourseCount: 1,
+    pendingAssignmentCount: 0,
+    failedAssignmentCount: 0
+  };
+  await page.route("**/api/admin/summary", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        account: { id: "7", name: "Example School" },
+        summary: {
+          courseCount: 1,
+          configuredCourseCount: 1,
+          assessmentCount: 2,
+          enabledAssessmentCount: 1,
+          toolPresetCount: 1
+        }
+      })
+    });
+  });
+  await page.route("**/api/admin/courses?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ success: true, courses: [{ ...adminCourse, assessments: undefined }], nextCursor: null })
+    });
+  });
+  await page.route("**/api/admin/courses/101", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ success: true, course: adminCourse })
+    });
+  });
+  await page.route("**/api/admin/tool-presets", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ success: true, presets: [adminPreset] })
+    });
+  });
+  await page.route("**/api/admin/terms", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        terms: [{ id: "22", name: "Fall 2026", startAt: "2026-07-01", endAt: "2026-12-31" }]
+      })
+    });
+  });
+  await page.route("**/api/admin/course-catalog?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        courses: [
+          {
+            id: "102",
+            name: "Chemistry",
+            courseCode: "CHEM-101",
+            termName: "Fall 2026",
+            connected: false
+          }
+        ],
+        nextCursor: null
+      })
+    });
+  });
+  await page.route("**/api/admin/courses/101/assessments/classicquiz_501/passwords/reveal", async (route) => {
+    expect(route.request().headers()["x-auth-token"]).toBe("test-admin-token");
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        expiresInSeconds: 30,
+        passwords: {
+          start: { value: "test-start-password", source: "assessment" },
+          exit: { value: null, source: "managed" },
+          accessCode: { value: "TEST-CODE", source: "canvas" }
+        }
+      })
+    });
+  });
+
+  await page.goto("/admin-preview");
+
+  await expect(page.getByRole("heading", { name: "Safe Exam Browser Admin" })).toBeVisible();
+  const coursesTab = page.getByRole("tab", { name: /Courses/u });
+  await expect(coursesTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
+  await page.getByRole("button", { name: "Connect" }).click();
+  const connectDialog = page.getByRole("dialog", { name: "Connect Canvas courses" });
+  await expect(connectDialog).toBeVisible();
+  await expect(connectDialog.getByText("Chemistry")).toBeVisible();
+  await connectDialog.getByRole("button", { name: "Close" }).click();
+  await coursesTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("heading", { name: "Approved exam tools" })).toBeVisible();
+  await coursesTab.click();
+  await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
+  await expect(page.getByText("Midterm")).toBeVisible();
+  const inactiveAssessment = page.locator("article.admin-assessment-row").filter({ hasText: "Practice quiz" });
+  await expect(inactiveAssessment.getByRole("button", { name: "Enable SEB" })).toBeVisible();
+  await expect(inactiveAssessment.getByRole("button", { name: /Reveal passwords/u })).toHaveCount(0);
+  await expect(inactiveAssessment.getByRole("button", { name: /Reset settings/u })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reveal passwords" })).toHaveCount(1);
+
+  await page.getByRole("tab", { name: /Institution settings/u }).click();
+  await expect(page.getByRole("heading", { name: "Approved exam tools" })).toBeVisible();
+  await expect(page.getByText("Desmos Graphing Calculator")).toBeVisible();
+  await page.getByRole("button", { name: "Assign courses" }).click();
+  const rolloutDialog = page.getByRole("dialog", { name: "Assign Desmos Graphing Calculator" });
+  await expect(rolloutDialog).toBeVisible();
+  await expect(rolloutDialog.getByText("Biology")).toBeVisible();
+  await rolloutDialog.getByRole("button", { name: "Close" }).click();
+  await page.reload();
+  await expect(page.getByRole("tab", { name: /Institution settings/u })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Approved exam tools" })).toBeVisible();
+  await page.getByRole("button", { name: "New exam tool" }).click();
+  await expect(page.getByRole("heading", { name: "Create tool preset" })).toBeVisible();
+  await page.getByRole("button", { name: "Close tool preset" }).click();
+
+  await page.getByRole("tab", { name: /Courses/u }).click();
+  await page.getByRole("button", { name: "Reveal passwords" }).click();
+  await expect(page.getByText("test-start-password")).toBeVisible();
+  await expect(page.getByText("TEST-CODE")).toBeVisible();
+  expect(browserErrors).toEqual([]);
 });
 
 test("serves built app assets before API CORS restrictions", async ({ request }) => {

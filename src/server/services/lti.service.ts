@@ -86,12 +86,20 @@ export function launchDataFromPayload(payload: JWTPayload): LtiLaunchData {
   const ags = asRecord(payload[LTI_CLAIMS.ags]);
   const courseIdFromCustom = asString(custom.canvas_course_id);
   const courseIdFromContext = asString(context.id);
+  const accountAdminSurface = asString(custom.seb_launch_surface) === "account_admin";
   const ltiSubject = asString(payload.sub);
   if (!ltiSubject) {
     throw new Error("LTI token is missing subject");
   }
   const canvasUserId = asString(custom.canvas_user_id);
-  assertLtiRoleClaimsConsistent({ roles, custom: stringifyRecord(custom) });
+  const stringifiedCustom = stringifyRecord(custom);
+  // Account-navigation launches do not have a course-membership context. Canvas may still
+  // substitute enrollment roles for an administrator who also teaches or studies, so those
+  // values cannot be compared with the account-level standard LTI roles. Account launches
+  // are authorized separately from signed administrator, root-account, and account-id claims.
+  if (!accountAdminSurface) {
+    assertLtiRoleClaimsConsistent({ roles, custom: stringifiedCustom });
+  }
   return {
     ltiSubject,
     canvasUserId,
@@ -99,7 +107,7 @@ export function launchDataFromPayload(payload: JWTPayload): LtiLaunchData {
     userId: canvasUserId || ltiSubject,
     fullName: asString(payload.name),
     email: asString(payload.email),
-    courseId: resolveCanvasCourseId(courseIdFromCustom, ags, courseIdFromContext),
+    courseId: accountAdminSurface ? undefined : resolveCanvasCourseId(courseIdFromCustom, ags, courseIdFromContext),
     courseName: asString(context.title) || asString(context.label),
     roles,
     deploymentId: asString(payload[LTI_CLAIMS.deploymentId]),
@@ -109,7 +117,7 @@ export function launchDataFromPayload(payload: JWTPayload): LtiLaunchData {
     resourceLinkId: asString(resourceLink.id),
     resourceLinkTitle: asString(resourceLink.title),
     resourceLinkDescription: asString(resourceLink.description),
-    custom: stringifyRecord(custom),
+    custom: stringifiedCustom,
     platform: asRecord(payload[LTI_CLAIMS.toolPlatform]),
     ags
   };

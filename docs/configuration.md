@@ -34,16 +34,19 @@ PostgreSQL 17 or newer is the supported durable store. The application uses ordi
 
 Cloud Run connects to Cloud SQL with `DATABASE_HOST=/cloudsql/PROJECT:REGION:INSTANCE` and `DATABASE_SSL_MODE=disable`; the authenticated Unix socket is local to the Cloud Run sandbox. A VM or external managed PostgreSQL connection should normally use `verify-full` with a trusted certificate chain. If the provider uses a private certificate authority, mount the CA file and set Node's `NODE_EXTRA_CA_CERTS` to that path before process startup.
 
-The migration ledger is `schema_migrations`. Application/runtime data uses six tables:
+The migration ledger is `schema_migrations`. Application/runtime data uses nine tables:
 
-| Table                 | Contents                                                     |
-| --------------------- | ------------------------------------------------------------ |
-| `assessments`         | Assessment discovery state and SEB settings.                 |
-| `courses`             | Course defaults and exam-tool catalog.                       |
-| `canvas_oauth_tokens` | Canvas OAuth tokens and student setup preference.            |
-| `sessions`            | Express session records with expiry.                         |
-| `transient_states`    | One-time states, grants, proofs, handoffs, and rate budgets. |
-| `operation_locks`     | Short assessment-update leases.                              |
+| Table                           | Contents                                                     |
+| ------------------------------- | ------------------------------------------------------------ |
+| `admin_course_connections`      | Root-scoped Canvas course metadata and summary counts.       |
+| `admin_tool_presets`            | School-managed tool definitions.                             |
+| `admin_tool_preset_assignments` | Durable per-course rollout state and failures.               |
+| `assessments`                   | Assessment discovery state and SEB settings.                 |
+| `courses`                       | Course defaults and exam-tool catalog.                       |
+| `canvas_oauth_tokens`           | Purpose-scoped Canvas OAuth tokens and student preference.   |
+| `sessions`                      | Express session records with expiry.                         |
+| `transient_states`              | One-time states, grants, proofs, handoffs, and rate budgets. |
+| `operation_locks`               | Short assessment-update leases.                              |
 
 Run `npm run db:migrate` before a new application revision. Run `npm run db:cleanup` on a schedule to remove expired rows in bounded batches. Readiness returns failure when PostgreSQL is unavailable or the checked-in migrations have not all been applied.
 

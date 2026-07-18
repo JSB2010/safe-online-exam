@@ -1,12 +1,23 @@
-import type { AssessmentRecord, CourseRecord, OAuthToken } from "../../shared/models.js";
+import type {
+  AdminCourseConnectionRecord,
+  AdminToolPresetRecord,
+  AdminToolPresetAssignmentRecord,
+  AssessmentRecord,
+  CourseRecord,
+  OAuthToken
+} from "../../shared/models.js";
 import { prepareDocument, stripUndefinedValues } from "./document-values.js";
 import type { PostgresClientLike, PostgresDatabase } from "./postgres-client.js";
 import type {
   AppRepositories,
+  AdminCourseConnectionListOptions,
+  AdminCourseConnectionStore,
+  AdminCourseConnectionSummary,
   CollectionStore,
   OperationLockRecord,
   OperationLockStore,
   QueryFilter,
+  QueryOptions,
   SessionRecord,
   TransientStateRecord,
   TransientStateStore
@@ -38,9 +49,34 @@ const OAUTH_MAPPING: DocumentMapping<OAuthToken> = {
   table: "canvas_oauth_tokens",
   extracted: [{ field: "userId", column: "user_id" }]
 };
+const ADMIN_COURSE_CONNECTION_MAPPING: DocumentMapping<AdminCourseConnectionRecord> = {
+  table: "admin_course_connections",
+  extracted: [
+    { field: "rootAccountId", column: "root_account_id" },
+    { field: "courseId", column: "course_id" },
+    { field: "name", column: "course_name" },
+    { field: "courseCode", column: "course_code" }
+  ]
+};
+const ADMIN_TOOL_PRESET_MAPPING: DocumentMapping<AdminToolPresetRecord> = {
+  table: "admin_tool_presets",
+  extracted: [{ field: "rootAccountId", column: "root_account_id" }]
+};
+const ADMIN_TOOL_PRESET_ASSIGNMENT_MAPPING: DocumentMapping<AdminToolPresetAssignmentRecord> = {
+  table: "admin_tool_preset_assignments",
+  extracted: [
+    { field: "rootAccountId", column: "root_account_id" },
+    { field: "presetId", column: "preset_id" },
+    { field: "courseId", column: "course_id" },
+    { field: "status", column: "status" }
+  ]
+};
 
 export function createPostgresRepositories(database: PostgresDatabase): AppRepositories {
   return {
+    adminCourseConnections: new PostgresAdminCourseConnectionStore(database),
+    adminToolPresetAssignments: new PostgresCollectionStore(database, ADMIN_TOOL_PRESET_ASSIGNMENT_MAPPING),
+    adminToolPresets: new PostgresCollectionStore(database, ADMIN_TOOL_PRESET_MAPPING),
     assessments: new PostgresCollectionStore(database, ASSESSMENT_MAPPING),
     courses: new PostgresCollectionStore(database, COURSE_MAPPING),
     oauthTokens: new PostgresCollectionStore(database, OAUTH_MAPPING),
@@ -52,7 +88,7 @@ export function createPostgresRepositories(database: PostgresDatabase): AppRepos
 
 export class PostgresCollectionStore<T extends Record<string, any>> implements CollectionStore<T> {
   constructor(
-    private readonly database: PostgresDatabase,
+    protected readonly database: PostgresDatabase,
     private readonly mapping: DocumentMapping<T>
   ) {}
 
@@ -85,11 +121,15 @@ export class PostgresCollectionStore<T extends Record<string, any>> implements C
     await this.database.query(`DELETE FROM ${this.mapping.table} WHERE id = $1`, [id]);
   }
 
-  async find(filters: QueryFilter[] = []): Promise<T[]> {
+  async find(filters: QueryFilter[] = [], options: QueryOptions = {}): Promise<T[]> {
     const { clause, values } = buildWhereClause(filters, fieldColumns(this.mapping));
+    const orderBy =
+      options.orderBy === "createdAt" ? "created_at" : options.orderBy === "updatedAt" ? "updated_at" : "id";
+    const direction = options.direction === "desc" ? "DESC" : "ASC";
+    const limit = normalizedQueryLimit(options.limit);
     const rows = await queryRows<DocumentRow>(
       this.database,
-      `SELECT id, document, created_at, updated_at FROM ${this.mapping.table}${clause} ORDER BY id`,
+      `SELECT id, document, created_at, updated_at FROM ${this.mapping.table}${clause} ORDER BY ${orderBy} ${direction}${limit ? ` LIMIT ${limit}` : ""}`,
       values
     );
     return rows.map((row) => decodeDocument<T>(row));
@@ -125,6 +165,76 @@ export class PostgresCollectionStore<T extends Record<string, any>> implements C
     );
     return decodeDocument<T>(rows[0]!);
   }
+}
+
+class PostgresAdminCourseConnectionStore
+  extends PostgresCollectionStore<AdminCourseConnectionRecord>
+  implements AdminCourseConnectionStore
+{
+  constructor(database: PostgresDatabase) {
+    super(database, ADMIN_COURSE_CONNECTION_MAPPING);
+  }
+
+  async listForRoot(
+    rootAccountId: string,
+    options: AdminCourseConnectionListOptions
+  ): Promise<AdminCourseConnectionRecord[]> {
+    const values: unknown[] = [rootAccountId];
+    const conditions = ["root_account_id = $1"];
+    const search = options.search?.trim();
+    if (search) {
+      values.push(`%${search.replace(/[\\\\%_]/gu, "\\$&")}%`);
+      conditions.push(
+        `(course_name ILIKE $${values.length} ESCAPE '\\' OR COALESCE(course_code, '') ILIKE $${values.length} ESCAPE '\\' OR course_id ILIKE $${values.length} ESCAPE '\\' OR document->>'termName' ILIKE $${values.length} ESCAPE '\\' OR document->>'teacherNames' ILIKE $${values.length} ESCAPE '\\')`
+      );
+    }
+    if (options.afterName) {
+      values.push(options.afterName, options.afterCourseId || "");
+      conditions.push(
+        `(lower(course_name), course_id) > (lower($${values.length - 1}::text), $${values.length}::text)`
+      );
+    }
+    values.push(Math.min(Math.max(options.limit, 1), 100));
+    const rows = await queryRows<DocumentRow>(
+      this.database,
+      `SELECT id, document, created_at, updated_at
+       FROM admin_course_connections
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY lower(course_name), course_id
+       LIMIT $${values.length}`,
+      values
+    );
+    return rows.map((row) => decodeDocument<AdminCourseConnectionRecord>(row));
+  }
+
+  async summarizeForRoot(rootAccountId: string): Promise<AdminCourseConnectionSummary> {
+    const result = await this.database.query<{
+      course_count: number | string;
+      assessment_count: number | string;
+      enabled_assessment_count: number | string;
+      issue_count: number | string;
+    }>(
+      `SELECT
+         count(*)::int AS course_count,
+         COALESCE(sum(COALESCE((document->>'assessmentCount')::int, 0)), 0)::int AS assessment_count,
+         COALESCE(sum(COALESCE((document->>'enabledAssessmentCount')::int, 0)), 0)::int AS enabled_assessment_count,
+         COALESCE(sum(COALESCE((document->>'issueCount')::int, 0)), 0)::int AS issue_count
+       FROM admin_course_connections
+       WHERE root_account_id = $1`,
+      [rootAccountId]
+    );
+    const row = result.rows[0];
+    return {
+      courseCount: Number(row?.course_count || 0),
+      assessmentCount: Number(row?.assessment_count || 0),
+      enabledAssessmentCount: Number(row?.enabled_assessment_count || 0),
+      issueCount: Number(row?.issue_count || 0)
+    };
+  }
+}
+
+function normalizedQueryLimit(limit: number | undefined): number | null {
+  return Number.isSafeInteger(limit) && Number(limit) > 0 ? Math.min(Number(limit), 10_000) : null;
 }
 
 class PostgresSessionStore implements CollectionStore<SessionRecord> {

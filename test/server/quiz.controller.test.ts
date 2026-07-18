@@ -510,6 +510,23 @@ describe("QuizController", () => {
   });
 
   it("saves a Classic Quiz structured policy and returns only secret-presence flags", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      externalTools: [
+        {
+          id: "desmos-graphing",
+          label: "Desmos Graphing",
+          url: "https://www.desmos.com/calculator",
+          enabled: false
+        },
+        {
+          id: "desmos-scientific",
+          label: "Desmos Scientific",
+          url: "https://www.desmos.com/scientific",
+          enabled: false
+        }
+      ]
+    });
     assessments.getSebSettingForQuiz.mockResolvedValue({
       quizId: "quiz-1",
       courseId: COURSE_ID,
@@ -536,7 +553,15 @@ describe("QuizController", () => {
         quitPasswordOverride: true,
         startPasswordOverride: true,
         urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
-        externalToolIds: ["desmos-graphing"]
+        externalToolIds: ["desmos-graphing"],
+        quizOnlyExternalTools: [
+          {
+            id: "formula-reference",
+            label: "Formula reference",
+            url: "https://reference.example.edu/formulas",
+            enabled: true
+          }
+        ]
       },
       USER_ID
     );
@@ -559,6 +584,13 @@ describe("QuizController", () => {
     expect(assessments.saveQuizSebSetting).toHaveBeenCalledWith(
       expect.objectContaining({
         externalToolIds: ["desmos-graphing"],
+        quizOnlyExternalTools: [
+          expect.objectContaining({
+            id: "formula-reference",
+            url: "https://reference.example.edu/formulas",
+            enabled: true
+          })
+        ],
         externalTools: expect.arrayContaining([
           expect.objectContaining({ id: "desmos-graphing", enabled: true }),
           expect.objectContaining({ id: "desmos-scientific", enabled: false })
@@ -567,7 +599,7 @@ describe("QuizController", () => {
     );
   });
 
-  it("rejects quiz-level tool definitions while allowing only course-tool selections", async () => {
+  it("rejects attempts to replace the course catalog from a quiz request", async () => {
     await expectHttpError(
       () =>
         controller.saveStructured(

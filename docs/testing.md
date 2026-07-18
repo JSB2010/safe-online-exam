@@ -46,15 +46,16 @@ That smoke builds the exact runtime image, waits for the migration/app readiness
 
 ## Test Coverage By Layer
 
-| Layer                                  | Location                                                    | What it protects                                                                                                                               |
-| -------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Shared domain policy                   | `test/server/models.test.ts` and related tests              | Content IDs, roles, URL-rule/tool normalization, course defaults, and password-state behavior.                                                 |
-| Configuration and deployment artifacts | `app-config.test.ts`, `deployment-hardening-static.test.ts` | Runtime validation, public/private artifact handling, image-digest deployment, and documentation-backed deployment invariants.                 |
-| LTI and OAuth                          | LTI/OAuth controller and service tests                      | Signed-claim validation, browser binding, state replay prevention, role routing, OAuth state binding, and token ownership.                     |
-| Persistence and concurrency            | repository/session/assessment and PostgreSQL tests          | Atomic claims, one-time consumption, cleanup, session storage, distributed locks, and Canvas/database consistency.                             |
-| SEB configuration and proof            | `seb-*.test.ts`                                             | Plist generation, encryption, Config Key validation, configuration grants, proof redemption, handoff records, exit grants, and password rules. |
-| Detector                               | `canvas-seb-detector-script.test.ts`, static-asset tests    | Loading, Canvas route handling, access-code flow, approved tools, completion detection, exit behavior, and stable detector/theme-loader paths. |
-| Browser app shell                      | `test/e2e/app-shell.spec.ts`                                | Built server startup, public metadata routes, React routes, desktop/mobile rendering, and browser console errors.                              |
+| Layer                                  | Location                                                    | What it protects                                                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared domain policy                   | `test/server/models.test.ts` and related tests              | Content IDs, roles, URL-rule/tool normalization, course defaults, and password-state behavior.                                                       |
+| Configuration and deployment artifacts | `app-config.test.ts`, `deployment-hardening-static.test.ts` | Runtime validation, public/private artifact handling, image-digest deployment, and documentation-backed deployment invariants.                       |
+| LTI and OAuth                          | LTI/OAuth controller and service tests                      | Signed-claim validation, browser binding, state replay prevention, role routing, OAuth state binding, scope-profile upgrades, and token ownership.   |
+| Account administration                 | `admin-dashboard.test.ts` and action-token tests            | Root-account/course binding, administrator request integrity, split resource loading, recovery actions, course connection, and durable bulk rollout. |
+| Persistence and concurrency            | repository/session/assessment and PostgreSQL tests          | Atomic claims, one-time consumption, cleanup, session storage, distributed locks, and Canvas/database consistency.                                   |
+| SEB configuration and proof            | `seb-*.test.ts`                                             | Plist generation, encryption, Config Key validation, configuration grants, proof redemption, handoff records, exit grants, and password rules.       |
+| Detector                               | `canvas-seb-detector-script.test.ts`, static-asset tests    | Loading, Canvas route handling, access-code flow, approved tools, completion detection, exit behavior, and stable detector/theme-loader paths.       |
+| Browser app shell                      | `test/e2e/app-shell.spec.ts`                                | Built server startup, public metadata routes, React routes, desktop/mobile rendering, and browser console errors.                                    |
 
 Do not rely on a high coverage percentage alone. The most sensitive assurance is that a test exercises the same trust boundary it claims to protect: signed LTI data for identity, server proof for access-code release, and Canvas-authored completion for exit behavior.
 
@@ -119,15 +120,18 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 
 1. Confirm `/health`, `/lti/config`, JWKS, and detector endpoints on the deployed URL.
 2. Confirm Canvas stores the current LTI client ID, deployment ID, login URL, target link URI, and JWKS URL from `/lti/config`.
-3. Confirm the API OAuth key has the complete application scope set, including the exact session-token scope, described in [Canvas setup](canvas-setup.md).
-4. Confirm the active Canvas theme loads the detector asset on a Classic Quiz `/take` page and a New Quiz assignment route.
-5. Confirm the client certificate profile is installed on an approved test device and the active public-key hash matches the service.
+3. Confirm the API OAuth key has the complete application and administrator scope set, including the exact session-token scope, described in [Canvas setup](canvas-setup.md).
+4. Open **Safe Exam Browser Admin** from root-account navigation and complete its separate OAuth authorization.
+5. Confirm only Canvas-authorized root-account courses appear. Create and assign a school tool preset; refresh one test course; reveal a password and verify it disappears automatically; rotate the course exit password; reset one assessment exit password; rotate its code; toggle SEB; and verify the secret-free activity records.
+6. Repeat the launch as an instructor, sub-account administrator, and student and confirm the root-account dashboard is denied.
+7. Confirm the active Canvas theme loads the detector asset on a Classic Quiz `/take` page and a New Quiz assignment route.
+8. Confirm the client certificate profile is installed on an approved test device and the active public-key hash matches the service.
 
 ### Instructor
 
 1. Launch the tool from a Canvas course and complete or re-run Canvas OAuth.
 2. Refresh the course. Confirm it finds the intended published Classic Quiz and New Quiz data.
-3. Configure a valid effective exit password, optional start password, selected exam tools, and narrow URL rules.
+3. Configure a valid effective exit password, optional start password, selected course tools, one quiz-only tool, and narrow URL rules. Confirm the quiz-only tool does not appear in another assessment or in course defaults.
 4. Enable one Classic Quiz and one New Quiz. Confirm Canvas requires an access code and the management response does not reveal it.
 5. Change one protected setting, confirm the previous configuration becomes unsuitable for proof, and download a fresh configuration.
 6. Disable each assessment and confirm Canvas access-code protection is removed only through the intended action.

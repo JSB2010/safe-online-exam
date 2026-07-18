@@ -19,6 +19,7 @@ import {
   defaultQuizSebSetting,
   enabledExternalTools,
   extractClassicQuizId,
+  isAccountAdministrator,
   isInstructor,
   isUnsafeBroadUrlPattern,
   isStudent,
@@ -289,6 +290,28 @@ describe("content id helpers", () => {
     ]);
   });
 
+  it("merges quiz-only tools without adding them to the course catalog", () => {
+    const catalog = [
+      { id: "course-calc", label: "Course calculator", url: "https://calc.example.edu", enabled: false }
+    ];
+    const resolved = resolveExternalToolsForAssessment(catalog, ["course-calc"], [], true, [
+      {
+        id: "quiz-reference",
+        label: "Quiz reference",
+        url: "https://reference.example.edu/formulas",
+        enabled: false
+      }
+    ]);
+
+    expect(enabledExternalTools(resolved)).toEqual([
+      expect.objectContaining({ id: "course-calc", enabled: true }),
+      expect.objectContaining({ id: "quiz-reference", enabled: true })
+    ]);
+    expect(catalog).toEqual([
+      { id: "course-calc", label: "Course calculator", url: "https://calc.example.edu", enabled: false }
+    ]);
+  });
+
   it("keeps custom tool access explicit and rejects identity or regex rules", () => {
     const tools = normalizeExternalTools([
       {
@@ -527,5 +550,22 @@ describe("LTI role helpers", () => {
     expect(isInstructor({ roles: ["urn:lti:role:ims/lis/Instructor"] })).toBe(true);
     expect(isStudent({ roles: ["urn:lti:ims/lis/Learner"] })).toBe(true);
     expect(isStudent({ roles: ["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Student"] })).toBe(true);
+  });
+
+  it.each([
+    "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator",
+    "http://purl.imsglobal.org/vocab/lis/v2/membership#Administrator",
+    "http://purl.imsglobal.org/vocab/lis/v2/system/person#SysAdmin",
+    "urn:lti:sysrole:ims/lis/SysAdmin"
+  ])("accepts a standard signed Canvas administrator role: %s", (role) => {
+    expect(isAccountAdministrator({ roles: [role] })).toBe(true);
+  });
+
+  it("does not treat an ordinary signed system user role as administrator access", () => {
+    expect(
+      isAccountAdministrator({
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/system/person#User"]
+      })
+    ).toBe(false);
   });
 });
