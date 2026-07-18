@@ -210,6 +210,36 @@ describe("SEB config certificate encryption", () => {
       restoreEnv("SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH", previousPublicKeyPath);
     }
   });
+
+  it("strips bundled private-key PEM blocks from public certificate output", () => {
+    const certificatePem = [
+      "-----BEGIN CERTIFICATE-----",
+      "MIIC/zCCAeegAwIBAgIUFmDZUn12UAxF0S+6EdK/NLU2UQUwDQYJKoZIhvcNAQEL",
+      "BQAwDzENMAsGA1UEAwwEdGVzdDAeFw0yNjA3MTQwNjIzNDZaFw0yNjA3MTUwNjIz",
+      "NDZaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK",
+      "AoIBAQDaRgIIOz6F2VeK/YQtMN+HOidAmh1iGVsg6zdaFZvkfoTRj9u3m3d2uBpl",
+      "HNa9sEf5RPpcR7CNLR6LIo1c8j0SJVy/RgFA9HUkurBegsn/ElAG8oskBy1njkIo",
+      "T45cQ9Kh4Sne8qQHAyzdguiaOK28SrCBry+FKYtTfNCF06NU1zRr8gjvzjJAyUbJ",
+      "1749Vl26fk995+CGpkS+M/JN+lmLdlGIYWXIpsFglzVqZ4iaNfLV7D7oiGLPxcDS",
+      "VZj4uNPwVi0uf8pH/iwKuhGAf2JqPeqcir3KOz7a34M4cmmmZGOq6cOAlctDicru",
+      "hs7QAdt179+WU4p0g5ytpEq7DSSXAgMBAAGjUzBRMB0GA1UdDgQWBBSLlB4V3wfE",
+      "FF1nVVfLlrBJ1gNByDAfBgNVHSMEGDAWgBSLlB4V3wfEFF1nVVfLlrBJ1gNByDAP",
+      "BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAgusVeY8uOHmXNI61y",
+      "me/4CbToQdV0tHqVWK97MW/pQ/YDJbn1skABdc1JbyhAeGaz15GZayfHjZTvKwYg",
+      "AkVOxCc8wsv0ouqhSAUL6aUhCwnQox3q8HUhq0otRE14XfR8kpZOL6/MpHTXnGXX",
+      "WjHBLLlLLh46GN8yHdvzCRLctd4q231lfR/I6pWmv5Fb+oAQepslWThgC+UlTCp2",
+      "pfG2jRUJt2RrhnxH6TejKIbam3hsaJjfu1QgvVksTjgXvvHSTTKUL92RmEXO2NC0",
+      "3kO5fiTL90r+FKsdLsBIFlwoynBygBfSsFwCPRT/IHQWVpkOtOAcPETeaq5lQBZ/",
+      "geOD",
+      "-----END CERTIFICATE-----"
+    ].join("\n");
+    const bundledPem = `${certificatePem}\n-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n`;
+
+    const keyMaterial = keyMaterialFromPem(bundledPem);
+
+    expect(keyMaterial.certificatePem).toBe(`${certificatePem}\n`);
+    expect(keyMaterial.certificatePem).not.toContain("PRIVATE KEY");
+  });
 });
 
 function decryptRncryptor(encrypted: Buffer, password: string): Buffer {
