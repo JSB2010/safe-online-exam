@@ -102,7 +102,7 @@ export function keyMaterialFromPem(pem: string, source = "configured PEM"): SebE
   return {
     publicKey,
     publicKeyHash,
-    certificatePem: parsedCertificate ? pem : undefined,
+    certificatePem: parsedCertificate ? certificatePemFromDer(parsedCertificate.raw) : undefined,
     certificateDer: parsedCertificate?.raw,
     source
   };
@@ -170,6 +170,11 @@ function parseCertificate(pem: string): X509Certificate | null {
 function exportRsaPublicKeyDer(publicKey: KeyObject): Buffer {
   const exported = publicKey.export({ format: "der", type: "pkcs1" });
   return Buffer.isBuffer(exported) ? exported : Buffer.from(exported);
+}
+
+function certificatePemFromDer(certificateDer: Buffer): string {
+  const base64Lines = certificateDer.toString("base64").match(/.{1,64}/gu) || [];
+  return `-----BEGIN CERTIFICATE-----\n${base64Lines.join("\n")}\n-----END CERTIFICATE-----\n`;
 }
 
 function rncryptorEncryptWithPassword(data: Buffer, password: string): Buffer {
