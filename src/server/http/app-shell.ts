@@ -24,9 +24,18 @@ export function renderAppShell(options: AppShellOptions): string {
     <script id="seb-bootstrap" type="application/json">${payload}</script>
     <script type="module" src="${appScriptPath}"></script>
     <link rel="stylesheet" href="${appStylesheetPath}">
+    <style>
+      .seb-app-loading { min-height: 100vh; display: grid; place-items: center; padding: 24px; color: #475467; background: #f3f6fa; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .seb-app-loading__card { width: min(760px, 100%); display: grid; gap: 18px; padding: 28px; background: #fff; border: 1px solid #dbe2ea; border-radius: 14px; box-shadow: 0 10px 28px rgba(24, 36, 56, .06); }
+      .seb-app-loading__heading { width: 42%; height: 16px; border-radius: 6px; background: #e8edf4; }
+      .seb-app-loading__line { width: 72%; height: 12px; border-radius: 6px; background: #eef2f6; }
+      .seb-app-loading__row { height: 64px; border-radius: 10px; background: #eef2f6; animation: seb-shell-pulse 1.2s ease-in-out infinite; }
+      @keyframes seb-shell-pulse { 50% { opacity: .62; } }
+      @media (prefers-reduced-motion: reduce) { .seb-app-loading__row { animation: none; } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><main class="seb-app-loading" role="status" aria-live="polite" aria-label="Loading Safe Exam Browser"><section class="seb-app-loading__card"><div class="seb-app-loading__heading"></div><div class="seb-app-loading__line"></div><div class="seb-app-loading__row"></div><div class="seb-app-loading__row"></div><div class="seb-app-loading__row"></div></section></main></div>
   </body>
 </html>`;
 }

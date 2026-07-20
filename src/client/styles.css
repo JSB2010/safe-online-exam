@@ -1,4 +1,8 @@
 :root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --motion-press: 140ms;
+  --motion-surface: 180ms;
   color-scheme: light;
   font-family:
     Inter,
@@ -84,6 +88,118 @@ p {
 
 .service-shell {
   width: min(840px, calc(100vw - 32px));
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dashboard-skeleton {
+  pointer-events: none;
+}
+
+.skeleton-heading,
+.skeleton-stat-group,
+.skeleton-workspace,
+.skeleton-workspace aside,
+.skeleton-workspace > div {
+  display: flex;
+  gap: 10px;
+}
+
+.skeleton-heading {
+  align-items: center;
+}
+
+.skeleton-heading > span:last-child,
+.skeleton-workspace aside,
+.skeleton-workspace > div {
+  flex: 1;
+  flex-direction: column;
+}
+
+.skeleton-stat-group {
+  margin-left: auto;
+}
+
+.skeleton-block {
+  display: block;
+  border-radius: 7px;
+  background: #e8eef5;
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-icon {
+  width: 42px;
+  height: 42px;
+}
+
+.skeleton-title {
+  width: min(260px, 72%);
+  height: 18px;
+}
+
+.skeleton-copy {
+  width: min(360px, 92%);
+  height: 12px;
+}
+
+.skeleton-stat {
+  width: 84px;
+  height: 38px;
+}
+
+.skeleton-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 5px;
+  background: #eef2f6;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.skeleton-tabs .skeleton-block {
+  height: 58px;
+}
+
+.skeleton-workspace {
+  min-height: 440px;
+  padding: 22px;
+}
+
+.skeleton-workspace aside {
+  max-width: 310px;
+  padding-right: 20px;
+  border-right: 1px solid #e2e8f0;
+}
+
+.skeleton-input {
+  height: 38px;
+  margin: 8px 0;
+}
+
+.skeleton-row {
+  height: 54px;
+}
+
+.skeleton-detail {
+  height: 90px;
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.62;
+  }
 }
 
 .topbar,
@@ -344,10 +460,10 @@ p {
   border-radius: 8px;
   text-decoration: none;
   transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    background-color var(--motion-surface) var(--ease-out),
+    border-color var(--motion-surface) var(--ease-out),
+    color var(--motion-surface) var(--ease-out),
+    transform var(--motion-press) var(--ease-out);
 }
 
 .button {
@@ -379,9 +495,16 @@ p {
   background: #b42318;
 }
 
-.button:hover:not(:disabled),
-.icon-button:hover:not(:disabled) {
-  transform: translateY(-1px);
+@media (hover: hover) and (pointer: fine) {
+  .button:hover:not(:disabled),
+  .icon-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+}
+
+.button:active:not(:disabled),
+.icon-button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .button:disabled,
@@ -843,6 +966,8 @@ p {
   padding: 20px;
   overflow: auto;
   background: rgba(15, 23, 42, 0.48);
+  opacity: 1;
+  transition: opacity var(--motion-surface) var(--ease-out);
 }
 
 .dialog {
@@ -852,6 +977,22 @@ p {
   overflow-x: hidden;
   overflow-y: auto;
   padding: 22px;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity var(--motion-surface) var(--ease-out),
+    transform var(--motion-surface) var(--ease-out);
+}
+
+@starting-style {
+  .dialog-backdrop {
+    opacity: 0;
+  }
+
+  .dialog-backdrop .dialog {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
 }
 
 .dialog.large {
@@ -1245,6 +1386,18 @@ select:disabled {
   border: 1px solid #dbe2ea;
   border-radius: 8px;
   box-shadow: 0 16px 34px rgba(24, 36, 56, 0.16);
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity var(--motion-surface) var(--ease-out),
+    transform var(--motion-surface) var(--ease-out);
+}
+
+@starting-style {
+  .toast {
+    opacity: 0;
+    transform: translateY(12px);
+  }
 }
 
 .toast.success {
@@ -1535,6 +1688,15 @@ select:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .skeleton-block {
+    animation: none;
+  }
+
+  .dialog-backdrop .dialog,
+  .toast {
+    transform: none;
+  }
+
   .countdown-track span {
     animation: none;
     transform: scaleX(1);

@@ -650,7 +650,7 @@
         if (!document.getElementById(ACCESS_CODE_PROGRESS_STYLE_ID)) {
             const style = document.createElement('style');
             style.id = ACCESS_CODE_PROGRESS_STYLE_ID;
-            style.textContent = '@keyframes sebProgressSpin { to { transform: rotate(360deg); } }';
+            style.textContent = '@keyframes sebProgressSpin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { #seb-access-code-progress-card [data-seb-spinner="true"] { animation: none !important; } }';
             document.head.appendChild(style);
         }
 
@@ -688,7 +688,7 @@
                         ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; border: 2px solid #b42318; border-radius: 999px; font-size: 15px; font-weight: 900; line-height: 1;">!</div>'
                         : isSuccess
                             ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; font-size: 21px; font-weight: 900; line-height: 1;">✓</div>'
-                            : '<div style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #075985; border-radius: 999px; animation: sebProgressSpin 0.8s linear infinite;"></div>'
+                            : '<div data-seb-spinner="true" style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #075985; border-radius: 999px; animation: sebProgressSpin 0.8s linear infinite;"></div>'
                 }
             </div>
             <h2 style="margin: 0 0 10px; color: #182230; font-size: 24px; line-height: 1.15; font-weight: 800;">
@@ -1989,9 +1989,7 @@
                 ? { proofToken: data.proofToken, errorMessage: null }
                 : {
                       proofToken: null,
-                      errorMessage:
-                          data.message ||
-                          'Safe Exam Browser could not verify this quiz configuration. Reopen the quiz from Canvas using the Safe Exam Browser link.'
+                      errorMessage: accessProofErrorMessage(response.status, JSON.stringify({ error_code: data.error_code }))
                   };
         } catch (error) {
             debugLog('Error creating access proof: ' + errorMessage(error), 'warn');
@@ -2015,10 +2013,13 @@
 
         try {
             const payload = JSON.parse(responseText);
-            if (payload && payload.error_code === 'INVALID_SEB_CONFIG_PROOF') {
+            if (payload && payload.error_code === 'CANVAS_SESSION_AUTHORIZATION_REQUIRED') {
+                return 'Your Canvas connection has expired. Return to Canvas, reconnect the Safe Exam Browser tool, then reopen this quiz.';
+            }
+            if (payload && (payload.error_code === 'INVALID_SEB_CONFIG_PROOF' || payload.error_code === 'SEB_CONFIGURATION_UNAVAILABLE')) {
                 return fallback;
             }
-            return typeof payload.message === 'string' && payload.message.trim() ? payload.message : fallback;
+            return fallback;
         } catch (error) {
             return fallback;
         }
@@ -2728,7 +2729,7 @@
         }
         const style = document.createElement('style');
         style.id = SUBMISSION_OVERLAY_STYLE_ID;
-        style.textContent = '@keyframes sebSubmissionSpin { to { transform: rotate(360deg); } }';
+        style.textContent = '@keyframes sebSubmissionSpin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { #seb-classic-submission-overlay [data-seb-spinner="true"] { animation: none !important; } }';
         (document.head || document.body).appendChild(style);
     }
 
@@ -2767,7 +2768,7 @@
         const message = options.message || '';
         const iconInner = isError
             ? '<div style="width: 22px; height: 22px; display: grid; place-items: center; border: 2px solid #b42318; border-radius: 999px; font-size: 15px; font-weight: 900; line-height: 1;">!</div>'
-            : '<div style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #075985; border-radius: 999px; animation: sebSubmissionSpin 0.8s linear infinite;"></div>';
+            : '<div data-seb-spinner="true" style="width: 18px; height: 18px; border: 2px solid #bae6fd; border-top-color: #075985; border-radius: 999px; animation: sebSubmissionSpin 0.8s linear infinite;"></div>';
         const dismissButton = isError && options.dismissLabel
             ? `<button type="button" id="seb-submission-dismiss-button" style="margin-top: 18px; min-height: 38px; padding: 0 14px; border: 1px solid #cfd6e4; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 700; cursor: pointer;">${escapeHtml(options.dismissLabel)}</button>`
             : '';

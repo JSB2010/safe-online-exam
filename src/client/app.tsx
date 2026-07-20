@@ -82,6 +82,12 @@ type Toast = {
   message: string;
 };
 
+type ClientRequestError = Error & {
+  code?: string;
+  status?: number;
+  userFacing?: true;
+};
+
 type OnboardingRecovery = {
   message: string;
   actionLabel?: string;
@@ -575,6 +581,10 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
     const nextSection = sections[nextIndex].id;
     setActiveSection(nextSection);
     window.requestAnimationFrame(() => document.getElementById(`admin-tab-${nextSection}`)?.focus());
+  }
+
+  if (loading && !overview) {
+    return <AdminDashboardSkeleton />;
   }
 
   return (
@@ -1710,6 +1720,47 @@ function ServiceStatusPage() {
   );
 }
 
+function AdminDashboardSkeleton() {
+  return (
+    <main className="app-shell admin-shell dashboard-skeleton" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Loading Safe Exam Browser administration…</span>
+      <header className="topbar">
+        <div className="skeleton-heading">
+          <span className="skeleton-block skeleton-icon" />
+          <span>
+            <span className="skeleton-block skeleton-title" />
+            <span className="skeleton-block skeleton-copy" />
+          </span>
+        </div>
+        <div className="skeleton-stat-group" aria-hidden="true">
+          <span className="skeleton-block skeleton-stat" />
+          <span className="skeleton-block skeleton-stat" />
+          <span className="skeleton-block skeleton-stat" />
+        </div>
+      </header>
+      <div className="skeleton-tabs" aria-hidden="true">
+        <span className="skeleton-block" />
+        <span className="skeleton-block" />
+      </div>
+      <section className="work-surface skeleton-workspace" aria-hidden="true">
+        <aside>
+          <span className="skeleton-block skeleton-copy" />
+          <span className="skeleton-block skeleton-input" />
+          <span className="skeleton-block skeleton-row" />
+          <span className="skeleton-block skeleton-row" />
+          <span className="skeleton-block skeleton-row" />
+        </aside>
+        <div>
+          <span className="skeleton-block skeleton-title" />
+          <span className="skeleton-block skeleton-copy" />
+          <span className="skeleton-block skeleton-detail" />
+          <span className="skeleton-block skeleton-detail" />
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function TeacherDashboard({ data }: { data: Record<string, any> }) {
   const [items] = useState<QuizView[]>(data.quizzes || []);
   const [settings, setSettings] = useState<Record<string, any>>(data.quizSebSettings || {});
@@ -1782,7 +1833,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       if (redirectForAuth(body)) return;
       if (!body.success) {
         handleRecovery(body);
-        pushToast("error", body.message || "The SEB setting could not be updated.");
+        pushToast("error", apiMessage(body, "The SEB setting could not be updated."));
       } else {
         setSettings((current) => ({
           ...current,
@@ -1810,7 +1861,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
         window.location.assign("/lti/launch");
       } else {
         handleRecovery(body);
-        pushToast("error", body.message || "Could not refresh Canvas content.");
+        pushToast("error", apiMessage(body, "Could not refresh Canvas content."));
       }
     } catch (error) {
       handleRecovery(error);
@@ -1829,7 +1880,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     if (redirectForAuth(body)) return;
     if (!body.success) {
       handleRecovery(body);
-      throw new Error(body.message || "Course defaults could not be saved.");
+      throw clientRequestError(typeof body.error_code === "string" ? body.error_code : undefined);
     }
     setCourseDefaults(normalizeCourseDefaults(body.defaults, data.courseId));
     if (successMessage) {
@@ -2466,7 +2517,7 @@ function SebSetupCheckDialog({
         headers: actionHeaders(authToken)
       });
       if (!result.success) {
-        throw new Error(result.message || "Canvas connection could not be verified.");
+        throw clientRequestError(typeof result.error_code === "string" ? result.error_code : undefined);
       }
       await onCompleted?.();
       window.location.assign(launchUrl);
@@ -2477,7 +2528,7 @@ function SebSetupCheckDialog({
         setChecking(false);
         return;
       }
-      setError(launchError instanceof Error ? launchError.message : "Canvas connection could not be verified.");
+      setError(errorMessage(launchError, "Canvas connection could not be verified."));
       setChecking(false);
     }
   };
@@ -2635,7 +2686,7 @@ function SettingsDialog({
       });
       if (redirectForAuth(saved)) return;
       if (!saved.success && !saved.setting) {
-        setError(saved.message || "SEB settings could not be saved.");
+        setError(apiMessage(saved, "SEB settings could not be saved."));
         return;
       }
       onSaved(saved);
@@ -2656,7 +2707,7 @@ function SettingsDialog({
       );
       if (redirectForAuth(saved)) return;
       if (!saved.success && !saved.setting) {
-        setError(saved.message || "Could not reset quiz defaults.");
+        setError(apiMessage(saved, "Could not reset quiz defaults."));
         return;
       }
       setUsesDefaults(true);
@@ -3658,13 +3709,12 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
   );
 }
 
-function OAuthErrorPage({ data }: { data: Record<string, any> }) {
-  const description = typeof data.description === "string" && data.description ? ` ${data.description}` : "";
+function OAuthErrorPage({ data: _data }: { data: Record<string, any> }) {
   return (
     <MessagePage
       icon={<AlertCircle />}
       title="Canvas connection was not completed"
-      message={`Canvas did not authorize this connection.${description} Return to the course tool and select Connect Canvas to try again.`}
+      message="Canvas did not authorize this connection. Return to the course tool and select Connect Canvas to try again."
       action={
         <a className="button primary" href="/lti/launch">
           <ArrowLeft size={16} /> Return to Canvas tool
@@ -3705,14 +3755,13 @@ function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?
       broker = null;
     }
     try {
-      const response = await fetch(grantUrl, {
+      const payload = await requestJson(grantUrl, {
         method: "POST",
         credentials: "same-origin",
         headers: { accept: "application/json", "x-auth-token": token }
       });
-      const payload = (await response.json()) as { sebLaunchUrl?: unknown; message?: unknown };
-      if (!response.ok || typeof payload.sebLaunchUrl !== "string" || !/^sebs?:\/\//iu.test(payload.sebLaunchUrl)) {
-        throw new Error(typeof payload.message === "string" ? payload.message : "Unable to prepare Safe Exam Browser");
+      if (typeof payload.sebLaunchUrl !== "string" || !/^sebs?:\/\//iu.test(payload.sebLaunchUrl)) {
+        throw clientRequestError(typeof payload.error_code === "string" ? payload.error_code : undefined);
       }
       if (broker && !broker.closed) {
         broker.location.replace(payload.sebLaunchUrl);
@@ -3727,7 +3776,10 @@ function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?
       const recovery = onboardingRecovery(launchError, "student");
       setError(
         recovery?.message ||
-          (launchError instanceof Error ? launchError.message : "Unable to prepare Safe Exam Browser")
+          errorMessage(
+            launchError,
+            "Safe Exam Browser could not prepare this quiz. Reopen it from Canvas and try again"
+          )
       );
     } finally {
       setLaunching(false);
@@ -4220,26 +4272,93 @@ async function persistStudentReadinessPromptDismissal(authToken?: string): Promi
     headers: actionHeaders(authToken)
   });
   if (!body.success) {
-    throw new Error(body.message || "The reminder could not be dismissed.");
+    throw clientRequestError(typeof body.error_code === "string" ? body.error_code : undefined);
   }
 }
 
 async function requestJson(url: string, init?: RequestInit): Promise<Record<string, any>> {
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch {
+    throw clientRequestError("NETWORK_ERROR", 0);
+  }
   const contentType = response.headers.get("content-type") || "";
-  const body = contentType.includes("application/json") ? await response.json() : {};
+  let body: Record<string, any> = {};
+  if (contentType.includes("application/json")) {
+    try {
+      body = (await response.json()) as Record<string, any>;
+    } catch {
+      body = {};
+    }
+  }
   if (!response.ok) {
-    const error = new Error(body.message || body.error || `Request failed with status ${response.status}.`) as Error & {
-      code?: unknown;
-    };
-    error.code = body.error_code;
-    throw error;
+    throw clientRequestError(typeof body.error_code === "string" ? body.error_code : undefined, response.status);
   }
   return body;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+  const candidate = error as ClientRequestError | undefined;
+  return safeErrorMessage(candidate?.code, candidate?.status, fallback);
+}
+
+function apiMessage(body: Record<string, any>, fallback: string): string {
+  return safeErrorMessage(typeof body.error_code === "string" ? body.error_code : undefined, undefined, fallback);
+}
+
+function clientRequestError(code?: string, status?: number): ClientRequestError {
+  const error = new Error("Safe Exam Browser request failed") as ClientRequestError;
+  error.code = code;
+  error.status = status;
+  error.userFacing = true;
+  return error;
+}
+
+function safeErrorMessage(code: string | undefined, status: number | undefined, fallback: string): string {
+  switch (code) {
+    case "CANVAS_AUTHORIZATION_REQUIRED":
+      return "Canvas needs to be reconnected before this can continue. Reconnect Canvas, then try again.";
+    case "CANVAS_PERMISSION_DENIED":
+      return "Canvas blocked this action because the integration does not have the required permission. Ask a Canvas administrator to check the Developer Key scopes.";
+    case "CANVAS_SESSION_AUTHORIZATION_REQUIRED":
+      return "Your Canvas connection has expired. Reconnect Canvas, then try again.";
+    case "CANVAS_SESSION_READINESS_FAILED":
+      return "Canvas could not confirm this connection right now. Check your connection and try again in a moment.";
+    case "INVALID_SEB_CONFIG_PROOF":
+    case "SEB_CONFIGURATION_UNAVAILABLE":
+      return "This Safe Exam Browser configuration is no longer current. Return to Canvas and reopen the quiz from the course tool.";
+    case "ASSESSMENT_NOT_FOUND":
+    case "ASSESSMENT_SETTING_NOT_FOUND":
+      return "That assessment is no longer available. Refresh the course content, then try again.";
+    case "SEB_NOT_ENABLED":
+      return "Safe Exam Browser is not enabled for that assessment. Enable it in the course settings, then try again.";
+    case "INVALID_SEB_URL_POLICY":
+    case "INVALID_SEB_DOMAIN_POLICY":
+    case "INVALID_SEB_TOOL_POLICY":
+    case "INVALID_SEB_TOOL_SELECTION":
+      return "One or more security settings are not valid. Review the highlighted course or assessment settings and save again.";
+    case "NETWORK_ERROR":
+      return "We could not reach the Safe Exam Browser service. Check your connection and try again.";
+    default:
+      break;
+  }
+  if (status === 401 || status === 403) {
+    return "Your Canvas session cannot complete this action. Reopen the tool from Canvas and try again.";
+  }
+  if (status === 404) {
+    return "The requested item is no longer available. Refresh the page and try again.";
+  }
+  if (status === 409 || status === 422) {
+    return "This change could not be applied because the current settings need attention. Refresh the page, review the settings, and try again.";
+  }
+  if (status === 429) {
+    return "Too many requests were made in a short time. Wait a moment, then try again.";
+  }
+  if (status && status >= 500) {
+    return "The Safe Exam Browser service could not complete that request. Try again in a moment; contact your administrator if it continues.";
+  }
+  return `${fallback.replace(/\.$/u, "")}. Check your connection and try again.`;
 }
 
 function onboardingRecovery(value: unknown, audience: "instructor" | "student"): OnboardingRecovery | null {

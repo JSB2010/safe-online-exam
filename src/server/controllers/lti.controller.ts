@@ -80,7 +80,7 @@ export class LtiController {
         .send(
           renderFallbackHtml(
             "LTI Launch Error",
-            `<h1>LTI Launch Error</h1><p>${escapeHtml(body.error_description || body.error)}</p>`
+            "<h1>LTI Launch Error</h1><p>Canvas could not complete this launch. Return to the course and open the Safe Exam Browser tool again. If the problem continues, ask a Canvas administrator to verify the app installation.</p>"
           )
         );
       return;

@@ -437,7 +437,10 @@ describe("LtiController role routing", () => {
       error_description: "<bad>"
     });
     expect(canvasErrorResponse.status).toHaveBeenCalledWith(400);
-    expect(canvasErrorResponse.send).toHaveBeenCalledWith(expect.stringContaining("&lt;bad&gt;"));
+    expect(canvasErrorResponse.send).toHaveBeenCalledWith(
+      expect.stringContaining("Canvas could not complete this launch. Return to the course")
+    );
+    expect(canvasErrorResponse.send).not.toHaveBeenCalledWith(expect.stringContaining("&lt;bad&gt;"));
   });
 
   it("returns Canvas LTI dynamic registration metadata", () => {
