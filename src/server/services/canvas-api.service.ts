@@ -122,7 +122,7 @@ const CANVAS_DISCOVERY_PAGE_SIZE = 100;
 const CANVAS_DISCOVERY_MAX_PAGES = 100;
 export const CANVAS_API_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 export const CANVAS_OAUTH_RESPONSE_MAX_BYTES = 64 * 1024;
-export const CANVAS_API_USER_AGENT = "SEB-CanvasLTI/1.0";
+export const CANVAS_API_USER_AGENT = "SafeOnlineExam/1.0";
 export const CANVAS_SESSION_TOKEN_SCOPE = "url:GET|/api/v1/login/session_token";
 
 @Injectable()

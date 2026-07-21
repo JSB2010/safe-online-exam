@@ -30,8 +30,13 @@ describe("HomeController", () => {
     });
   });
 
-  it("handles browser favicon probes without generating a not-found warning", () => {
-    expect(homeController().favicon()).toBeUndefined();
+  it("provides the Safe Online Exam icon for browser favicon probes", async () => {
+    const response = { type: vi.fn().mockReturnThis(), send: vi.fn() };
+
+    await homeController().favicon(response as any);
+
+    expect(response.type).toHaveBeenCalledWith("image/x-icon");
+    expect(response.send).toHaveBeenCalledWith(expect.any(Buffer));
   });
 });
 

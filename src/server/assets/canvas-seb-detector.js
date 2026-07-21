@@ -1,5 +1,5 @@
 /**
- * Canvas SEB Browser Detection and Redirection Script
+ * Safe Online Exam browser detection and redirection script
  *
  * Injected by a Canvas theme loader. Keep this file dependency-free because it
  * runs inside Canvas and Safe Exam Browser.
@@ -220,7 +220,7 @@
     function initializeScript() {
         loadDebugStatus();
 
-        debugLog('Canvas SEB Detector Script Loaded!', 'success');
+        debugLog('Safe Online Exam detector loaded!', 'success');
         debugLog('Version: ' + DETECTOR_VERSION);
         debugLog('Debug Mode: ' + (state.debugMode ? 'ENABLED' : 'DISABLED'));
         debugLog('User Agent: ' + navigator.userAgent);
@@ -260,7 +260,7 @@
         }
 
         const logger = type === 'warn' ? console.warn : type === 'error' ? console.error : console.log;
-        logger('Canvas SEB Detector:', type);
+        logger('Safe Online Exam detector:', type);
     }
 
     function detectorTrace(event, details = {}, type = 'info') {
@@ -677,7 +677,7 @@
         const iconBorder = isError ? '#fecdca' : isSuccess ? '#abefc6' : '#bae6fd';
         const title = isError ? 'Something went wrong' : isSuccess ? 'Success' : 'Preparing your quiz';
         const body = isError
-            ? escapeHtml(message || 'The access code could not be entered automatically. Reload the quiz in Safe Exam Browser, or ask your instructor for help.')
+            ? escapeHtml(message || 'The access code could not be entered automatically. Reload the quiz through Safe Online Exam, or ask your instructor for help.')
             : isSuccess
                 ? 'Entering your quiz now.'
                 : 'Entering the access code automatically.';
@@ -1082,7 +1082,11 @@
                 .join(' ')
                 .trim()
                 .toLowerCase();
-            if (!identifyingText.includes('safe exam browser') && identifyingText !== 'seb') {
+            if (
+                !identifyingText.includes('safe online exam') &&
+                !identifyingText.includes('safe exam browser') &&
+                identifyingText !== 'seb'
+            ) {
                 continue;
             }
             try {
@@ -1180,12 +1184,12 @@
                     Secure assessment
                 </p>
                 <h2 id="seb-launch-dialog-title" style="color: #182230; margin: 0 0 12px; font-size: 24px; line-height: 1.15; font-weight: 800;">
-                    Safe Exam Browser Required
+                    Safe Online Exam Required
                 </h2>
                 <p style="margin: 0; font-size: 15px; line-height: 1.45; color: #667085;">
                     ${isNewQuiz
-                        ? 'Open this assessment directly in Safe Exam Browser, or stay here to review previous attempts.'
-                        : 'Open this assessment directly in Safe Exam Browser.'}
+                        ? 'Open this assessment with Safe Online Exam, or stay here to review previous attempts.'
+                        : 'Open this assessment with Safe Online Exam.'}
                 </p>
                 </div>
                 <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 14px 32px 18px; background: #f8fafc; border-top: 1px solid #dbe2ea; flex-wrap: wrap;">
@@ -1193,7 +1197,7 @@
                             ? '<button id="seb-launch-view-page-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">View quiz page</button>'
                             : '<button id="seb-launch-back-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">Back</button>'}
                         <a id="seb-launch-open-link" href="${escapeHtml(secureLaunchUrl || fallbackUrl)}" rel="noopener noreferrer" referrerpolicy="no-referrer" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">
-                        ${secureLaunchUrl ? 'Open in Safe Exam Browser' : 'Go to course navigation'}
+                        ${secureLaunchUrl ? 'Open with Safe Online Exam' : 'Go to course navigation'}
                         </a>
                 </div>
             </div>
@@ -1930,7 +1934,7 @@
         const quizInfo = options.quizInfo || extractQuizInfo();
         if (!quizInfo) {
             debugLog('Could not extract quiz info for auto-fill', 'warn');
-            showAccessCodeErrorOverlay('The quiz page could not be identified. Reload the quiz in Safe Exam Browser, or ask your instructor for help.');
+            showAccessCodeErrorOverlay('The quiz page could not be identified. Reload the quiz through Safe Online Exam, or ask your instructor for help.');
             return;
         }
 
@@ -2053,7 +2057,7 @@
                 releaseAccessCodeAutomation(quizInfo);
                 showAutoFillError(
                     proofResult.errorMessage ||
-                        'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.',
+                        'Safe Online Exam could not verify this quiz configuration. Reload the quiz through Safe Online Exam, or ask your instructor for help.',
                     shouldShowAccessCodeErrors
                 );
                 return;
@@ -2175,7 +2179,7 @@
                 proofToken: null,
                 retryable: true,
                 errorMessage:
-                    'Safe Exam Browser could not read the Config Key for this quiz. Reopen the quiz from Canvas using the Safe Exam Browser link.'
+                    'Safe Online Exam could not read the Config Key for this quiz. Reopen the quiz from Canvas using the Safe Online Exam link.'
             };
         }
 
@@ -2221,7 +2225,7 @@
             return {
                 proofToken: null,
                 errorMessage:
-                    'Safe Exam Browser could not verify this quiz configuration because the verification request failed. Check your connection, then reload the quiz in SEB.'
+                    'Safe Online Exam could not verify this quiz configuration because the verification request failed. Check your connection, then reload the quiz through Safe Online Exam.'
             };
         }
     }
@@ -2229,8 +2233,8 @@
     function accessProofErrorMessage(status, responseText) {
         const fallback =
             status === 403 || status === 409
-                ? 'This SEB configuration could not be verified. It may be stale, incorrect, or modified. Reopen the quiz from Canvas using the Safe Exam Browser link.'
-                : 'Safe Exam Browser could not verify this quiz configuration. Reload the quiz in SEB, or ask your instructor for help.';
+                ? 'This Safe Online Exam configuration could not be verified. It may be stale, incorrect, or modified. Reopen the quiz from Canvas using the Safe Online Exam link.'
+                : 'Safe Online Exam could not verify this quiz configuration. Reload the quiz through Safe Online Exam, or ask your instructor for help.';
 
         if (!responseText) {
             return fallback;
@@ -2239,7 +2243,7 @@
         try {
             const payload = JSON.parse(responseText);
             if (payload && payload.error_code === 'CANVAS_SESSION_AUTHORIZATION_REQUIRED') {
-                return 'Your Canvas connection has expired. Return to Canvas, reconnect the Safe Exam Browser tool, then reopen this quiz.';
+                return 'Your Canvas connection has expired. Return to Canvas, reconnect Safe Online Exam, then reopen this quiz.';
             }
             if (payload && (payload.error_code === 'INVALID_SEB_CONFIG_PROOF' || payload.error_code === 'SEB_CONFIGURATION_UNAVAILABLE')) {
                 return fallback;
@@ -2433,7 +2437,7 @@
                     submitButton: summarizeTraceElement(currentSubmitButton)
                 }), 'warn');
                 releaseAccessCodeAutomation(quizInfo);
-                showAccessCodeErrorOverlay('The Canvas Submit button could not be activated. Try again, or reload the quiz in Safe Exam Browser.');
+                showAccessCodeErrorOverlay('The Canvas Submit button could not be activated. Try again, or reload the quiz through Safe Online Exam.');
                 return;
             }
 
@@ -2498,7 +2502,7 @@
                 debugLog('Canvas did not show the New Quiz Begin control after access-code submission', 'warn');
                 detectorTrace('new-quiz-begin-timeout', { quizInfo }, 'warn');
                 releaseAccessCodeAutomation(quizInfo);
-                showAccessCodeErrorOverlay('The access code was entered, but Canvas did not show the Begin button. Try again, or reload the quiz in Safe Exam Browser.');
+                showAccessCodeErrorOverlay('The access code was entered, but Canvas did not show the Begin button. Try again, or reload the quiz through Safe Online Exam.');
             }
         }, 30000);
     }

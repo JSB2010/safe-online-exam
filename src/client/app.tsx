@@ -27,6 +27,7 @@ import {
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
+import safeOnlineExamIcon from "./assets/safe-online-exam-icon.png";
 import type {
   CourseSebDefaults,
   ExternalToolAccessRule,
@@ -98,6 +99,14 @@ type OnboardingRecovery = {
   actionUrl?: string;
 };
 
+function BrandMark() {
+  return (
+    <div className="brand-mark">
+      <img src={safeOnlineExamIcon} alt="" />
+    </div>
+  );
+}
+
 function readBootstrap(): BootstrapPayload {
   const element = document.getElementById("seb-bootstrap");
   if (!element?.textContent) {
@@ -147,7 +156,7 @@ export function App() {
     case "service-status":
       return <ServiceStatusPage />;
     default:
-      return <MessagePage icon={<Shield />} title="Safe Exam Browser" message="This service is running." />;
+      return <MessagePage icon={<Shield />} title="Safe Online Exam" message="This service is running." />;
   }
 }
 
@@ -445,7 +454,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
   async function rotateCourseQuitPassword(course: AdminCourseView) {
     if (
       !window.confirm(
-        "Rotate this course exit password? Existing downloaded SEB files will no longer contain the current password."
+        "Rotate this course exit password? Existing downloaded Safe Online Exam configuration files will no longer contain the current password."
       )
     ) {
       return;
@@ -595,11 +604,9 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
     <main className="app-shell admin-shell">
       <header className="topbar">
         <div className="topbar-title">
-          <div className="brand-mark">
-            <ShieldCheck size={20} />
-          </div>
+          <BrandMark />
           <div>
-            <h1>Safe Exam Browser Admin</h1>
+            <h1>Safe Online Exam Admin</h1>
             <p>{overview?.account?.name || `Canvas account ${data.rootAccountId || ""}`}</p>
           </div>
         </div>
@@ -613,7 +620,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
             <strong>{summary.assessmentCount || 0}</strong>
           </div>
           <div className="stat-pill active">
-            <span>SEB active</span>
+            <span>Safe Online Exam active</span>
             <strong>{summary.enabledAssessmentCount || 0}</strong>
           </div>
           <button
@@ -668,7 +675,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
           <aside className="admin-course-sidebar">
             <div className="admin-sidebar-heading">
               <div>
-                <span className="section-kicker">Safe Exam Browser</span>
+                <span className="section-kicker">Safe Online Exam</span>
                 <h2>Configured courses</h2>
               </div>
               <button className="button primary small" type="button" onClick={() => setConnectingCourses(true)}>
@@ -692,7 +699,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
               )}
               {!loading && !filteredCourses.length && (
                 <div className="empty-line">
-                  {query ? "No matching configured courses." : "No courses have configured Safe Exam Browser yet."}
+                  {query ? "No matching configured courses." : "No courses have configured Safe Online Exam yet."}
                 </div>
               )}
               {filteredCourses.map((course) => (
@@ -708,7 +715,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                   </span>
                   <span
                     className={clsx("admin-count", course.enabledAssessmentCount > 0 && "active")}
-                    title={`${course.enabledAssessmentCount} of ${course.assessmentCount} assessments require SEB`}
+                    title={`${course.enabledAssessmentCount} of ${course.assessmentCount} assessments require Safe Online Exam`}
                   >
                     {course.enabledAssessmentCount}/{course.assessmentCount}
                   </span>
@@ -832,7 +839,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                 <div className="admin-assessment-heading">
                   <div>
                     <h3>Assessments</h3>
-                    <p>Manage Safe Exam Browser only where it is currently required.</p>
+                    <p>Manage Safe Online Exam only where it is currently required.</p>
                   </div>
                   <span>
                     {selectedCourse.enabledAssessmentCount} active · {selectedCourse.assessmentCount} total
@@ -859,7 +866,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                         </div>
                         <div className="admin-assessment-actions">
                           <span className={clsx("status-pill", assessment.sebRequired ? "enabled" : "disabled")}>
-                            {assessment.sebRequired ? "SEB required" : "SEB off"}
+                            {assessment.sebRequired ? "Safe Online Exam required" : "Safe Online Exam off"}
                           </span>
                           {assessment.sebRequired ? (
                             <>
@@ -928,7 +935,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                                     `seb:${assessment.id}`,
                                     `${route}/seb`,
                                     { method: "PUT", body: JSON.stringify({ required: false }) },
-                                    "SEB disabled for this assessment."
+                                    "Safe Online Exam disabled for this assessment."
                                   )
                                 }
                               >
@@ -945,11 +952,11 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                                   `seb:${assessment.id}`,
                                   `${route}/seb`,
                                   { method: "PUT", body: JSON.stringify({ required: true }) },
-                                  "SEB enabled for this assessment."
+                                  "Safe Online Exam enabled for this assessment."
                                 )
                               }
                             >
-                              <Lock size={15} /> Enable SEB
+                              <Lock size={15} /> Enable Safe Online Exam
                             </button>
                           )}
                         </div>
@@ -970,7 +977,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
               <div className="empty-state">
                 <BookOpen size={30} />
                 <strong>Select a course</strong>
-                <span>Choose a Canvas course to inspect its Safe Exam Browser configuration.</span>
+                <span>Choose a Canvas course to inspect its Safe Online Exam configuration.</span>
               </div>
             )}
           </div>
@@ -1741,12 +1748,10 @@ function ServiceStatusPage() {
     <main className="app-shell service-shell">
       <header className="topbar">
         <div className="topbar-title">
-          <div className="brand-mark">
-            <Shield size={20} />
-          </div>
+          <BrandMark />
           <div>
-            <h1>Canvas SEB LTI</h1>
-            <p>Safe Exam Browser integration service</p>
+            <h1>Safe Online Exam</h1>
+            <p>Canvas assessment security service</p>
           </div>
         </div>
         <div className="stat-pill active">
@@ -1760,8 +1765,8 @@ function ServiceStatusPage() {
             <Check size={22} />
           </div>
           <span className="section-kicker">Service status</span>
-          <h2>Canvas SEB LTI service is running</h2>
-          <p>Launch from Canvas to manage quizzes or open SEB assessments.</p>
+          <h2>Safe Online Exam is running</h2>
+          <p>Launch from Canvas to manage assessments or open secure exams.</p>
         </div>
       </section>
     </main>
@@ -1771,7 +1776,7 @@ function ServiceStatusPage() {
 function AdminDashboardSkeleton() {
   return (
     <main className="app-shell admin-shell dashboard-skeleton" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading Safe Exam Browser administration…</span>
+      <span className="sr-only">Loading Safe Online Exam administration…</span>
       <header className="topbar">
         <div className="skeleton-heading">
           <span className="skeleton-block skeleton-icon" />
@@ -1869,7 +1874,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     const enabled = !!settings[item.id]?.sebRequired;
     if (!enabled && !canEnableSebAssessment(settings[item.id], courseDefaults)) {
       openCourseSettings("password");
-      pushToast("error", "Set an exit password in Settings before enabling SEB.");
+      pushToast("error", "Set an exit password in Settings before enabling Safe Online Exam.");
       return;
     }
     setBusyId(item.id);
@@ -1881,17 +1886,17 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       if (redirectForAuth(body)) return;
       if (!body.success) {
         handleRecovery(body);
-        pushToast("error", apiMessage(body, "The SEB setting could not be updated."));
+        pushToast("error", apiMessage(body, "The Safe Online Exam setting could not be updated."));
       } else {
         setSettings((current) => ({
           ...current,
           [item.id]: body.setting || { ...current[item.id], sebRequired: !enabled }
         }));
-        pushToast("success", enabled ? "SEB disabled." : "SEB enabled.");
+        pushToast("success", enabled ? "Safe Online Exam disabled." : "Safe Online Exam enabled.");
       }
     } catch (error) {
       handleRecovery(error);
-      pushToast("error", errorMessage(error, "The SEB setting could not be updated."));
+      pushToast("error", errorMessage(error, "The Safe Online Exam setting could not be updated."));
     } finally {
       setBusyId(null);
     }
@@ -1946,11 +1951,9 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-title">
-          <div className="brand-mark">
-            <Shield size={20} />
-          </div>
+          <BrandMark />
           <div>
-            <h1>Safe Exam Browser</h1>
+            <h1>Safe Online Exam</h1>
             <p>{data.courseName || `Course ${data.courseId}`}</p>
           </div>
         </div>
@@ -2000,7 +2003,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
           <div>
             <span className="section-kicker">Assessment access</span>
             <h2>Assessments</h2>
-            <p>Turn Safe Exam Browser on only for the quizzes that need it.</p>
+            <p>Turn Safe Online Exam on only for the quizzes that need it.</p>
           </div>
           <div className="search">
             <Search size={18} />
@@ -2009,7 +2012,8 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
         </div>
         {needsExitPassword && (
           <div className="notice error">
-            <Lock size={17} /> Set an exit password in Course defaults before enabling SEB for these quizzes.
+            <Lock size={17} /> Set an exit password in Course defaults before enabling Safe Online Exam for these
+            quizzes.
           </div>
         )}
         <div className="content-list">
@@ -2028,7 +2032,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
                     <p>
                       {item.quizTypeDisplay || item.contentType || "Canvas content"}
                       <span className={clsx("assessment-status", enabled && "enabled")}>
-                        {enabled ? "SEB enabled" : "SEB off"}
+                        {enabled ? "Safe Online Exam enabled" : "Safe Online Exam off"}
                       </span>
                     </p>
                   </div>
@@ -2057,9 +2061,9 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
                     title={
                       canEnable
                         ? enabled
-                          ? "Disable SEB"
-                          : "Enable SEB"
-                        : "Set an exit password in Course defaults before enabling SEB"
+                          ? "Disable Safe Online Exam"
+                          : "Enable Safe Online Exam"
+                        : "Set an exit password in Course defaults before enabling Safe Online Exam"
                     }
                   >
                     {enabled ? <Unlock size={16} /> : <Lock size={16} />}
@@ -2144,11 +2148,9 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
     <main className="app-shell student-shell">
       <header className="topbar">
         <div className="topbar-title">
-          <div className="brand-mark">
-            <Shield size={20} />
-          </div>
+          <BrandMark />
           <div>
-            <h1>Safe Exam Browser Quizzes</h1>
+            <h1>Safe Online Exam</h1>
             <p>{data.courseName || `Course ${data.courseId || ""}`}</p>
           </div>
         </div>
@@ -2169,8 +2171,8 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
             <span className="section-kicker">Before your first quiz</span>
             <h2 id="student-ready-title">Check this computer when you have a few minutes</h2>
             <p>
-              The optional check confirms your Canvas connection and that Safe Exam Browser can open the school setup
-              file.
+              The optional check confirms your Canvas connection and that Safe Online Exam can open the school setup
+              file in Safe Exam Browser.
             </p>
             {readinessBannerError && (
               <p className="field-error" role="alert">
@@ -2200,7 +2202,7 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
         <div className="list-header">
           <div>
             <h2>Quizzes</h2>
-            <p>Open each quiz in Safe Exam Browser.</p>
+            <p>Open each quiz with Safe Online Exam.</p>
           </div>
         </div>
         <div className="content-list">
@@ -2213,7 +2215,7 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
                   <p>{quiz.quizTypeDisplay || "Canvas quiz"}</p>
                 </div>
               </div>
-              <span className="status-pill enabled">SEB required</span>
+              <span className="status-pill enabled">Safe Online Exam required</span>
               <SebLaunchButton
                 grantUrl={quiz.configGrantUrl || quiz.configUrl}
                 token={data.configGrantToken}
@@ -2223,8 +2225,8 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
           ))}
           {quizzes.length === 0 && (
             <EmptyState
-              title="No SEB quizzes are active"
-              message="Your instructor has not enabled Safe Exam Browser for a quiz in this course."
+              title="No Safe Online Exam quizzes are active"
+              message="Your instructor has not enabled Safe Online Exam for a quiz in this course."
             />
           )}
         </div>
@@ -2312,7 +2314,7 @@ function InstructorSetupWizard({
       description:
         enabledAssessmentCount > 0
           ? `${enabledAssessmentCount} assessment${enabledAssessmentCount === 1 ? " is" : "s are"} already enabled. Finish this guide, then use the course list whenever you need to adjust one.`
-          : "Finish this guide, then choose an assessment from the course list to enable Safe Exam Browser."
+          : "Finish this guide, then choose an assessment from the course list to enable Safe Online Exam."
     }
   }[step];
 
@@ -2329,7 +2331,7 @@ function InstructorSetupWizard({
         <header className="dialog-header">
           <div>
             <span className="section-kicker">Guided course setup</span>
-            <h2 id="setup-wizard-title">Set up Safe Exam Browser</h2>
+            <h2 id="setup-wizard-title">Set up Safe Online Exam</h2>
           </div>
           {!required && (
             <button
@@ -2433,11 +2435,9 @@ function AdminSetupPage({ data }: { data: Record<string, any> }) {
     <main className="app-shell service-shell setup-center">
       <header className="topbar">
         <div className="topbar-title">
-          <div className="brand-mark">
-            <Shield size={20} />
-          </div>
+          <BrandMark />
           <div>
-            <h1>Canvas SEB setup</h1>
+            <h1>Safe Online Exam setup</h1>
             <p>A role-by-role rollout guide for the Canvas integration.</p>
           </div>
         </div>
@@ -2493,8 +2493,8 @@ function AdminSetupPage({ data }: { data: Record<string, any> }) {
           <h2>Student</h2>
           <strong>Connect and check</strong>
           <p>
-            Connect Canvas once from course navigation. The optional setup check confirms that SEB can open the school
-            configuration on that computer.
+            Connect Canvas once from course navigation. The optional setup check confirms that Safe Online Exam can open
+            the school configuration on that computer.
           </p>
         </article>
       </section>
@@ -2523,7 +2523,8 @@ function AdminSetupPage({ data }: { data: Record<string, any> }) {
             </li>
             <li>
               Load the detector script through the active Canvas theme. Then have an instructor configure course
-              defaults and a student complete connection, setup check, and a real SEB launch before broader rollout.
+              defaults and a student complete connection, setup check, and a real Safe Online Exam launch before broader
+              rollout.
             </li>
           </ol>
         </section>
@@ -2592,7 +2593,7 @@ function SebSetupCheckDialog({
         <header className="dialog-header">
           <div>
             <span className="section-kicker">Device setup</span>
-            <h2 id="setup-check-title">Safe Exam Browser setup check</h2>
+            <h2 id="setup-check-title">Safe Online Exam setup check</h2>
           </div>
           <button
             ref={closeButtonRef}
@@ -2606,7 +2607,7 @@ function SebSetupCheckDialog({
           </button>
         </header>
         <div className="setup-check-intro">
-          <p>This confirms your Canvas connection, then opens a short SEB test on this computer.</p>
+          <p>This confirms your Canvas connection, then opens a short Safe Online Exam test on this computer.</p>
           <div className="instruction-list">
             <div>
               <strong>1</strong>
@@ -2614,11 +2615,11 @@ function SebSetupCheckDialog({
             </div>
             <div>
               <strong>2</strong>
-              <span>Keep the SEB check open until every item has finished.</span>
+              <span>Keep the Safe Online Exam check open until every item has finished.</span>
             </div>
             <div>
               <strong>3</strong>
-              <span>Wait for the check page to say SEB is checked and working, then quit SEB.</span>
+              <span>Wait for the check page to say Safe Online Exam is ready, then quit the secure browser.</span>
             </div>
           </div>
         </div>
@@ -2627,7 +2628,7 @@ function SebSetupCheckDialog({
             Cancel
           </button>
           <button className="button primary" type="button" disabled={checking} onClick={() => void launchCheck()}>
-            <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch SEB check"}
+            <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch Safe Online Exam check"}
           </button>
         </footer>
         {error && (
@@ -2742,12 +2743,12 @@ function SettingsDialog({
       });
       if (redirectForAuth(saved)) return;
       if (!saved.success && !saved.setting) {
-        setError(apiMessage(saved, "SEB settings could not be saved."));
+        setError(apiMessage(saved, "Safe Online Exam settings could not be saved."));
         return;
       }
       onSaved(saved);
     } catch (saveError) {
-      setError(errorMessage(saveError, "SEB settings could not be saved."));
+      setError(errorMessage(saveError, "Safe Online Exam settings could not be saved."));
     } finally {
       setSaving(false);
     }
@@ -2982,7 +2983,7 @@ function DefaultsDialog({
         <header className="dialog-header">
           <div>
             <span className="section-kicker">Course settings</span>
-            <h2 id="defaults-title">SEB course policy</h2>
+            <h2 id="defaults-title">Safe Online Exam course policy</h2>
           </div>
           <button
             ref={closeButtonRef}
@@ -3111,7 +3112,7 @@ function DefaultsEditor({
             />
             <span>
               <strong>Require a start password</strong>
-              <small>Add a second check before an assessment opens in Safe Exam Browser.</small>
+              <small>Add a second check before an assessment opens in Safe Online Exam.</small>
             </span>
           </label>
           <input
@@ -3135,7 +3136,9 @@ function DefaultsEditor({
             />
             <span>
               <strong>Protect exits with a course password</strong>
-              <small>An exit password is required before SEB can be enabled unless your school supplies one.</small>
+              <small>
+                An exit password is required before Safe Online Exam can be enabled unless your school supplies one.
+              </small>
             </span>
           </label>
           <input
@@ -3264,7 +3267,7 @@ function SettingsSections({
             <small>
               {hasDefaultPassword
                 ? "Otherwise this quiz uses the course or managed server default."
-                : "A course, quiz, or managed server exit password is required while SEB is enabled."}
+                : "A course, quiz, or managed server exit password is required while Safe Online Exam is enabled."}
             </small>
           </span>
         </label>
@@ -3486,7 +3489,9 @@ function ToolEditor({
                   <section className="tool-access-list youtube-video-policy">
                     <div>
                       <strong>Video-only access</strong>
-                      <small>SEB permits only the embedded player, its video stream, and its thumbnails.</small>
+                      <small>
+                        The secure browser permits only the embedded player, its video stream, and its thumbnails.
+                      </small>
                     </div>
                     <p className="tool-launch-url">
                       <span>Video player</span>
@@ -3841,7 +3846,7 @@ function QuizToolSelector({
         <p>
           {selectedIds === null
             ? "This quiz uses the course defaults. Check a box to make a quiz-specific selection."
-            : "This quiz has its own tool selection. Only checked tools will be included in its SEB file."}
+            : "This quiz has its own tool selection. Only checked tools will be included in its Safe Online Exam configuration."}
         </p>
         {selectedIds !== null && (
           <button className="button secondary small" type="button" onClick={() => onChange(null)}>
@@ -3952,8 +3957,8 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
       title="Connect Canvas"
       message={
         (data.onboarding as OnboardingContext | undefined)?.resumeAssessment
-          ? "Connect Canvas once, then return to the Safe Exam Browser quiz you selected."
-          : "Connect Canvas once to open Safe Exam Browser quizzes without signing in again."
+          ? "Connect Canvas once, then return to the Safe Online Exam quiz you selected."
+          : "Connect Canvas once to open Safe Online Exam quizzes without signing in again."
       }
       action={
         <div className="student-action-stack">
@@ -3983,7 +3988,7 @@ function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
     window.location.replace(returnUrl);
   }, [returnUrl]);
 
-  return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Exam Browser Quizzes." />;
+  return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Online Exam." />;
 }
 
 function SebDownloadPage({ data }: { data: Record<string, any> }) {
@@ -3992,11 +3997,11 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
     <>
       <MessagePage
         icon={<Shield />}
-        title="Safe Exam Browser Required"
+        title="Safe Online Exam Required"
         message={
           data.showReadinessPrompt
             ? "Canvas is connected. You can optionally check this computer before opening your quiz."
-            : "Open this assessment in Safe Exam Browser when you are ready. If prompted, allow your browser to open the app."
+            : "Open this assessment with Safe Online Exam when you are ready. If prompted, allow Safe Exam Browser to open."
         }
         action={
           <>
@@ -4006,7 +4011,11 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
             <button className="button secondary" type="button" onClick={() => setShowSetupCheck(true)}>
               <ShieldCheck size={16} /> Setup check
             </button>
-            <SebLaunchButton grantUrl={data.configGrantUrl} token={data.configGrantToken} label="Open SEB" />
+            <SebLaunchButton
+              grantUrl={data.configGrantUrl}
+              token={data.configGrantToken}
+              label="Open Safe Online Exam"
+            />
           </>
         }
       />
@@ -4044,7 +4053,7 @@ function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?
 
   const launch = async () => {
     if (!grantUrl || !token || launching) {
-      setError("Reopen the Safe Exam Browser tool from Canvas and try again.");
+      setError("Reopen Safe Online Exam from Canvas and try again.");
       return;
     }
     setLaunching(true);
@@ -4090,10 +4099,7 @@ function SebLaunchButton({ grantUrl, token, label }: { grantUrl?: string; token?
       const recovery = onboardingRecovery(launchError, "student");
       setError(
         recovery?.message ||
-          errorMessage(
-            launchError,
-            "Safe Exam Browser could not prepare this quiz. Reopen it from Canvas and try again"
-          )
+          errorMessage(launchError, "Safe Online Exam could not prepare this quiz. Reopen it from Canvas and try again")
       );
     } finally {
       setLaunching(false);
@@ -4126,13 +4132,13 @@ function SebLaunchingPage({ data }: { data: Record<string, any> }) {
   return (
     <MessagePage
       icon={<Shield />}
-      title="Opening Safe Exam Browser"
-      message="Approve the browser prompt to open SEB. You can return to your Canvas course with the button below."
+      title="Opening Safe Online Exam"
+      message="Approve the browser prompt to open Safe Online Exam. You can return to your Canvas course with the button below."
       action={
         <>
           {sebLaunchUrl && (
             <a className="button primary" href={sebLaunchUrl}>
-              <ExternalLink size={16} /> Open SEB
+              <ExternalLink size={16} /> Open Safe Online Exam
             </a>
           )}
           {returnUrl && (
@@ -4154,14 +4160,14 @@ function SebExitPage({ data }: { data: Record<string, any> }) {
       title="Assessment Complete"
       message={
         quitUrl
-          ? "SEB will close this session automatically. Use the button if it stays open."
-          : "Return to the submitted assessment results page to finish closing Safe Exam Browser."
+          ? "Safe Online Exam will close this session automatically. Use the button if it stays open."
+          : "Return to the submitted assessment results page to finish closing Safe Online Exam."
       }
       action={
         quitUrl ? (
           <AutoRedirectAction
             url={quitUrl}
-            label="Quit Safe Exam Browser"
+            label="Quit Safe Online Exam"
             icon={<LogOut size={16} />}
             seconds={2}
             linkId="sebQuitLink"
@@ -4231,8 +4237,8 @@ function SebQuitPage({ data }: { data: Record<string, any> }) {
   return (
     <MessagePage
       icon={<LogOut />}
-      title="Safe Exam Browser Closing"
-      message="SEB should close this session. Use the button again if this window remains open."
+      title="Safe Online Exam Closing"
+      message="Safe Online Exam should close this session. Use the button again if this window remains open."
       action={
         <a className="button primary" id="sebLegacyQuitLink" href={data.legacyQuitUrl || data.quitUrl}>
           Quit again
@@ -4255,7 +4261,7 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
   const [checks, setChecks] = useState<SetupCheckItem[]>([
     {
       id: "config-opened",
-      label: "SEB setup configuration opened",
+      label: "Safe Online Exam setup configuration opened",
       detail: data.configEncryptionEnabled
         ? "The certificate-protected setup file opened successfully."
         : "The setup file opened successfully. Certificate encryption is disabled for this environment.",
@@ -4264,7 +4270,7 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
     {
       id: "seb-runtime",
       label: "Safe Exam Browser detected",
-      detail: "Checking the SEB runtime and browser identity.",
+      detail: "Checking the Safe Exam Browser runtime and browser identity.",
       status: "pending"
     },
     {
@@ -4276,12 +4282,12 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
     {
       id: "connectivity",
       label: "LTI service is reachable",
-      detail: "Checking secure connectivity to the SEB integration service.",
+      detail: "Checking secure connectivity to the Safe Online Exam service.",
       status: "pending"
     },
     {
       id: "config-key",
-      label: "SEB Config Key verified",
+      label: "Configuration key verified",
       detail: "Checking that this exact setup configuration can be verified by the server.",
       status: "pending"
     }
@@ -4312,7 +4318,9 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
       update(
         "seb-runtime",
         sebDetected ? "pass" : "fail",
-        sebDetected ? "SEB runtime signals are present." : "This page is not running inside Safe Exam Browser."
+        sebDetected
+          ? "Safe Exam Browser is ready for Safe Online Exam."
+          : "This page is not running inside Safe Exam Browser."
       );
 
       try {
@@ -4325,7 +4333,7 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
         }
         update("storage", "pass", "Session storage is working.");
       } catch {
-        update("storage", "fail", "Session storage is unavailable in this SEB session.");
+        update("storage", "fail", "Session storage is unavailable in this secure-browser session.");
       }
 
       try {
@@ -4334,9 +4342,9 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
         if (!response.ok || health.status !== "UP") {
           throw new Error("Health check failed.");
         }
-        update("connectivity", "pass", "The SEB integration service responded normally.");
+        update("connectivity", "pass", "The Safe Online Exam service responded normally.");
       } catch {
-        update("connectivity", "fail", "The SEB integration service could not be reached from this session.");
+        update("connectivity", "fail", "The Safe Online Exam service could not be reached from this session.");
       }
 
       try {
@@ -4359,7 +4367,7 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
         if (!response.ok) {
           throw new Error("Config Key proof rejected.");
         }
-        update("config-key", "pass", "The server verified this exact SEB setup configuration.");
+        update("config-key", "pass", "The server verified this exact Safe Online Exam setup configuration.");
       } catch {
         update(
           "config-key",
@@ -4384,10 +4392,10 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
         <div className={clsx("message-icon", passed && "success", complete && !passed && "error")}>
           <ShieldCheck size={22} />
         </div>
-        <h1>{passed ? "SEB is checked and working" : "Checking Safe Exam Browser"}</h1>
+        <h1>{passed ? "Safe Online Exam is ready" : "Checking Safe Online Exam"}</h1>
         <p>
           {passed
-            ? "This computer can open encrypted SEB configurations and verify them with the Canvas SEB integration."
+            ? "This computer can open encrypted Safe Online Exam configurations and verify them with Safe Online Exam."
             : "Keep this window open while the setup checks run."}
         </p>
         <div className="check-list" role="list">
@@ -4403,7 +4411,7 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
         </div>
         <div className="message-actions">
           <a className={clsx("button", passed ? "primary" : "secondary")} id="sebSetupCheckQuitLink" href={quitUrl}>
-            <LogOut size={16} /> Quit Safe Exam Browser
+            <LogOut size={16} /> Quit Safe Online Exam
           </a>
         </div>
       </section>
@@ -4622,7 +4630,7 @@ function apiMessage(body: Record<string, any>, fallback: string): string {
 }
 
 function clientRequestError(code?: string, status?: number): ClientRequestError {
-  const error = new Error("Safe Exam Browser request failed") as ClientRequestError;
+  const error = new Error("Safe Online Exam request failed") as ClientRequestError;
   error.code = code;
   error.status = status;
   error.userFacing = true;
@@ -4641,12 +4649,12 @@ function safeErrorMessage(code: string | undefined, status: number | undefined, 
       return "Canvas could not confirm this connection right now. Check your connection and try again in a moment.";
     case "INVALID_SEB_CONFIG_PROOF":
     case "SEB_CONFIGURATION_UNAVAILABLE":
-      return "This Safe Exam Browser configuration is no longer current. Return to Canvas and reopen the quiz from the course tool.";
+      return "This Safe Online Exam configuration is no longer current. Return to Canvas and reopen the quiz from the course tool.";
     case "ASSESSMENT_NOT_FOUND":
     case "ASSESSMENT_SETTING_NOT_FOUND":
       return "That assessment is no longer available. Refresh the course content, then try again.";
     case "SEB_NOT_ENABLED":
-      return "Safe Exam Browser is not enabled for that assessment. Enable it in the course settings, then try again.";
+      return "Safe Online Exam is not enabled for that assessment. Enable it in the course settings, then try again.";
     case "INVALID_SEB_URL_POLICY":
     case "INVALID_SEB_DOMAIN_POLICY":
     case "INVALID_SEB_TOOL_SELECTION":
@@ -4654,7 +4662,7 @@ function safeErrorMessage(code: string | undefined, status: number | undefined, 
     case "INVALID_SEB_TOOL_POLICY":
       return "We could not save a tool because its start page or an extra link is not allowed. Check the tool’s highlighted URL fields and try again.";
     case "NETWORK_ERROR":
-      return "We could not reach the Safe Exam Browser service. Check your connection and try again.";
+      return "We could not reach the Safe Online Exam service. Check your connection and try again.";
     default:
       break;
   }
@@ -4671,7 +4679,7 @@ function safeErrorMessage(code: string | undefined, status: number | undefined, 
     return "Too many requests were made in a short time. Wait a moment, then try again.";
   }
   if (status && status >= 500) {
-    return "The Safe Exam Browser service could not complete that request. Try again in a moment; contact your administrator if it continues.";
+    return "The Safe Online Exam service could not complete that request. Try again in a moment; contact your administrator if it continues.";
   }
   return `${fallback.replace(/\.$/u, "")}. Check your connection and try again.`;
 }
@@ -4703,7 +4711,7 @@ function onboardingRecovery(value: unknown, audience: "instructor" | "student"):
   if (code === "CANVAS_SESSION_AUTHORIZATION_REQUIRED") {
     return audience === "student"
       ? {
-          message: "Your Canvas connection needs to be renewed before Safe Exam Browser can open this quiz.",
+          message: "Your Canvas connection needs to be renewed before Safe Online Exam can open this quiz.",
           actionLabel: "Reconnect Canvas",
           actionUrl: "/api/student-session-authorize"
         }
@@ -4716,7 +4724,8 @@ function onboardingRecovery(value: unknown, audience: "instructor" | "student"):
   }
   if (code === "INVALID_SEB_CONFIG_PROOF" || code === "SEB_CONFIGURATION_UNAVAILABLE") {
     return {
-      message: "This SEB configuration is no longer current. Return to Canvas and reopen the quiz from the course tool."
+      message:
+        "This Safe Online Exam configuration is no longer current. Return to Canvas and reopen the quiz from the course tool."
     };
   }
   return null;

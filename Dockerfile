@@ -39,6 +39,7 @@ ENV PORT=8080
 COPY --from=production-deps /app/package*.json ./
 COPY --from=production-deps /app/node_modules ./node_modules
 COPY --from=verify /app/dist ./dist
+COPY --from=verify /app/LICENSE /app/NOTICE /app/COMMERCIAL-LICENSE.md /app/CONTRIBUTING.md /app/THIRD-PARTY-NOTICES.md /app/TRADEMARKS.md ./
 
 EXPOSE 8080
 

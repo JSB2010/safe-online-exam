@@ -531,7 +531,9 @@ describe("SebController route contracts", () => {
     expect(firstResponse.status).toHaveBeenCalledWith(200);
     expect(firstResponse.send).toHaveBeenCalledWith(download);
     expect(secondResponse.status).toHaveBeenCalledWith(400);
-    expect(secondResponse.send).toHaveBeenCalledWith("Unable to generate the SEB setup check configuration.");
+    expect(secondResponse.send).toHaveBeenCalledWith(
+      "Unable to generate the Safe Online Exam setup check configuration."
+    );
     expect(sebConfig.prepareSebConfigurationDownload).toHaveBeenCalledTimes(1);
     expect(sebConfig.assertConfigurationDownloadReady).toHaveBeenCalledTimes(2);
   });

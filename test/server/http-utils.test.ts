@@ -37,7 +37,11 @@ describe("HTTP helpers", () => {
     expect(appShell).not.toContain("window.__SEB_BOOTSTRAP__");
     expect(appShell).toContain('<script type="module" src="/assets/index.js"></script>');
     expect(appShell).toContain('<link rel="stylesheet" href="/assets/index.css">');
-    expect(appShell).toContain('aria-label="Loading Safe Exam Browser"');
+    expect(appShell).toContain('<link rel="icon" type="image/x-icon" href="/favicon.ico" />');
+    expect(appShell).toContain(
+      '<link rel="icon" type="image/png" sizes="192x192" href="/assets/safe-online-exam-icon.png" />'
+    );
+    expect(appShell).toContain('aria-label="Loading Safe Online Exam"');
     expect(appShell).toContain('class="seb-app-loading__row"');
     expect(appShell).not.toContain("crossorigin");
     expect(renderFallbackHtml("A < B", "<p>Body</p>")).toContain("A &lt; B");

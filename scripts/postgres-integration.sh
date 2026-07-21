@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_name="seb-canvas-postgres-test"
+project_name="safe-online-exam-postgres-test"
 
 cleanup() {
   docker compose -p "$project_name" -f compose.postgres-test.yaml down --volumes --remove-orphans

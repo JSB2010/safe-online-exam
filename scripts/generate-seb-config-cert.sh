@@ -5,7 +5,7 @@ umask 077
 OUT_DIR="${1:-.local/seb-certs}"
 NAME="${SEB_CERT_NAME:-seb-config-encryption-local}"
 P12_PASSWORD_FILE="${SEB_CERT_P12_PASSWORD_FILE:-${2:-}}"
-SUBJECT="${SEB_CERT_SUBJECT:-/CN=SEB Canvas LTI Local Config Encryption/O=Local Development}"
+SUBJECT="${SEB_CERT_SUBJECT:-/CN=Safe Online Exam Local Config Encryption/O=Local Development}"
 DAYS="${SEB_CERT_DAYS:-3650}"
 
 if [[ -z "$P12_PASSWORD_FILE" || ! -f "$P12_PASSWORD_FILE" || ! -s "$P12_PASSWORD_FILE" ]]; then

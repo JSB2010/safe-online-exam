@@ -25,7 +25,7 @@ mkdir -p .local
 openssl rand -base64 48 > .local/seb-cert-p12-password
 
 SEB_CERT_NAME=seb-config-encryption \
-SEB_CERT_SUBJECT="/CN=Canvas SEB Configuration Encryption/O=Organization" \
+SEB_CERT_SUBJECT="/CN=Safe Online Exam Configuration Encryption/O=Organization" \
 bash scripts/generate-seb-config-cert.sh \
   .local/seb-certs \
   .local/seb-cert-p12-password

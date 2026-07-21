@@ -4,7 +4,7 @@ Canonical guidance for coding agents working in this repository.
 
 ## First Principles
 
-This is a TypeScript Canvas Safe Exam Browser LTI integration. Preserve its Canvas LTI URLs, Cloud Run service names, PostgreSQL schema/data behavior, SEB configuration behavior, and public compatibility endpoints.
+This is a TypeScript Safe Online Exam Canvas LTI integration. Preserve its Canvas LTI URLs, Cloud Run service names, PostgreSQL schema/data behavior, SEB configuration behavior, and public compatibility endpoints.
 
 Preserve behavior before refactoring. Canvas LTI URLs, Cloud Run service names, migration ordering, PostgreSQL concurrency semantics, SEB configuration behavior, and public compatibility endpoints are part of the product contract.
 

@@ -446,7 +446,7 @@ describe("LtiController role routing", () => {
   it("returns Canvas LTI dynamic registration metadata", () => {
     const metadata = controller.ltiConfig();
     expect(metadata).toMatchObject({
-      title: "Safe Exam Browser Canvas Integration",
+      title: "Safe Online Exam",
       oidc_initiation_url: "https://tool.example.test/lti/login",
       target_link_uri: "https://tool.example.test/lti/launch",
       public_jwk_url: "https://tool.example.test/.well-known/jwks.json",

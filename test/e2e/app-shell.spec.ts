@@ -31,7 +31,7 @@ test("serves detector scripts from stable and Canvas-theme paths", async ({ requ
     const response = await request.get(path);
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toContain("application/javascript");
-    expect(await response.text()).toContain("Canvas SEB Detector");
+    expect(await response.text()).toContain("Safe Online Exam detector");
   }
 
   const loader = await request.get("/js/canvas-seb-theme-loader.js");
@@ -60,7 +60,7 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
   expect(ltiConfig.status()).toBe(200);
   const ltiBody = (await ltiConfig.json()) as Record<string, any>;
   expect(ltiBody).toMatchObject({
-    title: "Safe Exam Browser Canvas Integration",
+    title: "Safe Online Exam",
     oidc_initiation_url: "http://localhost:8080/lti/login",
     target_link_uri: "http://localhost:8080/lti/launch",
     public_jwk_url: "http://localhost:8080/.well-known/jwks.json"
@@ -85,6 +85,10 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
       canvas_root_account_id: "$Canvas.rootAccount.id"
     })
   });
+
+  const favicon = await request.get("/favicon.ico");
+  expect(favicon.status()).toBe(200);
+  expect(favicon.headers()["content-type"]).toContain("image/x-icon");
 });
 
 test("renders the responsive root-account administrator workspace and controlled secret reveal", async ({ page }) => {
@@ -234,7 +238,7 @@ test("renders the responsive root-account administrator workspace and controlled
 
   await page.goto("/admin-preview");
 
-  await expect(page.getByRole("heading", { name: "Safe Exam Browser Admin" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Safe Online Exam Admin" })).toBeVisible();
   const coursesTab = page.getByRole("tab", { name: /Courses/u });
   await expect(coursesTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
@@ -328,14 +332,14 @@ test("keeps SEB config and proof endpoints defensive without seeded assessment d
   expect(proof.status()).toBe(404);
   await expect(proof.json()).resolves.toMatchObject({
     success: false,
-    message: "No SEB setting found for this quiz"
+    message: "No Safe Online Exam setting found for this quiz"
   });
 
   const accessCode = await request.get("/api/seb/access-code/course-1/23455");
   expect(accessCode.status()).toBe(405);
   await expect(accessCode.json()).resolves.toMatchObject({
     success: false,
-    message: "Use POST to redeem an SEB access proof"
+    message: "Use POST to redeem a Safe Online Exam access proof"
   });
 
   const forgedRedemption = await request.post("/api/seb/access-code/course-1/23455", {
@@ -344,7 +348,7 @@ test("keeps SEB config and proof endpoints defensive without seeded assessment d
   expect(forgedRedemption.status()).toBe(404);
   await expect(forgedRedemption.json()).resolves.toMatchObject({
     success: false,
-    message: "No SEB setting found for this quiz"
+    message: "No Safe Online Exam setting found for this quiz"
   });
 });
 
@@ -364,7 +368,7 @@ test("serves the public, role-separated Canvas setup center", async ({ page }) =
 
   await page.goto("/setup");
 
-  await expect(page.getByRole("heading", { name: "Canvas SEB setup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Safe Online Exam setup" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Canvas administrator" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Instructor" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Student" })).toBeVisible();

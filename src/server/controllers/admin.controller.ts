@@ -493,7 +493,7 @@ export class AdminController {
     void principal;
     const setting = await this.courseSettings.resetQuizQuitPasswordToDefault(courseId, assessmentId);
     if (!setting) {
-      return apiError(404, "No Safe Exam Browser setting was found for this assessment", {
+      return apiError(404, "No Safe Online Exam setting was found for this assessment", {
         error_code: "ASSESSMENT_SETTING_NOT_FOUND"
       });
     }
@@ -524,7 +524,7 @@ export class AdminController {
             "account_admin"
           );
     if (!setting) {
-      return apiError(409, "SEB is not enabled for this assessment", { error_code: "SEB_NOT_ENABLED" });
+      return apiError(409, "Safe Online Exam is not enabled for this assessment", { error_code: "SEB_NOT_ENABLED" });
     }
     return { success: true, setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword) };
   }
@@ -540,7 +540,7 @@ export class AdminController {
     void principal;
     const setting = await this.courseSettings.resetQuizToDefaults(courseId, assessment.id);
     if (!setting) {
-      return apiError(404, "No Safe Exam Browser setting was found for this assessment", {
+      return apiError(404, "No Safe Online Exam setting was found for this assessment", {
         error_code: "ASSESSMENT_SETTING_NOT_FOUND"
       });
     }

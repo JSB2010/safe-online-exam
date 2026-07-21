@@ -353,7 +353,7 @@ export class QuizController {
         );
         return {
           success: true,
-          message: "SEB enabled.",
+          message: "Safe Online Exam enabled.",
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
         };
       }
@@ -365,7 +365,7 @@ export class QuizController {
       );
       return {
         success: true,
-        message: "SEB enabled.",
+        message: "Safe Online Exam enabled.",
         setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
       };
     } catch (error) {
@@ -388,7 +388,7 @@ export class QuizController {
     await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
     const setting = await this.courseSettings.resetQuizToDefaults(courseId, quizId);
     if (!setting) {
-      return apiError(404, "No SEB setting found for this quiz");
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
     }
     return {
       success: true,
@@ -415,14 +415,14 @@ export class QuizController {
         );
         return {
           success: true,
-          message: "SEB disabled.",
+          message: "Safe Online Exam disabled.",
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
         };
       }
       const setting = await this.assessments.disableSebWithAccessCode(courseId, quizId, userId);
       return {
         success: true,
-        message: "SEB disabled.",
+        message: "Safe Online Exam disabled.",
         setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
       };
     } catch (error) {
@@ -459,11 +459,11 @@ export class QuizController {
         ? await this.assessments.regenerateContentAccessCode(courseId, quizId, parsed.assignmentId, userId)
         : await this.assessments.regenerateQuizAccessCode(courseId, quizId, userId);
       if (!setting) {
-        return apiError(404, "SEB is not enabled for this quiz");
+        return apiError(404, "Safe Online Exam is not enabled for this quiz");
       }
       return {
         success: true,
-        message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
+        message: "Safe Online Exam access code regenerated. Students should reopen the quiz from Canvas."
       };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {

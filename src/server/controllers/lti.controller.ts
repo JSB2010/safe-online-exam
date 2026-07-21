@@ -80,7 +80,7 @@ export class LtiController {
         .send(
           renderFallbackHtml(
             "LTI Launch Error",
-            "<h1>LTI Launch Error</h1><p>Canvas could not complete this launch. Return to the course and open the Safe Exam Browser tool again. If the problem continues, ask a Canvas administrator to verify the app installation.</p>"
+            "<h1>LTI Launch Error</h1><p>Canvas could not complete this launch. Return to the course and open Safe Online Exam again. If the problem continues, ask a Canvas administrator to verify the app installation.</p>"
           )
         );
       return;
@@ -158,7 +158,7 @@ export class LtiController {
           .send(
             renderFallbackHtml(
               "Deep Linking Removed",
-              "<h1>Deep Linking Removed</h1><p>Use the Safe Exam Browser course navigation app to manage SEB requirements.</p>"
+              "<h1>Deep Linking Removed</h1><p>Use the Safe Online Exam course navigation app to manage secure assessment requirements.</p>"
             )
           );
         return;
@@ -312,8 +312,8 @@ export class LtiController {
       canvas_user_is_root_account_admin: "$Canvas.user.isRootAccountAdmin"
     };
     return {
-      title: "Safe Exam Browser Canvas Integration",
-      description: "Require Safe Exam Browser for Canvas Classic Quizzes and New Quizzes.",
+      title: "Safe Online Exam",
+      description: "Require Safe Online Exam with Safe Exam Browser for Canvas Classic Quizzes and New Quizzes.",
       oidc_initiation_url: `${toolUrl}/lti/login`,
       target_link_uri: `${toolUrl}/lti/launch`,
       public_jwk_url: `${toolUrl}/.well-known/jwks.json`,
@@ -323,7 +323,7 @@ export class LtiController {
           platform: "canvas.instructure.com",
           privacy_level: "public",
           settings: {
-            text: "Safe Exam Browser",
+            text: "Safe Online Exam",
             placements: [
               {
                 placement: "course_navigation",
@@ -338,7 +338,7 @@ export class LtiController {
                 placement: "account_navigation",
                 message_type: "LtiResourceLinkRequest",
                 target_link_uri: `${toolUrl}/lti/launch`,
-                text: "Safe Exam Browser Admin",
+                text: "Safe Online Exam Admin",
                 visibility: "admins",
                 required_permissions: "manage_course_content_edit",
                 default: "enabled",
@@ -370,7 +370,7 @@ export class LtiController {
       });
     }
     return renderAppShell({
-      title: "Safe Exam Browser Administration",
+      title: "Safe Online Exam Administration",
       view: "admin",
       initialData: {
         userId: principal.canvasUserId,
@@ -496,7 +496,7 @@ export class LtiController {
       // the complete catalog is persisted without mutating ordinary reads.
       const courseDefaults = await this.courseSettings.ensureDefaults(courseId);
       return renderAppShell({
-        title: "Safe Exam Browser Manager",
+        title: "Safe Online Exam",
         view: "teacher",
         initialData: {
           courseId,
@@ -593,7 +593,7 @@ export class LtiController {
     const configGrantToken = this.configGrantActionToken(request, principal);
     if (target?.setting?.sebRequired && !this.sebDetector.isRequestFromSeb(request, target.setting)) {
       return renderAppShell({
-        title: "Safe Exam Browser Required",
+        title: "Safe Online Exam Required",
         view: "seb-required",
         initialData: {
           courseId,
@@ -604,7 +604,7 @@ export class LtiController {
       });
     }
     return renderAppShell({
-      title: "Safe Exam Browser Quizzes",
+      title: "Safe Online Exam",
       view: "student",
       initialData: {
         courseId,

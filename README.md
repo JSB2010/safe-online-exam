@@ -1,6 +1,6 @@
-# Canvas Safe Exam Browser LTI
+# Safe Online Exam
 
-Canvas Safe Exam Browser LTI connects Canvas assessments to [Safe Exam Browser (SEB)](https://safeexambrowser.org/). Instructors configure Classic Quizzes and New Quizzes from a Canvas course-navigation placement, while root-account Canvas administrators receive a separate school-wide account-navigation dashboard. Students receive a certificate-encrypted `.seb` configuration, and the Canvas access code is released only after Config Key proof succeeds.
+Safe Online Exam connects Canvas assessments to [Safe Exam Browser (SEB)](https://safeexambrowser.org/). Instructors configure Classic Quizzes and New Quizzes from a Canvas course-navigation placement, while root-account Canvas administrators receive a separate school-wide account-navigation dashboard. Students receive a certificate-encrypted `.seb` configuration, and the Canvas access code is released only after Config Key proof succeeds.
 
 The application supports Canvas LTI 1.3, Canvas OAuth, protected Canvas session handoff, approved web exam tools, one-time access proof, and the Canvas detector script. It runs on Node.js 24 with PostgreSQL 17 and can be deployed with Docker Compose, on a conventional container platform, or on Google Cloud Run with Cloud SQL.
 
@@ -65,7 +65,7 @@ The same container is portable to a conventional VPS or any platform that provid
 Build a versioned image and create a private environment file:
 
 ```bash
-docker build -t canvas-seb-lti:local .
+docker build -t safe-online-exam:local .
 cp .env.compose.example .env
 chmod 600 .env
 mkdir -p secrets
@@ -74,7 +74,7 @@ mkdir -p secrets
 Set real Canvas/LTI values and strong secrets in `.env`, place the public SEB encryption certificate at `secrets/seb-config-encryption.crt.pem`, then start the stack:
 
 ```bash
-APP_IMAGE=canvas-seb-lti:local docker compose up -d --wait
+APP_IMAGE=safe-online-exam:local docker compose up -d --wait
 curl -fsS http://127.0.0.1:8080/health
 curl -fsS http://127.0.0.1:8080/ready
 ```
@@ -145,3 +145,15 @@ Classic Quiz content IDs are `classicquiz_{quizId}`. New Quiz content IDs are `n
 - The matching SEB configuration private identity belongs only on managed clients, never in the server image or runtime.
 - The app refuses `USE_IN_MEMORY_STORE=true`, debug mode, unsafe URLs, and disabled configuration encryption in hardened runtimes.
 - Relevant settings changes invalidate downloaded configurations; require a fresh `.seb` file.
+
+## License And Commercial Use
+
+Safe Online Exam is source-available under the [PolyForm Noncommercial
+License 1.0.0](LICENSE), not an OSI-approved open-source license. Eligible
+educational institutions may self-host and modify the software for their own
+use without purchasing a commercial license.
+
+Commercial managed hosting, installation, implementation, support, resale,
+and competing hosted services are reserved for separately licensed use. See
+[Commercial licensing](COMMERCIAL-LICENSE.md), [third-party notices](THIRD-PARTY-NOTICES.md),
+[contributing](CONTRIBUTING.md), and [trademark guidance](TRADEMARKS.md).

@@ -1,6 +1,6 @@
 # Canvas Setup
 
-This guide installs a deployed Canvas Safe Exam Browser LTI service in Canvas. Complete [Configuration](configuration.md) and the initial deployment first: the public `TOOL_URL` must be final before creating Canvas registrations. For a new Google Cloud installation, follow the stable-URL and two-pass LTI bootstrap in [Deployment](deployment.md); for Docker/VPS, establish DNS and TLS before creating the keys.
+This guide installs a deployed Safe Online Exam service in Canvas. Complete [Configuration](configuration.md) and the initial deployment first: the public `TOOL_URL` must be final before creating Canvas registrations. For a new Google Cloud installation, follow the stable-URL and two-pass LTI bootstrap in [Deployment](deployment.md); for Docker/VPS, establish DNS and TLS before creating the keys.
 
 The service is portable across Canvas environments, but each deployment is configured for one Canvas origin. Keep separate client IDs, deployment IDs, OAuth credentials, PostgreSQL databases, secrets, and service URLs for environments that must remain isolated.
 
@@ -209,8 +209,8 @@ The service also exposes `/api/seb/canvas-detector.js` for an existing installat
 
 Use separate administrator, instructor, and student accounts.
 
-1. As a root-account administrator, retrieve `/lti/config`, confirm Canvas has the intended client and deployment IDs, and confirm both **Safe Exam Browser Admin** in root-account navigation and the course app in a target course.
-2. Open **Safe Exam Browser Admin**, complete its separate Canvas authorization, verify school courses load, create and assign a school tool preset, refresh a test course, reveal and rotate a test exit password, reset an assessment exit password, rotate its access code, and confirm each operation appears in recent administrator activity.
+1. As a root-account administrator, retrieve `/lti/config`, confirm Canvas has the intended client and deployment IDs, and confirm both **Safe Online Exam Admin** in root-account navigation and the course app in a target course.
+2. Open **Safe Online Exam Admin**, complete its separate Canvas authorization, verify school courses load, create and assign a school tool preset, refresh a test course, reveal and rotate a test exit password, reset an assessment exit password, rotate its access code, and confirm each operation appears in recent administrator activity.
 3. As an instructor, launch the tool from Canvas, complete OAuth, refresh assessments, enable the assigned school tool, create one quiz-only tool, set an effective exit-password policy, and enable one Classic Quiz and one New Quiz.
 4. In a normal browser, open each assessment page and verify that the theme loaded the detector script without console errors.
 5. As a student, launch the course-navigation tool, complete the one-time Canvas connection, and run the optional setup check.

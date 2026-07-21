@@ -367,7 +367,7 @@ describe("SEB config downloads", () => {
 
       expect(response.status).toHaveBeenCalledWith(400);
       expect(response.sent).toBe(
-        "Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings."
+        "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
       );
     });
   });
@@ -380,7 +380,7 @@ describe("SEB config downloads", () => {
 
         expect(response.status).toHaveBeenCalledWith(400);
         expect(response.sent).toBe(
-          "Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings."
+          "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
         );
       },
       { encryptionEnabled: true }
@@ -462,7 +462,7 @@ describe("SEB config downloads", () => {
         expect(first.sent).toBeInstanceOf(Buffer);
         expect(second.status).toHaveBeenCalledWith(400);
         expect(second.sent).toBe(
-          "Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings."
+          "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
         );
         expect(prepareDownload).toHaveBeenCalledTimes(1);
         expect(readinessCheck).toHaveBeenCalledTimes(2);

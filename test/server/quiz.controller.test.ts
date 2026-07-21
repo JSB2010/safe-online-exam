@@ -322,7 +322,7 @@ describe("QuizController", () => {
 
     expect(result).toMatchObject({
       success: true,
-      message: "SEB enabled.",
+      message: "Safe Online Exam enabled.",
       setting: {
         contentId: "newquiz:course-1:assignment-99",
         hasAccessCode: true,
@@ -370,7 +370,7 @@ describe("QuizController", () => {
 
     expect(result).toMatchObject({
       success: true,
-      message: "SEB disabled.",
+      message: "Safe Online Exam disabled.",
       setting: { hasAccessCode: false, hasConfigKey: false }
     });
     expect(assessments.disableContentSebWithAccessCode).toHaveBeenCalledWith(
@@ -398,7 +398,7 @@ describe("QuizController", () => {
 
     expect(result).toEqual({
       success: true,
-      message: "SEB access code regenerated. Students should reopen the quiz from Canvas."
+      message: "Safe Online Exam access code regenerated. Students should reopen the quiz from Canvas."
     });
     expect(JSON.stringify(result)).not.toContain("OLD-CODE");
     expect(JSON.stringify(result)).not.toContain("stored-config-key");

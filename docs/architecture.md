@@ -2,7 +2,7 @@
 
 ## System Purpose
 
-Canvas Safe Exam Browser LTI is an LTI 1.3 tool for requiring Safe Exam Browser (SEB) on Canvas Classic Quizzes and New Quizzes. It has four connected responsibilities:
+Safe Online Exam is an LTI 1.3 tool for requiring Safe Exam Browser (SEB) on Canvas Classic Quizzes and New Quizzes. It has four connected responsibilities:
 
 1. Give instructors a course-scoped interface for discovering Canvas assessments and managing SEB policy.
 2. Give verified root-account administrators a Canvas-embedded, school-wide recovery interface with controlled password reveal, active-course connection, and bulk tool rollout.

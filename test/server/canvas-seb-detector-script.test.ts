@@ -12,7 +12,7 @@ const DETECTOR_CONFIG_KEY = new SebConfigKeyService().computeConfigKey(
   Buffer.from(plist.build({ startURL: `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/take` }))
 );
 
-describe("Canvas SEB detector script", () => {
+describe("Safe Online Exam detector script", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -26,7 +26,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?user_id=7288",
       body: `
-        <nav><a aria-label="Safe Exam Browser" href="/courses/11825/external_tools/44">Safe Exam Browser</a></nav>
+        <nav><a aria-label="Safe Online Exam" href="/courses/11825/external_tools/44">Safe Online Exam</a></nav>
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
           <form id="access_code_form">
@@ -38,7 +38,7 @@ describe("Canvas SEB detector script", () => {
 
     await context.runDetector();
 
-    expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
+    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
 
     const directLaunchUrl = new URL(openSebLink!.href);
@@ -49,7 +49,7 @@ describe("Canvas SEB detector script", () => {
     expect(directLaunchUrl.searchParams.get("launch_url")).toBe(
       "https://tool.example.edu/seb/launch/classicquiz_23455"
     );
-    expect(openSebLink?.textContent).toContain("Open in Safe Exam Browser");
+    expect(openSebLink?.textContent).toContain("Open with Safe Online Exam");
     expect(openSebLink?.rel).toContain("noopener");
     expect(context.document.querySelector('a[href^="sebs://"]')).toBeNull();
     expect(context.document.getElementById("seb-launch-countdown-text")).toBeNull();
@@ -80,9 +80,9 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
 
-    expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
+    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
     expect(context.console.log).not.toHaveBeenCalledWith(
-      "Canvas SEB Detector:",
+      "Safe Online Exam detector:",
       "Quiz completion handler active for Course 11825, Quiz 23455"
     );
   });
@@ -91,7 +91,7 @@ describe("Canvas SEB detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/assignments/991/taking/31299",
       body: `
-        <nav><a aria-label="Safe Exam Browser" href="/courses/11825/external_tools/44">Safe Exam Browser</a></nav>
+        <nav><a aria-label="Safe Online Exam" href="/courses/11825/external_tools/44">Safe Online Exam</a></nav>
         <main>
           <h1>New Quiz</h1>
           <section id="attempt-history">Attempt History: Attempt 1</section>
@@ -104,7 +104,7 @@ describe("Canvas SEB detector script", () => {
 
     await context.runDetector();
 
-    expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
+    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
     expect(context.document.body.textContent).toContain("review previous attempts");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
     const directLaunchUrl = new URL(openSebLink!.href);
@@ -140,7 +140,7 @@ describe("Canvas SEB detector script", () => {
     await context.runDetector();
 
     expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
-    expect(context.console.log.mock.calls.every((call) => call[0] === "Canvas SEB Detector:")).toBe(true);
+    expect(context.console.log.mock.calls.every((call) => call[0] === "Safe Online Exam detector:")).toBe(true);
     expect(context.console.log.mock.calls.every((call) => ["info", "success", "warn", "error"].includes(call[1]))).toBe(
       true
     );
@@ -160,7 +160,7 @@ describe("Canvas SEB detector script", () => {
     await flushPromises();
     await vi.advanceTimersByTimeAsync(400);
 
-    expect(context.document.body.textContent).toContain("Safe Exam Browser Required");
+    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
     expect(openSebLink?.href).toBe("https://canvas.example.edu/courses/11825");
 
@@ -295,7 +295,7 @@ describe("Canvas SEB detector script", () => {
 
   it("shows a stale or modified SEB configuration message when proof is rejected", async () => {
     const message =
-      "This SEB configuration could not be verified. It may be stale, incorrect, or modified. Reopen the quiz from Canvas using the Safe Exam Browser link.";
+      "This Safe Online Exam configuration could not be verified. It may be stale, incorrect, or modified. Reopen the quiz from Canvas using the Safe Online Exam link.";
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?user_id=7288",
       userAgent: "Mozilla/5.0 SafeExamBrowser",
@@ -1784,10 +1784,10 @@ describe("Canvas SEB detector script", () => {
       expect(context.console.log).toHaveBeenCalled();
       expect(
         context.console.log.mock.calls.every(
-          (call) => call[0] === "Canvas SEB Detector:" && ["info", "success", "warn", "error"].includes(call[1])
+          (call) => call[0] === "Safe Online Exam detector:" && ["info", "success", "warn", "error"].includes(call[1])
         )
       ).toBe(true);
-      expect(JSON.stringify(context.console.log.mock.calls)).not.toContain("Canvas SEB Detector Script Loaded!");
+      expect(JSON.stringify(context.console.log.mock.calls)).not.toContain("Safe Online Exam detector loaded!");
     }
   });
 

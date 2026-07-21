@@ -121,7 +121,7 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 1. Confirm `/health`, `/lti/config`, JWKS, and detector endpoints on the deployed URL.
 2. Confirm Canvas stores the current LTI client ID, deployment ID, login URL, target link URI, and JWKS URL from `/lti/config`.
 3. Confirm the API OAuth key has the complete application and administrator scope set, including the exact session-token scope, described in [Canvas setup](canvas-setup.md).
-4. Open **Safe Exam Browser Admin** from root-account navigation and complete its separate OAuth authorization.
+4. Open **Safe Online Exam Admin** from root-account navigation and complete its separate OAuth authorization.
 5. Confirm only Canvas-authorized root-account courses appear. Create and assign a school tool preset; refresh one test course; reveal a password and verify it disappears automatically; rotate the course exit password; reset one assessment exit password; rotate its code; toggle SEB; and verify the secret-free activity records.
 6. Repeat the launch as an instructor, sub-account administrator, and student and confirm the root-account dashboard is denied.
 7. Confirm the active Canvas theme loads the detector asset on a Classic Quiz `/take` page and a New Quiz assignment route.

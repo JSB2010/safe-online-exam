@@ -94,7 +94,9 @@ export class SebController {
     const principal = verifiedLtiPrincipal(request);
     const normalizedQuizId = normalizedPublicSebContentId(quizId);
     if (!principal || principal.courseId !== courseId || !normalizedQuizId || parseNewQuizContentId(normalizedQuizId)) {
-      response.status(403).send("Launch this assessment from Canvas before downloading its SEB configuration.");
+      response
+        .status(403)
+        .send("Launch this assessment from Canvas before downloading its Safe Online Exam configuration.");
       return;
     }
     const setting = await this.assessments.getSebSettingForQuiz(normalizedQuizId);
@@ -110,7 +112,7 @@ export class SebController {
     const configPath = configGrantEndpoint(courseId, canonicalContentId);
     response.send(
       renderAppShell({
-        title: "Safe Exam Browser Required",
+        title: "Safe Online Exam Required",
         view: "seb-required",
         initialData: {
           courseId,
@@ -138,14 +140,14 @@ export class SebController {
     requireSebConfigGrantRequestIntegrity(request, this.config, principal);
     if (requiresStudentSessionHandoff(principal)) {
       if (!this.canvasApi || !(await this.canvasApi.hasSessionTokenAccess(principal.canvasUserId))) {
-        return apiError(403, "Canvas connection is required before opening Safe Exam Browser.", {
+        return apiError(403, "Canvas connection is required before opening Safe Online Exam.", {
           error_code: "CANVAS_SESSION_AUTHORIZATION_REQUIRED"
         });
       }
     }
     const target = await this.resolveConfigGrantTarget(courseId, contentId);
     if (!target) {
-      return apiError(404, "SEB configuration is unavailable");
+      return apiError(404, "Safe Online Exam configuration is unavailable");
     }
     try {
       const grant = await this.configGrants.mintGrant(
@@ -187,7 +189,7 @@ export class SebController {
       return { success: true, checks: { canvasSessionAuthorization: true } };
     } catch (error) {
       if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
-        return apiError(403, "Canvas connection must be completed again before using Safe Exam Browser.", {
+        return apiError(403, "Canvas connection must be completed again before using Safe Online Exam.", {
           error_code: "CANVAS_SESSION_AUTHORIZATION_REQUIRED"
         });
       }
@@ -266,7 +268,7 @@ export class SebController {
           "content-disposition",
           `attachment; filename="quiz_${sanitizeFileToken(courseId)}_${sanitizeFileToken(canonicalContentId)}.seb"`
         )
-        .setHeader("content-description", "Safe Exam Browser Configuration")
+        .setHeader("content-description", "Safe Online Exam Configuration")
         .setHeader("x-content-type-options", "nosniff")
         .setHeader("cache-control", "private, no-store")
         .setHeader("referrer-policy", "no-referrer")
@@ -277,13 +279,15 @@ export class SebController {
         response
           .status(403)
           .setHeader("cache-control", "no-store")
-          .send("Canvas connection is no longer available. Reopen Safe Exam Browser Quizzes from Canvas to continue.");
+          .send("Canvas connection is no longer available. Reopen Safe Online Exam from Canvas to continue.");
         return;
       }
       response
         .status(400)
         .setHeader("cache-control", "no-store")
-        .send("Unable to generate this SEB configuration. Ask the instructor to verify the quiz settings.");
+        .send(
+          "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
+        );
     }
   }
 
@@ -314,7 +318,7 @@ export class SebController {
   downloadConfigEncryptionCertificatePem(@Res() response: Response): void {
     const certificate = this.sebConfig.getEncryptionCertificate();
     if (!certificate) {
-      response.status(404).send("SEB config encryption certificate is not configured");
+      response.status(404).send("Safe Online Exam configuration encryption certificate is not configured");
       return;
     }
     response
@@ -329,7 +333,7 @@ export class SebController {
   downloadConfigEncryptionCertificateDer(@Res() response: Response): void {
     const certificate = this.sebConfig.getEncryptionCertificate();
     if (!certificate) {
-      response.status(404).send("SEB config encryption certificate is not configured");
+      response.status(404).send("Safe Online Exam configuration encryption certificate is not configured");
       return;
     }
     response
@@ -361,7 +365,7 @@ export class SebController {
         .status(200)
         .type("application/octet-stream")
         .setHeader("content-disposition", 'attachment; filename="seb-setup-check.seb"')
-        .setHeader("content-description", "Safe Exam Browser Setup Check Configuration")
+        .setHeader("content-description", "Safe Online Exam Setup Check Configuration")
         .setHeader("x-content-type-options", "nosniff")
         .setHeader("cache-control", "private, no-store")
         .setHeader("referrer-policy", "no-referrer")
@@ -369,7 +373,7 @@ export class SebController {
         .send(generated);
     } catch {
       this.setupCheckConfigCache = undefined;
-      response.status(400).send("Unable to generate the SEB setup check configuration.");
+      response.status(400).send("Unable to generate the Safe Online Exam setup check configuration.");
     }
   }
 
@@ -378,7 +382,7 @@ export class SebController {
     const quitUrl = absoluteUrl(request, "/seb/check/quit", this.config.getApplicationBaseUrl());
     response.send(
       renderAppShell({
-        title: "SEB Setup Check",
+        title: "Safe Online Exam Setup Check",
         view: "seb-check",
         initialData: {
           proofUrl: "/api/seb/check-proof",
@@ -405,7 +409,7 @@ export class SebController {
     if (!validUrl || !validProof) {
       return apiError(
         403,
-        "This SEB setup check configuration could not be verified. Reopen the setup check from Canvas using the Safe Exam Browser button.",
+        "This Safe Online Exam setup check configuration could not be verified. Reopen the setup check from Canvas using the Safe Online Exam button.",
         { error_code: "INVALID_SEB_SETUP_CHECK_PROOF" }
       );
     }
@@ -426,7 +430,7 @@ export class SebController {
       .setHeader("x-seb-exit", "setup-check")
       .send(
         renderAppShell({
-          title: "Safe Exam Browser Closing",
+          title: "Safe Online Exam Closing",
           view: "seb-quit",
           initialData: { quitUrl, legacyQuitUrl: quitUrl, courseId: "setup", quizId: "check" }
         })
@@ -523,7 +527,7 @@ export class SebController {
       !consumePublicBudget(request, "seb-tools", 1_200) ||
       !(await this.distributedAdmission.consumeRequestIp(request, "seb-tools-ip", 2_400))
     ) {
-      return apiError(429, "Too many SEB tool requests", { error_code: "RATE_LIMITED" });
+      return apiError(429, "Too many Safe Online Exam tool requests", { error_code: "RATE_LIMITED" });
     }
     const setting = await this.resolveSebSetting(courseId, normalizedContentId);
     if (!setting?.sebRequired || !setting.enabled || !this.effectiveQuitPassword(setting)) {
@@ -546,13 +550,13 @@ export class SebController {
     setSensitiveResponseHeaders(response);
     const normalizedContentId = normalizedPublicSebContentId(quizId);
     if (!normalizedContentId) {
-      return apiError(404, "No SEB setting found for this quiz");
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
     }
     if (
       !consumePublicBudget(request, "seb-proof", 1_200) ||
       !(await this.distributedAdmission.consumeRequestIp(request, "seb-proof-ip", 2_400))
     ) {
-      return apiError(429, "Too many SEB proof requests", { error_code: "RATE_LIMITED" });
+      return apiError(429, "Too many Safe Online Exam proof requests", { error_code: "RATE_LIMITED" });
     }
     const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
     const target = canonicalContentId ? await this.resolveConfigGrantTarget(courseId, canonicalContentId) : null;
@@ -567,7 +571,7 @@ export class SebController {
       (setting.startPassword && !setting.configKeySalt) ||
       !canonicalContentId
     ) {
-      return apiError(404, "No SEB setting found for this quiz");
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
     }
     const expectedConfigKey = await this.currentConfigKey(courseId, normalizedContentId, setting);
     const validBodyUrl = !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, normalizedContentId);
@@ -606,7 +610,7 @@ export class SebController {
       );
       return apiError(
         403,
-        "This SEB configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh SEB configuration from Canvas and reopen the quiz.",
+        "This Safe Online Exam configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh configuration from Canvas and reopen the quiz.",
         { error_code: "INVALID_SEB_CONFIG_PROOF" }
       );
     }
@@ -633,13 +637,13 @@ export class SebController {
     setSensitiveResponseHeaders(response);
     const normalizedContentId = normalizedPublicSebContentId(quizId);
     if (!normalizedContentId || !proofToken || !/^[A-Za-z0-9_-]{43}$/u.test(proofToken) || !request) {
-      return apiError(403, "Invalid or expired SEB access proof");
+      return apiError(403, "Invalid or expired Safe Online Exam access proof");
     }
     if (
       !consumePublicBudget(request, "seb-access-code", 1_200) ||
       !(await this.distributedAdmission.consumeRequestIp(request, "seb-access-code-ip", 2_400))
     ) {
-      return apiError(429, "Too many SEB access-code requests", { error_code: "RATE_LIMITED" });
+      return apiError(429, "Too many Safe Online Exam access-code requests", { error_code: "RATE_LIMITED" });
     }
     const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
     const target = canonicalContentId ? await this.resolveConfigGrantTarget(courseId, canonicalContentId) : null;
@@ -652,10 +656,10 @@ export class SebController {
       (setting.startPassword && !setting.configKeySalt) ||
       !canonicalContentId
     ) {
-      return apiError(404, "No SEB setting found for this quiz");
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
     }
     if (!setting.sebRequired || !setting.enabled) {
-      return { success: false, message: "SEB not required for this quiz" };
+      return { success: false, message: "Safe Online Exam is not required for this quiz" };
     }
     if (!setting.accessCode) {
       return { success: false, message: "No access code configured for this quiz" };
@@ -667,7 +671,7 @@ export class SebController {
       target.settingsFingerprint
     );
     if (!digest) {
-      return apiError(403, "Invalid or expired SEB access proof");
+      return apiError(403, "Invalid or expired Safe Online Exam access proof");
     }
     const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, digest);
     return {
@@ -709,7 +713,7 @@ export class SebController {
 
   @Get("/api/seb/access-code/:courseId/:quizId")
   accessCodeGet(): Record<string, unknown> {
-    return apiError(405, "Use POST to redeem an SEB access proof");
+    return apiError(405, "Use POST to redeem a Safe Online Exam access proof");
   }
 
   @Get("/seb/exit/session/:courseId/:quizId/:grant")
@@ -792,7 +796,7 @@ export class SebController {
       .setHeader("cache-control", "no-store")
       .send(
         renderFallbackHtml(
-          "Use Safe Exam Browser to Quit",
+          "Use Safe Online Exam to Quit",
           "<h1>Automatic quit is unavailable</h1><p>Use Safe Exam Browser's native Quit command and the proctor-provided quit password.</p>"
         )
       );
@@ -851,7 +855,7 @@ export class SebController {
       .setHeader("x-seb-exit", "submitted")
       .send(
         renderAppShell({
-          title: "Safe Exam Browser Closing",
+          title: "Safe Online Exam Closing",
           view: "seb-quit",
           initialData: { courseId, quizId: contentId, quitUrl, legacyQuitUrl: quitUrl }
         })
@@ -962,7 +966,7 @@ export class SebController {
         .send(
           renderFallbackHtml(
             "Canvas Launch Required",
-            "<h1>Canvas Launch Required</h1><p>Please open this assessment from Canvas before using Safe Exam Browser.</p>"
+            "<h1>Canvas Launch Required</h1><p>Please open this assessment from Canvas before using Safe Online Exam.</p>"
           )
         );
       return;
@@ -1010,7 +1014,10 @@ export class SebController {
     if (directLaunch) {
       const target = await this.resolveConfigGrantTarget(resolved.content.courseId, resolvedCanonicalContentId);
       if (!target) {
-        response.status(404).setHeader("cache-control", "no-store").send("SEB configuration is unavailable");
+        response
+          .status(404)
+          .setHeader("cache-control", "no-store")
+          .send("Safe Online Exam configuration is unavailable");
         return;
       }
       try {
@@ -1033,7 +1040,7 @@ export class SebController {
           .setHeader("referrer-policy", "no-referrer")
           .send(
             renderAppShell({
-              title: "Opening Safe Exam Browser",
+              title: "Opening Safe Online Exam",
               view: "seb-launching",
               initialData: {
                 sebLaunchUrl: sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl()),
@@ -1056,7 +1063,7 @@ export class SebController {
         : false;
     response.send(
       renderAppShell({
-        title: "Safe Exam Browser Required",
+        title: "Safe Online Exam Required",
         view: "seb-download",
         initialData: {
           content: resolved.content,
@@ -1173,7 +1180,7 @@ export class SebController {
       .setHeader("referrer-policy", "no-referrer")
       .send(
         renderAppShell({
-          title: "Safe Exam Browser Required",
+          title: "Safe Online Exam Required",
           view: "seb-download",
           initialData: {
             courseId,

@@ -74,11 +74,11 @@ gcloud artifacts repositories describe "$REPOSITORY" \
 gcloud artifacts repositories create "$REPOSITORY" \
   --location="$REGION" \
   --repository-format=docker \
-  --description="Canvas SEB application images"
+  --description="Safe Online Exam application images"
 
 gcloud iam service-accounts describe "$RUNTIME_SA" >/dev/null 2>&1 || \
 gcloud iam service-accounts create "$RUNTIME_SA_NAME" \
-  --display-name="Canvas SEB development runtime"
+  --display-name="Safe Online Exam development runtime"
 
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}" \
@@ -181,7 +181,7 @@ node scripts/generate-lti-private-key.mjs "$SERVICE" \
 
 openssl rand -base64 48 >"$BOOTSTRAP_DIR/seb_p12_password"
 SEB_CERT_NAME=seb-config-encryption \
-SEB_CERT_SUBJECT="/CN=Canvas SEB Configuration Encryption/O=Organization" \
+SEB_CERT_SUBJECT="/CN=Safe Online Exam Configuration Encryption/O=Organization" \
 bash scripts/generate-seb-config-cert.sh \
   "$BOOTSTRAP_DIR/seb-certs" \
   "$BOOTSTRAP_DIR/seb_p12_password"
@@ -365,7 +365,7 @@ export CLEANUP_JOB="${SERVICE}-cleanup"
 
 gcloud iam service-accounts describe "$SCHEDULER_SA" >/dev/null 2>&1 || \
 gcloud iam service-accounts create "$SCHEDULER_SA_NAME" \
-  --display-name="Canvas SEB cleanup scheduler"
+  --display-name="Safe Online Exam cleanup scheduler"
 
 gcloud run jobs add-iam-policy-binding "$CLEANUP_JOB" \
   --region="$REGION" \
@@ -534,8 +534,8 @@ Clone or copy the repository to a protected application directory and verify Doc
 ```bash
 docker version
 docker compose version
-git clone YOUR_REPOSITORY_URL seb-canvas-lti
-cd seb-canvas-lti
+git clone https://github.com/JSB2010/safe-online-exam.git safe-online-exam
+cd safe-online-exam
 ```
 
 ### 2. Build Or Select An Image
@@ -543,14 +543,14 @@ cd seb-canvas-lti
 Build locally with an immutable version or commit tag:
 
 ```bash
-export APP_IMAGE="canvas-seb-lti:$(git rev-parse --short=12 HEAD)"
+export APP_IMAGE="safe-online-exam:$(git rev-parse --short=12 HEAD)"
 docker build --tag "$APP_IMAGE" .
 ```
 
 Alternatively, use a trusted published image by digest:
 
 ```bash
-export APP_IMAGE="ghcr.io/your-organization/seb-canvas-lti@sha256:REPLACE_WITH_DIGEST"
+export APP_IMAGE="ghcr.io/jsb2010/safe-online-exam@sha256:REPLACE_WITH_DIGEST"
 docker pull "$APP_IMAGE"
 ```
 
@@ -577,7 +577,7 @@ printf '%s' 'your-canvas-api-client-secret' >secrets/canvas_api_client_secret
 mkdir -p .local
 openssl rand -base64 48 >.local/docker-seb-p12-password
 SEB_CERT_NAME=seb-config-encryption \
-SEB_CERT_SUBJECT="/CN=Canvas SEB Configuration Encryption/O=Organization" \
+SEB_CERT_SUBJECT="/CN=Safe Online Exam Configuration Encryption/O=Organization" \
 bash scripts/generate-seb-config-cert.sh \
   .local/docker-seb-certs \
   .local/docker-seb-p12-password
@@ -682,7 +682,7 @@ Complete the detector theme-loader and acceptance steps in [Canvas setup](canvas
 Run cleanup at least daily. A root-owned systemd timer is preferred; cron is acceptable on a simple host. Example root crontab entry, using absolute paths:
 
 ```cron
-17 3 * * * cd /opt/seb-canvas-lti && /usr/bin/docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml --profile maintenance run --rm cleanup >>/var/log/canvas-seb-cleanup.log 2>&1
+17 3 * * * cd /opt/safe-online-exam && /usr/bin/docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml --profile maintenance run --rm cleanup >>/var/log/safe-online-exam-cleanup.log 2>&1
 ```
 
 Test the exact command interactively first:
@@ -757,8 +757,8 @@ Inspect the eight application/runtime tables plus `schema_migrations`, and exerc
 Build or pull the new immutable image, update `APP_IMAGE` in `.env.secrets`, take a backup, and start the full topology. Compose recreates the migration service for the new image and keeps the application behind its successful completion condition:
 
 ```bash
-docker build --tag canvas-seb-lti:NEW_VERSION .
-# Edit APP_IMAGE in .env.secrets to canvas-seb-lti:NEW_VERSION.
+docker build --tag safe-online-exam:NEW_VERSION .
+# Edit APP_IMAGE in .env.secrets to safe-online-exam:NEW_VERSION.
 
 docker compose \
   --env-file .env.secrets \

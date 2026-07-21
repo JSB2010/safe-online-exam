@@ -14,12 +14,17 @@ export function renderAppShell(options: AppShellOptions): string {
     .replace(/\u2029/gu, "\\u2029");
   const appScriptPath = versionedAssetPath("/assets/index.js");
   const appStylesheetPath = versionedAssetPath("/assets/index.css");
+  const appIconPath = versionedAssetPath("/assets/safe-online-exam-icon.png");
+  const faviconPath = versionedAssetPath("/favicon.ico");
 
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/x-icon" href="${faviconPath}" />
+    <link rel="icon" type="image/png" sizes="192x192" href="${appIconPath}" />
+    <link rel="apple-touch-icon" href="${appIconPath}" />
     <title>${escapeHtml(options.title)}</title>
     <script id="seb-bootstrap" type="application/json">${payload}</script>
     <script type="module" src="${appScriptPath}"></script>
@@ -35,7 +40,7 @@ export function renderAppShell(options: AppShellOptions): string {
     </style>
   </head>
   <body>
-    <div id="root"><main class="seb-app-loading" role="status" aria-live="polite" aria-label="Loading Safe Exam Browser"><section class="seb-app-loading__card"><div class="seb-app-loading__heading"></div><div class="seb-app-loading__line"></div><div class="seb-app-loading__row"></div><div class="seb-app-loading__row"></div><div class="seb-app-loading__row"></div></section></main></div>
+    <div id="root"><main class="seb-app-loading" role="status" aria-live="polite" aria-label="Loading Safe Online Exam"><section class="seb-app-loading__card"><div class="seb-app-loading__heading"></div><div class="seb-app-loading__line"></div><div class="seb-app-loading__row"></div><div class="seb-app-loading__row"></div><div class="seb-app-loading__row"></div></section></main></div>
   </body>
 </html>`;
 }

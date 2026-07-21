@@ -1,4 +1,7 @@
-import { Controller, Get, Header, HttpCode, ServiceUnavailableException } from "@nestjs/common";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Controller, Get, Header, Res, ServiceUnavailableException } from "@nestjs/common";
+import type { Response } from "express";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
@@ -14,7 +17,7 @@ export class HomeController {
   @Header("content-type", "text/html; charset=utf-8")
   home(): string {
     return renderAppShell({
-      title: "Canvas SEB LTI",
+      title: "Safe Online Exam",
       view: "service-status"
     });
   }
@@ -24,7 +27,7 @@ export class HomeController {
   login(): string {
     return renderFallbackHtml(
       "Launch from Canvas",
-      "<h1>Launch from Canvas</h1><p>This tool is available through Canvas. Open the course in Canvas and launch Safe Exam Browser from the configured LTI link.</p>"
+      "<h1>Launch from Canvas</h1><p>This tool is available through Canvas. Open the course in Canvas and launch Safe Online Exam from the configured LTI link.</p>"
     );
   }
 
@@ -43,7 +46,7 @@ export class HomeController {
   private renderSetup(detailed: boolean): string {
     const toolUrl = this.config.getRequiredToolUrl();
     return renderAppShell({
-      title: "Canvas SEB setup",
+      title: "Safe Online Exam setup",
       view: "admin-setup",
       initialData: {
         toolUrl,
@@ -62,8 +65,9 @@ export class HomeController {
   }
 
   @Get("/favicon.ico")
-  @HttpCode(204)
-  favicon(): void {}
+  async favicon(@Res() response: Response): Promise<void> {
+    response.type("image/x-icon").send(await faviconBytes());
+  }
 
   @Get("/ready")
   async ready(): Promise<Record<string, string>> {
@@ -79,4 +83,16 @@ export class HomeController {
   loginHealth(): Record<string, string> {
     return { status: "UP" };
   }
+}
+
+async function faviconBytes(): Promise<Buffer> {
+  for (const path of [join(process.cwd(), "dist/client/favicon.ico"), join(process.cwd(), "public/favicon.ico")]) {
+    try {
+      return await readFile(path);
+    } catch {
+      // The source file is available during development; the built asset is
+      // available in the production image.
+    }
+  }
+  throw new Error("Safe Online Exam favicon is unavailable");
 }

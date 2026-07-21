@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_name="seb-canvas-compose-smoke"
-image="seb-canvas-lti:compose-smoke"
+project_name="safe-online-exam-compose-smoke"
+image="safe-online-exam:compose-smoke"
 temporary_directory="$(mktemp -d)"
 environment_file="$temporary_directory/.env"
 secrets_directory="$temporary_directory/secrets"
@@ -25,7 +25,7 @@ trap cleanup EXIT
 mkdir -p "$secrets_directory"
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-  -subj "/CN=SEB Compose Smoke" \
+  -subj "/CN=Safe Online Exam Compose Smoke" \
   -addext "basicConstraints=critical,CA:FALSE" \
   -addext "keyUsage=critical,keyEncipherment,dataEncipherment" \
   -keyout "$temporary_directory/certificate-private-key.pem" \
