@@ -73,6 +73,8 @@ describe("deployment hardening artifacts", () => {
     expect(bundleReadme).toContain("does not contain application source code");
     expect(dockerfile).toContain("scripts/generate-lti-private-key.mjs");
     expect(source("scripts/compose-smoke.sh")).toContain("compose.caddy.yaml --profile caddy config --quiet");
+    expect(source("scripts/compose-smoke.sh")).toContain('docker run --rm --entrypoint /nodejs/bin/node "$image"');
+    expect(source("scripts/compose-smoke.sh")).not.toContain("node scripts/generate-lti-private-key.mjs compose-smoke");
   });
 
   it("contains no retired document-database runtime dependency or provider", () => {

@@ -24,13 +24,16 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$secrets_directory"
 
+docker build --tag "$image" .
+
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
   -subj "/CN=Safe Online Exam Compose Smoke" \
   -addext "basicConstraints=critical,CA:FALSE" \
   -addext "keyUsage=critical,keyEncipherment,dataEncipherment" \
   -keyout "$temporary_directory/certificate-private-key.pem" \
   -out "$secrets_directory/seb-config-encryption.crt.pem" >/dev/null 2>&1
-lti_private_key="$(node scripts/generate-lti-private-key.mjs compose-smoke)"
+lti_private_key="$(docker run --rm --entrypoint /nodejs/bin/node "$image" \
+  /app/scripts/generate-lti-private-key.mjs compose-smoke)"
 printf '%s' "$lti_private_key" >"$secrets_directory/lti_private_key"
 printf '%s' "compose-api-secret" >"$secrets_directory/canvas_api_client_secret"
 printf '%s' "compose-database-password" >"$secrets_directory/database_password"
@@ -72,7 +75,6 @@ chmod 600 "$environment_file"
 "${compose_command[@]}" config --quiet
 "${compose_command[@]}" -f compose.caddy.yaml --profile caddy config --quiet
 
-docker build --tag "$image" .
 "${compose_command[@]}" up --detach --wait
 curl --fail --silent --show-error http://127.0.0.1:18080/health >/dev/null
 curl --fail --silent --show-error http://127.0.0.1:18080/ready >/dev/null
