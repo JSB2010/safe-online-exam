@@ -22,6 +22,7 @@ describe("deployment hardening artifacts", () => {
     expect(compose).toContain("/ready");
     const postgresService = compose.slice(compose.indexOf("  postgres:"), compose.indexOf("  migrate:"));
     expect(postgresService).not.toContain("ports:");
+    expect(dockerfile).toContain("FROM node:24-bookworm-slim AS base");
     expect(dockerfile).toContain("distroless/nodejs24-debian13:nonroot");
     expect(dockerfile).not.toMatch(/apt-get[\s\S]{0,100}postgres/iu);
   });
@@ -195,6 +196,8 @@ describe("deployment hardening artifacts", () => {
     expect(dependabot).toContain("package-ecosystem: github-actions");
     expect(dependabot).toContain("package-ecosystem: docker");
     expect(dependabot.match(/interval: weekly/gu)).toHaveLength(2);
+    expect(dependabot).toContain("dependency-name: node");
+    expect(dependabot).toContain("version-update:semver-major");
   });
 
   it("allows a school deployment to configure its own Canvas LTI platform endpoints", () => {

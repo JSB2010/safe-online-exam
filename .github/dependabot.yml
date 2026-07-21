@@ -11,3 +11,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Node 24 is the supported application runtime. Keep receiving image
+    # patches/minor updates, but require an intentional runtime migration for
+    # a new Node major.
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
