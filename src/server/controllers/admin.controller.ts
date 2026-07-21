@@ -11,7 +11,8 @@ import type {
 import {
   normalizeExternalToolAccessRules,
   normalizeExternalTools,
-  parseNewQuizContentId
+  parseNewQuizContentId,
+  YOUTUBE_VIDEO_TOOL_PRESET
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
@@ -1044,7 +1045,7 @@ function normalizedToolPresetInput(body: unknown): {
       id: "school-preset-template",
       label: name,
       enabled: false,
-      preset: null,
+      preset: rawTool.preset === YOUTUBE_VIDEO_TOOL_PRESET ? YOUTUBE_VIDEO_TOOL_PRESET : null,
       adminPresetId: null,
       managedByAdmin: false
     }

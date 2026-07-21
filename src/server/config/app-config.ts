@@ -198,12 +198,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
 
 export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.ProcessEnv): string[] {
   const cloudRunRuntime = isCloudRunRuntime(env);
+  const errors: string[] = [];
   if (!requiresHardenedRuntimeValidation(snapshot, env)) {
-    return [];
+    return errors;
   }
   const runtimeLabel = cloudRunRuntime ? "Cloud Run" : "production";
 
-  const errors: string[] = [];
   requirePresent(
     errors,
     env,

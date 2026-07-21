@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { Controller, Get, Head, Post, Param, Query, Req, Res, Body, Headers } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
+import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
 import {
   allowlistEntriesForExternalTools,
   classicQuizContentId,
   enabledExternalTools,
   extractClassicQuizId,
+  isYouTubeVideoTool,
   parseNewQuizContentId,
+  youtubeVideoId,
   urlRulesToAllowedEntries
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
@@ -511,11 +513,7 @@ export class SebController {
     }
     return {
       success: true,
-      tools: enabledExternalTools(setting.externalTools).map((tool) => ({
-        id: tool.id,
-        label: tool.label,
-        url: tool.url
-      }))
+      tools: this.examToolPayloads(setting.externalTools)
     };
   }
 
@@ -659,12 +657,36 @@ export class SebController {
       accessCode: setting.accessCode,
       exitGrant,
       exitGrantExpiresInSeconds: this.proofService.getExitGrantTtlSeconds(),
-      tools: enabledExternalTools(setting.externalTools).map((tool) => ({
-        id: tool.id,
-        label: tool.label,
-        url: tool.url
-      }))
+      tools: this.examToolPayloads(setting.externalTools)
     };
+  }
+
+  /**
+   * YouTube now requires a Referer or equivalent client identity for embeds.
+   * The server-owned page is the embedding document, so the player receives a
+   * stable HTTPS origin even when SEB opens a tool in a separate window.
+   */
+  @Get("/seb/tool/youtube/:videoId")
+  youtubeTool(@Param("videoId") videoId: string, @Res() response: Response): void {
+    if (!/^[A-Za-z0-9_-]{11}$/u.test(videoId)) {
+      response.status(404).send("Video not found");
+      return;
+    }
+    const appBaseUrl = this.applicationBaseUrl();
+    const origin = new URL(appBaseUrl).origin;
+    const player = new URL(`https://www.youtube.com/embed/${videoId}`);
+    player.searchParams.set("rel", "0");
+    player.searchParams.set("origin", origin);
+    response
+      .status(200)
+      .setHeader("cache-control", "no-store")
+      .setHeader("referrer-policy", "strict-origin-when-cross-origin")
+      .setHeader(
+        "content-security-policy",
+        "default-src 'none'; frame-src https://www.youtube.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+      )
+      .type("html")
+      .send(renderYouTubeToolPage(player.toString()));
   }
 
   @Get("/api/seb/access-code/:courseId/:quizId")
@@ -1192,6 +1214,31 @@ export class SebController {
     return new URL(`/courses/${encodeURIComponent(courseId)}`, this.config.getCanvasDomain()).toString();
   }
 
+  private applicationBaseUrl(): string {
+    const baseUrl = this.config.getApplicationBaseUrl() || this.config.toolUrl;
+    if (!baseUrl) {
+      throw new Error("Application base URL is required for exam tools");
+    }
+    return baseUrl;
+  }
+
+  private examToolPayloads(tools?: ExternalToolConfig[] | null): Array<{ id: string; label: string; url: string }> {
+    return enabledExternalTools(tools).map((tool) => ({
+      id: tool.id,
+      label: tool.label,
+      url: this.examToolLaunchUrl(tool)
+    }));
+  }
+
+  private examToolLaunchUrl(tool: ExternalToolConfig): string {
+    const appBaseUrl = this.applicationBaseUrl();
+    const videoId = isYouTubeVideoTool(tool) ? youtubeVideoId(tool) : null;
+    if (videoId) {
+      return new URL(`/seb/tool/youtube/${videoId}`, appBaseUrl).toString();
+    }
+    return tool.url;
+  }
+
   private async redirectStaleSebLaunchToCanvas(response: Response, contentId: string): Promise<boolean> {
     const canonicalContentId = canonicalSebConfigContentId(contentId);
     if (!canonicalContentId) {
@@ -1581,6 +1628,27 @@ function allowedDomains(setting: QuizSebSetting | ContentSebSetting): string[] {
       ...allowlistEntriesForExternalTools(setting.externalTools)
     ])
   );
+}
+
+function renderYouTubeToolPage(playerUrl: string): string {
+  const src = escapeHtmlAttribute(playerUrl);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>YouTube video</title>
+    <style>html,body,iframe{width:100%;height:100%;margin:0;border:0;background:#000}iframe{display:block}</style>
+  </head>
+  <body>
+    <iframe title="YouTube video" src="${src}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+  </body>
+</html>`;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 }
 
 function proofGenerationDigest(courseId: string, contentId: string, configKey: string, accessCode: string): string {

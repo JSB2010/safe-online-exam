@@ -20,7 +20,8 @@ import {
   defaultCourseSebDefaults,
   extractClassicQuizId,
   normalizeCourseExternalTools,
-  parseNewQuizContentId
+  parseNewQuizContentId,
+  YOUTUBE_VIDEO_TOOL_PRESET
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
@@ -330,7 +331,7 @@ function adminManagedTool(preset: AdminToolPresetRecord): ExternalToolConfig {
       id: `school-${preset.id}`,
       label: preset.name,
       enabled: false,
-      preset: null,
+      preset: preset.tool.preset === YOUTUBE_VIDEO_TOOL_PRESET ? YOUTUBE_VIDEO_TOOL_PRESET : null,
       adminPresetId: preset.id,
       managedByAdmin: true
     }

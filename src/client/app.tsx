@@ -37,9 +37,13 @@ import type {
 import {
   EXTERNAL_TOOL_PRESETS,
   canEnableSebAssessment,
+  isYouTubeVideoTool,
+  isYouTubeUrl,
   legacyDomainsToUrlRules,
   normalizeCourseExternalTools,
-  normalizeUrlRules
+  normalizeYouTubeVideoUrl,
+  normalizeUrlRules,
+  YOUTUBE_VIDEO_TOOL_PRESET
 } from "../shared/models.js";
 
 interface BootstrapPayload {
@@ -1540,10 +1544,22 @@ function AdminToolPresetDialog({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showToolValidationErrors, setShowToolValidationErrors] = useState(false);
+  const youtubeVideo = isYouTubeVideoDefinition(tool);
+  const startUrlError = youtubeVideo
+    ? youtubeVideoValidationMessage(tool.url, showToolValidationErrors)
+    : toolStartUrlValidationMessage(tool.url, showToolValidationErrors);
 
   const save = async () => {
     setSaving(true);
     setError("");
+    const toolError = externalToolsValidationMessage([tool]);
+    if (toolError) {
+      setShowToolValidationErrors(true);
+      setError(`Fix this tool before saving: ${toolError}`);
+      setSaving(false);
+      return;
+    }
     try {
       await onSave({
         name,
@@ -1553,6 +1569,7 @@ function AdminToolPresetDialog({
           label: name,
           url: tool.url,
           enabled: false,
+          preset: tool.preset || null,
           allowedRules: tool.allowedRules || []
         }
       });
@@ -1599,6 +1616,16 @@ function AdminToolPresetDialog({
                     <Calculator size={14} /> {template.label}
                   </button>
                 ))}
+                <button
+                  className="button secondary small"
+                  type="button"
+                  onClick={() => {
+                    setName("YouTube video");
+                    setTool(newYoutubeVideoTool("school-preset-template"));
+                  }}
+                >
+                  <PlayCircle size={14} /> YouTube video
+                </button>
               </div>
             </div>
             <div className="tool-custom-fields">
@@ -1607,12 +1634,19 @@ function AdminToolPresetDialog({
                 <input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
               </label>
               <label>
-                Exact launch URL
+                {youtubeVideo ? "YouTube video link" : "Start page"}
                 <input
                   value={tool.url}
+                  aria-invalid={!!startUrlError}
                   onChange={(event) => setTool((current) => ({ ...current, url: event.target.value }))}
-                  placeholder="https://www.desmos.com/calculator"
+                  placeholder={youtubeVideo ? "Paste a YouTube link" : "https://www.desmos.com/calculator"}
                 />
+                <small>
+                  {youtubeVideo
+                    ? "Paste a watch, share, Shorts, or embed link. Students get only the video player; YouTube sign-in and browsing stay blocked."
+                    : "This is the page students open. It is always allowed exactly as entered."}
+                </small>
+                {startUrlError && <small className="field-error">{startUrlError}</small>}
               </label>
             </div>
             <label>
@@ -1624,45 +1658,59 @@ function AdminToolPresetDialog({
                 placeholder="Approved graphing calculator"
               />
             </label>
-            <div className="tool-access-heading">
-              <div>
-                <strong>Required resource access</strong>
-                <small>Add only the exact assets or paths the tool needs inside SEB.</small>
+            {!youtubeVideo && (
+              <div className="tool-access-heading">
+                <div>
+                  <strong>Extra pages students can use</strong>
+                  <small>Add a page, file, or website only when this tool needs it after opening.</small>
+                </div>
+                <button
+                  className="button secondary small"
+                  type="button"
+                  onClick={() =>
+                    setTool((current) => ({
+                      ...current,
+                      allowedRules: [...(current.allowedRules || []), newToolAccessRule()]
+                    }))
+                  }
+                >
+                  <Plus size={14} /> Add location
+                </button>
               </div>
-              <button
-                className="button secondary small"
-                type="button"
-                onClick={() =>
-                  setTool((current) => ({
-                    ...current,
-                    allowedRules: [...(current.allowedRules || []), newToolAccessRule()]
-                  }))
-                }
-              >
-                <Plus size={14} /> Add resource
-              </button>
-            </div>
-            {(tool.allowedRules || []).map((rule) => (
-              <ToolAccessRuleEditor
-                key={rule.id}
-                rule={rule}
-                disabled={false}
-                onChange={(patch) =>
-                  setTool((current) => ({
-                    ...current,
-                    allowedRules: (current.allowedRules || []).map((entry) =>
-                      entry.id === rule.id ? { ...entry, ...patch } : entry
-                    )
-                  }))
-                }
-                onRemove={() =>
-                  setTool((current) => ({
-                    ...current,
-                    allowedRules: (current.allowedRules || []).filter((entry) => entry.id !== rule.id)
-                  }))
-                }
-              />
-            ))}
+            )}
+            <p className="tool-launch-url">
+              <span>{youtubeVideo ? "Video player" : "Start page"}</span>
+              <code>{tool.url || "Add a secure https:// address"}</code>
+            </p>
+            {youtubeVideo ? (
+              <p className="tool-blocked-note">
+                Only this public video and the player resources it requires are available.
+              </p>
+            ) : (
+              (tool.allowedRules || []).map((rule) => (
+                <ToolAccessRuleEditor
+                  key={rule.id}
+                  rule={rule}
+                  startUrl={tool.url}
+                  showValidationErrors={showToolValidationErrors}
+                  disabled={false}
+                  onChange={(patch) =>
+                    setTool((current) => ({
+                      ...current,
+                      allowedRules: (current.allowedRules || []).map((entry) =>
+                        entry.id === rule.id ? { ...entry, ...patch } : entry
+                      )
+                    }))
+                  }
+                  onRemove={() =>
+                    setTool((current) => ({
+                      ...current,
+                      allowedRules: (current.allowedRules || []).filter((entry) => entry.id !== rule.id)
+                    }))
+                  }
+                />
+              ))
+            )}
           </section>
         </div>
         {error && (
@@ -2637,6 +2685,7 @@ function SettingsDialog({
   const [startPassword, setStartPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showToolValidationErrors, setShowToolValidationErrors] = useState(false);
 
   const customizeUrlRules = (next: SebUrlRule[]) => {
     setUsesDefaults(false);
@@ -2663,6 +2712,13 @@ function SettingsDialog({
   async function save() {
     setSaving(true);
     setError(null);
+    const toolError = externalToolsValidationMessage(quizOnlyTools);
+    if (toolError) {
+      setShowToolValidationErrors(true);
+      setError(`Fix this tool before saving: ${toolError}`);
+      setSaving(false);
+      return;
+    }
     try {
       const body = {
         quizId: item.id,
@@ -2753,8 +2809,10 @@ function SettingsDialog({
           quizOnlyTools={quizOnlyTools}
           setQuizOnlyTools={(tools) => {
             setUsesDefaults(false);
+            setShowToolValidationErrors(false);
             setQuizOnlyTools(tools.map((tool) => ({ ...tool, enabled: true })));
           }}
+          showToolValidationErrors={showToolValidationErrors}
           quitPassword={quitPassword}
           setQuitPassword={customizeQuitPassword}
           startPassword={startPassword}
@@ -2896,10 +2954,19 @@ function DefaultsDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<"password" | "urls" | "tools">(initialSection);
+  const [showToolValidationErrors, setShowToolValidationErrors] = useState(false);
 
   async function save() {
     setSaving(true);
     setError(null);
+    const toolError = externalToolsValidationMessage(draft.externalTools);
+    if (toolError) {
+      setSection("tools");
+      setShowToolValidationErrors(true);
+      setError(`Fix this tool before saving: ${toolError}`);
+      setSaving(false);
+      return;
+    }
     try {
       await onSave(draft);
     } catch (saveError) {
@@ -2971,7 +3038,12 @@ function DefaultsDialog({
               </span>
             </button>
           </nav>
-          <DefaultsEditor draft={draft} setDraft={setDraft} visibleSection={section} />
+          <DefaultsEditor
+            draft={draft}
+            setDraft={setDraft}
+            visibleSection={section}
+            showToolValidationErrors={showToolValidationErrors}
+          />
         </div>
         {error && (
           <div className="notice error">
@@ -2994,11 +3066,13 @@ function DefaultsDialog({
 function DefaultsEditor({
   draft,
   setDraft,
-  visibleSection = "all"
+  visibleSection = "all",
+  showToolValidationErrors = false
 }: {
   draft: CourseSebDefaults;
   setDraft: (value: SetStateAction<CourseSebDefaults>) => void;
   visibleSection?: "all" | "password" | "urls" | "tools";
+  showToolValidationErrors?: boolean;
 }) {
   const showPassword = visibleSection === "all" || visibleSection === "password";
   const showUrls = visibleSection === "all" || visibleSection === "urls";
@@ -3096,6 +3170,7 @@ function DefaultsEditor({
           <ToolEditor
             tools={draft.externalTools}
             onChange={(externalTools) => setDraft((current) => ({ ...current, externalTools }))}
+            showValidationErrors={showToolValidationErrors}
           />
         </section>
       )}
@@ -3120,7 +3195,8 @@ function SettingsSections({
   startPasswordOverride,
   setStartPasswordOverride,
   hasDefaultPassword,
-  hasDefaultStartPassword
+  hasDefaultStartPassword,
+  showToolValidationErrors = false
 }: {
   urlRules: SebUrlRule[];
   setUrlRules: (rules: SebUrlRule[]) => void;
@@ -3139,6 +3215,7 @@ function SettingsSections({
   setStartPasswordOverride: (value: boolean) => void;
   hasDefaultPassword: boolean;
   hasDefaultStartPassword: boolean;
+  showToolValidationErrors?: boolean;
 }) {
   return (
     <div className="settings-stack">
@@ -3225,7 +3302,11 @@ function SettingsSections({
               Add a tool here when it should not appear in the course catalog. Its URL policy applies only to this quiz.
             </small>
           </div>
-          <ToolEditor tools={quizOnlyTools} onChange={setQuizOnlyTools} />
+          <ToolEditor
+            tools={quizOnlyTools}
+            onChange={setQuizOnlyTools}
+            showValidationErrors={showToolValidationErrors}
+          />
         </div>
       </section>
     </div>
@@ -3280,11 +3361,13 @@ function UrlRuleEditor({
 function ToolEditor({
   tools,
   onChange,
-  disabled = false
+  disabled = false,
+  showValidationErrors = false
 }: {
   tools: ExternalToolConfig[];
   onChange: (tools: ExternalToolConfig[]) => void;
   disabled?: boolean;
+  showValidationErrors?: boolean;
 }) {
   const [expandedToolIds, setExpandedToolIds] = useState<string[]>([]);
   const update = (id: string, patch: Partial<ExternalToolConfig>) =>
@@ -3298,22 +3381,36 @@ function ToolEditor({
     onChange([...tools, tool]);
     setExpandedToolIds((current) => [...current, tool.id]);
   };
+  const addYoutubeVideo = () => {
+    const tool = newYoutubeVideoTool();
+    onChange([...tools, tool]);
+    setExpandedToolIds((current) => [...current, tool.id]);
+  };
 
   return (
     <div className="tool-list">
       <div className="tool-list-intro">
         <p>
-          Choose which course tools are available by default. Open a tool only when you need to edit its launch URL or
-          allowed resources.
+          Add the page students should open, then list only the extra pages or files that tool needs in Safe Exam
+          Browser.
         </p>
-        <button className="button secondary small" type="button" disabled={disabled} onClick={addTool}>
-          <Plus size={14} /> Add tool
-        </button>
+        <div className="tool-list-actions">
+          <button className="button secondary small" type="button" disabled={disabled} onClick={addTool}>
+            <Plus size={14} /> Add tool
+          </button>
+          <button className="button secondary small" type="button" disabled={disabled} onClick={addYoutubeVideo}>
+            <PlayCircle size={14} /> Add YouTube video
+          </button>
+        </div>
       </div>
       {tools.map((tool) => {
         const expanded = expandedToolIds.includes(tool.id);
         const definitionLocked = disabled || tool.managedByAdmin === true;
         const detailId = `tool-details-${tool.id}`;
+        const youtubeVideo = isYouTubeVideoDefinition(tool);
+        const startUrlError = youtubeVideo
+          ? youtubeVideoValidationMessage(tool.url, showValidationErrors)
+          : toolStartUrlValidationMessage(tool.url, showValidationErrors);
         return (
           <article className={clsx("tool-card", expanded && "expanded")} key={tool.id}>
             <header className="tool-card-header">
@@ -3324,9 +3421,7 @@ function ToolEditor({
                   disabled={disabled}
                   onChange={(event) => update(tool.id, { enabled: event.target.checked })}
                 />
-                <span className="tool-icon">
-                  <Calculator size={16} />
-                </span>
+                <span className="tool-icon">{youtubeVideo ? <PlayCircle size={16} /> : <Calculator size={16} />}</span>
                 <span>
                   <strong>{tool.label || "New custom tool"}</strong>
                   <small>{tool.enabled ? "Enabled by default" : "Disabled by default"}</small>
@@ -3336,8 +3431,15 @@ function ToolEditor({
                 <span
                   className={clsx("tool-badge", tool.managedByAdmin ? "school" : tool.preset ? "preset" : "custom")}
                 >
-                  {tool.managedByAdmin ? "School preset" : tool.preset ? "Preloaded" : "Custom"}
+                  {tool.managedByAdmin
+                    ? "School preset"
+                    : youtubeVideo
+                      ? "Video"
+                      : tool.preset
+                        ? "Preloaded"
+                        : "Custom"}
                 </span>
+                <small className="tool-access-summary">{toolAccessSummary(tool)}</small>
                 <button
                   className="tool-expand-button"
                   type="button"
@@ -3363,68 +3465,92 @@ function ToolEditor({
                     />
                   </label>
                   <label>
-                    Exact launch URL
+                    {youtubeVideo ? "YouTube video link" : "Start page"}
                     <input
                       value={tool.url}
                       disabled={definitionLocked}
+                      aria-invalid={!!startUrlError}
                       onChange={(event) => update(tool.id, { url: event.target.value })}
-                      placeholder="https://example.edu/tool"
+                      placeholder={youtubeVideo ? "Paste a YouTube link" : "https://example.edu/tool"}
                     />
+                    <small>
+                      {youtubeVideo
+                        ? "Paste a watch, share, Shorts, or embed link. Students can play this video, but cannot sign in or browse YouTube."
+                        : "This is the page students open. It is allowed exactly as entered."}
+                    </small>
+                    {startUrlError && <small className="field-error">{startUrlError}</small>}
                   </label>
                 </div>
 
-                <section className="tool-access-list">
-                  <div className="tool-access-heading">
+                {youtubeVideo ? (
+                  <section className="tool-access-list youtube-video-policy">
                     <div>
-                      <strong>Allowed in SEB</strong>
-                      <small>
-                        The launch page plus these exact resources are the only extra pages this tool can use.
-                      </small>
+                      <strong>Video-only access</strong>
+                      <small>SEB permits only the embedded player, its video stream, and its thumbnails.</small>
                     </div>
-                    <button
-                      className="button secondary small"
-                      type="button"
-                      disabled={definitionLocked}
-                      onClick={() =>
-                        update(tool.id, {
-                          allowedRules: [...(tool.allowedRules || []), newToolAccessRule()]
-                        })
-                      }
-                    >
-                      <Plus size={14} /> Add resource
-                    </button>
-                  </div>
-                  <p className="tool-launch-url">
-                    <code>{tool.url || "Exact launch URL required"}</code>
-                  </p>
-                  {(tool.allowedRules || []).map((rule) => (
-                    <ToolAccessRuleEditor
-                      disabled={definitionLocked}
-                      key={rule.id}
-                      rule={rule}
-                      onChange={(patch) =>
-                        update(tool.id, {
-                          allowedRules: (tool.allowedRules || []).map((entry) =>
-                            entry.id === rule.id ? { ...entry, ...patch } : entry
-                          )
-                        })
-                      }
-                      onRemove={() =>
-                        update(tool.id, {
-                          allowedRules: (tool.allowedRules || []).filter((entry) => entry.id !== rule.id)
-                        })
-                      }
-                    />
-                  ))}
-                  {(tool.allowedRules || []).length === 0 && (
-                    <p className="empty-line">No additional resource paths.</p>
-                  )}
-                  <p className="tool-blocked-note">
-                    {tool.managedByAdmin
-                      ? "This definition is managed by your Canvas administrator. You can enable or disable it for the course."
-                      : "Everything else—including sign-in, saved work, sharing, and other sites—is blocked."}
-                  </p>
-                </section>
+                    <p className="tool-launch-url">
+                      <span>Video player</span>
+                      <code>{normalizeYouTubeVideoUrl(tool.url) || "Paste a valid YouTube video link"}</code>
+                    </p>
+                    <p className="tool-blocked-note">
+                      Private, age-restricted, or sign-in-required videos will not work during an exam.
+                    </p>
+                  </section>
+                ) : (
+                  <section className="tool-access-list">
+                    <div className="tool-access-heading">
+                      <div>
+                        <strong>Extra pages students can use</strong>
+                        <small>Add a page, file, or website only when this tool needs it after opening.</small>
+                      </div>
+                      <button
+                        className="button secondary small"
+                        type="button"
+                        disabled={definitionLocked}
+                        onClick={() =>
+                          update(tool.id, {
+                            allowedRules: [...(tool.allowedRules || []), newToolAccessRule()]
+                          })
+                        }
+                      >
+                        <Plus size={14} /> Add location
+                      </button>
+                    </div>
+                    <p className="tool-launch-url">
+                      <span>Start page</span>
+                      <code>{tool.url || "Add a secure https:// address"}</code>
+                    </p>
+                    {(tool.allowedRules || []).map((rule) => (
+                      <ToolAccessRuleEditor
+                        disabled={definitionLocked}
+                        key={rule.id}
+                        rule={rule}
+                        startUrl={tool.url}
+                        showValidationErrors={showValidationErrors}
+                        onChange={(patch) =>
+                          update(tool.id, {
+                            allowedRules: (tool.allowedRules || []).map((entry) =>
+                              entry.id === rule.id ? { ...entry, ...patch } : entry
+                            )
+                          })
+                        }
+                        onRemove={() =>
+                          update(tool.id, {
+                            allowedRules: (tool.allowedRules || []).filter((entry) => entry.id !== rule.id)
+                          })
+                        }
+                      />
+                    ))}
+                    {(tool.allowedRules || []).length === 0 && (
+                      <p className="empty-line">No additional resource paths.</p>
+                    )}
+                    <p className="tool-blocked-note">
+                      {tool.managedByAdmin
+                        ? "This definition is managed by your Canvas administrator. You can enable or disable it for the course."
+                        : "Anything not listed here is blocked, including unrelated pages and other websites."}
+                    </p>
+                  </section>
+                )}
 
                 {!tool.managedByAdmin && (
                   <footer className="tool-card-actions">
@@ -3450,57 +3576,245 @@ function ToolEditor({
 
 function ToolAccessRuleEditor({
   rule,
+  startUrl,
+  showValidationErrors = false,
   onChange,
   onRemove,
   disabled
 }: {
   rule: ExternalToolAccessRule;
+  startUrl: string;
+  showValidationErrors?: boolean;
   onChange: (patch: Partial<ExternalToolAccessRule>) => void;
   onRemove: () => void;
   disabled: boolean;
 }) {
   const changeMatch = (match: ExternalToolAccessRule["match"]) => {
-    if (
-      match === "domain" &&
-      !window.confirm("Allow every HTTPS page on this domain? This is broader than an exact URL or resource path.")
-    ) {
-      return;
-    }
     onChange({
       match,
-      ...(match === "domain" ? { broadDomainConfirmed: true } : { broadDomainConfirmed: undefined })
+      ...(match === "domain" ? { broadDomainConfirmed: false } : { broadDomainConfirmed: undefined })
     });
   };
+
+  const changeValue = (value: string) => onChange({ value });
+  const addressLabel = rule.match === "domain" ? "Website address" : "Address to allow";
+  const addressPlaceholder =
+    rule.match === "domain"
+      ? "example.edu"
+      : rule.match === "path"
+        ? "https://example.edu/help"
+        : "https://example.edu/page";
+  const validationMessage = toolAccessValidationMessage(rule, showValidationErrors);
+  const addressIsValid = validationMessage === null;
+  const externalHost = externalResourceHost(rule, startUrl);
+
   return (
-    <div className={clsx("tool-access-rule", rule.match === "domain" && "broad")}>
-      <select
-        value={rule.match}
-        disabled={disabled}
-        onChange={(event) => changeMatch(event.target.value as ExternalToolAccessRule["match"])}
-      >
-        <option value="exact">Exact URL</option>
-        <option value="path">Path and children</option>
-        <option value="domain">Whole domain (broad)</option>
-      </select>
-      <input
-        value={rule.value}
-        disabled={disabled}
-        onChange={(event) => onChange({ value: event.target.value })}
-        placeholder={
-          rule.match === "domain"
-            ? "assets.example.edu"
-            : rule.match === "path"
-              ? "https://example.edu/assets/*"
-              : "https://example.edu/resource"
-        }
-      />
-      {!disabled && (
-        <button className="icon-button" type="button" onClick={onRemove} title="Remove allowed resource">
-          <Trash2 size={16} />
-        </button>
+    <fieldset className={clsx("tool-access-rule", rule.match === "domain" && "broad")}>
+      <legend>What should students be able to open?</legend>
+      <div className="tool-access-scope-options">
+        <label className={clsx("tool-access-scope", rule.match === "exact" && "selected")}>
+          <input
+            type="radio"
+            name={`tool-access-scope-${rule.id}`}
+            checked={rule.match === "exact"}
+            disabled={disabled}
+            onChange={() => changeMatch("exact")}
+          />
+          <span>
+            <strong>This one page or file</strong>
+            <small>One specific link</small>
+          </span>
+        </label>
+        <label className={clsx("tool-access-scope", rule.match === "path" && "selected")}>
+          <input
+            type="radio"
+            name={`tool-access-scope-${rule.id}`}
+            checked={rule.match === "path"}
+            disabled={disabled}
+            onChange={() => changeMatch("path")}
+          />
+          <span>
+            <strong>This address and related links</strong>
+            <small>Anything under one web address</small>
+          </span>
+        </label>
+        <label className={clsx("tool-access-scope", rule.match === "domain" && "selected", "broad")}>
+          <input
+            type="radio"
+            name={`tool-access-scope-${rule.id}`}
+            checked={rule.match === "domain"}
+            disabled={disabled}
+            onChange={() => changeMatch("domain")}
+          />
+          <span>
+            <strong>This whole website</strong>
+            <small>Use only when one link is not enough</small>
+          </span>
+        </label>
+      </div>
+      <div className="tool-access-address">
+        <label>
+          {addressLabel}
+          <input
+            value={displayToolAccessValue(rule)}
+            disabled={disabled}
+            aria-invalid={!addressIsValid}
+            onChange={(event) => changeValue(event.target.value)}
+            placeholder={addressPlaceholder}
+          />
+        </label>
+        {!disabled && (
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onRemove}
+            title="Remove this location"
+            aria-label="Remove this location"
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
+      </div>
+      {!!rule.value && !addressIsValid && <p className="field-error">{validationMessage}</p>}
+      <p className="tool-access-preview">{toolAccessPreview(rule)}</p>
+      {externalHost && (
+        <p className="tool-access-external-note" role="status">
+          This is hosted by <strong>{externalHost}</strong>, not the start page’s website. Students will be able to open
+          it during the exam.
+        </p>
       )}
-    </div>
+      {rule.match === "domain" && (
+        <label className="tool-access-confirmation">
+          <input
+            type="checkbox"
+            checked={rule.broadDomainConfirmed === true}
+            disabled={disabled}
+            onChange={(event) => onChange({ broadDomainConfirmed: event.target.checked })}
+          />
+          <span>I understand this lets students open any HTTPS page on this website during the exam.</span>
+        </label>
+      )}
+    </fieldset>
   );
+}
+
+function displayToolAccessValue(rule: ExternalToolAccessRule): string {
+  return rule.match === "path" ? rule.value.replace(/\/\*$/u, "") : rule.value;
+}
+
+function toolStartUrlValidationMessage(value: string, required = false): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return required ? "Enter the HTTPS page students should open." : null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) {
+      return "Use a complete HTTPS address without a username, password, or port.";
+    }
+    if (isYouTubeUrl(value)) {
+      return "Use “Add YouTube video” for a video instead of adding a general YouTube page.";
+    }
+    return null;
+  } catch {
+    return "Enter a complete HTTPS address, such as https://example.edu/tool.";
+  }
+}
+
+function isYouTubeVideoDefinition(tool: Pick<ExternalToolConfig, "preset">): boolean {
+  return tool.preset === YOUTUBE_VIDEO_TOOL_PRESET;
+}
+
+function youtubeVideoValidationMessage(value: string, required = false): string | null {
+  if (!value.trim()) {
+    return required ? "Paste a YouTube watch, share, Shorts, or embed link." : null;
+  }
+  return normalizeYouTubeVideoUrl(value)
+    ? null
+    : "Use one YouTube video link, such as https://youtu.be/VIDEO_ID or https://www.youtube.com/watch?v=VIDEO_ID.";
+}
+
+function toolAccessValidationMessage(rule: ExternalToolAccessRule, required = false): string | null {
+  const value = displayToolAccessValue(rule).trim();
+  if (!value) {
+    return required ? "Enter the page, file, or website students may use." : null;
+  }
+  try {
+    const candidate = rule.match === "domain" && !value.includes("://") ? `https://${value}` : value;
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) {
+      return "Use a complete HTTPS address without a username, password, or port.";
+    }
+    if (isYouTubeUrl(value)) {
+      return "Use “Add YouTube video” for a video instead of adding it as an extra location.";
+    }
+    if (rule.match === "path" && (parsed.pathname === "/" || parsed.search || parsed.hash)) {
+      return "Choose a specific address below the website, such as https://example.edu/help.";
+    }
+    if (rule.match === "domain" && (parsed.pathname !== "/" || parsed.search || parsed.hash)) {
+      return "For a whole website, enter only its address, such as example.edu.";
+    }
+    if (rule.match === "domain" && rule.broadDomainConfirmed !== true) {
+      return "Confirm that students may use this whole website during the exam.";
+    }
+    return null;
+  } catch {
+    return "Enter a complete HTTPS address, such as https://example.edu/page.";
+  }
+}
+
+function externalToolsValidationMessage(tools: ExternalToolConfig[]): string | null {
+  for (const tool of tools) {
+    const label = tool.label.trim() || "This tool";
+    const startError = isYouTubeVideoDefinition(tool)
+      ? youtubeVideoValidationMessage(tool.url, true)
+      : toolStartUrlValidationMessage(tool.url, true);
+    if (startError) {
+      return `${label}: ${startError}`;
+    }
+    for (const rule of tool.allowedRules || []) {
+      const accessError = toolAccessValidationMessage(rule, true);
+      if (accessError) {
+        return `${label}: ${accessError}`;
+      }
+    }
+  }
+  return null;
+}
+
+function toolAccessPreview(rule: ExternalToolAccessRule): string {
+  const value = displayToolAccessValue(rule).trim() || "the address above";
+  if (rule.match === "exact") {
+    return `Students can open only ${value}.`;
+  }
+  if (rule.match === "path") {
+    return `Students can open ${value} and links below that address.`;
+  }
+  return `Students can open any HTTPS page on ${value}.`;
+}
+
+function externalResourceHost(rule: ExternalToolAccessRule, startUrl: string): string | null {
+  const resourceValue = displayToolAccessValue(rule).trim();
+  if (!resourceValue || !startUrl.trim()) {
+    return null;
+  }
+  try {
+    const startHost = new URL(startUrl).hostname.replace(/^www\./u, "").toLowerCase();
+    const resourceUrl =
+      rule.match === "domain" && !resourceValue.includes("://") ? `https://${resourceValue}` : resourceValue;
+    const resourceHost = new URL(resourceUrl).hostname.replace(/^www\./u, "").toLowerCase();
+    return resourceHost && resourceHost !== startHost ? resourceHost : null;
+  } catch {
+    return null;
+  }
+}
+
+function toolAccessSummary(tool: ExternalToolConfig): string {
+  if (isYouTubeVideoTool(tool)) {
+    return "One public video";
+  }
+  const count = tool.allowedRules?.length || 0;
+  return count === 0 ? "Start page only" : `${count} additional location${count === 1 ? "" : "s"}`;
 }
 
 function QuizToolSelector({
@@ -4335,9 +4649,10 @@ function safeErrorMessage(code: string | undefined, status: number | undefined, 
       return "Safe Exam Browser is not enabled for that assessment. Enable it in the course settings, then try again.";
     case "INVALID_SEB_URL_POLICY":
     case "INVALID_SEB_DOMAIN_POLICY":
-    case "INVALID_SEB_TOOL_POLICY":
     case "INVALID_SEB_TOOL_SELECTION":
-      return "One or more security settings are not valid. Review the highlighted course or assessment settings and save again.";
+      return "One or more website permissions cannot be saved. Check the URL settings in this course or assessment and try again.";
+    case "INVALID_SEB_TOOL_POLICY":
+      return "We could not save a tool because its start page or an extra link is not allowed. Check the tool’s highlighted URL fields and try again.";
     case "NETWORK_ERROR":
       return "We could not reach the Safe Exam Browser service. Check your connection and try again.";
     default:
@@ -4452,6 +4767,17 @@ function newCustomTool(): ExternalToolConfig {
     label: "",
     url: "",
     enabled: false,
+    allowedRules: []
+  };
+}
+
+function newYoutubeVideoTool(id = clientId("youtube-video")): ExternalToolConfig {
+  return {
+    id,
+    label: "YouTube video",
+    url: "",
+    enabled: false,
+    preset: YOUTUBE_VIDEO_TOOL_PRESET,
     allowedRules: []
   };
 }

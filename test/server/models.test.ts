@@ -26,6 +26,7 @@ import {
   legacyDomainsToUrlRules,
   normalizeCourseExternalTools,
   normalizeExternalTools,
+  normalizeYouTubeVideoUrl,
   normalizeUrlRules,
   newQuizContentId,
   parseNewQuizContentId,
@@ -33,6 +34,7 @@ import {
   quizToContentItem,
   resolveExternalToolsForAssessment,
   seedCourseExternalTools,
+  YOUTUBE_VIDEO_TOOL_PRESET,
   urlRulesToAllowedEntries
 } from "../../src/shared/models.js";
 
@@ -312,7 +314,7 @@ describe("content id helpers", () => {
     ]);
   });
 
-  it("keeps custom tool access explicit and rejects identity or regex rules", () => {
+  it("keeps custom tool access explicit and converts a YouTube video into the bounded player policy", () => {
     const tools = normalizeExternalTools([
       {
         id: "reference",
@@ -323,7 +325,7 @@ describe("content id helpers", () => {
           { id: "page", match: "exact", value: "https://reference.example.edu/exam/formulas" },
           { id: "assets", match: "path", value: "https://cdn.reference.example.edu/assets/*" },
           { id: "broad", match: "domain", value: "reference.example.edu", broadDomainConfirmed: true },
-          { id: "identity", match: "domain", value: "accounts.google.com" }
+          { id: "video", match: "exact", value: "https://www.youtube.com/watch?v=qZ7OjpjGVGs" }
         ]
       },
       {
@@ -334,19 +336,38 @@ describe("content id helpers", () => {
         matchType: "regex"
       },
       {
-        id: "identity-host",
-        label: "Identity",
-        url: "https://login.microsoftonline.com/common",
+        id: "youtube",
+        label: "YouTube video",
+        url: "https://www.youtube.com/watch?v=qZ7OjpjGVGs",
         enabled: true
       }
     ]);
 
-    expect(tools).toHaveLength(1);
+    expect(tools).toHaveLength(2);
     expect(tools[0]?.allowedRules).toEqual([
       { id: "page", match: "exact", value: "https://reference.example.edu/exam/formulas" },
       { id: "assets", match: "path", value: "https://cdn.reference.example.edu/assets/*" },
       { id: "broad", match: "domain", value: "reference.example.edu", broadDomainConfirmed: true }
     ]);
+    expect(tools[1]).toMatchObject({
+      id: "youtube",
+      label: "YouTube video",
+      url: "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0",
+      preset: YOUTUBE_VIDEO_TOOL_PRESET,
+      allowedRules: []
+    });
+    expect(allowlistEntriesForExternalTools(tools)).toContain("youtube-video:qZ7OjpjGVGs");
+  });
+
+  it("accepts common YouTube video links but not channels or general YouTube pages", () => {
+    expect(normalizeYouTubeVideoUrl("https://youtu.be/qZ7OjpjGVGs?t=4")).toBe(
+      "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0"
+    );
+    expect(normalizeYouTubeVideoUrl("https://www.youtube.com/shorts/qZ7OjpjGVGs")).toBe(
+      "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0"
+    );
+    expect(normalizeYouTubeVideoUrl("https://www.youtube.com/@SafeExamBrowser")).toBeNull();
+    expect(normalizeYouTubeVideoUrl("https://www.youtube.com/watch?v=invalid")).toBeNull();
   });
 
   it("normalizes only canonical exact and domain URL rules", () => {

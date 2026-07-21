@@ -4,6 +4,7 @@ import { AppConfig } from "../../src/server/config/app-config.js";
 import {
   buildAllowlistRules,
   buildSetupCheckAllowlistRules,
+  DEFAULT_MACOS_BROWSER_USER_AGENT,
   SebConfigurationService
 } from "../../src/server/services/seb-configuration.service.js";
 
@@ -266,6 +267,26 @@ describe("SebConfigurationService", () => {
     expect(parsed.prohibitedProcesses).toBeUndefined();
   });
 
+  it("always emits the macOS Safari-compatible browser user agent", () => {
+    const service = new SebConfigurationService(new AppConfig());
+    const parsed = plist.parse(
+      service
+        .generateSebConfiguration({
+          courseId: "course-1",
+          contentId: "classicquiz_quiz-1",
+          startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1/take",
+          accessCode: "CODE123",
+          quitPassword: "unique-exit-passphrase"
+        })
+        .toString("utf8")
+    ) as Record<string, unknown>;
+
+    expect(parsed.browserUserAgentMac).toBe(1);
+    expect(parsed.browserUserAgentMacCustom).toBe(DEFAULT_MACOS_BROWSER_USER_AGENT);
+    expect(parsed.browserUserAgentWinDesktopMode).toBeUndefined();
+    expect(parsed.browserUserAgentWinDesktopModeCustom).toBeUndefined();
+  });
+
   it("permits both literal and percent-encoded New Quiz exit URLs through the SEB URL filter", () => {
     const rules = buildAllowlistRules({
       appBaseUrl: "https://app.example.com",
@@ -317,6 +338,26 @@ describe("SebConfigurationService", () => {
     expect(expressions).not.toContain("https://*.amazonaws.com/*");
     expect(expressions).not.toContain("^https://.*$");
     expect(expressions).not.toContain(".*");
+  });
+
+  it("emits a bounded player policy for a YouTube video without opening YouTube sign-in or browsing", () => {
+    const rules = buildAllowlistRules({
+      appBaseUrl: "https://app.example.com",
+      canvasBaseUrl: "https://canvas.example.com",
+      courseId: "course-1",
+      contentId: "classicquiz_quiz-1",
+      startUrl: "https://canvas.example.com/courses/course-1/quizzes/quiz-1/take",
+      requiredDomains: [],
+      additionalDomains: ["youtube-video:qZ7OjpjGVGs"]
+    });
+    const expressions = rules.map((rule) => rule.expression);
+
+    expect(expressions).toContain("^https://www\\.youtube\\.com/embed/qZ7OjpjGVGs(?:[?#].*)?$");
+    expect(expressions).toContain("^https://app\\.example\\.com/seb/tool/youtube/qZ7OjpjGVGs$");
+    expect(expressions).toContain("^https://i\\.ytimg\\.com/(?:.*)$");
+    expect(expressions).toContain("^https://[a-z0-9-]+\\.googlevideo\\.com/(?:videoplayback|initplayback)(?:[?#].*)?$");
+    expect(expressions).not.toContain("https://accounts.google.com/*");
+    expect(expressions.some((expression) => expression.includes("youtube\\.com/watch"))).toBe(false);
   });
 
   it("does not grant top-level navigation to shared Canvas content infrastructure", () => {

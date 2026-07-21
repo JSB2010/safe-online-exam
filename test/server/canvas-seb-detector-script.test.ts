@@ -1611,7 +1611,15 @@ describe("Canvas SEB detector script", () => {
     expect(context.document.body.textContent).not.toContain("Bad Tool");
     expect(context.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/seb/tools/"), expect.anything());
 
-    const collapse = context.document.querySelector<HTMLButtonElement>(".seb-tools-icon-button");
+    const sidebar = context.document.getElementById("seb-exam-tools-sidebar");
+    expect(sidebar?.getAttribute("data-seb-tools-placement")).toBeTruthy();
+    expect(context.document.querySelector(".seb-tools-drag-handle")?.getAttribute("aria-hidden")).toBe("true");
+    expect(sidebar?.textContent).toContain("↺");
+    const selectStart = new context.Event("selectstart", { cancelable: true });
+    sidebar?.dispatchEvent(selectStart);
+    expect(selectStart.defaultPrevented).toBe(true);
+
+    const collapse = context.document.querySelector<HTMLButtonElement>(".seb-tools-icon-button[aria-expanded]");
     expect(collapse?.tagName).toBe("BUTTON");
     expect(collapse?.getAttribute("aria-expanded")).toBe("true");
     collapse?.click();
@@ -1631,6 +1639,86 @@ describe("Canvas SEB detector script", () => {
     expect(toolWindow.location.replace).not.toHaveBeenCalled();
     expect(toolWindow.opener).toBeNull();
     expect(toolWindow.focus).toHaveBeenCalled();
+  });
+
+  it("reasserts focus only while a newly opened Google Sheet completes its startup navigation", async () => {
+    const toolWindow = {
+      closed: false,
+      focus: vi.fn(),
+      opener: {}
+    };
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take?debug=true",
+      debugResponse: { enabled: true },
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/23455": {
+          success: true,
+          accessCode: "ACCESS",
+          exitGrant: "e".repeat(43),
+          tools: [
+            {
+              id: "sheet",
+              label: "Google Sheet",
+              url: "https://docs.google.com/spreadsheets/d/example/edit"
+            }
+          ]
+        }
+      },
+      openWindow: vi.fn(() => toolWindow),
+      body: `<main><h1 id="quiz_title">Midterm Quiz</h1><form id="access_code_form"><input name="access_code" type="password" /><button type="submit">Submit</button></form></main>`
+    });
+    context.document.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(1_000);
+    context.document.querySelector("#access_code_form")?.remove();
+    context.document.querySelector("main")?.appendChild(context.document.createElement("section"));
+    await vi.advanceTimersByTimeAsync(400);
+
+    context.document.querySelector<HTMLButtonElement>(".seb-tool-button")?.click();
+    expect(toolWindow.focus).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(toolWindow.focus).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not schedule delayed focus for non-Sheets tools", async () => {
+    const toolWindow = {
+      closed: false,
+      focus: vi.fn(),
+      opener: {}
+    };
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take?debug=true",
+      debugResponse: { enabled: true },
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: DETECTOR_CONFIG_KEY } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": { success: true, proofToken: "proof-1" },
+        "/api/seb/access-code/11825/23455": {
+          success: true,
+          accessCode: "ACCESS",
+          exitGrant: "e".repeat(43),
+          tools: [{ id: "calc", label: "Calculator", url: "https://calc.example.edu" }]
+        }
+      },
+      openWindow: vi.fn(() => toolWindow),
+      body: `<main><h1 id="quiz_title">Midterm Quiz</h1><form id="access_code_form"><input name="access_code" type="password" /><button type="submit">Submit</button></form></main>`
+    });
+    context.document.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(1_000);
+    context.document.querySelector("#access_code_form")?.remove();
+    context.document.querySelector("main")?.appendChild(context.document.createElement("section"));
+    await vi.advanceTimersByTimeAsync(400);
+
+    context.document.querySelector<HTMLButtonElement>(".seb-tool-button")?.click();
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(toolWindow.focus).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the direct named window when a browser does not expose opener isolation", async () => {

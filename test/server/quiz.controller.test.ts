@@ -99,6 +99,41 @@ describe("QuizController", () => {
     );
   });
 
+  it("converts an instructor's YouTube video link into the bounded video tool", async () => {
+    courseSettings.saveDefaults.mockImplementation(async (_courseId, defaults) => ({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      ...defaults
+    }));
+
+    await expect(
+      controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
+        setupCompleted: true,
+        externalTools: [
+          {
+            id: "youtube",
+            label: "YouTube video",
+            url: "https://www.youtube.com/watch?v=qZ7OjpjGVGs",
+            enabled: true
+          }
+        ]
+      })
+    ).resolves.toMatchObject({ success: true });
+
+    expect(courseSettings.saveDefaults).toHaveBeenCalledWith(
+      COURSE_ID,
+      expect.objectContaining({
+        externalTools: [
+          expect.objectContaining({
+            id: "youtube",
+            url: "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0",
+            preset: "youtube-video",
+            allowedRules: []
+          })
+        ]
+      })
+    );
+  });
+
   it("preserves write-only course secrets when the client omits masked fields", async () => {
     courseSettings.getDefaults.mockResolvedValue({
       ...defaultCourseSebDefaults(COURSE_ID),

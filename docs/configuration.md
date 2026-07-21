@@ -120,6 +120,8 @@ The registration document is `${TOOL_URL}/lti/config` and publishes the login, l
 | `APP_DETECTOR_DIAGNOSTICS_ENABLED`      | `false`   | Sanitized detector detail; production profile rejects true.                      |
 | `APP_ASSET_VERSION`                     | Unset     | Optional client cache version; `K_REVISION` is used when present.                |
 
+Generated configurations use a Safari-compatible browser user agent on macOS so Google Sheets selects its full-resolution canvas path. SEB appends its own identifier to that user agent. Windows configurations retain SEB's native Chromium-based browser user agent.
+
 ## Secret Rotation
 
 Rotate one secret at a time and create a new immutable secret version. Update the runtime to the numbered version, deploy, smoke test, then disable the old version. Rotating `SESSION_SECRET` invalidates sessions; rotating `STATE_ENCRYPTION_KEY` invalidates outstanding opaque state; rotating LTI signing material requires Canvas/JWKS coordination; rotating the SEB certificate requires distributing the matching new private identity and issuing fresh configurations.

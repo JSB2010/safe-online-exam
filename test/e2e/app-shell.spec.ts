@@ -267,8 +267,31 @@ test("renders the responsive root-account administrator workspace and controlled
   await expect(page.getByRole("tab", { name: /Institution settings/u })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Approved exam tools" })).toBeVisible();
   await page.getByRole("button", { name: "New exam tool" }).click();
-  await expect(page.getByRole("heading", { name: "Create tool preset" })).toBeVisible();
+  const presetDialog = page.getByRole("dialog", { name: "Create tool preset" });
+  await expect(presetDialog).toBeVisible();
+  await presetDialog.getByLabel("Start page").fill("https://docs.google.com/presentation/d/example/edit");
+  await expect(presetDialog.getByText("Extra pages students can use")).toBeVisible();
+  await presetDialog.getByRole("button", { name: "Add location" }).click();
+  await expect(presetDialog.getByText("What should students be able to open?")).toBeVisible();
+  await expect(presetDialog.getByText("This one page or file")).toBeVisible();
+  await expect(presetDialog.getByText("This address and related links")).toBeVisible();
+  await expect(presetDialog.getByText("This whole website")).toBeVisible();
+  await presetDialog.getByText("This one page or file").click();
+  await presetDialog.getByLabel("Address to allow").fill("https://www.youtube.com/watch?v=qZ7OjpjGVGs");
+  await expect(presetDialog.getByText(/This is hosted by youtube\.com/u)).toBeVisible();
+  await presetDialog.getByText("This whole website").click();
+  await expect(presetDialog.getByText(/I understand this lets students open any HTTPS page/u)).toBeVisible();
   await page.getByRole("button", { name: "Close tool preset" }).click();
+  await page.getByRole("button", { name: "New exam tool" }).click();
+  const youtubePresetDialog = page.getByRole("dialog", { name: "Create tool preset" });
+  await youtubePresetDialog.getByRole("button", { name: "YouTube video" }).click();
+  await expect(youtubePresetDialog.getByLabel("YouTube video link")).toBeVisible();
+  await youtubePresetDialog.getByLabel("YouTube video link").fill("https://youtu.be/qZ7OjpjGVGs");
+  await expect(
+    youtubePresetDialog.getByText("Only this public video and the player resources it requires are available.")
+  ).toBeVisible();
+  await youtubePresetDialog.getByRole("button", { name: "Save preset" }).click();
+  await expect(youtubePresetDialog).toBeHidden();
 
   await page.getByRole("tab", { name: /Courses/u }).click();
   await page.getByRole("button", { name: "Reveal passwords" }).click();

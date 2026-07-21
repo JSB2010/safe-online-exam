@@ -41,6 +41,19 @@ interface UrlFilterRule {
   action: number;
 }
 
+export const DEFAULT_MACOS_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15";
+
+function macOSBrowserUserAgentSettings(): Record<string, unknown> {
+  // SEB appends its SEB/<version> marker to a configured macOS user agent.
+  // Google Sheets uses this current-Safari identity when selecting its canvas
+  // rendering path, while Windows keeps its native Chromium-based identity.
+  return {
+    browserUserAgentMac: 1,
+    browserUserAgentMacCustom: DEFAULT_MACOS_BROWSER_USER_AGENT
+  };
+}
+
 // macOS exam boundary: Apple's Automatic Assessment Configuration (AAC) is
 // the OS-enforced assessment mode; SEB's classic macOS kiosk mode is only a
 // user-space fallback. Released SEB macOS clients (3.2 through 3.6.x) read
@@ -256,6 +269,7 @@ export class SebConfigurationService implements OnModuleInit {
       allowDictionaryLookup: false,
       browserWindowWebView: 3,
       browserWindowWebViewClassicHideDeprecationNote: false,
+      ...macOSBrowserUserAgentSettings(),
       newBrowserWindowByLinkPolicy: 2,
       newBrowserWindowByScriptPolicy: 2,
       newBrowserWindowNavigation: true,
@@ -453,6 +467,9 @@ export function buildAllowlistRules(input: {
   }
   for (const domain of input.additionalDomains) {
     add(domain);
+    for (const rule of externalToolBridgeRules(input.appBaseUrl, domain)) {
+      addRule(rule);
+    }
   }
   return Array.from(rules.values()).sort((left, right) => left.expression.localeCompare(right.expression));
 }
@@ -510,6 +527,10 @@ function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   if (!value || value.length > 2048 || isUnsafeBroadPattern(value)) {
     return [];
   }
+  if (value.startsWith("youtube-video:")) {
+    const videoId = value.slice("youtube-video:".length);
+    return /^[A-Za-z0-9_-]{11}$/u.test(videoId) ? youtubeVideoRules(videoId) : [];
+  }
   if (value.startsWith("regex:")) {
     return [];
   }
@@ -542,6 +563,34 @@ function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   return domain && !isBlockedIdentityProviderHostname(domain)
     ? [{ active: true, regex: false, expression: `https://${domain}/*`, action: 1 }]
     : [];
+}
+
+/**
+ * These launch pages are server-owned and carry no user-controlled redirect
+ * destination. Their exact URL is also included in the assessment's SEB URL
+ * filter, so they cannot become a general-purpose navigation escape hatch.
+ */
+function externalToolBridgeRules(appBaseUrl: string, entry: string): UrlFilterRule[] {
+  try {
+    if (entry.startsWith("youtube-video:")) {
+      const videoId = entry.slice("youtube-video:".length);
+      if (!/^[A-Za-z0-9_-]{11}$/u.test(videoId)) {
+        return [];
+      }
+      return [
+        {
+          active: true,
+          regex: true,
+          expression: exactUrlRegex(new URL(`/seb/tool/youtube/${videoId}`, appBaseUrl)),
+          action: 1
+        }
+      ];
+    }
+  } catch {
+    // The source entries are validated before they are persisted. Keep config
+    // generation fail-closed if a malformed historical record slips through.
+  }
+  return [];
 }
 
 function urlAllowRule(value: string): UrlFilterRule {
@@ -672,6 +721,35 @@ function isBlockedIdentityProviderHostname(hostname: string): boolean {
 
 function isBlockedIdentityProviderUrl(url: URL): boolean {
   return isBlockedIdentityProviderHostname(url.hostname);
+}
+
+/**
+ * YouTube embeds are a deliberately bounded exception to the general
+ * identity-provider blocklist. The teacher supplies one public video, while
+ * this server-owned policy permits only the player code, its thumbnails, and
+ * its media-stream endpoints. It does not permit accounts.google.com, search,
+ * watch pages, or arbitrary YouTube navigation.
+ */
+function youtubeVideoRules(videoId: string): UrlFilterRule[] {
+  const video = escapeRegex(videoId);
+  return [
+    { active: true, regex: true, expression: `^https://www\\.youtube\\.com/embed/${video}(?:[?#].*)?$`, action: 1 },
+    {
+      active: true,
+      regex: true,
+      expression:
+        "^https://www\\.youtube\\.com/(?:s/player|youtubei/v1/player|api/stats|ptracking|generate_204)(?:/.*)?(?:[?#].*)?$",
+      action: 1
+    },
+    { active: true, regex: true, expression: "^https://i\\.ytimg\\.com/(?:.*)$", action: 1 },
+    { active: true, regex: true, expression: "^https://yt3\\.ggpht\\.com/(?:.*)$", action: 1 },
+    {
+      active: true,
+      regex: true,
+      expression: "^https://[a-z0-9-]+\\.googlevideo\\.com/(?:videoplayback|initplayback)(?:[?#].*)?$",
+      action: 1
+    }
+  ];
 }
 
 function exactUrlRegex(url: URL): string {

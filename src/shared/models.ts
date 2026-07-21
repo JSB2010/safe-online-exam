@@ -408,6 +408,72 @@ export interface ExternalToolAccessRule {
   broadDomainConfirmed?: boolean;
 }
 
+export const YOUTUBE_VIDEO_TOOL_PRESET = "youtube-video";
+
+function isYouTubeHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^www\./u, "");
+  return host === "youtu.be" || host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com";
+}
+
+export function isYouTubeUrl(value?: string | null): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const candidate = /^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return isYouTubeHostname(new URL(candidate).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Converts a share, watch, Shorts, or embed link into the one player URL that
+ * the exam policy supports. A YouTube video ID is deliberately constrained to
+ * its documented 11-character form so a custom URL cannot widen the policy.
+ */
+export function normalizeYouTubeVideoUrl(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const candidate = /^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) {
+      return null;
+    }
+    const host = parsed.hostname.toLowerCase().replace(/^www\./u, "");
+    let videoId: string | null = null;
+    if (host === "youtu.be") {
+      videoId = parsed.pathname.split("/").filter(Boolean)[0] || null;
+    } else if (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
+      const path = parsed.pathname.split("/").filter(Boolean);
+      if (path[0] === "watch") {
+        videoId = parsed.searchParams.get("v");
+      } else if (path[0] === "embed" || path[0] === "shorts") {
+        videoId = path[1] || null;
+      }
+    }
+    return videoId && /^[A-Za-z0-9_-]{11}$/u.test(videoId) ? `https://www.youtube.com/embed/${videoId}?rel=0` : null;
+  } catch {
+    return null;
+  }
+}
+
+export function youtubeVideoId(tool: Pick<ExternalToolConfig, "preset" | "url">): string | null {
+  if (tool.preset !== YOUTUBE_VIDEO_TOOL_PRESET) {
+    return null;
+  }
+  const normalized = normalizeYouTubeVideoUrl(tool.url);
+  return normalized ? new URL(normalized).pathname.split("/").at(-1) || null : null;
+}
+
+export function isYouTubeVideoTool(tool: Pick<ExternalToolConfig, "preset" | "url">): boolean {
+  return youtubeVideoId(tool) !== null;
+}
+
 export const EXTERNAL_TOOL_PRESETS: ExternalToolConfig[] = [
   {
     id: "desmos-graphing",
@@ -935,12 +1001,35 @@ export function normalizeExternalTools(input?: ExternalToolConfig[] | null): Ext
       return [];
     }
     const label = tool.label?.trim();
-    const url = normalizeToolUrl(tool.url);
+    const youtubeUrl = normalizeYouTubeVideoUrl(tool.url);
+    // Upgrade existing teacher-created YouTube watch/share links into the
+    // bounded video policy when they are next read or saved.
+    const isYoutubeVideo = tool.preset === YOUTUBE_VIDEO_TOOL_PRESET || !!youtubeUrl;
+    const url = isYoutubeVideo ? youtubeUrl : normalizeToolUrl(tool.url);
     if (!label || !url) {
+      return [];
+    }
+    if (!isYoutubeVideo && isYouTubeUrl(tool.url)) {
       return [];
     }
     const id = sanitizeToolId(tool.id || label || `tool-${index + 1}`);
     const uniqueId = seen.has(id) ? `${id}-${index + 1}` : id;
+    if (isYoutubeVideo) {
+      seen.add(uniqueId);
+      return [
+        {
+          id: uniqueId,
+          label,
+          url,
+          enabled: !!tool.enabled,
+          preset: YOUTUBE_VIDEO_TOOL_PRESET,
+          adminPresetId: tool.managedByAdmin === true && tool.adminPresetId ? sanitizeToolId(tool.adminPresetId) : null,
+          managedByAdmin: tool.managedByAdmin === true,
+          allowedRules: [],
+          allowedDomains: []
+        }
+      ];
+    }
     const allowedRules = normalizeExternalToolAccessRules(
       Array.isArray(tool.allowedRules) && tool.allowedRules.length
         ? tool.allowedRules
@@ -1033,6 +1122,11 @@ export function enabledExternalTools(input?: ExternalToolConfig[] | null): Exter
 export function allowlistEntriesForExternalTools(input?: ExternalToolConfig[] | null): string[] {
   const entries = new Set<string>();
   for (const tool of enabledExternalTools(input)) {
+    const videoId = youtubeVideoId(tool);
+    if (videoId) {
+      entries.add(`youtube-video:${videoId}`);
+      continue;
+    }
     entries.add(`exact:${tool.url}`);
     for (const entry of toolAllowlistEntries(tool.allowedRules || [])) {
       entries.add(entry);
@@ -1308,7 +1402,7 @@ export function normalizeExternalToolAccessRules(input?: ExternalToolAccessRule[
     const id = sanitizeToolId(rule?.id || `resource-${index + 1}`);
     let normalized: string | null = null;
     if (match === "exact") {
-      normalized = normalizeToolUrl(value);
+      normalized = normalizeToolResourceUrl(value);
     } else if (match === "path") {
       normalized = normalizeToolPathRule(value);
     } else if (match === "domain") {
@@ -1398,8 +1492,7 @@ function normalizeToolUrl(value?: string | null): string | null {
       parsed.username ||
       parsed.password ||
       parsed.port ||
-      !normalizeConcreteHostname(parsed.hostname) ||
-      isBlockedToolHostname(parsed.hostname)
+      !normalizeConcreteHostname(parsed.hostname)
     ) {
       return null;
     }
@@ -1409,9 +1502,19 @@ function normalizeToolUrl(value?: string | null): string | null {
   }
 }
 
+/**
+ * A teacher may explicitly approve a resource hosted away from the tool's
+ * start page (for example, a particular video or CDN asset). Tool start pages
+ * use the same safe HTTPS normalization, so a teacher can intentionally make
+ * that external site the tool itself.
+ */
+function normalizeToolResourceUrl(value?: string | null): string | null {
+  return isYouTubeUrl(value) ? null : normalizeToolUrl(value);
+}
+
 function normalizeToolPathRule(value: string): string | null {
   const candidate = value.endsWith("/*") ? value.slice(0, -1) : value;
-  const url = normalizeToolUrl(candidate);
+  const url = normalizeToolResourceUrl(candidate);
   if (!url) {
     return null;
   }
@@ -1423,7 +1526,9 @@ function normalizeToolPathRule(value: string): string | null {
 }
 
 function normalizeToolDomainRule(value: string): string | null {
-  const candidate = value.includes("://") ? normalizeToolUrl(value) : normalizeToolUrl(`https://${value}`);
+  const candidate = value.includes("://")
+    ? normalizeToolResourceUrl(value)
+    : normalizeToolResourceUrl(`https://${value}`);
   if (!candidate) {
     return null;
   }
@@ -1431,30 +1536,7 @@ function normalizeToolDomainRule(value: string): string | null {
   if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
     return null;
   }
-  return isBlockedToolHostname(parsed.hostname) ? null : parsed.hostname;
-}
-
-function isBlockedToolHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    new Set([
-      "accounts.google.com",
-      "accounts.youtube.com",
-      "sso.canvaslms.com",
-      "www.google.com",
-      "www.youtube.com",
-      "www.googleapis.com",
-      "login.microsoftonline.com",
-      "login.live.com",
-      "login.okta.com",
-      "login.salesforce.com",
-      "appleid.apple.com"
-    ]).has(normalized) ||
-    normalized === "auth0.com" ||
-    normalized.endsWith(".auth0.com") ||
-    normalized.endsWith(".okta.com") ||
-    normalized.endsWith(".onelogin.com")
-  );
+  return parsed.hostname;
 }
 
 function normalizeUrlRule(entry: SebUrlRule | string, index: number): SebUrlRule | null {

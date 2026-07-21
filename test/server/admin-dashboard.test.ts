@@ -157,6 +157,30 @@ describe("AdminController", () => {
     });
   });
 
+  it("creates a school YouTube video preset with the bounded player definition", async () => {
+    const controller = controllerDouble(createInMemoryRepositories(), canvasApiDouble());
+
+    await expect(
+      controller.createToolPreset({} as any, {
+        name: "Cell division video",
+        description: "Approved public video",
+        tool: {
+          url: "https://youtu.be/qZ7OjpjGVGs",
+          preset: "youtube-video",
+          allowedRules: []
+        }
+      })
+    ).resolves.toMatchObject({
+      preset: {
+        tool: {
+          preset: "youtube-video",
+          url: "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0",
+          allowedRules: []
+        }
+      }
+    });
+  });
+
   it("rejects deprecated or unconfirmed broad resource policy in school presets", async () => {
     const controller = controllerDouble(createInMemoryRepositories(), canvasApiDouble());
     await expect(

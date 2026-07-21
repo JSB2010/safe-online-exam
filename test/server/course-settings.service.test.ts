@@ -113,6 +113,41 @@ describe("CourseSettingsService", () => {
     expect(removed.externalTools.some((tool) => tool.adminPresetId === preset.id)).toBe(false);
   });
 
+  it("preserves the bounded YouTube video policy when an administrator assigns it", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    const preset = {
+      id: "e8e95e19-d10f-4dcb-8e06-7e90f21ada8b",
+      rootAccountId: "7",
+      name: "Cell division video",
+      description: "Approved public video",
+      tool: {
+        id: "template",
+        label: "Cell division video",
+        url: "https://youtu.be/qZ7OjpjGVGs",
+        preset: "youtube-video",
+        enabled: false,
+        allowedRules: []
+      },
+      assignedCourseIds: ["course-1"],
+      createdByUserId: "42",
+      updatedByUserId: "42"
+    };
+
+    const pushed = await service.pushAdminToolPreset("course-1", preset);
+    expect(pushed.externalTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Cell division video",
+          preset: "youtube-video",
+          url: "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0",
+          allowedRules: [],
+          managedByAdmin: true
+        })
+      ])
+    );
+  });
+
   it("rejects course-default and managed-fallback start/exit password collisions", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);

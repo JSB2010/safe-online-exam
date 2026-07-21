@@ -77,6 +77,62 @@ describe("SebController route contracts", () => {
     });
   });
 
+  it("opens YouTube through the server-owned player page and regular tools directly", async () => {
+    const { controller } = controllerWith({
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          externalTools: [
+            {
+              id: "video",
+              label: "Class video",
+              url: "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0",
+              preset: "youtube-video",
+              enabled: true
+            },
+            {
+              id: "sheet",
+              label: "Reference sheet",
+              url: "https://docs.google.com/spreadsheets/d/1A2b_3-c/edit?usp=sharing",
+              enabled: true
+            }
+          ]
+        })
+      }
+    });
+
+    await expect(controller.tools(requestDouble(), "course-1", "23455")).resolves.toEqual({
+      success: true,
+      tools: [
+        { id: "video", label: "Class video", url: "https://tool.example.edu/seb/tool/youtube/qZ7OjpjGVGs" },
+        {
+          id: "sheet",
+          label: "Reference sheet",
+          url: "https://docs.google.com/spreadsheets/d/1A2b_3-c/edit?usp=sharing"
+        }
+      ]
+    });
+  });
+
+  it("serves a YouTube embedding document with the configured origin and rejects invalid video IDs", () => {
+    const { controller } = controllerWith();
+    const videoResponse = responseDouble();
+    controller.youtubeTool("qZ7OjpjGVGs", videoResponse);
+
+    expect(videoResponse.setHeader).toHaveBeenCalledWith("referrer-policy", "strict-origin-when-cross-origin");
+    expect(videoResponse.send).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "https://www.youtube.com/embed/qZ7OjpjGVGs?rel=0&amp;origin=https%3A%2F%2Ftool.example.edu"
+      )
+    );
+
+    const invalidResponse = responseDouble();
+    controller.youtubeTool("not-a-video-id", invalidResponse);
+    expect(invalidResponse.status).toHaveBeenCalledWith(404);
+  });
+
   it("gates access-code retrieval with one-time proof tokens", async () => {
     const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
     const { controller } = controllerWith({
