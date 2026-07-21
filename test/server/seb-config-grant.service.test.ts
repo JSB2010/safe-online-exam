@@ -41,6 +41,23 @@ describe("SebConfigGrantService", () => {
     await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toBeNull();
   });
 
+  it("validates a Windows HEAD probe without consuming the one-time grant", async () => {
+    const service = grantService();
+    const token = await service.mintGrant(
+      requestDouble(),
+      principal(),
+      "course-1",
+      "101",
+      sebConfigSettingsFingerprint("course-1", "101", classicSetting())
+    );
+
+    await expect(service.validateGrant(token, "course-1", "classicquiz_101")).resolves.toBe(true);
+    await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toMatchObject({
+      contentId: "classicquiz_101"
+    });
+    await expect(service.validateGrant(token, "course-1", "classicquiz_101")).resolves.toBe(false);
+  });
+
   it("rejects minting for a course outside the validated LTI principal", async () => {
     const service = grantService();
 

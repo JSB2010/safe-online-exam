@@ -121,6 +121,29 @@ export class SebConfigGrantService {
     };
   }
 
+  /**
+   * Validates a configuration-download grant without consuming it.
+   *
+   * SEB for Windows probes a remote configuration with HEAD before issuing the
+   * GET which actually downloads it. Treating that probe as a download forces
+   * clients that fall back to a GET probe to burn the one-time grant before
+   * they receive the configuration bytes.
+   */
+  async validateGrant(token: string | undefined | null, courseId: string, contentId: string): Promise<boolean> {
+    const canonicalContentId = canonicalSebConfigContentId(contentId);
+    if (!canonicalContentId || !token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      return false;
+    }
+    const record = await this.repositories.value.transientStates.get(grantDocumentId(token));
+    return (
+      isConfigGrantRecord(record) &&
+      !record.consumedAt &&
+      !isExpired(record.expiresAt) &&
+      safeEqual(record.courseId, courseId) &&
+      safeEqual(record.contentId, canonicalContentId)
+    );
+  }
+
   getTokenTtlSeconds(): number {
     return GRANT_TTL_SECONDS;
   }
@@ -155,6 +178,11 @@ export function sameSebConfigSettingsFingerprint(left: string, right: string): b
 
 function grantDocumentId(token: string): string {
   return createHash("sha256").update(`seb-config-grant:${token}`, "utf8").digest("hex");
+}
+
+function isExpired(expiresAt: Date | string): boolean {
+  const timestamp = new Date(expiresAt).getTime();
+  return !Number.isFinite(timestamp) || timestamp <= Date.now();
 }
 
 function isConfigGrantRecord(record: TransientStateRecord | null): record is TransientStateRecord & {

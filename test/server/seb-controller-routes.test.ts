@@ -452,8 +452,9 @@ describe("SebController route contracts", () => {
     expect(missingResponse.status).toHaveBeenCalledWith(404);
   });
 
-  it("does not let HEAD prefetches reach or consume the GET grant path", async () => {
+  it("accepts Windows HEAD probes without consuming the GET grant path", async () => {
     const { controller, configGrants } = controllerWith();
+    configGrants.validateGrant = vi.fn().mockResolvedValue(true);
     const response = responseDouble();
 
     await controller.downloadConfig(
@@ -464,8 +465,8 @@ describe("SebController route contracts", () => {
       "g".repeat(43)
     );
 
-    expect(response.status).toHaveBeenCalledWith(405);
-    expect(response.setHeader).toHaveBeenCalledWith("allow", "GET");
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(configGrants.validateGrant).toHaveBeenCalledWith("g".repeat(43), "course-1", "classicquiz_23455");
     expect(configGrants.consumeGrant).not.toHaveBeenCalled();
   });
 
@@ -868,6 +869,7 @@ function controllerWith(options: Record<string, any> = {}) {
   const configGrants = {
     mintGrant: vi.fn().mockResolvedValue("g".repeat(43)),
     consumeGrant: vi.fn(),
+    validateGrant: vi.fn().mockResolvedValue(false),
     getTokenTtlSeconds: vi.fn().mockReturnValue(120),
     ...options.configGrants
   };

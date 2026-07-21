@@ -222,7 +222,7 @@ export class SebController {
     @Query("grant") grant?: string
   ): Promise<void> {
     if (request.method?.toUpperCase() === "HEAD") {
-      this.rejectConfigPrefetch(response);
+      await this.inspectConfigDownload(response, courseId, contentId, grant);
       return;
     }
     if (
@@ -288,8 +288,26 @@ export class SebController {
   }
 
   @Head("/seb/config/:courseId/:contentId.seb")
-  rejectConfigPrefetch(@Res() response: Response): void {
-    response.status(405).setHeader("allow", "GET").setHeader("cache-control", "no-store").send();
+  async inspectConfigDownload(
+    @Res() response: Response,
+    @Param("courseId") courseId: string,
+    @Param("contentId") contentId: string,
+    @Query("grant") grant?: string
+  ): Promise<void> {
+    const canonicalContentId = canonicalSebConfigContentId(contentId);
+    if (!canonicalContentId || !(await this.configGrants.validateGrant(grant, courseId, canonicalContentId))) {
+      response.status(403).setHeader("cache-control", "no-store").send();
+      return;
+    }
+    // Windows SEB validates a configuration URL with HEAD before its single
+    // GET download. Do not consume the grant here: only downloadConfig may
+    // mint the assessment's session handoff and release encrypted bytes.
+    response
+      .status(200)
+      .type("application/octet-stream")
+      .setHeader("cache-control", "private, no-store")
+      .setHeader("referrer-policy", "no-referrer")
+      .send();
   }
 
   @Get("/seb/config-encryption-certificate.pem")

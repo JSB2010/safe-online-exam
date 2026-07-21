@@ -17,6 +17,33 @@ const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).
 }) as string;
 
 describe("SEB config downloads", () => {
+  it("accepts the Windows HEAD probe without consuming the configuration grant", async () => {
+    const configGrants = {
+      validateGrant: vi.fn().mockResolvedValue(true),
+      consumeGrant: vi.fn()
+    };
+    const controller = new SebController(
+      new AppConfig(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      proofService(),
+      configGrants as any,
+      admissionDouble()
+    );
+    const response = responseDouble();
+
+    await controller.inspectConfigDownload(response as any, "11825", "classicquiz_23455", "a".repeat(43));
+
+    expect(configGrants.validateGrant).toHaveBeenCalledWith("a".repeat(43), "11825", "classicquiz_23455");
+    expect(configGrants.consumeGrant).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(200);
+    expect(response.type).toHaveBeenCalledWith("application/octet-stream");
+  });
+
   it("uses a fresh Canvas session URL only while creating a connected student's SEB config", async () => {
     await withConfig(async () => {
       const sebConfig = new SebConfigurationService(new AppConfig());
