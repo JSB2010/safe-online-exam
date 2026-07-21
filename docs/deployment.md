@@ -7,6 +7,21 @@ The application has two supported deployment modes:
 
 The runtime itself is provider-agnostic. It needs a Node.js container, PostgreSQL 17 or newer, environment variables or mounted secret files, an HTTPS public origin, a one-shot migration command before a new revision, and a scheduled cleanup command. Google-specific behavior is confined to the checked-in Cloud Build deployment configuration.
 
+## Public Releases And Image Tags
+
+GitHub Releases are the public release authority. Publishing a stable release from a `vX.Y.Z` tag whose `X.Y.Z` version matches `package.json` runs verification, PostgreSQL integration, and Compose smoke tests before publishing the multi-architecture image:
+
+```text
+ghcr.io/jsb2010/safe-online-exam:X.Y.Z   immutable release
+ghcr.io/jsb2010/safe-online-exam:X.Y     current patch release for that minor
+ghcr.io/jsb2010/safe-online-exam:X       current stable release for that major
+ghcr.io/jsb2010/safe-online-exam:latest  newest stable GitHub Release
+```
+
+Each release also publishes a provenance attestation, SBOM, an exact manifest digest, and `safe-online-exam-X.Y.Z-compose.tar.gz`. Pre-releases publish only their exact prerelease tag and never move `latest`, `X`, or `X.Y`. The repository owner must make the linked GHCR package public once in GitHub Packages settings.
+
+Tags are mutable pointers. Production Compose and Cloud Run deployments must use the exact digest shown in the GitHub Release, for example `ghcr.io/jsb2010/safe-online-exam@sha256:...`.
+
 ## Release Invariants
 
 - Keep each Canvas environment isolated by public URL, database, credentials, secrets, LTI deployment, and runtime identity.
@@ -505,6 +520,22 @@ gcloud run services update-traffic "$SERVICE" \
 
 Traffic rollback does not roll back PostgreSQL. Schema recovery means a reviewed forward migration or a restore into a controlled target; never run automatic down-migrations during a failed deploy. Use expand/migrate/deploy/contract changes so adjacent application revisions remain compatible whenever possible.
 
+### Promote A Published GitHub Release To Cloud Run
+
+Publishing a GitHub Release does **not** deploy the maintained production service. First verify the release notes' image digest and take an on-demand database backup. Then use the dedicated promotion configuration, which deploys that exact public GHCR digest to the migration job, waits for it, and only then updates the cleanup job and service:
+
+```bash
+export RELEASE_DIGEST="sha256:REPLACE_WITH_THE_GITHUB_RELEASE_DIGEST"
+
+gcloud builds submit \
+  --config=cloudbuild-release-promote.yaml \
+  --substitutions=_IMAGE_DIGEST="$RELEASE_DIGEST",_LOCATION=us-central1,_SERVICE=canvas-seb-prod,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb-prod,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_SECRET_PREFIX=prod,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas-prod
+```
+
+The public package must remain reachable to Cloud Run. The checked-in promotion helper accepts only the fixed public Safe Online Exam GHCR repository or an Artifact Registry repository, and it rejects non-digest references. Preserve the existing source-based `cloudbuild-dev.yaml`, `cloudbuild-prod.yaml`, and `cloudbuild-school.yaml` workflows for development and deployments that intentionally build the checked-out source.
+
+After promotion, inspect the migration execution and confirm the Cloud Run job and service image references, then run the release smoke checks below. Promote to development first when validating a new release process.
+
 ### Development Database Reset
 
 The repository includes a guarded development-only reset command for cases that require a completely fresh installation state:
@@ -521,7 +552,7 @@ This mode is suitable for any provider that supplies a persistent Linux host or 
 
 ### 1. Prepare The Host
 
-Use a supported Linux distribution with current security updates, Docker Engine, the Docker Compose v2 plugin, and `age` or another approved backup-encryption tool. Allocate enough memory and disk for the image build and PostgreSQL. Configure:
+Use a supported Linux distribution with current security updates, Docker Engine, the Docker Compose v2 plugin, and `age` or another approved backup-encryption tool. Allocate enough memory and disk for the application containers and PostgreSQL. Configure:
 
 - a stable DNS name pointing to the host;
 - inbound TCP 80 and 443 for certificate issuance and HTTPS;
@@ -529,65 +560,43 @@ Use a supported Linux distribution with current security updates, Docker Engine,
 - no public PostgreSQL port; and
 - encrypted disks, automatic security updates, time synchronization, and off-host monitoring.
 
-Clone or copy the repository to a protected application directory and verify Docker:
+Download a versioned Compose bundle from the intended GitHub Release and verify Docker. Do not use `latest` for a production installation:
 
 ```bash
 docker version
 docker compose version
-git clone https://github.com/JSB2010/safe-online-exam.git safe-online-exam
-cd safe-online-exam
+export VERSION="X.Y.Z"
+curl -fL -O "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
+tar -xzf "safe-online-exam-${VERSION}-compose.tar.gz"
+cd "safe-online-exam-${VERSION}"
 ```
 
-### 2. Build Or Select An Image
+The downloaded `.env.compose.secrets.example` already contains the exact release digest. Confirm it matches the release notes before continuing.
 
-Build locally with an immutable version or commit tag:
+### 2. Select The Released Image
 
-```bash
-export APP_IMAGE="safe-online-exam:$(git rev-parse --short=12 HEAD)"
-docker build --tag "$APP_IMAGE" .
-```
-
-Alternatively, use a trusted published image by digest:
+The standard self-hosted path pulls the digest that ships in the bundle:
 
 ```bash
-export APP_IMAGE="ghcr.io/jsb2010/safe-online-exam@sha256:REPLACE_WITH_DIGEST"
+export APP_IMAGE="$(sed -n 's/^APP_IMAGE=//p' .env.compose.secrets.example)"
 docker pull "$APP_IMAGE"
 ```
 
-The same image runs the application, migrations, and cleanup. Do not use an unpinned moving tag for production.
+The same image runs the application, migrations, cleanup, and bootstrap LTI-key generator. Do not use an unpinned moving tag for production.
 
 ### 3. Generate Keys And Prepare Secrets
 
-Use the mounted-file variant so application secrets are not stored as direct Compose environment values:
+Use the mounted-file variant so application secrets are not stored as direct Compose environment values. The release bundle's helper creates a protected secrets directory and puts the matching SEB private identity under `.local/`, which is intentionally outside the runtime:
 
 ```bash
 umask 077
 cp .env.compose.secrets.example .env.secrets
 chmod 600 .env.secrets
-mkdir -p secrets
-chmod 700 secrets
-
-node scripts/generate-lti-private-key.mjs production >secrets/lti_private_key
-openssl rand -base64 48 >secrets/database_password
-openssl rand -base64 48 >secrets/session_secret
-openssl rand -base64 48 >secrets/state_encryption_key
+APP_IMAGE="$APP_IMAGE" ./bootstrap-secrets.sh
 printf '%s' 'your-canvas-api-client-secret' >secrets/canvas_api_client_secret
-: >secrets/seb_quit_password
-
-mkdir -p .local
-openssl rand -base64 48 >.local/docker-seb-p12-password
-SEB_CERT_NAME=seb-config-encryption \
-SEB_CERT_SUBJECT="/CN=Safe Online Exam Configuration Encryption/O=Organization" \
-bash scripts/generate-seb-config-cert.sh \
-  .local/docker-seb-certs \
-  .local/docker-seb-p12-password
-cp .local/docker-seb-certs/seb-config-encryption.crt.pem \
-  secrets/seb-config-encryption.crt.pem
-
-chmod 644 secrets/*
 ```
 
-The secrets directory is mode `0700`; the files are container-readable inside that protected directory. Move the `.p12`, private key, and passphrase out of the host application directory and into the approved client-deployment vault.
+The secrets directory is mode `0700`; the files are container-readable inside that protected directory. Move `.local/seb-client-identity/` (the `.p12`, private key, and passphrase) out of the host application directory and into the approved client-deployment vault. The server receives only `secrets/seb-config-encryption.crt.pem`.
 
 Edit `.env.secrets` and set at least:
 
@@ -641,7 +650,18 @@ The topology has four roles:
 
 ### 5. Add HTTPS With A TLS Reverse Proxy
 
-Keep the application on loopback and terminate TLS with Caddy, nginx, Traefik, or the provider's managed ingress. For Caddy installed on the host:
+Keep the application on loopback and terminate TLS with Caddy, nginx, Traefik, or the provider's managed ingress. For the optional Caddy profile included in the release bundle, set `PUBLIC_HOST` in `.env.secrets`, open inbound TCP 80/443 and UDP 443, then start the stack with `compose.caddy.yaml`:
+
+```bash
+docker compose \
+  --env-file .env.secrets \
+  -f compose.yaml \
+  -f compose.secrets.yaml \
+  -f compose.caddy.yaml \
+  --profile caddy up --detach --wait
+```
+
+The default stack remains loopback-only so it can run behind an existing Caddy, nginx, Traefik, load balancer, or container-platform ingress. For Caddy installed on the host instead, use:
 
 ```caddyfile
 seb.example.edu {
@@ -754,11 +774,11 @@ Inspect the eight application/runtime tables plus `schema_migrations`, and exerc
 
 ### 8. Upgrade
 
-Build or pull the new immutable image, update `APP_IMAGE` in `.env.secrets`, take a backup, and start the full topology. Compose recreates the migration service for the new image and keeps the application behind its successful completion condition:
+Download the next release bundle, confirm its exact digest, copy the protected `.env.secrets` and `secrets/` directory into it, update only the selected `APP_IMAGE` and `APP_ASSET_VERSION`, take a backup, and start the full topology. Compose recreates the migration service for the new image and keeps the application behind its successful completion condition:
 
 ```bash
-docker build --tag safe-online-exam:NEW_VERSION .
-# Edit APP_IMAGE in .env.secrets to safe-online-exam:NEW_VERSION.
+docker pull ghcr.io/jsb2010/safe-online-exam@sha256:REPLACE_WITH_NEW_RELEASE_DIGEST
+# Edit APP_IMAGE in .env.secrets to that exact digest.
 
 docker compose \
   --env-file .env.secrets \

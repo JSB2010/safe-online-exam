@@ -43,6 +43,38 @@ describe("deployment hardening artifacts", () => {
     );
   });
 
+  it("ships an optional Caddy profile without exposing the application or database by default", () => {
+    const caddy = source("compose.caddy.yaml");
+    const caddyfile = source("Caddyfile");
+
+    expect(caddy).toContain('profiles: ["caddy"]');
+    expect(caddy).toContain("PUBLIC_HOST: ${PUBLIC_HOST:-}");
+    expect(caddy).toContain('"80:80"');
+    expect(caddy).toContain('"443:443"');
+    expect(caddyfile).toContain("{$PUBLIC_HOST}");
+    expect(caddyfile).toContain("reverse_proxy app:8080");
+    expect(source("compose.yaml")).toContain("127.0.0.1");
+  });
+
+  it("packages a digest-pinned self-hosted release bundle without source checkout", () => {
+    const bundle = source("scripts/create-release-bundle.sh");
+    const bootstrap = source("scripts/bootstrap-compose-secrets.sh");
+    const bundleReadme = source("deploy/compose-README.md");
+    const dockerfile = source("Dockerfile");
+
+    expect(bundle).toContain("safe-online-exam-${version}");
+    expect(bundle).toContain("compose.caddy.yaml");
+    expect(bundle).toContain("bootstrap-secrets.sh");
+    expect(bundle).toContain("IMAGE_DIGEST");
+    expect(bootstrap).toContain("safe-online-exam@sha256");
+    expect(bootstrap).toContain("generate-lti-private-key.mjs");
+    expect(bootstrap).toContain("seb-client-identity");
+    expect(bootstrap).not.toContain("CANVAS_API_CLIENT_SECRET=");
+    expect(bundleReadme).toContain("does not contain application source code");
+    expect(dockerfile).toContain("scripts/generate-lti-private-key.mjs");
+    expect(source("scripts/compose-smoke.sh")).toContain("compose.caddy.yaml --profile caddy config --quiet");
+  });
+
   it("contains no retired document-database runtime dependency or provider", () => {
     const production = [source("package.json"), ...sourceTree("src"), ...sourceTree("scripts")].join("\n");
     for (const forbidden of [
@@ -102,6 +134,63 @@ describe("deployment hardening artifacts", () => {
       expect(config, path).toContain("APP_DEBUG_ENABLED=false");
       expect(config, path).toContain('      - "service"');
     }
+  });
+
+  it("can manually promote only a released Safe Online Exam GHCR digest", () => {
+    const helper = source("scripts/deploy-cloud-run-digest.sh");
+    const writer = source("scripts/write-image-digest.sh");
+    const promotion = source("cloudbuild-release-promote.yaml");
+
+    expect(helper).toContain('"ghcr.io/jsb2010/safe-online-exam"');
+    expect(writer).toContain("invalid image digest");
+    expect(writer).toContain("output must be a direct child of /workspace");
+    expect(promotion).toContain("_IMAGE_REPOSITORY: ghcr.io/jsb2010/safe-online-exam");
+    expect(promotion).toContain("_IMAGE_DIGEST: sha256:REPLACE_WITH_RELEASE_DIGEST");
+    expect(promotion).toContain('entrypoint: "/workspace/scripts/write-image-digest.sh"');
+    expect(promotion.match(/entrypoint: "\/workspace\/scripts\/deploy-cloud-run-digest\.sh"/gu)).toHaveLength(3);
+    expect(promotion).toContain("-migrate");
+    expect(promotion).toContain("-cleanup");
+    expect(promotion).toContain('"--wait"');
+    expect(promotion).not.toContain("docker build");
+  });
+
+  it("publishes public release images only from a verified GitHub Release", () => {
+    const workflow = source(".github/workflows/publish-release-image.yml");
+
+    expect(workflow).toContain("types: [published]");
+    expect(workflow).toContain('expected_tag="v${package_version}"');
+    expect(workflow).toContain("git merge-base --is-ancestor");
+    expect(workflow).toContain("npm run verify");
+    expect(workflow).toContain("npm run verify:postgres");
+    expect(workflow).toContain("bash scripts/compose-smoke.sh");
+    expect(workflow).toContain("linux/amd64,linux/arm64");
+    expect(workflow).toContain("sbom: true");
+    expect(workflow).toContain("actions/attest@v4");
+    expect(workflow).toContain("org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0");
+    expect(workflow).toContain("type=raw,value=latest");
+    expect(workflow).toContain("scope: ${{ env.IMAGE_NAME }}@push");
+    expect(workflow).toContain("create-release-bundle.sh");
+    expect(workflow).toContain("gh release upload");
+  });
+
+  it("runs the deploy-equivalent verification layers for pull requests and main pushes without credentials", () => {
+    const workflow = source(".github/workflows/ci.yml");
+
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain("permissions:\n  contents: read");
+    expect(workflow).toContain("npm run verify");
+    expect(workflow).toContain("npm run verify:postgres");
+    expect(workflow).toContain("bash scripts/compose-smoke.sh");
+    expect(workflow).not.toMatch(/gcloud|google-github-actions|packages: write|id-token: write/iu);
+  });
+
+  it("tracks GitHub Actions and Docker base-image updates through Dependabot", () => {
+    const dependabot = source(".github/dependabot.yml");
+
+    expect(dependabot).toContain("package-ecosystem: github-actions");
+    expect(dependabot).toContain("package-ecosystem: docker");
+    expect(dependabot.match(/interval: weekly/gu)).toHaveLength(2);
   });
 
   it("allows a school deployment to configure its own Canvas LTI platform endpoints", () => {

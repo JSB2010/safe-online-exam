@@ -1,0 +1,146 @@
+name: Publish release image
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: jsb2010/safe-online-exam
+
+jobs:
+  verify-release:
+    name: Verify release source
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Confirm the release is based on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$(git rev-parse HEAD)" FETCH_HEAD
+
+      - name: Confirm release tag matches package version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          package_version="$(node --input-type=module -e "import packageJson from './package.json' with { type: 'json' }; process.stdout.write(packageJson.version)")"
+          expected_tag="v${package_version}"
+          test "$RELEASE_TAG" = "$expected_tag"
+          printf 'version=%s\n' "$package_version" >>"$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify application
+        run: npm run verify
+
+      - name: Verify PostgreSQL integration
+        run: npm run verify:postgres
+
+      - name: Verify Compose topology
+        run: bash scripts/compose-smoke.sh
+
+  publish:
+    name: Publish GHCR image and release bundle
+    needs: verify-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          scope: ${{ env.IMAGE_NAME }}@push
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }},enable=${{ !github.event.release.prerelease }}
+            type=semver,pattern={{major}},value=${{ github.event.release.tag_name }},enable=${{ !github.event.release.prerelease }}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+          labels: |
+            org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0
+
+      - name: Build and push multi-architecture image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest the published image
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build the versioned Compose bundle
+        id: bundle
+        env:
+          RELEASE_VERSION: ${{ needs.verify-release.outputs.version }}
+          RELEASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p release-artifacts
+          archive="$(bash scripts/create-release-bundle.sh "$RELEASE_VERSION" "$RELEASE_IMAGE" release-artifacts)"
+          printf 'archive=%s\n' "$archive" >>"$GITHUB_OUTPUT"
+
+      - name: Attach bundle and digest to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
+          BUNDLE: ${{ steps.bundle.outputs.archive }}
+        run: |
+          gh release upload "$RELEASE_TAG" "$BUNDLE" --clobber
+          existing_notes="$(gh release view "$RELEASE_TAG" --json body --jq .body)"
+          notes_file="$(mktemp)"
+          printf '%s\n\n## Published container image\n\n`%s`\n' "$existing_notes" "$RELEASE_IMAGE" >"$notes_file"
+          gh release edit "$RELEASE_TAG" --notes-file "$notes_file"

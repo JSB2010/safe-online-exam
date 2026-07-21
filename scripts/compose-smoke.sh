@@ -46,6 +46,7 @@ APP_ENV_FILE=$environment_file
 BIND_ADDRESS=127.0.0.1
 APP_PORT=18080
 SECRETS_DIRECTORY=$secrets_directory
+PUBLIC_HOST=seb.example.edu
 NODE_ENV=production
 APP_ENV=prod
 HOST=0.0.0.0
@@ -67,6 +68,9 @@ APP_DEBUG_ENABLED=false
 APP_DETECTOR_DIAGNOSTICS_ENABLED=false
 EOF
 chmod 600 "$environment_file"
+
+"${compose_command[@]}" config --quiet
+"${compose_command[@]}" -f compose.caddy.yaml --profile caddy config --quiet
 
 docker build --tag "$image" .
 "${compose_command[@]}" up --detach --wait

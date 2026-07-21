@@ -36,6 +36,8 @@ npm run test:e2e
 
 `npm run verify` runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. `npm run verify:postgres` starts PostgreSQL 17, applies migrations in isolated schemas, and runs repository atomicity/concurrency tests. The deploy pipeline runs both layers before promotion.
 
+GitHub Actions runs those two layers plus the Compose smoke test for every pull request and push to `main`. It uses the pinned Ubuntu 24.04 runner and Node 24—the same supported major runtime as the production container—with npm download caching through `setup-node`. This CI workflow has no cloud credentials and does not publish images or deploy services; use its three jobs as required branch-protection checks before merge. Dependabot opens weekly update PRs for GitHub Actions and Docker base images.
+
 Verify the production topology separately:
 
 ```bash
@@ -43,6 +45,12 @@ bash scripts/compose-smoke.sh
 ```
 
 That smoke builds the exact runtime image, waits for the migration/app readiness gates, writes a safe row, restarts the app, and confirms the named PostgreSQL volume retained it.
+
+## Release Pipeline Checks
+
+Publishing a stable GitHub Release requires a `vX.Y.Z` tag that matches `package.json`. The GitHub workflow checks that the tag commit is on `main`, runs `npm run verify`, `npm run verify:postgres`, and `bash scripts/compose-smoke.sh`, then publishes the `linux/amd64` and `linux/arm64` image manifest, SBOM, provenance, and a digest-pinned Compose bundle.
+
+Before relying on the first public release, inspect the GitHub Release asset, confirm the manifest lists both architectures, and run the bundle's `docker compose ... config --quiet` plus first-install smoke procedure on an isolated host. Before a Cloud Run promotion, use the release digest with `cloudbuild-release-promote.yaml` against development, then confirm its migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets.
 
 ## Test Coverage By Layer
 

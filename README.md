@@ -49,43 +49,58 @@ Canvas LTI 1.3 ──────> NestJS service ──────> PostgreSQL
 
 ## Deployment Options
 
-Google Cloud Run with Cloud SQL is the recommended managed deployment. The checked-in Cloud Build pipeline verifies the image, runs real PostgreSQL tests, publishes an immutable Artifact Registry digest, waits for the migration job, deploys the cleanup job, and updates the existing Cloud Run service without changing its URL.
+Published stable releases are available as multi-architecture OCI images at `ghcr.io/jsb2010/safe-online-exam`. A release tag `vX.Y.Z` publishes the immutable `X.Y.Z` image and moves `X.Y`, `X`, and `latest` to the same digest. Use the exact release digest in production; moving tags are for discovery only. Every GitHub Release also includes a Compose bundle with that digest already selected.
+
+Google Cloud Run with Cloud SQL is the recommended managed deployment. Existing source-based Cloud Build workflows remain useful for development and maintained environments. A separately reviewed GitHub Release can instead be promoted by digest through `cloudbuild-release-promote.yaml`, which runs its migration job before updating the cleanup job and service.
 
 ```bash
 gcloud builds submit --config=cloudbuild-dev.yaml
 gcloud builds submit --config=cloudbuild-prod.yaml
 ```
 
-First-time Google Cloud provisioning requires Cloud SQL, Artifact Registry, runtime/build IAM, Secret Manager versions, a stable service URL, and a two-pass Canvas LTI bootstrap. Follow the exact commands in [Deployment](docs/deployment.md); a bare build submission is only sufficient after those resources exist.
+First-time Google Cloud provisioning requires Cloud SQL, runtime/build IAM, Secret Manager versions, a stable service URL, and a two-pass Canvas LTI bootstrap. Follow the exact commands in [Deployment](docs/deployment.md); a bare build submission is only sufficient after those resources exist.
 
 The same container is portable to a conventional VPS or any platform that provides PostgreSQL 17+, HTTPS ingress, secret injection, a migration job, and scheduled cleanup.
 
 ## Quick Start With Docker Compose
 
-Build a versioned image and create a private environment file:
+Download a specific GitHub Release asset, rather than cloning this repository or building application source on the target host:
 
 ```bash
-docker build -t safe-online-exam:local .
-cp .env.compose.example .env
-chmod 600 .env
-mkdir -p secrets
+export VERSION=1.0.0
+curl -fL -O "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
+tar -xzf "safe-online-exam-${VERSION}-compose.tar.gz"
+cd "safe-online-exam-${VERSION}"
+cp .env.compose.secrets.example .env.secrets
+chmod 600 .env.secrets
 ```
 
-Set real Canvas/LTI values and strong secrets in `.env`, place the public SEB encryption certificate at `secrets/seb-config-encryption.crt.pem`, then start the stack:
+Set the non-secret Canvas/LTI values in `.env.secrets`, then generate protected runtime secrets and the client-only SEB identity. Provide the Canvas API secret after creating its Developer Key; never place the generated `.p12`, private PEM, or its password in the server runtime.
 
 ```bash
-APP_IMAGE=safe-online-exam:local docker compose up -d --wait
+APP_IMAGE="$(sed -n 's/^APP_IMAGE=//p' .env.compose.secrets.example)" \
+  ./bootstrap-secrets.sh
+# Write the Canvas API secret to secrets/canvas_api_client_secret.
+docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml up -d --wait
 curl -fsS http://127.0.0.1:8080/health
 curl -fsS http://127.0.0.1:8080/ready
 ```
 
 Compose runs schema migrations before the app and stores PostgreSQL data in the `postgres_data` volume. It binds only to loopback by default. Put a TLS reverse proxy in front before exposing the service to Canvas; production `TOOL_URL` must be HTTPS.
 
-For a hardened host where application secrets must be mounted as files, use [.env.compose.secrets.example](.env.compose.secrets.example) and the override:
+For a bare VPS, set `PUBLIC_HOST` in `.env.secrets`, open ports 80 and 443, and add the optional Caddy profile:
 
 ```bash
-docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml up -d --wait
+docker compose --env-file .env.secrets \
+  -f compose.yaml -f compose.secrets.yaml -f compose.caddy.yaml \
+  --profile caddy up -d --wait
 ```
+
+See [Deployment](docs/deployment.md) for the release workflow, upgrades, backups, Cloud Run promotion, and Canvas bootstrap sequence.
+
+## Continuous Integration
+
+GitHub Actions runs a non-deploying CI workflow for every pull request and push to `main`. It runs the application verification gate, real PostgreSQL integration tests, and the production Compose smoke topology on the pinned Ubuntu 24.04 runner with Node 24. It has read-only repository permission and does not authenticate to Google Cloud or publish container images. npm download caching is enabled through `setup-node`; Dependabot opens weekly update PRs for GitHub Actions and Docker base images. Configure these three checks as required branch-protection checks for `main`.
 
 ## Local Development
 

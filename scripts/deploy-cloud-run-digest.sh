@@ -12,8 +12,8 @@ resource_kind="$3"
 resource="$4"
 shift 4
 
-if [[ ! "$repository" =~ ^[a-z0-9.-]+-docker\.pkg\.dev/[a-z0-9:._-]+/[a-z0-9._/-]+$ ]]; then
-  echo "invalid Artifact Registry image repository" >&2
+if [[ "$repository" != "ghcr.io/jsb2010/safe-online-exam" && ! "$repository" =~ ^[a-z0-9.-]+-docker\.pkg\.dev/[a-z0-9:._-]+/[a-z0-9._/-]+$ ]]; then
+  echo "invalid image repository" >&2
   exit 64
 fi
 if [[ "$resource_kind" != "service" && "$resource_kind" != "job" ]]; then
