@@ -19,6 +19,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      verified_sha: ${{ steps.source.outputs.verified_sha }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v7
@@ -32,10 +33,14 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Record verified source commit
+        id: source
+        run: printf 'verified_sha=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
       - name: Confirm the release is based on main
         run: |
           git fetch origin main
-          git merge-base --is-ancestor "$(git rev-parse HEAD)" FETCH_HEAD
+          git merge-base --is-ancestor "${{ steps.source.outputs.verified_sha }}" FETCH_HEAD
 
       - name: Confirm release tag matches package version
         id: version
@@ -69,10 +74,10 @@ jobs:
       attestations: write
       id-token: write
     steps:
-      - name: Check out the release tag
+      - name: Check out the verified release commit
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.verify-release.outputs.verified_sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
