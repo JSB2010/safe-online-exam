@@ -161,6 +161,8 @@ describe("deployment hardening artifacts", () => {
 
     expect(workflow).toContain("types: [published]");
     expect(workflow).toContain('expected_tag="v${package_version}"');
+    expect(workflow).toContain("verified_sha: ${{ steps.source.outputs.verified_sha }}");
+    expect(workflow).toContain("ref: ${{ needs.verify-release.outputs.verified_sha }}");
     expect(workflow).toContain("git merge-base --is-ancestor");
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run verify:postgres");
