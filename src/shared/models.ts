@@ -1661,18 +1661,9 @@ function sanitizeToolId(value: string): string {
 
 type RoleAwareLaunchData = Pick<LtiLaunchData, "roles" | "custom">;
 
-const canvasInstructorEnrollments = new Set(["teacherenrollment", "taenrollment", "designerenrollment"]);
-const canvasStudentEnrollments = new Set(["studentenrollment"]);
 const instructorContextRoles = new Set(["administrator", "contentdeveloper", "instructor"]);
 const studentContextRoles = new Set(["learner"]);
 const studentInstitutionRoles = new Set(["student", "learner"]);
-const instructorPermissions = new Set([
-  "manage_assignments_add",
-  "manage_assignments_edit",
-  "manage_course_content_add",
-  "manage_course_content_edit",
-  "manage_course_content_delete"
-]);
 
 export function isInstructor(launchData?: RoleAwareLaunchData | null): boolean {
   if (!launchData) {
@@ -1697,43 +1688,6 @@ export function isAccountAdministrator(launchData?: RoleAwareLaunchData | null):
     const institution = parseInstitutionRole(role);
     return context?.principal === "administrator" || institution === "administrator" || isSystemAdministratorRole(role);
   });
-}
-
-/**
- * Canvas custom substitutions are signed, but they are deployment-configurable and are not the
- * interoperable LTI authorization claim. Keep the standard LTI roles claim authoritative and fail
- * closed when a configured custom field contradicts it.
- */
-export function assertLtiRoleClaimsConsistent(launchData: RoleAwareLaunchData): void {
-  const standardInstructor = launchData.roles.some(isContextInstructorRole);
-  const standardStudent =
-    launchData.roles.some(isContextStudentRole) || launchData.roles.some(isInstitutionStudentRole);
-  const canvasMembershipRoles = customValues(launchData.custom, ["canvas_membership_roles"]);
-  const lisMembershipRoles = customValues(launchData.custom, [
-    "canvas_lis_membership_roles",
-    "com_instructure_membership_roles"
-  ]);
-  const permissions = customValues(launchData.custom, ["canvas_membership_permissions"]);
-  const customInstructor =
-    canvasMembershipRoles.some(isCanvasInstructorEnrollment) ||
-    lisMembershipRoles.some(isContextInstructorRole) ||
-    permissions.some((permission) => instructorPermissions.has(permission.toLowerCase()));
-  const customStudent =
-    canvasMembershipRoles.some(isCanvasStudentEnrollment) ||
-    lisMembershipRoles.some(isContextStudentRole) ||
-    lisMembershipRoles.some(isInstitutionStudentRole);
-
-  if ((customInstructor && !standardInstructor) || (customStudent && !standardStudent)) {
-    throw new Error("Conflicting LTI role claims");
-  }
-}
-
-function isCanvasInstructorEnrollment(role: string): boolean {
-  return canvasInstructorEnrollments.has(role.toLowerCase());
-}
-
-function isCanvasStudentEnrollment(role: string): boolean {
-  return canvasStudentEnrollments.has(role.toLowerCase());
 }
 
 function isContextInstructorRole(role: string): boolean {
@@ -1790,32 +1744,4 @@ function isSystemAdministratorRole(role: string): boolean {
     normalized === "http://purl.imsglobal.org/vocab/lis/v2/system/person#sysadmin" ||
     normalized === "urn:lti:sysrole:ims/lis/sysadmin"
   );
-}
-
-function customValues(custom: Record<string, string> | undefined, keys: string[]): string[] {
-  return keys.flatMap((key) => splitRoleList(custom?.[key]));
-}
-
-function splitRoleList(value: string | undefined): string[] {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed.startsWith("$")) {
-    return [];
-  }
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (Array.isArray(parsed)) {
-        return parsed
-          .map(String)
-          .map((entry) => entry.trim())
-          .filter(Boolean);
-      }
-    } catch {
-      return [];
-    }
-  }
-  return trimmed
-    .split(/[\s,]+/u)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }

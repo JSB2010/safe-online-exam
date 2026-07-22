@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from "jose";
-import { assertLtiRoleClaimsConsistent, type LtiLaunchData } from "../../shared/models.js";
+import type { LtiLaunchData } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 
 const LTI_SIGNING_ALGORITHM = "RS256";
@@ -93,13 +93,11 @@ export function launchDataFromPayload(payload: JWTPayload): LtiLaunchData {
   }
   const canvasUserId = asString(custom.canvas_user_id);
   const stringifiedCustom = stringifyRecord(custom);
-  // Account-navigation launches do not have a course-membership context. Canvas may still
-  // substitute enrollment roles for an administrator who also teaches or studies, so those
-  // values cannot be compared with the account-level standard LTI roles. Account launches
-  // are authorized separately from signed administrator, root-account, and account-id claims.
-  if (!accountAdminSurface) {
-    assertLtiRoleClaimsConsistent({ roles, custom: stringifiedCustom });
-  }
+  // Canvas custom substitutions are deployment-defined metadata. They are signed but are not
+  // interoperable authorization claims, and Canvas can legitimately report a different
+  // enrollment representation here than in the standard LTI roles claim. Authorization always
+  // uses `roles` below (and never these custom values), so a disagreement must not reject an
+  // otherwise valid course launch.
   return {
     ltiSubject,
     canvasUserId,

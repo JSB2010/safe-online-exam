@@ -242,7 +242,7 @@ describe("LtiService.validateToken", () => {
     );
   });
 
-  it("rejects a learner token whose custom claims request teacher privileges", async () => {
+  it("keeps standard LTI roles authoritative when Canvas custom substitutions disagree", async () => {
     const token = await signLaunch(
       privateKey,
       launchPayload({
@@ -256,7 +256,9 @@ describe("LtiService.validateToken", () => {
       })
     );
 
-    await expect(makeLtiService(localJwks).validateToken(token, NONCE)).rejects.toThrow("Conflicting LTI role claims");
+    await expect(makeLtiService(localJwks).validateToken(token, NONCE)).resolves.toMatchObject({
+      roles: [LEARNER_ROLE]
+    });
   });
 
   it.each(["iat", "exp"] as const)("rejects a token missing %s", async (claim) => {
