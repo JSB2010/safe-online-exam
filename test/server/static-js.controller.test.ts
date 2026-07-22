@@ -232,6 +232,8 @@ describe("StaticJsController", () => {
     expect(script).toContain('const detectorUrl = "https://seb.example.edu/js/canvas-seb-detector.js";');
     expect(script).toContain("quizzes\\/\\d+\\/take");
     expect(script).toContain("assignments\\/\\d+");
+    expect(script).toContain("newQuizAuthoringPath");
+    expect(script).toContain("build|settings|moderate|reports|exports");
     expect(script).toContain('script.dataset.canvasSebDetector = "true";');
   });
 

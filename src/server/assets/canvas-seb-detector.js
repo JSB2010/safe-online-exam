@@ -16,6 +16,7 @@
     const DIAGNOSTIC_TRACING = SERVER_DIAGNOSTIC_MODE === true || SERVER_DIAGNOSTIC_MODE === 'true';
     const DETECTOR_VERSION = '4.0 route-verified New Quiz completion';
     const DETECTOR_TRACE_ENDPOINT = `${SEB_DOWNLOAD_BASE_URL}/api/debug/canvas-detector-trace`;
+    const SAFE_ONLINE_EXAM_ICON_URL = `${SEB_DOWNLOAD_BASE_URL}/assets/safe-online-exam-icon.png`;
     const DETECTOR_TRACE_BATCH_SIZE = 15;
     const LATE_ACCESS_CODE_CHECK_DELAY_MS = 300;
     const PENDING_REDIRECT_TTL_MS = 10 * 60 * 1000;
@@ -450,6 +451,31 @@
                 '^/courses/' + escapeRegexValue(quizInfo.courseId) +
                 '/assignments/' + escapeRegexValue(quizInfo.assignmentId) +
                 '/taking/[^/]+/take/?$'
+            ).test(location.pathname);
+        }
+
+        return new RegExp(
+            '^/courses/' + escapeRegexValue(quizInfo.courseId) +
+            '/quizzes/' + escapeRegexValue(quizInfo.quizId) +
+            '/take(?:/|$)'
+        ).test(location.pathname);
+    }
+
+    function isStudentAssessmentAccessPage(quizInfo = extractQuizInfo()) {
+        if (!quizInfo) {
+            return false;
+        }
+
+        if (quizInfo.contentType === 'NEW_QUIZ') {
+            // New Quiz authoring screens also contain the access-code control.
+            // Do not treat a known instructor workspace as an assessment
+            // launch. Canvas can use /launch before it creates an attempt,
+            // so rejecting every non-/taking route would break valid student
+            // handoffs. This intentionally keeps the exclusion narrow.
+            return !new RegExp(
+                '^/courses/' + escapeRegexValue(quizInfo.courseId) +
+                '/assignments/' + escapeRegexValue(quizInfo.assignmentId) +
+                '/(?:build|settings|moderate|reports|exports)(?:/|$)'
             ).test(location.pathname);
         }
 
@@ -1141,6 +1167,10 @@
             return;
         }
         const quizInfo = extractQuizInfo();
+        if (!isStudentAssessmentAccessPage(quizInfo)) {
+            debugLog('Not a student assessment access route, skipping browser launch prompt');
+            return;
+        }
         const promptKey = quizInfo ? quizKey(quizInfo) : courseId + ':' + quizId;
         const isNewQuiz = quizInfo
             ? quizInfo.contentType === 'NEW_QUIZ'
@@ -1177,19 +1207,19 @@
         message.innerHTML = `
             <div style="width: min(560px, 100%); overflow: hidden; background: #ffffff; color: #182230; border: 1px solid #dbe2ea; border-radius: 8px; box-shadow: 0 16px 34px rgba(24,36,56,0.16); text-align: left;">
                 <div style="padding: 32px 32px 22px;">
-                <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; color: #075985; background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; font-weight: 800;">
-                    SEB
+                <div style="width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 18px; overflow: hidden; background: #ffffff; border: 1px solid #dbe2ea; border-radius: 10px;">
+                    <img src="${escapeHtml(SAFE_ONLINE_EXAM_ICON_URL)}" alt="" width="40" height="40" loading="lazy" decoding="async" style="display: block; width: 40px; height: 40px; object-fit: contain;" />
                 </div>
                 <p style="margin: 0 0 6px; color: #0b63ce; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0;">
-                    Secure assessment
+                    Safe Online Exam
                 </p>
                 <h2 id="seb-launch-dialog-title" style="color: #182230; margin: 0 0 12px; font-size: 24px; line-height: 1.15; font-weight: 800;">
-                    Safe Online Exam Required
+                    Open Safe Exam Browser
                 </h2>
                 <p style="margin: 0; font-size: 15px; line-height: 1.45; color: #667085;">
                     ${isNewQuiz
-                        ? 'Open this assessment with Safe Online Exam, or stay here to review previous attempts.'
-                        : 'Open this assessment with Safe Online Exam.'}
+                        ? 'Open this assessment in Safe Exam Browser, or stay here to review previous attempts.'
+                        : 'Open this assessment in Safe Exam Browser.'}
                 </p>
                 </div>
                 <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 14px 32px 18px; background: #f8fafc; border-top: 1px solid #dbe2ea; flex-wrap: wrap;">
@@ -1197,7 +1227,7 @@
                             ? '<button id="seb-launch-view-page-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">View quiz page</button>'
                             : '<button id="seb-launch-back-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">Back</button>'}
                         <a id="seb-launch-open-link" href="${escapeHtml(secureLaunchUrl || fallbackUrl)}" rel="noopener noreferrer" referrerpolicy="no-referrer" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">
-                        ${secureLaunchUrl ? 'Open with Safe Online Exam' : 'Go to course navigation'}
+                        ${secureLaunchUrl ? 'Open Safe Exam Browser' : 'Open Safe Online Exam'}
                         </a>
                 </div>
             </div>
@@ -3394,6 +3424,11 @@
         const quizInfo = extractQuizInfo();
         if (!quizInfo) {
             debugLog('Could not extract quiz info', 'warn');
+            return;
+        }
+
+        if (!isStudentAssessmentAccessPage(quizInfo)) {
+            debugLog('Not a student assessment access route, skipping detector behavior');
             return;
         }
 

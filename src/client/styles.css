@@ -950,6 +950,7 @@ p {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   min-height: 28px;
   padding: 0 9px;
   border-radius: 999px;
@@ -3120,15 +3121,10 @@ select[aria-invalid="true"] {
   border-radius: 10px;
 }
 
-.assessment-icon.enabled {
-  color: #047857;
-  background: #ecfdf3;
-  border-color: #a7f3d0;
-}
-
 .assessment-status {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   min-height: 20px;
   padding: 1px 6px;
   color: #667085;

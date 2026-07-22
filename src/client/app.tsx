@@ -839,7 +839,6 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                 <div className="admin-assessment-heading">
                   <div>
                     <h3>Assessments</h3>
-                    <p>Manage Safe Online Exam only where it is currently required.</p>
                   </div>
                   <span>
                     {selectedCourse.enabledAssessmentCount} active · {selectedCourse.assessmentCount} total
@@ -855,7 +854,9 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                         key={assessment.id}
                       >
                         <div className="admin-assessment-main">
-                          <span className={clsx("status-dot", assessment.sebRequired && "on")} />
+                          <span className="assessment-icon" aria-hidden="true">
+                            <BookOpen size={16} />
+                          </span>
                           <div>
                             <strong>{assessment.title}</strong>
                             <small>
@@ -866,7 +867,8 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                         </div>
                         <div className="admin-assessment-actions">
                           <span className={clsx("status-pill", assessment.sebRequired ? "enabled" : "disabled")}>
-                            {assessment.sebRequired ? "Safe Online Exam required" : "Safe Online Exam off"}
+                            {assessment.sebRequired ? <ShieldCheck size={13} /> : <Shield size={13} />}
+                            {assessment.sebRequired ? "Requires Safe Exam Browser" : "Browser not required"}
                           </span>
                           {assessment.sebRequired ? (
                             <>
@@ -2001,9 +2003,7 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
       <section className="work-surface assessment-surface">
         <div className="list-header">
           <div>
-            <span className="section-kicker">Assessment access</span>
             <h2>Assessments</h2>
-            <p>Turn Safe Online Exam on only for the quizzes that need it.</p>
           </div>
           <div className="search">
             <Search size={18} />
@@ -2024,15 +2024,16 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
             return (
               <article className="content-row teacher-row" key={item.id}>
                 <div className="content-main">
-                  <span className={clsx("assessment-icon", enabled && "enabled")} aria-hidden="true">
-                    {enabled ? <ShieldCheck size={18} /> : <BookOpen size={18} />}
+                  <span className="assessment-icon" aria-hidden="true">
+                    <BookOpen size={18} />
                   </span>
                   <div>
                     <h3>{item.title}</h3>
                     <p>
                       {item.quizTypeDisplay || item.contentType || "Canvas content"}
                       <span className={clsx("assessment-status", enabled && "enabled")}>
-                        {enabled ? "Safe Online Exam enabled" : "Safe Online Exam off"}
+                        {enabled ? <ShieldCheck size={13} /> : <Shield size={13} />}
+                        {enabled ? "Requires Safe Exam Browser" : "Browser not required"}
                       </span>
                     </p>
                   </div>
@@ -2202,7 +2203,7 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
         <div className="list-header">
           <div>
             <h2>Quizzes</h2>
-            <p>Open each quiz with Safe Online Exam.</p>
+            <p>Open each quiz in Safe Exam Browser.</p>
           </div>
         </div>
         <div className="content-list">
@@ -2215,7 +2216,7 @@ function StudentDashboard({ data }: { data: Record<string, any> }) {
                   <p>{quiz.quizTypeDisplay || "Canvas quiz"}</p>
                 </div>
               </div>
-              <span className="status-pill enabled">Safe Online Exam required</span>
+              <span className="status-pill enabled">Safe Exam Browser required</span>
               <SebLaunchButton
                 grantUrl={quiz.configGrantUrl || quiz.configUrl}
                 token={data.configGrantToken}
@@ -2593,7 +2594,7 @@ function SebSetupCheckDialog({
         <header className="dialog-header">
           <div>
             <span className="section-kicker">Device setup</span>
-            <h2 id="setup-check-title">Safe Online Exam setup check</h2>
+            <h2 id="setup-check-title">Safe Exam Browser setup check</h2>
           </div>
           <button
             ref={closeButtonRef}
@@ -2607,19 +2608,25 @@ function SebSetupCheckDialog({
           </button>
         </header>
         <div className="setup-check-intro">
-          <p>This confirms your Canvas connection, then opens a short Safe Online Exam test on this computer.</p>
+          <p>This confirms your Canvas connection, then opens a short Safe Exam Browser test on this computer.</p>
           <div className="instruction-list">
             <div>
               <strong>1</strong>
-              <span>If your computer asks to approve the school configuration certificate, complete that prompt.</span>
+              <span>
+                If your computer asks for a certificate password, enter it and select <b>Always Allow</b>.
+              </span>
             </div>
             <div>
               <strong>2</strong>
-              <span>Keep the Safe Online Exam check open until every item has finished.</span>
+              <span>When your browser asks, select Open Safe Exam Browser.</span>
             </div>
             <div>
               <strong>3</strong>
-              <span>Wait for the check page to say Safe Online Exam is ready, then quit the secure browser.</span>
+              <span>Keep the check open until every item has finished.</span>
+            </div>
+            <div>
+              <strong>4</strong>
+              <span>Wait for the check page to say Safe Online Exam is ready, then quit Safe Exam Browser.</span>
             </div>
           </div>
         </div>
@@ -2628,7 +2635,7 @@ function SebSetupCheckDialog({
             Cancel
           </button>
           <button className="button primary" type="button" disabled={checking} onClick={() => void launchCheck()}>
-            <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch Safe Online Exam check"}
+            <PlayCircle size={16} /> {checking ? "Checking Canvas…" : "Launch Safe Exam Browser check"}
           </button>
         </footer>
         {error && (
@@ -3997,11 +4004,11 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
     <>
       <MessagePage
         icon={<Shield />}
-        title="Safe Online Exam Required"
+        title="Safe Exam Browser Required"
         message={
           data.showReadinessPrompt
             ? "Canvas is connected. You can optionally check this computer before opening your quiz."
-            : "Open this assessment with Safe Online Exam when you are ready. If prompted, allow Safe Exam Browser to open."
+            : "Open this assessment in Safe Exam Browser when you are ready. If prompted, allow Safe Exam Browser to open."
         }
         action={
           <>
@@ -4014,7 +4021,7 @@ function SebDownloadPage({ data }: { data: Record<string, any> }) {
             <SebLaunchButton
               grantUrl={data.configGrantUrl}
               token={data.configGrantToken}
-              label="Open Safe Online Exam"
+              label="Open Safe Exam Browser"
             />
           </>
         }
@@ -4132,13 +4139,13 @@ function SebLaunchingPage({ data }: { data: Record<string, any> }) {
   return (
     <MessagePage
       icon={<Shield />}
-      title="Opening Safe Online Exam"
-      message="Approve the browser prompt to open Safe Online Exam. You can return to your Canvas course with the button below."
+      title="Opening Safe Exam Browser"
+      message="When the browser confirmation appears, select Open Safe Exam Browser. You can return to your Canvas course with the button below."
       action={
         <>
           {sebLaunchUrl && (
             <a className="button primary" href={sebLaunchUrl}>
-              <ExternalLink size={16} /> Open Safe Online Exam
+              <ExternalLink size={16} /> Open Safe Exam Browser
             </a>
           )}
           {returnUrl && (
@@ -4160,14 +4167,14 @@ function SebExitPage({ data }: { data: Record<string, any> }) {
       title="Assessment Complete"
       message={
         quitUrl
-          ? "Safe Online Exam will close this session automatically. Use the button if it stays open."
-          : "Return to the submitted assessment results page to finish closing Safe Online Exam."
+          ? "Safe Exam Browser will close this session automatically. Use the button if it stays open."
+          : "Return to the submitted assessment results page to finish closing Safe Exam Browser."
       }
       action={
         quitUrl ? (
           <AutoRedirectAction
             url={quitUrl}
-            label="Quit Safe Online Exam"
+            label="Quit Safe Exam Browser"
             icon={<LogOut size={16} />}
             seconds={2}
             linkId="sebQuitLink"
@@ -4237,8 +4244,8 @@ function SebQuitPage({ data }: { data: Record<string, any> }) {
   return (
     <MessagePage
       icon={<LogOut />}
-      title="Safe Online Exam Closing"
-      message="Safe Online Exam should close this session. Use the button again if this window remains open."
+      title="Safe Exam Browser Closing"
+      message="Safe Exam Browser should close this session. Use the button again if this window remains open."
       action={
         <a className="button primary" id="sebLegacyQuitLink" href={data.legacyQuitUrl || data.quitUrl}>
           Quit again
@@ -4411,7 +4418,7 @@ function SebSetupCheckPage({ data }: { data: Record<string, any> }) {
         </div>
         <div className="message-actions">
           <a className={clsx("button", passed ? "primary" : "secondary")} id="sebSetupCheckQuitLink" href={quitUrl}>
-            <LogOut size={16} /> Quit Safe Online Exam
+            <LogOut size={16} /> Quit Safe Exam Browser
           </a>
         </div>
       </section>

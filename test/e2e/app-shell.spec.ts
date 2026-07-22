@@ -254,7 +254,7 @@ test("renders the responsive root-account administrator workspace and controlled
   await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
   await expect(page.getByText("Midterm")).toBeVisible();
   const inactiveAssessment = page.locator("article.admin-assessment-row").filter({ hasText: "Practice quiz" });
-  await expect(inactiveAssessment.getByRole("button", { name: "Enable SEB" })).toBeVisible();
+  await expect(inactiveAssessment.getByRole("button", { name: "Enable Safe Online Exam" })).toBeVisible();
   await expect(inactiveAssessment.getByRole("button", { name: /Reveal passwords/u })).toHaveCount(0);
   await expect(inactiveAssessment.getByRole("button", { name: /Reset settings/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reveal passwords" })).toHaveCount(1);

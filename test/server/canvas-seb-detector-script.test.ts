@@ -38,7 +38,7 @@ describe("Safe Online Exam detector script", () => {
 
     await context.runDetector();
 
-    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
+    expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
 
     const directLaunchUrl = new URL(openSebLink!.href);
@@ -49,8 +49,11 @@ describe("Safe Online Exam detector script", () => {
     expect(directLaunchUrl.searchParams.get("launch_url")).toBe(
       "https://tool.example.edu/seb/launch/classicquiz_23455"
     );
-    expect(openSebLink?.textContent).toContain("Open with Safe Online Exam");
+    expect(openSebLink?.textContent).toContain("Open Safe Exam Browser");
     expect(openSebLink?.rel).toContain("noopener");
+    const productIcon = context.document.querySelector<HTMLImageElement>("#seb-launch-prompt img");
+    expect(productIcon?.src).toBe("https://tool.example.edu/assets/safe-online-exam-icon.png");
+    expect(productIcon?.getAttribute("loading")).toBe("lazy");
     expect(context.document.querySelector('a[href^="sebs://"]')).toBeNull();
     expect(context.document.getElementById("seb-launch-countdown-text")).toBeNull();
     expect(context.document.getElementById("seb-launch-countdown-bar")).toBeNull();
@@ -80,7 +83,7 @@ describe("Safe Online Exam detector script", () => {
     await context.runDetector();
     await vi.advanceTimersByTimeAsync(3_100);
 
-    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
+    expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
     expect(context.console.log).not.toHaveBeenCalledWith(
       "Safe Online Exam detector:",
       "Quiz completion handler active for Course 11825, Quiz 23455"
@@ -104,7 +107,7 @@ describe("Safe Online Exam detector script", () => {
 
     await context.runDetector();
 
-    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
+    expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
     expect(context.document.body.textContent).toContain("review previous attempts");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
     const directLaunchUrl = new URL(openSebLink!.href);
@@ -160,7 +163,7 @@ describe("Safe Online Exam detector script", () => {
     await flushPromises();
     await vi.advanceTimersByTimeAsync(400);
 
-    expect(context.document.body.textContent).toContain("Safe Online Exam Required");
+    expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
     expect(openSebLink?.href).toBe("https://canvas.example.edu/courses/11825");
 
@@ -169,6 +172,24 @@ describe("Safe Online Exam detector script", () => {
     await vi.advanceTimersByTimeAsync(400);
 
     expect(context.document.querySelectorAll("#seb-launch-prompt")).toHaveLength(1);
+  });
+
+  it("does not show a launch prompt on a New Quiz instructor settings page", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/settings/1779?display=full_width_with_nav",
+      body: `
+        <main>
+          <h1>Settings</h1>
+          <label>Access code <input name="access_code" type="password" /></label>
+          <button type="submit">Submit</button>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
   });
 
   it("proves SEB config key, retrieves the one-time access code, fills it, and submits the access-code form", async () => {

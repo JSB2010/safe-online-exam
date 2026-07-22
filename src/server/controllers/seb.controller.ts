@@ -112,7 +112,7 @@ export class SebController {
     const configPath = configGrantEndpoint(courseId, canonicalContentId);
     response.send(
       renderAppShell({
-        title: "Safe Online Exam Required",
+        title: "Safe Exam Browser Required",
         view: "seb-required",
         initialData: {
           courseId,
@@ -430,7 +430,7 @@ export class SebController {
       .setHeader("x-seb-exit", "setup-check")
       .send(
         renderAppShell({
-          title: "Safe Online Exam Closing",
+          title: "Safe Exam Browser Closing",
           view: "seb-quit",
           initialData: { quitUrl, legacyQuitUrl: quitUrl, courseId: "setup", quizId: "check" }
         })
@@ -855,7 +855,7 @@ export class SebController {
       .setHeader("x-seb-exit", "submitted")
       .send(
         renderAppShell({
-          title: "Safe Online Exam Closing",
+          title: "Safe Exam Browser Closing",
           view: "seb-quit",
           initialData: { courseId, quizId: contentId, quitUrl, legacyQuitUrl: quitUrl }
         })
@@ -1040,7 +1040,7 @@ export class SebController {
           .setHeader("referrer-policy", "no-referrer")
           .send(
             renderAppShell({
-              title: "Opening Safe Online Exam",
+              title: "Opening Safe Exam Browser",
               view: "seb-launching",
               initialData: {
                 sebLaunchUrl: sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl()),
@@ -1063,7 +1063,7 @@ export class SebController {
         : false;
     response.send(
       renderAppShell({
-        title: "Safe Online Exam Required",
+        title: "Safe Exam Browser Required",
         view: "seb-download",
         initialData: {
           content: resolved.content,
@@ -1180,7 +1180,7 @@ export class SebController {
       .setHeader("referrer-policy", "no-referrer")
       .send(
         renderAppShell({
-          title: "Safe Online Exam Required",
+          title: "Safe Exam Browser Required",
           view: "seb-download",
           initialData: {
             courseId,

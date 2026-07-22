@@ -60,8 +60,9 @@ export function renderCanvasThemeLoader(baseUrl: string): string {
 
   const detectorUrl = ${JSON.stringify(detectorUrl)};
   const assessmentPath = /^\\/courses\\/\\d+\\/(?:quizzes\\/\\d+\\/take|assignments\\/\\d+)(?:\\/|$)/;
+  const newQuizAuthoringPath = /^\\/courses\\/\\d+\\/assignments\\/\\d+\\/(?:build|settings|moderate|reports|exports)(?:\\/|$)/;
 
-  if (!assessmentPath.test(window.location.pathname)) {
+  if (!assessmentPath.test(window.location.pathname) || newQuizAuthoringPath.test(window.location.pathname)) {
     return;
   }
   if (document.querySelector('script[data-canvas-seb-detector="true"]')) {
