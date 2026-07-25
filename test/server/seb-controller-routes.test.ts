@@ -14,6 +14,19 @@ import { SebConfigurationService } from "../../src/server/services/seb-configura
 const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
 describe("SebController route contracts", () => {
+  it("renders a no-store same-tab SEB handoff shell without placing a configuration URL in the response", () => {
+    const response = responseDouble();
+    const { controller } = controllerWith({});
+
+    controller.launchHandoff(response);
+
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store");
+    expect(response.setHeader).toHaveBeenCalledWith("referrer-policy", "no-referrer");
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).toContain('"view":"seb-launching-handoff"');
+    expect(html).not.toContain("sebs://");
+  });
+
   it("redirects Classic Quiz enforcement when SEB is not required", async () => {
     const response = responseDouble();
     const { controller } = controllerWith({

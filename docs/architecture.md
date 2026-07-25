@@ -247,25 +247,26 @@ All routes below are under `/api/quizzes` and require the verified instructor/re
 
 ### Student SEB, proof, and exit routes
 
-| Route                                                                                             | Purpose                                                                            |
-| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `GET /seb/quiz/:courseId/:quizId`                                                                 | Render assessment SEB-required/download view.                                      |
-| `POST /api/seb/config-grant/:courseId/:contentId`                                                 | Mint a one-time configuration download grant from a verified launch.               |
-| `GET /seb/config/:courseId/:contentId.seb`                                                        | Consume a configuration grant and download the encrypted assessment configuration. |
-| `GET /seb/config-encryption-certificate.pem`, `GET /seb/config-encryption-certificate.cer`        | Public active encryption certificate in PEM/DER form.                              |
-| `POST /api/seb/session-readiness`, `POST /api/seb/session-readiness/dismiss`                      | Test or dismiss the optional student setup prompt.                                 |
-| `GET /seb/check/config.seb`, `GET /seb/check`, `POST /api/seb/check-proof`, `GET /seb/check/quit` | Setup-check configuration, page, proof, and quit flow.                             |
-| `GET /seb/launch/:contentId`, `POST /seb/launch/:contentId`, `GET /seb/launch/:contentId/login`   | Signed/direct assessment-launch handoff.                                           |
-| `GET /seb/config/:courseId/:quizId`, `GET /seb/config/:quizId`                                    | Compatibility redirects into the current configuration flow.                       |
-| `POST /api/seb/access-proof/:courseId/:quizId`                                                    | Validate Config Key proof and mint the one-time access-code proof.                 |
-| `POST /api/seb/access-code/:courseId/:quizId`                                                     | Redeem a proof for the access code, approved tools, and exit grant.                |
-| `GET /api/seb/access-code/:courseId/:quizId`                                                      | Explicit method guidance; redemption is POST-only.                                 |
-| `GET /api/seb/tools/:courseId/:quizId`                                                            | Return the current approved tool view under the proof/session boundary.            |
-| `GET /seb/exit/session/:courseId/:quizId/:grant`                                                  | Render a validated post-submission exit page.                                      |
-| `GET /seb/exit/:courseId/:quizId`                                                                 | Render a non-terminal/manual exit page.                                            |
-| `GET /seb/exit/quit/:courseId/:quizId/:grant`                                                     | Redirect a validated exit grant to the configuration-bound SEB quit URL.           |
-| `GET /seb/exit/complete/:courseId/:quizId/:token`                                                 | Render the HMAC-authenticated SEB quit completion page.                            |
-| `GET /seb/exit/quit/:courseId/:quizId`, `GET /seb/exit/manual/:courseId/:quizId`                  | Deliberately unavailable unbound quit routes; return `410`.                        |
+| Route                                                                                             | Purpose                                                                              |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `GET /seb/quiz/:courseId/:quizId`                                                                 | Render assessment SEB-required/download view.                                        |
+| `POST /api/seb/config-grant/:courseId/:contentId`                                                 | Mint a one-time configuration download grant from a verified launch.                 |
+| `GET /seb/config/:courseId/:contentId.seb`                                                        | Consume a configuration grant and download the encrypted assessment configuration.   |
+| `GET /seb/config-encryption-certificate.pem`, `GET /seb/config-encryption-certificate.cer`        | Public active encryption certificate in PEM/DER form.                                |
+| `POST /api/seb/session-readiness`, `POST /api/seb/session-readiness/dismiss`                      | Test or dismiss the optional student setup prompt.                                   |
+| `GET /seb/check/config.seb`, `GET /seb/check`, `POST /api/seb/check-proof`, `GET /seb/check/quit` | Setup-check configuration, page, proof, and quit flow.                               |
+| `GET /seb/launch/:contentId`, `POST /seb/launch/:contentId`, `GET /seb/launch/:contentId/login`   | Signed/direct assessment-launch handoff.                                             |
+| `GET /seb/launch-handoff`                                                                         | Same-tab launcher page for a configuration URL held only in browser session storage. |
+| `GET /seb/config/:courseId/:quizId`, `GET /seb/config/:quizId`                                    | Compatibility redirects into the current configuration flow.                         |
+| `POST /api/seb/access-proof/:courseId/:quizId`                                                    | Validate Config Key proof and mint the one-time access-code proof.                   |
+| `POST /api/seb/access-code/:courseId/:quizId`                                                     | Redeem a proof for the access code, approved tools, and exit grant.                  |
+| `GET /api/seb/access-code/:courseId/:quizId`                                                      | Explicit method guidance; redemption is POST-only.                                   |
+| `GET /api/seb/tools/:courseId/:quizId`                                                            | Return the current approved tool view under the proof/session boundary.              |
+| `GET /seb/exit/session/:courseId/:quizId/:grant`                                                  | Render a validated post-submission exit page.                                        |
+| `GET /seb/exit/:courseId/:quizId`                                                                 | Render a non-terminal/manual exit page.                                              |
+| `GET /seb/exit/quit/:courseId/:quizId/:grant`                                                     | Redirect a validated exit grant to the configuration-bound SEB quit URL.             |
+| `GET /seb/exit/complete/:courseId/:quizId/:token`                                                 | Render the HMAC-authenticated SEB quit completion page.                              |
+| `GET /seb/exit/quit/:courseId/:quizId`, `GET /seb/exit/manual/:courseId/:quizId`                  | Deliberately unavailable unbound quit routes; return `410`.                          |
 
 ### Detector and diagnostics routes
 

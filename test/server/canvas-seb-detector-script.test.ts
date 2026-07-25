@@ -51,6 +51,8 @@ describe("Safe Online Exam detector script", () => {
     );
     expect(openSebLink?.textContent).toContain("Open Safe Exam Browser");
     expect(openSebLink?.rel).toContain("noopener");
+    expect(context.document.getElementById("seb-launch-download-link")).toBeNull();
+    expect(context.document.body.textContent).not.toContain("Need Safe Exam Browser?");
     const productIcon = context.document.querySelector<HTMLImageElement>("#seb-launch-prompt img");
     expect(productIcon?.src).toBe("https://tool.example.edu/assets/safe-online-exam-icon.png");
     expect(productIcon?.getAttribute("loading")).toBe("lazy");

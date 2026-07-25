@@ -463,6 +463,20 @@ export class SebController {
     await this.handleSebLaunch(request, response, contentId, body.id_token, body.state);
   }
 
+  @Get("/seb/launch-handoff")
+  launchHandoff(@Res() response: Response): void {
+    response
+      .setHeader("cache-control", "private, no-store")
+      .setHeader("referrer-policy", "no-referrer")
+      .send(
+        renderAppShell({
+          title: "Opening Safe Exam Browser",
+          view: "seb-launching-handoff",
+          initialData: {}
+        })
+      );
+  }
+
   @Get("/seb/launch/:contentId")
   async launchGet(
     @Req() request: Request,

@@ -1647,6 +1647,80 @@ select[aria-invalid="true"] {
   margin-top: 18px;
 }
 
+.seb-launch-action-stack {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.seb-launch-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.seb-launch-recovery {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 18px;
+  padding: 14px 16px;
+  color: #475467;
+  background: #f7faff;
+  border: 1px solid #c9ddf6;
+  border-radius: 12px;
+  text-align: left;
+}
+
+.seb-launch-recovery-copy {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.seb-launch-recovery-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #0b63ce;
+  background: #eaf4ff;
+  border: 1px solid #c9e5ff;
+  border-radius: 8px;
+}
+
+.seb-launch-recovery strong {
+  display: block;
+  color: #182230;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.seb-launch-recovery p {
+  margin: 2px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.seb-launch-download-link {
+  flex: 0 0 auto;
+  color: #0b63ce;
+  border-color: #a8c8ee;
+}
+
+.seb-launch-recovery--launch-page {
+  width: 100%;
+  justify-self: stretch;
+  margin: 4px 0 0;
+  padding: 16px 18px;
+}
+
 .student-action-stack {
   display: grid;
   justify-items: start;
@@ -1980,6 +2054,24 @@ select[aria-invalid="true"] {
   .setup-check-panel .message-actions .button {
     width: 100%;
     justify-content: center;
+  }
+
+  .seb-launch-action-buttons {
+    width: 100%;
+    display: grid;
+  }
+
+  .seb-launch-action-buttons .button {
+    width: 100%;
+  }
+
+  .seb-launch-recovery {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .seb-launch-download-link {
+    width: 100%;
   }
 
   .check-row {
