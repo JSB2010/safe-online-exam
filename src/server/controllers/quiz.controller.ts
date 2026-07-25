@@ -22,11 +22,16 @@ import { AssessmentAuthorizationService } from "../services/assessment-authoriza
 import { AssessmentService } from "../services/assessment.service.js";
 import {
   type CanvasApiPermissionError,
+  CanvasApiService,
+  type CanvasInstructorCourse,
   isCanvasApiAuthorizationError,
   isCanvasApiPermissionError
 } from "../services/canvas-api.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
 import { hasEffectiveSebQuitPassword } from "../services/seb-quit-password.js";
+
+const COURSE_TOOL_COPY_TARGET_LIMIT = 100;
+const COURSE_TOOL_COPY_CONCURRENCY = 6;
 
 @Controller("/api/quizzes")
 export class QuizController {
@@ -34,7 +39,8 @@ export class QuizController {
     private readonly config: AppConfig,
     private readonly assessments: AssessmentService,
     private readonly courseSettings: CourseSettingsService,
-    private readonly authorization: AssessmentAuthorizationService
+    private readonly authorization: AssessmentAuthorizationService,
+    private readonly canvasApi: CanvasApiService
   ) {}
 
   @Post("/course/:courseId/refresh")
@@ -101,6 +107,90 @@ export class QuizController {
       success: true,
       defaults: toCourseDefaultsView(defaults, this.config.value.seb.defaultQuitPassword)
     };
+  }
+
+  @Get("/course/:courseId/exam-tools/:toolId/copy-targets")
+  async getCourseToolCopyTargets(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Param("toolId") toolId: string
+  ): Promise<Record<string, unknown>> {
+    const principal = this.authorization.requireInstructorForCourse(request, courseId);
+    await this.requireCopyableCourseTool(courseId, toolId);
+    try {
+      const courses = await this.canvasApi.getInstructorCourses(principal.canvasUserId);
+      return {
+        success: true,
+        courses: courses.filter((course) => course.id !== courseId).map((course) => courseToolCopyCourseView(course))
+      };
+    } catch (error) {
+      if (isCanvasApiAuthorizationError(error)) {
+        return canvasAuthorizationRequired(courseId, principal.canvasUserId);
+      }
+      if (isCanvasApiPermissionError(error)) {
+        return canvasPermissionDenied(error);
+      }
+      throw error;
+    }
+  }
+
+  @Post("/course/:courseId/exam-tools/:toolId/copy")
+  async copyCourseTool(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Param("toolId") toolId: string,
+    @Body() body: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const principal = this.authorization.requireInstructorForCourse(request, courseId, true);
+    const sourceTool = await this.requireCopyableCourseTool(courseId, toolId);
+    const targetCourseIds = copyTargetCourseIds(body);
+    if (targetCourseIds.includes(courseId)) {
+      return apiError(400, "Choose a different course to copy this exam tool.", {
+        error_code: "COURSE_TOOL_COPY_SOURCE_SELECTED"
+      });
+    }
+    try {
+      // Re-read the live Canvas list immediately before mutation. The picker is
+      // only a convenience view; it is not an authorization grant.
+      const availableCourses = await this.canvasApi.getInstructorCourses(principal.canvasUserId);
+      const availableById = new Map(availableCourses.map((course) => [course.id, course]));
+      const targetCourses = targetCourseIds.map((id) => availableById.get(id)).filter(isDefined);
+      if (targetCourses.length !== targetCourseIds.length) {
+        return apiError(403, "One or more selected courses are no longer available to you as an instructor.", {
+          error_code: "COURSE_TOOL_COPY_TARGET_DENIED"
+        });
+      }
+
+      const results = await mapWithConcurrency(targetCourses, COURSE_TOOL_COPY_CONCURRENCY, async (course) => {
+        try {
+          const copied = await this.courseSettings.copyInstructorToolToCourse(course.id, sourceTool);
+          return { ...courseToolCopyCourseView(course), status: copied.status };
+        } catch (error) {
+          return {
+            ...courseToolCopyCourseView(course),
+            status: "failed" as const,
+            errorCode: courseToolCopyFailureCode(error)
+          };
+        }
+      });
+      const copied = results.filter((result) => result.status === "copied");
+      const alreadyPresent = results.filter((result) => result.status === "already_present");
+      const failed = results.filter((result) => result.status === "failed");
+      return {
+        success: failed.length === 0,
+        copied,
+        alreadyPresent,
+        failed
+      };
+    } catch (error) {
+      if (isCanvasApiAuthorizationError(error)) {
+        return canvasAuthorizationRequired(courseId, principal.canvasUserId);
+      }
+      if (isCanvasApiPermissionError(error)) {
+        return canvasPermissionDenied(error);
+      }
+      throw error;
+    }
   }
 
   @Post("/course/:courseId/passwords/reveal")
@@ -515,6 +605,19 @@ export class QuizController {
       externalTools: normalizeExternalTools(setting?.externalTools)
     };
   }
+
+  private async requireCopyableCourseTool(courseId: string, toolId: string): Promise<ExternalToolConfig> {
+    const tool = (await this.courseSettings.getDefaults(courseId)).externalTools.find((entry) => entry.id === toolId);
+    if (!tool) {
+      return apiError(404, "Exam tool not found", { error_code: "COURSE_TOOL_NOT_FOUND" });
+    }
+    if (tool.managedByAdmin === true || tool.adminPresetId) {
+      return apiError(409, "School-managed exam tools cannot be copied from course settings.", {
+        error_code: "COURSE_TOOL_COPY_NOT_ALLOWED"
+      });
+    }
+    return tool;
+  }
 }
 
 function secretUpdate(
@@ -627,6 +730,75 @@ function requestedExternalToolIds(
   return normalizeExternalToolIds(body.externalToolIds);
 }
 
+function copyTargetCourseIds(body: Record<string, unknown>): string[] {
+  if (!Array.isArray(body.courseIds)) {
+    return apiError(400, "Choose at least one instructor course.", { error_code: "COURSE_TOOL_COPY_TARGETS_REQUIRED" });
+  }
+  const ids = Array.from(
+    new Set(
+      body.courseIds
+        .filter((courseId): courseId is string => typeof courseId === "string")
+        .map((courseId) => courseId.trim())
+        .filter((courseId) => courseId.length > 0 && courseId.length <= 128)
+    )
+  );
+  if (!ids.length || ids.length !== body.courseIds.length) {
+    return apiError(400, "Choose one or more valid instructor courses.", {
+      error_code: "COURSE_TOOL_COPY_TARGETS_REQUIRED"
+    });
+  }
+  if (ids.length > COURSE_TOOL_COPY_TARGET_LIMIT) {
+    return apiError(409, `Copy one exam tool to at most ${COURSE_TOOL_COPY_TARGET_LIMIT} courses at a time.`, {
+      error_code: "COURSE_TOOL_COPY_LIMIT"
+    });
+  }
+  return ids;
+}
+
+function courseToolCopyCourseView(course: CanvasInstructorCourse): {
+  courseId: string;
+  name: string;
+  courseCode: string | null;
+} {
+  return { courseId: course.id, name: course.name, courseCode: course.courseCode };
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
+async function mapWithConcurrency<T, U>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<U>
+): Promise<U[]> {
+  const results = new Array<U>(values.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
+  return results;
+}
+
+function courseToolCopyFailureCode(error: unknown): string {
+  const response =
+    error && typeof error === "object" && "getResponse" in error && typeof error.getResponse === "function"
+      ? error.getResponse()
+      : null;
+  if (response && typeof response === "object" && "error_code" in response) {
+    const errorCode = (response as { error_code?: unknown }).error_code;
+    if (typeof errorCode === "string" && errorCode === "COURSE_TOOL_LIMIT") {
+      return errorCode;
+    }
+  }
+  return "COURSE_TOOL_COPY_FAILED";
+}
+
 function canvasAuthorizationRequired(courseId: string, userId: string): Record<string, unknown> {
   return {
     success: false,
@@ -641,7 +813,7 @@ function canvasPermissionDenied(error: CanvasApiPermissionError): Record<string,
     success: false,
     error_code: "CANVAS_PERMISSION_DENIED",
     message:
-      "Canvas denied this update. The saved Canvas authorization is valid, but Canvas rejected the write request. Confirm the Canvas API Developer Key allows quiz access-code write scopes, then reauthorize Canvas.",
+      "Canvas denied this request. The saved Canvas authorization is valid, but the Developer Key is missing a required scope or Canvas denied the user's course permission. Confirm the Canvas API scope set, then reauthorize Canvas.",
     canvasStatus: error.status,
     canvasPath: safeCanvasPath(error.url)
   };

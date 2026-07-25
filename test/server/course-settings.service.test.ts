@@ -66,6 +66,69 @@ describe("CourseSettingsService", () => {
     });
   });
 
+  it("copies a course-owned tool without overwriting target tools and makes retries idempotent", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    const sourceTool = {
+      id: "formula-sheet",
+      label: "Formula sheet",
+      url: "https://reference.example.edu/formulas",
+      enabled: true,
+      allowedRules: [{ id: "images", match: "path" as const, value: "https://reference.example.edu/images/*" }]
+    };
+    await service.saveDefaults("target-course", {
+      setupCompleted: true,
+      externalTools: [
+        {
+          id: "formula-sheet",
+          label: "Different formula sheet",
+          url: "https://reference.example.edu/other",
+          enabled: false
+        }
+      ]
+    });
+
+    await expect(service.copyInstructorToolToCourse("target-course", sourceTool)).resolves.toEqual({
+      status: "copied",
+      toolId: "formula-sheet-copy"
+    });
+    await expect(service.copyInstructorToolToCourse("target-course", sourceTool)).resolves.toEqual({
+      status: "already_present",
+      toolId: "formula-sheet-copy"
+    });
+    await expect(service.getDefaults("target-course")).resolves.toMatchObject({
+      externalTools: expect.arrayContaining([
+        expect.objectContaining({ id: "formula-sheet", label: "Different formula sheet" }),
+        expect.objectContaining({
+          id: "formula-sheet-copy",
+          label: "Formula sheet",
+          enabled: true,
+          allowedRules: [{ id: "images", match: "path", value: "https://reference.example.edu/images/*" }]
+        })
+      ])
+    });
+  });
+
+  it("does not let a school-managed tool become an instructor-owned copy", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+
+    await expect(
+      service.copyInstructorToolToCourse("target-course", {
+        id: "school-tool",
+        label: "School tool",
+        url: "https://school.example.edu/tool",
+        enabled: true,
+        adminPresetId: "preset-1",
+        managedByAdmin: true
+      })
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ error_code: "COURSE_TOOL_COPY_NOT_ALLOWED" }),
+      status: 400
+    });
+    await expect(repos.value.courses.get("target-course")).resolves.toBeNull();
+  });
+
   it("pushes school presets while preventing instructors from changing or deleting their definitions", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);

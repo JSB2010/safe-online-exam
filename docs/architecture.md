@@ -74,7 +74,7 @@ An LTI launch authenticates a person but does not authorize Canvas API calls. Th
 3. `/api/oauth2callback` verifies state and exchanges the authorization code.
 4. PostgreSQL stores one OAuth grant per Canvas user ID. Administrator authorization upgrades that same record to the complete application-plus-administrator scope set, and `CanvasApiService` refreshes it when necessary.
 
-Every Canvas OAuth connection requests the same complete application scope set, including the session-token permission required for SEB handoff: `url:GET|/api/v1/login/session_token`. This keeps one durable grant valid when a person is an instructor in one course and a student in another; Canvas still enforces their actual course permissions. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
+Every Canvas OAuth connection requests the same complete application scope set, including the course-list permission used for teacher-scoped tool duplication (`url:GET|/api/v1/courses`) and the session-token permission required for SEB handoff (`url:GET|/api/v1/login/session_token`). This keeps one durable grant valid when a person is an instructor in one course and a student in another; Canvas still enforces their actual course permissions. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
 
 Root-account administrators use `/api/admin/oauth2authorize` to upgrade their existing user grant with administrator scopes. The upgraded grant retains every instructor, student-session, and assessment scope, so the same Canvas user never needs a second token record. Later course or student reauthorization preserves the administrator scope profile instead of replacing it with a narrower grant. The dashboard stores a root-account course index and browses active Canvas courses in bounded, server-filtered pages; it never imports the complete historical catalog. Summary, course list, selected-course detail, tool presets, and the Canvas course catalog are independent resources. Every admin mutation also requires a short-lived HMAC action token bound to the LTI subject, Canvas user, root account, deployment, and current Express session.
 
@@ -99,7 +99,7 @@ Assessment updates use short-lived PostgreSQL operation locks while Canvas and d
 
 ### Exam tools and URL policy
 
-Course-owned exam tools have an exact HTTPS launch URL and typed resource rules: one exact page or file, an address and related links, or an explicitly confirmed whole website. Instructors explicitly approve both tool start pages and resources, including a different HTTPS website such as a CDN asset; the instructor UI calls out cross-site access before saving. A dedicated YouTube video tool accepts a watch, share, Shorts, or embed link and turns it into one embedded public video with a server-owned player page and bounded media policy. The server-owned page supplies YouTube's required embedding identity while deliberately excluding YouTube browsing and Google sign-in. User-entered general rules remain restricted to safe HTTPS URLs or concrete domains. Wildcards, credentials, arbitrary regular expressions, and unsafe historical patterns are rejected or quarantined.
+Course-owned exam tools have an exact HTTPS launch URL and typed resource rules: one exact page or file, an address and related links, or an explicitly confirmed whole website. Instructors explicitly approve both tool start pages and resources, including a different HTTPS website such as a CDN asset; the instructor UI calls out cross-site access before saving. A saved instructor-owned tool can be duplicated into active Canvas courses where the same OAuth user is a teacher. The browser can only choose from a Canvas-filtered course list, and the server retrieves that list again before every target write; target IDs alone never authorize a copy. The copy appends a local tool without replacing the target catalog, preserves an existing equivalent definition on retry, and propagates the target course defaults so relevant configuration fingerprints are invalidated. A dedicated YouTube video tool accepts a watch, share, Shorts, or embed link and turns it into one embedded public video with a server-owned player page and bounded media policy. The server-owned page supplies YouTube's required embedding identity while deliberately excluding YouTube browsing and Google sign-in. User-entered general rules remain restricted to safe HTTPS URLs or concrete domains. Wildcards, credentials, arbitrary regular expressions, and unsafe historical patterns are rejected or quarantined.
 
 Root administrators can create reusable school presets in `admin_tool_presets` and assign them to individual courses. An assigned definition is synchronized into the course catalog as school-managed: instructors may enable or disable it but cannot silently change its launch URL or resource access. Updating or deleting the preset synchronizes every assigned course and invalidates affected configuration fingerprints. Quiz-only definitions remain on the assessment record and never become course defaults.
 
@@ -230,20 +230,22 @@ All routes below are under `/api/admin`, require a verified root-account adminis
 
 All routes below are under `/api/quizzes` and require the verified instructor/request-integrity boundary unless they are simple reads exposed through the current session.
 
-| Route                                                                                      | Purpose                                                  |
-| ------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `GET /api/quizzes`, `GET /api/quizzes/:quizId`, `GET /api/quizzes/seb-settings`            | Read cached course assessment/settings views.            |
-| `POST /api/quizzes/course/:courseId/refresh`                                               | Refresh Classic Quiz and New Quiz discovery from Canvas. |
-| `GET /api/quizzes/course/:courseId/defaults`, `PUT /api/quizzes/course/:courseId/defaults` | Read or update course defaults and exam-tool catalog.    |
-| `POST /api/quizzes/course/:courseId/passwords/reveal`                                      | Session-bound course password reveal.                    |
-| `POST /api/quizzes/:courseId/:quizId/passwords/reveal`                                     | Session-bound assessment password reveal.                |
-| `PUT /api/quizzes/:quizId/seb`, `POST /api/quizzes/seb-config-structured`                  | Update SEB settings.                                     |
-| `POST /api/quizzes/:courseId/:quizId/seb/enable`                                           | Enable SEB and set the Canvas access code.               |
-| `POST /api/quizzes/:courseId/:quizId/seb/disable`                                          | Disable SEB and remove Canvas access-code protection.    |
-| `POST /api/quizzes/:courseId/:quizId/seb/reset-defaults`                                   | Return one assessment to course defaults.                |
-| `POST /api/quizzes/:courseId/:quizId/seb/regenerate-code`                                  | Rotate the protected Canvas access code.                 |
-| `GET /api/quizzes/:courseId/:quizId/seb/config`                                            | Redirect to the current configuration flow.              |
-| `GET /api/quizzes/:courseId/:quizId/seb/status`                                            | Return the secret-free SEB status view.                  |
+| Route                                                                                      | Purpose                                                                                         |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `GET /api/quizzes`, `GET /api/quizzes/:quizId`, `GET /api/quizzes/seb-settings`            | Read cached course assessment/settings views.                                                   |
+| `POST /api/quizzes/course/:courseId/refresh`                                               | Refresh Classic Quiz and New Quiz discovery from Canvas.                                        |
+| `GET /api/quizzes/course/:courseId/defaults`, `PUT /api/quizzes/course/:courseId/defaults` | Read or update course defaults and exam-tool catalog.                                           |
+| `GET /api/quizzes/course/:courseId/exam-tools/:toolId/copy-targets`                        | List other active Canvas teacher courses eligible to receive one saved instructor tool.         |
+| `POST /api/quizzes/course/:courseId/exam-tools/:toolId/copy`                               | Reauthorize selected targets against Canvas and copy the tool without replacing their catalogs. |
+| `POST /api/quizzes/course/:courseId/passwords/reveal`                                      | Session-bound course password reveal.                                                           |
+| `POST /api/quizzes/:courseId/:quizId/passwords/reveal`                                     | Session-bound assessment password reveal.                                                       |
+| `PUT /api/quizzes/:quizId/seb`, `POST /api/quizzes/seb-config-structured`                  | Update SEB settings.                                                                            |
+| `POST /api/quizzes/:courseId/:quizId/seb/enable`                                           | Enable SEB and set the Canvas access code.                                                      |
+| `POST /api/quizzes/:courseId/:quizId/seb/disable`                                          | Disable SEB and remove Canvas access-code protection.                                           |
+| `POST /api/quizzes/:courseId/:quizId/seb/reset-defaults`                                   | Return one assessment to course defaults.                                                       |
+| `POST /api/quizzes/:courseId/:quizId/seb/regenerate-code`                                  | Rotate the protected Canvas access code.                                                        |
+| `GET /api/quizzes/:courseId/:quizId/seb/config`                                            | Redirect to the current configuration flow.                                                     |
+| `GET /api/quizzes/:courseId/:quizId/seb/status`                                            | Return the secret-free SEB status view.                                                         |
 
 ### Student SEB, proof, and exit routes
 

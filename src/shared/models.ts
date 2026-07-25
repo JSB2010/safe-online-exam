@@ -5,6 +5,7 @@ export type ContentType = "CLASSIC_QUIZ" | "NEW_QUIZ" | "ASSIGNMENT" | "DISCUSSI
  * user can later launch the tool in either a learner or instructor context.
  */
 export const CANVAS_REQUIRED_OAUTH_SCOPES = [
+  "url:GET|/api/v1/courses",
   "url:GET|/api/v1/courses/:course_id/quizzes",
   "url:GET|/api/v1/courses/:course_id/assignments",
   "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
@@ -23,11 +24,10 @@ export const CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES = [
 ] as const;
 
 /**
- * Version of the role-independent OAuth scope contract. Administrator-only
- * additions are detected from requestedScopes so they do not force every
- * instructor and student to reconnect.
+ * Version of the role-independent OAuth scope contract. Changes to this
+ * common scope set require a fresh Canvas authorization for every user.
  */
-export const CANVAS_OAUTH_SCOPE_VERSION = 2;
+export const CANVAS_OAUTH_SCOPE_VERSION = 3;
 
 export interface Quiz {
   id: string;

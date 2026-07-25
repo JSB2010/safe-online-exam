@@ -119,6 +119,62 @@ export class CourseSettingsService {
     );
   }
 
+  /**
+   * Adds a course-owned tool to one target course without replacing its
+   * existing catalog. The caller is responsible for proving target-course
+   * authorization with Canvas before invoking this mutation.
+   */
+  async copyInstructorToolToCourse(
+    targetCourseId: string,
+    sourceTool: ExternalToolConfig
+  ): Promise<{ status: "copied" | "already_present"; toolId: string }> {
+    const [normalizedSource] = normalizeCourseExternalTools([sourceTool]);
+    if (!normalizedSource || normalizedSource.managedByAdmin === true || normalizedSource.adminPresetId) {
+      throw new BadRequestException({
+        success: false,
+        statusCode: 400,
+        error_code: "COURSE_TOOL_COPY_NOT_ALLOWED",
+        message: "School-managed exam tools cannot be copied as instructor-owned tools."
+      });
+    }
+
+    const existing = await this.getDefaults(targetCourseId);
+    const existingTools = normalizeCourseExternalTools(existing.externalTools);
+    const matchingTool = existingTools.find((tool) => sameInstructorToolConfiguration(tool, normalizedSource));
+    if (matchingTool) {
+      return { status: "already_present", toolId: matchingTool.id };
+    }
+    if (existingTools.length >= 16) {
+      throw new BadRequestException({
+        success: false,
+        statusCode: 400,
+        error_code: "COURSE_TOOL_LIMIT",
+        message: "This course already has the maximum of 16 exam tools. Remove one before copying another tool."
+      });
+    }
+
+    const copiedTool = {
+      ...normalizedSource,
+      id: availableCopiedToolId(normalizedSource.id, existingTools),
+      // An instructor can only copy an instructor-owned tool. Keep the target
+      // definition local even if old stored data contains stale admin fields.
+      managedByAdmin: false,
+      adminPresetId: null,
+      allowedRules: normalizedSource.allowedRules?.map((rule) => ({ ...rule })),
+      allowedDomains: normalizedSource.allowedDomains?.slice()
+    };
+    await this.saveDefaults(
+      targetCourseId,
+      {
+        ...existing,
+        externalTools: [...existingTools, copiedTool],
+        externalToolsInitialized: true
+      },
+      { propagate: true }
+    );
+    return { status: "copied", toolId: copiedTool.id };
+  }
+
   async resetQuizToDefaults(courseId: string, quizId: string): Promise<QuizSebSetting | ContentSebSetting | null> {
     const defaults = await this.getDefaults(courseId);
     const assessmentId = canonicalAssessmentId(quizId);
@@ -340,4 +396,52 @@ function adminManagedTool(preset: AdminToolPresetRecord): ExternalToolConfig {
     throw new Error("Administrator tool preset is invalid");
   }
   return normalized;
+}
+
+function sameInstructorToolConfiguration(left: ExternalToolConfig, right: ExternalToolConfig): boolean {
+  return JSON.stringify(instructorToolConfiguration(left)) === JSON.stringify(instructorToolConfiguration(right));
+}
+
+function instructorToolConfiguration(
+  tool: ExternalToolConfig
+): Omit<ExternalToolConfig, "id" | "adminPresetId" | "managedByAdmin"> {
+  const [normalized] = normalizeCourseExternalTools([tool]);
+  if (!normalized) {
+    return {
+      label: "",
+      url: "",
+      enabled: false,
+      preset: null,
+      allowedRules: [],
+      allowedDomains: []
+    };
+  }
+  return {
+    label: normalized.label,
+    url: normalized.url,
+    enabled: normalized.enabled,
+    preset: normalized.preset || null,
+    allowedRules: normalized.allowedRules || [],
+    allowedDomains: normalized.allowedDomains || []
+  };
+}
+
+function availableCopiedToolId(sourceId: string, existingTools: ExternalToolConfig[]): string {
+  const usedIds = new Set(existingTools.map((tool) => tool.id));
+  if (!usedIds.has(sourceId)) {
+    return sourceId;
+  }
+  const base = `${sourceId}-copy`;
+  if (!usedIds.has(base)) {
+    return base;
+  }
+  for (let suffix = 2; suffix <= 100; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!usedIds.has(candidate)) {
+      return candidate;
+    }
+  }
+  // The course-level limit prevents this fallback in normal operation. Keep a
+  // stable final candidate for malformed legacy data with many duplicates.
+  return `${base}-101`;
 }

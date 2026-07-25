@@ -304,6 +304,85 @@ test("renders the responsive root-account administrator workspace and controlled
   expect(browserErrors).toEqual([]);
 });
 
+test("lets an instructor duplicate a saved exam tool into selected Canvas teacher courses", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/instructor-tool-copy-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "teacher",
+          data: {
+            courseId: "course-1",
+            courseName: "Current Course",
+            userId: "user-1",
+            authToken: "test-token",
+            quizzes: [],
+            quizSebSettings: {},
+            courseDefaults: {
+              courseId: "course-1",
+              setupCompleted: true,
+              urlRules: [],
+              externalTools: [
+                {
+                  id: "formula-sheet",
+                  label: "Formula sheet",
+                  url: "https://reference.example.edu/formulas",
+                  enabled: true,
+                  allowedRules: [{ id: "images", match: "path", value: "https://reference.example.edu/images/*" }]
+                }
+              ]
+            }
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await page.route("**/api/quizzes/course/course-1/exam-tools/formula-sheet/copy-targets", async (route) => {
+    expect(route.request().headers()["x-auth-token"]).toBe("test-token");
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        courses: [
+          { courseId: "course-2", name: "Biology", courseCode: "BIO-2" },
+          { courseId: "course-3", name: "Chemistry", courseCode: "CHEM-3" }
+        ]
+      })
+    });
+  });
+  await page.route("**/api/quizzes/course/course-1/exam-tools/formula-sheet/copy", async (route) => {
+    expect(route.request().headers()["x-auth-token"]).toBe("test-token");
+    expect(route.request().postDataJSON()).toEqual({ courseIds: ["course-2"] });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        copied: [{ courseId: "course-2", name: "Biology", courseCode: "BIO-2", status: "copied" }],
+        alreadyPresent: [],
+        failed: []
+      })
+    });
+  });
+
+  await page.goto("/instructor-tool-copy-preview");
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settingsDialog = page.getByRole("dialog", { name: "Safe Online Exam course policy" });
+  await settingsDialog.getByRole("button", { name: "Exam tools" }).click();
+  await settingsDialog.getByRole("button", { name: "Edit" }).click();
+  await settingsDialog.getByRole("button", { name: "Duplicate to courses" }).click();
+  const copyDialog = page.getByRole("dialog", { name: "Copy Formula sheet" });
+  await expect(copyDialog).toBeVisible();
+  await copyDialog.getByRole("checkbox", { name: "Biology" }).check();
+  await copyDialog.getByRole("button", { name: "Duplicate to 1 course" }).click();
+  await expect(copyDialog.getByText("Added to 1 course.")).toBeVisible();
+  expect(browserErrors).toEqual([]);
+});
+
 test("serves built app assets before API CORS restrictions", async ({ request }) => {
   const response = await request.get("/assets/index.js", {
     headers: {

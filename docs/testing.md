@@ -140,9 +140,10 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 1. Launch the tool from a Canvas course and complete or re-run Canvas OAuth.
 2. Refresh the course. Confirm it finds the intended published Classic Quiz and New Quiz data.
 3. Configure a valid effective exit password, optional start password, selected course tools, one quiz-only tool, and narrow URL rules. Confirm the quiz-only tool does not appear in another assessment or in course defaults.
-4. Enable one Classic Quiz and one New Quiz. Confirm Canvas requires an access code and the management response does not reveal it.
-5. Change one protected setting, confirm the previous configuration becomes unsuitable for proof, and download a fresh configuration.
-6. Disable each assessment and confirm Canvas access-code protection is removed only through the intended action.
+4. Save one instructor-owned course tool, use **Duplicate to courses**, and select a second active course where the same user is a teacher. Confirm the target receives the full launch/resource policy without replacing its existing tools; retry once and confirm it reports that the equivalent tool is already present. Confirm a non-teacher or the source course cannot be submitted as a target, and that a school-managed preset has no duplicate action.
+5. Enable one Classic Quiz and one New Quiz. Confirm Canvas requires an access code and the management response does not reveal it.
+6. Change one protected setting, confirm the previous configuration becomes unsuitable for proof, and download a fresh configuration.
+7. Disable each assessment and confirm Canvas access-code protection is removed only through the intended action.
 
 ### Student In A Normal Browser
 

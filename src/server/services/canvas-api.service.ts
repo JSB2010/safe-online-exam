@@ -56,6 +56,19 @@ export interface CanvasAdminCourse {
   teacherNames: string[];
 }
 
+/** A Canvas course in which the current OAuth user has a teacher enrollment. */
+export interface CanvasInstructorCourse {
+  id: string;
+  name: string;
+  courseCode: string | null;
+}
+
+interface CanvasInstructorCourseResponse {
+  id: number | string;
+  name?: string;
+  course_code?: string;
+}
+
 interface CanvasAdminCourseResponse {
   id: number | string;
   name?: string;
@@ -167,6 +180,31 @@ export class CanvasApiService {
       unlockAt: quiz.unlock_at || null,
       lockAt: quiz.lock_at || null
     }));
+  }
+
+  /**
+   * Lists the current OAuth user's active teacher courses. This is deliberately
+   * derived from Canvas for every copy operation; a client-supplied course ID
+   * is never treated as authorization to change that course's local policy.
+   */
+  async getInstructorCourses(userId: string): Promise<CanvasInstructorCourse[]> {
+    const url = `${this.getCanvasApiBaseUrl()}/courses?enrollment_type=teacher&per_page=${CANVAS_DISCOVERY_PAGE_SIZE}`;
+    const courses = await this.requestCompleteCanvasCollection<CanvasInstructorCourseResponse>(userId, url);
+    const seen = new Set<string>();
+    return courses.flatMap((course) => {
+      const id = String(course.id || "").trim();
+      if (!id || seen.has(id)) {
+        return [];
+      }
+      seen.add(id);
+      return [
+        {
+          id,
+          name: normalizedCanvasCourseName(course.name, id),
+          courseCode: normalizedCanvasCourseCode(course.course_code)
+        }
+      ];
+    });
   }
 
   async getNewQuizAssignments(
@@ -939,6 +977,16 @@ function canvasAdminCourse(course: CanvasAdminCourseResponse): CanvasAdminCourse
     termName: course.term?.name || null,
     teacherNames: (course.teachers || []).map((teacher) => teacher.display_name || teacher.name || "").filter(Boolean)
   };
+}
+
+function normalizedCanvasCourseName(value: string | undefined, courseId: string): string {
+  const normalized = value?.trim().replace(/\s+/gu, " ");
+  return normalized || `Course ${courseId}`;
+}
+
+function normalizedCanvasCourseCode(value: string | undefined): string | null {
+  const normalized = value?.trim().replace(/\s+/gu, " ");
+  return normalized || null;
 }
 
 function canvasAccountSummary(account: CanvasAccountResponse): CanvasAccountSummary {

@@ -83,6 +83,7 @@ ${TOOL_URL}/api/oauth2callback
 If the Canvas instance supports enforced scopes, allow this complete application scope set:
 
 ```text
+url:GET|/api/v1/courses
 url:GET|/api/v1/courses/:course_id/quizzes
 url:GET|/api/v1/courses/:course_id/assignments
 url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id
@@ -91,7 +92,7 @@ url:PATCH|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id
 url:GET|/api/v1/login/session_token
 ```
 
-Every Canvas connection requests this same scope set, regardless of the user’s role in the course that initiated authorization. This prevents a person who is an instructor in one course and a student in another from retaining an incompatible role-specific grant. Canvas continues to enforce the authorizing user’s actual account and course permissions.
+Every Canvas connection requests this same scope set, regardless of the user’s role in the course that initiated authorization. This prevents a person who is an instructor in one course and a student in another from retaining an incompatible role-specific grant. Canvas continues to enforce the authorizing user’s actual account and course permissions. The course-list scope powers the instructor exam-tool copy picker; the service requests only active courses with the Canvas `teacher` enrollment filter and rechecks that list immediately before writing any target course.
 
 For the root-account administrator dashboard, also allow this administrator scope set on the same OAuth key:
 
@@ -107,7 +108,7 @@ The administrator authorization requests the complete application scope set—in
 
 Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have each affected administrator select **Reconnect Canvas** once. Administrator-only scope additions do not invalidate ordinary instructor or student connections. Scope changes apply only to newly issued tokens.
 
-Store the API key’s client ID and secret in the deployment’s secret manager as `CANVAS_API_CLIENT_ID` and `CANVAS_API_CLIENT_SECRET`. If you change the redirect URI or scope set, affected users must reauthorize.
+Store the API key’s client ID and secret in the deployment’s secret manager as `CANVAS_API_CLIENT_ID` and `CANVAS_API_CLIENT_SECRET`. If you change the redirect URI or scope set, affected users must reauthorize. This release adds `url:GET|/api/v1/courses`, so instructors with an older grant must select **Reconnect Canvas** before using course-to-course exam-tool copy.
 
 ## 2. Create the LTI 1.3 Developer Key
 

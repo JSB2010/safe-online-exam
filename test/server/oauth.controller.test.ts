@@ -16,6 +16,7 @@ const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/pe
 describe("canvasScopes", () => {
   it("requests every Canvas OAuth scope required across instructor and student launches", () => {
     expect(canvasScopes()).toEqual([
+      "url:GET|/api/v1/courses",
       "url:GET|/api/v1/courses/:course_id/quizzes",
       "url:GET|/api/v1/courses/:course_id/assignments",
       "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",

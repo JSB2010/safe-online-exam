@@ -9,7 +9,7 @@ The application supports Canvas LTI 1.3, Canvas OAuth, protected Canvas session 
 - Discovers and manages Classic Quizzes and New Quizzes.
 - Gives verified root-account administrators a Canvas-embedded view of connected courses, assessment state, password recovery, active-course discovery, and reusable school tool presets with bulk rollout.
 - Sets and rotates Canvas access codes without returning them in routine UI or API responses.
-- Lets instructors select course tools or define a tool that exists only for one quiz.
+- Lets instructors select course tools, define a tool that exists only for one quiz, and duplicate a saved course tool into other active Canvas courses where they are teachers.
 - Generates certificate-encrypted SEB configurations with optional start and exit passwords.
 - Transfers a scoped Canvas session into SEB without copying the normal browser's cookies.
 - Uses the SEB JavaScript API and a short-lived one-time proof before releasing access, approved tools, or exit capability.

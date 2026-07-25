@@ -17,6 +17,7 @@ const LEARNER_ROLE = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"
 describe("QuizController", () => {
   let assessments: Record<string, ReturnType<typeof vi.fn>>;
   let courseSettings: Record<string, ReturnType<typeof vi.fn>>;
+  let canvasApi: Record<string, ReturnType<typeof vi.fn>>;
   let controller: QuizController;
 
   beforeEach(() => {
@@ -41,10 +42,18 @@ describe("QuizController", () => {
     courseSettings = {
       getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults(COURSE_ID)),
       saveDefaults: vi.fn(),
-      resetQuizToDefaults: vi.fn()
+      resetQuizToDefaults: vi.fn(),
+      copyInstructorToolToCourse: vi.fn()
     };
+    canvasApi = { getInstructorCourses: vi.fn() };
     const authorization = new AssessmentAuthorizationService(configDouble() as any, assessments as any);
-    controller = new QuizController(configDouble() as any, assessments as any, courseSettings as any, authorization);
+    controller = new QuizController(
+      configDouble() as any,
+      assessments as any,
+      courseSettings as any,
+      authorization,
+      canvasApi as any
+    );
   });
 
   it("saves course defaults only for a verified instructor with a session-bound token", async () => {
@@ -245,6 +254,62 @@ describe("QuizController", () => {
     expect(JSON.stringify(result)).not.toContain("quit-secret");
     expect(JSON.stringify(result)).not.toContain("start-secret");
     await expectHttpError(() => controller.getCourseDefaults(readRequest(), "other-course"), 403);
+  });
+
+  it("lists only other live Canvas teacher courses as exam-tool copy targets", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      externalTools: [copyableTool()]
+    });
+    canvasApi.getInstructorCourses.mockResolvedValue([
+      { id: COURSE_ID, name: "Current course", courseCode: "CUR-1" },
+      { id: "course-2", name: "Biology", courseCode: "BIO-2" }
+    ]);
+
+    await expect(controller.getCourseToolCopyTargets(readRequest(), COURSE_ID, "formula-sheet")).resolves.toEqual({
+      success: true,
+      courses: [{ courseId: "course-2", name: "Biology", courseCode: "BIO-2" }]
+    });
+    expect(canvasApi.getInstructorCourses).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it("rechecks Canvas teacher authorization before copying an instructor-owned tool", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      externalTools: [copyableTool()]
+    });
+    canvasApi.getInstructorCourses.mockResolvedValue([{ id: "course-2", name: "Biology", courseCode: "BIO-2" }]);
+    courseSettings.copyInstructorToolToCourse.mockResolvedValueOnce({ status: "copied", toolId: "formula-sheet" });
+
+    await expect(
+      controller.copyCourseTool(mutationRequest(), COURSE_ID, "formula-sheet", { courseIds: ["course-2"] })
+    ).resolves.toEqual({
+      success: true,
+      copied: [{ courseId: "course-2", name: "Biology", courseCode: "BIO-2", status: "copied" }],
+      alreadyPresent: [],
+      failed: []
+    });
+    expect(courseSettings.copyInstructorToolToCourse).toHaveBeenCalledWith(
+      "course-2",
+      expect.objectContaining({ id: "formula-sheet" })
+    );
+
+    canvasApi.getInstructorCourses.mockResolvedValue([]);
+    await expectHttpError(
+      () => controller.copyCourseTool(mutationRequest(), COURSE_ID, "formula-sheet", { courseIds: ["course-2"] }),
+      403
+    );
+    expect(courseSettings.copyInstructorToolToCourse).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose copying for a school-managed course tool", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      externalTools: [{ ...copyableTool(), managedByAdmin: true, adminPresetId: "school-preset" }]
+    });
+
+    await expectHttpError(() => controller.getCourseToolCopyTargets(readRequest(), COURSE_ID, "formula-sheet"), 409);
+    expect(canvasApi.getInstructorCourses).not.toHaveBeenCalled();
   });
 
   it("reveals saved course passwords only through an instructor-authorized no-store POST", async () => {
@@ -746,6 +811,16 @@ function actionTokenOnlyRequest(): any {
     sessionID: SESSION_ID,
     session: {},
     header: (name: string) => (name.toLowerCase() === "x-auth-token" ? token : undefined)
+  };
+}
+
+function copyableTool() {
+  return {
+    id: "formula-sheet",
+    label: "Formula sheet",
+    url: "https://reference.example.edu/formulas",
+    enabled: true,
+    allowedRules: [{ id: "images", match: "path" as const, value: "https://reference.example.edu/images/*" }]
   };
 }
 

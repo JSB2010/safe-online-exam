@@ -61,6 +61,25 @@ describe("CanvasApiService", () => {
     );
   });
 
+  it("lists every active Canvas course where the OAuth user is a teacher", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse([
+        { id: 41, name: "Physics", course_code: "PHY-101" },
+        { id: 42, name: "", course_code: "" },
+        { id: 41, name: "Duplicate response" }
+      ])
+    );
+
+    await expect(service.getInstructorCourses("user-1")).resolves.toEqual([
+      { id: "41", name: "Physics", courseCode: "PHY-101" },
+      { id: "42", name: "Course 42", courseCode: null }
+    ]);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://canvas.example.com/api/v1/courses?enrollment_type=teacher&per_page=100",
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer token-1" }) })
+    );
+  });
+
   it("browses bounded active administrator course pages with Canvas-side filters", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(
