@@ -265,6 +265,11 @@ describe("deployment hardening artifacts", () => {
 
   it("tracks application, workflow, and container updates through Dependabot", () => {
     const dependabot = source(".github/dependabot.yml");
+    const docker = dependabot.slice(
+      dependabot.indexOf("package-ecosystem: docker\n"),
+      dependabot.indexOf("package-ecosystem: docker-compose")
+    );
+    const dockerCompose = dependabot.slice(dependabot.indexOf("package-ecosystem: docker-compose"));
 
     expect(dependabot).toContain("package-ecosystem: npm");
     expect(dependabot).toContain("package-ecosystem: github-actions");
@@ -281,6 +286,10 @@ describe("deployment hardening artifacts", () => {
     expect(dependabot).toContain("dependency-name: node");
     expect(dependabot).toContain("dependency-name: postgres");
     expect(dependabot).toContain("version-update:semver-major");
+    for (const containerEcosystem of [docker, dockerCompose]) {
+      expect(containerEcosystem).toContain("default-days: 7");
+      expect(containerEcosystem).not.toMatch(/semver-(major|minor|patch)-days/u);
+    }
   });
 
   it("keeps the pinned npm toolchain synchronized across local and container builds", () => {
