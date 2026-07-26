@@ -179,7 +179,9 @@ describe("deployment hardening artifacts", () => {
     );
     expect(workflow).toContain("ref: ${{ needs.verify-release.outputs.verified_sha }}");
     expect(workflow).toContain('jq -e ".enabled == true"');
-    expect(workflow).toContain("wait-for-required-checks.sh");
+    expect(workflow).toContain("VERIFIED_SHA: ${{ steps.source.outputs.verified_sha }}");
+    expect(workflow).toContain('wait-for-required-checks.sh "$VERIFIED_SHA"');
+    expect(workflow).not.toContain('wait-for-required-checks.sh "${{ steps.source.outputs.verified_sha }}"');
     expect(requiredChecks).toContain("Application verification");
     expect(requiredChecks).toContain("PostgreSQL integration");
     expect(requiredChecks).toContain("Production Compose smoke");

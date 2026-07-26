@@ -97,7 +97,8 @@ jobs:
       - name: Require successful main and CodeQL checks
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/wait-for-required-checks.sh "${{ steps.source.outputs.verified_sha }}"
+          VERIFIED_SHA: ${{ steps.source.outputs.verified_sha }}
+        run: bash scripts/wait-for-required-checks.sh "$VERIFIED_SHA"
 
   publish:
     name: Publish verified release
