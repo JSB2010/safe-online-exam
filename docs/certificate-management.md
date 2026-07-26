@@ -1,8 +1,8 @@
 # SEB Configuration Certificate Management
 
-Every hardened deployment encrypts generated `.seb` files to a configured public X.509 certificate. The service receives only the public certificate; the matching private identity is installed only on approved client devices. This protects the configuration file separately from Config Key proof, which protects access-code release after SEB starts.
+By default, deployments encrypt generated `.seb` files to a configured public X.509 certificate. The service receives only the public certificate; the matching private identity is installed only on approved client devices. This protects the configuration file separately from Config Key proof, which protects access-code release after SEB starts.
 
-Do not disable either control to work around a rollout problem.
+An instance may explicitly set `SEB_CONFIG_ENCRYPTION_ENABLED=false` when it cannot distribute a private identity to student devices. This is a compatibility decision, not an equivalent security posture: the downloaded configuration is no longer restricted to devices holding that identity. A teacher-set start password still adds SEB password wrapping, and Config Key proof remains enabled.
 
 ## Trust Model
 
@@ -13,7 +13,7 @@ Do not disable either control to work around a rollout problem.
 | Device-management system / restricted vault | Private identity and its protection material                     | Broad user, instructor, or runtime access.                              |
 | Approved SEB client                         | Non-extractable, SEB-restricted private identity where supported | An exportable identity available to a student account or unrelated app. |
 
-Encryption prevents an unapproved device from opening the configuration. Config Key proof prevents an access code from being released when the running configuration does not match current server settings. Both controls are necessary.
+Encryption prevents an unapproved device from opening the configuration. Config Key proof prevents an access code from being released when the running configuration does not match current server settings. Use both controls whenever the instance needs device-restricted configurations.
 
 ## Generate An Identity
 
@@ -46,11 +46,12 @@ Immediately move the private PEM, `.p12`, and passphrase file into approved rest
 
 On Google Cloud, store the public certificate in Secret Manager and inject it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`. On Docker/VPS or another orchestrator, provide a protected runtime file through `SEB_CONFIG_ENCRYPTION_CERT_PATH`. [Deployment](deployment.md) shows both procedures.
 
-The service validates the X.509 certificate when it starts and when it creates a download. In a hardened runtime:
+When `SEB_CONFIG_ENCRYPTION_ENABLED` is unset or `true`, the service validates the X.509 certificate when it starts and when it creates a download. In any runtime:
 
-- `SEB_CONFIG_ENCRYPTION_ENABLED` must be `true`.
 - A valid public X.509 certificate is required.
 - A public-key-only fallback is not sufficient.
+
+Set `SEB_CONFIG_ENCRYPTION_ENABLED=false` only for an instance that cannot deploy the client private identity. The service does not load or use certificate material in that mode, and the certificate download endpoints return `404`. Assessment configurations are plaintext unless the instructor has set a start password, in which case SEB's password (`pswd`) wrapping remains active.
 
 The configured public certificate is available for verification at:
 

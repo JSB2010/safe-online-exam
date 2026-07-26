@@ -283,6 +283,17 @@ describe("deployment hardening artifacts", () => {
     );
   });
 
+  it("carries the instance certificate-encryption setting through Cloud Run deployments", () => {
+    for (const config of [
+      source("cloudbuild-dev.yaml"),
+      source("cloudbuild-prod.yaml"),
+      source("cloudbuild-school.yaml")
+    ]) {
+      expect(config).toContain('_SEB_CONFIG_ENCRYPTION_ENABLED: "true"');
+      expect(config).toContain("SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED}");
+    }
+  });
+
   it("pins each dev secret to its independently verified version", () => {
     const dev = source("cloudbuild-dev.yaml");
 

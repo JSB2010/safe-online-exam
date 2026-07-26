@@ -170,8 +170,7 @@ describe("SEB config downloads", () => {
         expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
         expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
         expect(prepareDownload).toHaveBeenCalledWith(generated, {
-          startPassword: undefined,
-          requireCertificateEncryption: true
+          startPassword: undefined
         });
       },
       { encryptionEnabled: true }
@@ -236,8 +235,7 @@ describe("SEB config downloads", () => {
         expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
         expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
         expect(prepareDownload).toHaveBeenCalledWith(generated, {
-          startPassword: undefined,
-          requireCertificateEncryption: true
+          startPassword: undefined
         });
       },
       { encryptionEnabled: true }
@@ -351,8 +349,7 @@ describe("SEB config downloads", () => {
         expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pkhs");
         expect(downloaded.toString("utf8")).not.toContain("unique-start-passphrase");
         expect(prepareDownload).toHaveBeenCalledWith(expect.any(Buffer), {
-          startPassword: "unique-start-passphrase",
-          requireCertificateEncryption: true
+          startPassword: "unique-start-passphrase"
         });
         expect(saveConfigKey).not.toHaveBeenCalled();
       },
@@ -360,16 +357,18 @@ describe("SEB config downloads", () => {
     );
   });
 
-  it("fails closed when assessment certificate encryption is disabled", async () => {
-    await withConfig(async () => {
-      const controller = classicController(new SebConfigurationService(new AppConfig()));
-      const response = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
+  it("delivers plaintext assessment configs when instance certificate encryption is disabled", async () => {
+    await withConfig(
+      async () => {
+        const controller = classicController(new SebConfigurationService(new AppConfig()));
+        const response = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
 
-      expect(response.status).toHaveBeenCalledWith(400);
-      expect(response.sent).toBe(
-        "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
-      );
-    });
+        expect(response.status).toHaveBeenCalledWith(200);
+        expect(response.sent).toBeInstanceOf(Buffer);
+        expect((response.sent as Buffer).toString("utf8")).toContain("<plist");
+      },
+      { encryptionEnabled: false }
+    );
   });
 
   it("rejects a config download when the assessment is owned by another course", async () => {

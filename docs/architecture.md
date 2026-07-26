@@ -135,7 +135,7 @@ The detector waits for Canvas-authored completion evidence. Classic Quiz complet
 
 Generated assessment configurations include a strict Canvas and approved-resource URL filter, SEB Config Key proof setup, session-monitoring and kiosk-related policy, exit protection, and optional start-password protection. The exact plist is built by `SebConfigurationService`; use integration testing with the supported SEB clients rather than assuming a setting is honored by every client release or operating system.
 
-In a hardened runtime, certificate encryption is mandatory. The public X.509 certificate or public key permits wrapping the file; the matching private identity belongs only on approved client devices. [Certificate management](certificate-management.md) defines the required handling and rotation model.
+Certificate encryption is enabled by default, including in hardened runtimes. The public X.509 certificate or public key permits wrapping the file; the matching private identity belongs only on approved client devices. An instance that cannot distribute that identity may explicitly set `SEB_CONFIG_ENCRYPTION_ENABLED=false`; in that mode the configuration is plaintext unless an instructor sets a start password. [Certificate management](certificate-management.md) defines the security trade-off and rotation model.
 
 ### Assessment and setup-check configuration policy
 

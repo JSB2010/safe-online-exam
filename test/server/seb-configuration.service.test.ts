@@ -31,6 +31,12 @@ describe("SebConfigurationService", () => {
     );
   });
 
+  it("does not require a certificate in a hardened runtime when the instance disables certificate encryption", () => {
+    const service = new SebConfigurationService(startupConfig(true, undefined, false));
+
+    expect(() => service.onModuleInit()).not.toThrow();
+  });
+
   it("keeps certificate loading lazy for local development", () => {
     const service = new SebConfigurationService(startupConfig(false, "not-a-certificate"));
     const certificateCheck = vi.spyOn(service, "getEncryptionCertificate");
@@ -639,14 +645,14 @@ describe("SebConfigurationService", () => {
   });
 });
 
-function startupConfig(hardened: boolean, certificatePem?: string): AppConfig {
+function startupConfig(hardened: boolean, certificatePem?: string, encryptionEnabled = true): AppConfig {
   return {
     isHardenedRuntime: () => hardened,
     value: {
       seb: {
         requiredDomains: [],
         configEncryption: {
-          enabled: true,
+          enabled: encryptionEnabled,
           certificatePem
         }
       }

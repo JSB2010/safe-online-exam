@@ -344,9 +344,11 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
     );
   }
 
-  if (!snapshot.seb.configEncryption.enabled) {
-    errors.push(`SEB_CONFIG_ENCRYPTION_ENABLED must be true in ${runtimeLabel}`);
-  } else if (!snapshot.seb.configEncryption.certificatePem && !snapshot.seb.configEncryption.certificatePath) {
+  if (
+    snapshot.seb.configEncryption.enabled &&
+    !snapshot.seb.configEncryption.certificatePem &&
+    !snapshot.seb.configEncryption.certificatePath
+  ) {
     errors.push(
       "SEB config encryption requires a validity-checked X.509 certificate through SEB_CONFIG_ENCRYPTION_CERT_PEM or SEB_CONFIG_ENCRYPTION_CERT_PATH"
     );

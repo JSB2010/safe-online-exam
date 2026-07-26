@@ -329,7 +329,7 @@ The first pass replaces the placeholder service with the real container, creates
 ```bash
 gcloud builds submit \
   --config=cloudbuild-dev.yaml \
-  --substitutions=_CANVAS_DOMAIN_SECRET_VERSION=1,_LTI_CLIENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_TOOL_URL_SECRET_VERSION=1,_LTI_PRIVATE_KEY_SECRET_VERSION=1,_SESSION_SECRET_VERSION=1,_STATE_ENCRYPTION_KEY_SECRET_VERSION=1,_CANVAS_API_CLIENT_ID_SECRET_VERSION=1,_CANVAS_API_CLIENT_SECRET_VERSION=1,_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
+  --substitutions=_CANVAS_DOMAIN_SECRET_VERSION=1,_LTI_CLIENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true,_TOOL_URL_SECRET_VERSION=1,_LTI_PRIVATE_KEY_SECRET_VERSION=1,_SESSION_SECRET_VERSION=1,_STATE_ENCRYPTION_KEY_SECRET_VERSION=1,_CANVAS_API_CLIENT_ID_SECRET_VERSION=1,_CANVAS_API_CLIENT_SECRET_VERSION=1,_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
 ```
 
 The Dockerfile performs install, typecheck, lint, format verification, coverage tests, build, production prune, and runtime assembly. BuildKit inline cache metadata and the Dockerfile's independent verification/production-dependency stages allow reusable or independent work to avoid unnecessary serialization. Cloud Build also runs the real PostgreSQL migration and concurrency suite. It pushes an immutable image digest, waits for the migration job, deploys the cleanup job, and deploys the service only after migration succeeds.
@@ -364,7 +364,7 @@ If these are versions 2, deploy with only those two pins changed:
 ```bash
 gcloud builds submit \
   --config=cloudbuild-dev.yaml \
-  --substitutions=_CANVAS_DOMAIN_SECRET_VERSION=1,_LTI_CLIENT_ID_SECRET_VERSION=2,_LTI_DEPLOYMENT_ID_SECRET_VERSION=2,_TOOL_URL_SECRET_VERSION=1,_LTI_PRIVATE_KEY_SECRET_VERSION=1,_SESSION_SECRET_VERSION=1,_STATE_ENCRYPTION_KEY_SECRET_VERSION=1,_CANVAS_API_CLIENT_ID_SECRET_VERSION=1,_CANVAS_API_CLIENT_SECRET_VERSION=1,_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
+  --substitutions=_CANVAS_DOMAIN_SECRET_VERSION=1,_LTI_CLIENT_ID_SECRET_VERSION=2,_LTI_DEPLOYMENT_ID_SECRET_VERSION=2,_SEB_CONFIG_ENCRYPTION_ENABLED=true,_TOOL_URL_SECRET_VERSION=1,_LTI_PRIVATE_KEY_SECRET_VERSION=1,_SESSION_SECRET_VERSION=1,_STATE_ENCRYPTION_KEY_SECRET_VERSION=1,_CANVAS_API_CLIENT_ID_SECRET_VERSION=1,_CANVAS_API_CLIENT_SECRET_VERSION=1,_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1
 ```
 
 Always confirm actual version numbers with `gcloud secrets versions list SECRET_NAME`; do not assume `2` if the secret already had versions.
@@ -412,12 +412,12 @@ gcloud run jobs executions list \
 
 ### Production And Parameterized Deployments
 
-`cloudbuild-prod.yaml` preserves `canvas-seb-prod`, uses `APP_ENV=prod`, disables detector diagnostics, keeps one minimum instance, and allows up to ten instances. It expects `prod_canvas_domain`, `prod_lti_client_id`, `prod_lti_deployment_id`, `prod_tool_url`, `prod_lti_private_key`, `prod_session_secret`, `prod_state_encryption_key`, `prod_api_client_id`, `prod_api_client_secret`, `prod_seb_config_encryption_cert_pem`, and `prod_database_password`. Its non-database secrets share `_SECRET_VERSION`; create the same numbered version for every non-database secret before changing that substitution. The database-password version is independently pinned.
+`cloudbuild-prod.yaml` preserves `canvas-seb-prod`, uses `APP_ENV=prod`, disables detector diagnostics, keeps one minimum instance, and allows up to ten instances. It expects `prod_canvas_domain`, `prod_lti_client_id`, `prod_lti_deployment_id`, `prod_tool_url`, `prod_lti_private_key`, `prod_session_secret`, `prod_state_encryption_key`, `prod_api_client_id`, `prod_api_client_secret`, `prod_seb_config_encryption_cert_pem`, and `prod_database_password`. Its non-database secrets share `_SECRET_VERSION`; create the same numbered version for every non-database secret before changing that substitution. The database-password version is independently pinned. `_SEB_CONFIG_ENCRYPTION_ENABLED` defaults to `true`; set it to `false` only for an instance that cannot distribute client private identities.
 
 ```bash
 gcloud builds submit \
   --config=cloudbuild-prod.yaml \
-  --substitutions=_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true
+  --substitutions=_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true
 ```
 
 `cloudbuild-school.yaml` is the parameterized template for another installation. With `_SECRET_PREFIX=canvas_seb`, it expects the same suffixes shown above under `canvas_seb_*` secret names:
@@ -432,7 +432,7 @@ _LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect
 ```bash
 gcloud builds submit \
   --config=cloudbuild-school.yaml \
-  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_LTI_KEY_SET_URL=https://canvas.example.edu/api/lti/security/jwks,_LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
+  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_LTI_KEY_SET_URL=https://canvas.example.edu/api/lti/security/jwks,_LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
 ```
 
 Inspect every substitution and referenced secret before the first build.
@@ -809,7 +809,7 @@ The checked-in Cloud Run configs use a pool maximum of 5. Production's ten app i
 
 For a bad release, stop promotion, preserve logs and database state, then decide whether the failure is application-only or schema/data-affecting. Route traffic to a previous revision or image only when its schema contract is compatible. Otherwise ship a reviewed forward correction or restore into a controlled target.
 
-For a secret or certificate incident, pause affected assessments, rotate only the affected material, deploy pinned new versions, distribute any replacement managed-client identity, invalidate affected settings through the normal workflow, and require fresh `.seb` downloads. Do not enable production debug mode, disable encryption, widen URL filters, or place client private identities in the server runtime.
+For a secret or certificate incident, pause affected assessments, rotate only the affected material, deploy pinned new versions, distribute any replacement managed-client identity, invalidate affected settings through the normal workflow, and require fresh `.seb` downloads. Do not enable production debug mode, widen URL filters, or place client private identities in the server runtime. If certificate encryption is intentionally disabled for an unmanaged-device instance, document that exception and require start passwords where configuration confidentiality is needed.
 
 ## Official Google Cloud References
 

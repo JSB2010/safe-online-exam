@@ -257,10 +257,9 @@ export class SebController {
         consumedGrant.canvasUserId,
         consumedGrant.requiresSessionHandoff
       );
-      // The encrypted bytes may come from the short single-flight cache. Check
-      // certificate time again immediately before serving them so a long-lived
-      // process cannot issue a config after NotAfter.
-      this.sebConfig.assertConfigurationDownloadReady({ requireCertificateEncryption: true });
+      // Certificate validity may change while a configuration is in the short
+      // single-flight cache. Recheck it before serving encrypted output.
+      this.sebConfig.assertConfigurationDownloadReady();
       response
         .status(200)
         .type("application/octet-stream")
@@ -1166,8 +1165,7 @@ export class SebController {
       returnTo
     );
     return this.sebConfig.prepareSebConfigurationDownload(plain, {
-      startPassword: target.setting.startPassword,
-      requireCertificateEncryption: true
+      startPassword: target.setting.startPassword
     });
   }
 
@@ -1317,8 +1315,7 @@ export class SebController {
     const plain = await this.generatePlainConfigUncached(courseId, contentId, canvasUrl, startUrlOverride);
     const setting = await this.resolveSebSetting(courseId, contentId);
     return this.sebConfig.prepareSebConfigurationDownload(plain, {
-      startPassword: setting?.startPassword,
-      requireCertificateEncryption: true
+      startPassword: setting?.startPassword
     });
   }
 

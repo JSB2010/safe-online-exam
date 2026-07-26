@@ -90,8 +90,7 @@ describe("AppConfig", () => {
         "CANVAS_REDIRECT_URI must equal TOOL_URL followed by /api/oauth2callback in production",
         "SESSION_SECRET must contain at least 32 characters in production",
         "STATE_ENCRYPTION_KEY must contain at least 32 characters in production",
-        "APP_DEBUG_ENABLED must be false in production",
-        "SEB_CONFIG_ENCRYPTION_ENABLED must be true in production"
+        "APP_DEBUG_ENABLED must be false in production"
       ])
     );
   });
@@ -468,7 +467,7 @@ describe("AppConfig", () => {
     expect(validateRuntimeConfig(loadConfigFromEnv(safeEnv), safeEnv)).toEqual([]);
   });
 
-  it("fails closed on unencrypted SEB configs and unsafe required-domain wildcards in Cloud Run", () => {
+  it("allows instance-level disabled certificate encryption in Cloud Run while retaining other hardening", () => {
     const env = {
       APP_ENV: "prod",
       K_SERVICE: "canvas-seb",
@@ -488,10 +487,12 @@ describe("AppConfig", () => {
 
     expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual(
       expect.arrayContaining([
-        "SEB_CONFIG_ENCRYPTION_ENABLED must be true in Cloud Run",
         "SEB_REQUIRED_DOMAINS contains an unsafe hostname: *.example.edu",
         "SEB_REQUIRED_DOMAINS must not include an identity-provider hostname: accounts.google.com"
       ])
+    );
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).not.toContain(
+      "SEB config encryption requires a validity-checked X.509 certificate through SEB_CONFIG_ENCRYPTION_CERT_PEM or SEB_CONFIG_ENCRYPTION_CERT_PATH"
     );
   });
 

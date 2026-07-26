@@ -1,6 +1,6 @@
 # Safe Online Exam
 
-Safe Online Exam connects Canvas assessments to [Safe Exam Browser (SEB)](https://safeexambrowser.org/). Instructors configure Classic Quizzes and New Quizzes from a Canvas course-navigation placement, while root-account Canvas administrators receive a separate school-wide account-navigation dashboard. Students receive a certificate-encrypted `.seb` configuration, and the Canvas access code is released only after Config Key proof succeeds.
+Safe Online Exam connects Canvas assessments to [Safe Exam Browser (SEB)](https://safeexambrowser.org/). Instructors configure Classic Quizzes and New Quizzes from a Canvas course-navigation placement, while root-account Canvas administrators receive a separate school-wide account-navigation dashboard. Students receive a certificate-encrypted `.seb` configuration by default, and the Canvas access code is released only after Config Key proof succeeds.
 
 The application supports Canvas LTI 1.3, Canvas OAuth, protected Canvas session handoff, approved web exam tools, one-time access proof, and the Canvas detector script. It runs on Node.js 24 with PostgreSQL 17 and can be deployed with Docker Compose, on a conventional container platform, or on Google Cloud Run with Cloud SQL.
 
@@ -10,7 +10,7 @@ The application supports Canvas LTI 1.3, Canvas OAuth, protected Canvas session 
 - Gives verified root-account administrators a Canvas-embedded view of connected courses, assessment state, password recovery, active-course discovery, and reusable school tool presets with bulk rollout.
 - Sets and rotates Canvas access codes without returning them in routine UI or API responses.
 - Lets instructors select course tools, define a tool that exists only for one quiz, and duplicate a saved course tool into other active Canvas courses where they are teachers.
-- Generates certificate-encrypted SEB configurations with optional start and exit passwords.
+- Generates certificate-encrypted SEB configurations by default, with optional start and exit passwords and an instance-level compatibility setting for unmanaged devices.
 - Transfers a scoped Canvas session into SEB without copying the normal browser's cookies.
 - Uses the SEB JavaScript API and a short-lived one-time proof before releasing access, approved tools, or exit capability.
 - Persists settings, OAuth tokens, sessions, transient claims, and distributed locks in PostgreSQL.

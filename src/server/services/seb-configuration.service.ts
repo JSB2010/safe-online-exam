@@ -215,7 +215,7 @@ export class SebConfigurationService implements OnModuleInit {
   constructor(private readonly config: AppConfig) {}
 
   onModuleInit(): void {
-    if (!this.config.isHardenedRuntime()) {
+    if (!this.config.isHardenedRuntime() || !this.config.value.seb.configEncryption.enabled) {
       return;
     }
     if (!this.getEncryptionCertificate()) {
@@ -358,15 +358,12 @@ export class SebConfigurationService implements OnModuleInit {
     return Buffer.from(plist.build(plistValue as any), "utf8");
   }
 
-  prepareSebConfigurationDownload(
-    plainConfig: Buffer,
-    options: { startPassword?: string | null; requireCertificateEncryption?: boolean } = {}
-  ): Buffer {
+  prepareSebConfigurationDownload(plainConfig: Buffer, options: { startPassword?: string | null } = {}): Buffer {
     const startPassword = normalizeSebPassword(options.startPassword);
     if (startPassword) {
       requireSebPasswordForConfiguration(startPassword, "start");
     }
-    const keyMaterial = this.currentEncryptionKeyMaterialForDownload(options.requireCertificateEncryption);
+    const keyMaterial = this.currentEncryptionKeyMaterialForDownload();
     if (!keyMaterial) {
       if (startPassword) {
         return preparePasswordProtectedSebConfig(plainConfig, startPassword);
@@ -378,8 +375,8 @@ export class SebConfigurationService implements OnModuleInit {
     });
   }
 
-  assertConfigurationDownloadReady(options: { requireCertificateEncryption?: boolean } = {}): void {
-    this.currentEncryptionKeyMaterialForDownload(options.requireCertificateEncryption);
+  assertConfigurationDownloadReady(): void {
+    this.currentEncryptionKeyMaterialForDownload();
   }
 
   getEncryptionCertificate(): { pem: string; der: Buffer; publicKeyHash: Buffer } | null {
@@ -403,13 +400,8 @@ export class SebConfigurationService implements OnModuleInit {
     return this.encryptionKeyMaterial;
   }
 
-  private currentEncryptionKeyMaterialForDownload(
-    requireCertificateEncryption = false
-  ): SebEncryptionKeyMaterial | null {
+  private currentEncryptionKeyMaterialForDownload(): SebEncryptionKeyMaterial | null {
     if (!this.config.value.seb.configEncryption.enabled) {
-      if (requireCertificateEncryption) {
-        throw new Error("Certificate encryption is required for assessment SEB configurations");
-      }
       return null;
     }
     const keyMaterial = this.getEncryptionKeyMaterial();

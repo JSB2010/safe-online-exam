@@ -52,24 +52,24 @@ Run `npm run db:migrate` before a new application revision. Run `npm run db:clea
 
 ## Required Application Values
 
-| Variable                             | Purpose                                                 | Hardened requirement                                                                       |
-| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `NODE_ENV`                           | Node runtime mode.                                      | `production` for the deployed image.                                                       |
-| `APP_ENV`                            | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                                        |
-| `PORT`                               | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                                               |
-| `TOOL_URL`                           | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                                         |
-| `CANVAS_DOMAIN`                      | Connected Canvas origin.                                | HTTPS origin only.                                                                         |
-| `LTI_CLIENT_ID`                      | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                                                  |
-| `LTI_PRIVATE_KEY`                    | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                                          |
-| `LTI_DEPLOYMENT_ID_CHECKING_ENABLED` | Enforce the configured deployment-ID allowlist.         | Defaults to `true`. Set `false` only for a controlled self-service course-install rollout. |
-| `LTI_DEPLOYMENT_ID`                  | Installed External App deployment ID.                   | Required when checking is enabled; comma/newline allowlist supported.                      |
-| `CANVAS_API_CLIENT_ID`               | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                                                    |
-| `CANVAS_API_CLIENT_SECRET`           | Canvas API OAuth secret.                                | Required secret.                                                                           |
-| `SESSION_SECRET`                     | Express session signing secret.                         | At least 32 characters and different from state encryption.                                |
-| `STATE_ENCRYPTION_KEY`               | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.                                 |
-| `SEB_CONFIG_ENCRYPTION_CERT_PEM`     | Public X.509 certificate used to encrypt `.seb` output. | Valid end-entity RSA certificate whose Key Usage permits encryption.                       |
+| Variable                             | Purpose                                                 | Hardened requirement                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                           | Node runtime mode.                                      | `production` for the deployed image.                                                                                  |
+| `APP_ENV`                            | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                                                                   |
+| `PORT`                               | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                                                                          |
+| `TOOL_URL`                           | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                                                                    |
+| `CANVAS_DOMAIN`                      | Connected Canvas origin.                                | HTTPS origin only.                                                                                                    |
+| `LTI_CLIENT_ID`                      | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                                                                             |
+| `LTI_PRIVATE_KEY`                    | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                                                                     |
+| `LTI_DEPLOYMENT_ID_CHECKING_ENABLED` | Enforce the configured deployment-ID allowlist.         | Defaults to `true`. Set `false` only for a controlled self-service course-install rollout.                            |
+| `LTI_DEPLOYMENT_ID`                  | Installed External App deployment ID.                   | Required when checking is enabled; comma/newline allowlist supported.                                                 |
+| `CANVAS_API_CLIENT_ID`               | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                                                                               |
+| `CANVAS_API_CLIENT_SECRET`           | Canvas API OAuth secret.                                | Required secret.                                                                                                      |
+| `SESSION_SECRET`                     | Express session signing secret.                         | At least 32 characters and different from state encryption.                                                           |
+| `STATE_ENCRYPTION_KEY`               | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.                                                            |
+| `SEB_CONFIG_ENCRYPTION_CERT_PEM`     | Public X.509 certificate used to encrypt `.seb` output. | Required when certificate encryption is enabled; valid end-entity RSA certificate whose Key Usage permits encryption. |
 
-`SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients.
+`SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients. Neither certificate input is required when certificate encryption is disabled.
 
 ## Deployment-ID Policy
 
@@ -106,21 +106,23 @@ The registration document is `${TOOL_URL}/lti/config` and publishes the login, l
 
 ## SEB And Diagnostics
 
-| Variable                                | Default   | Notes                                                                            |
-| --------------------------------------- | --------- | -------------------------------------------------------------------------------- |
-| `SEB_QUIT_PASSWORD`                     | Unset     | Optional managed exit-password fallback; must pass password policy.              |
-| `SEB_REQUIRED_DOMAINS`                  | Empty     | Concrete reviewed hostnames; wildcards and identity-provider hosts are rejected. |
-| `SEB_CONFIG_ENCRYPTION_ENABLED`         | `true`    | Must remain true in hardened runtimes.                                           |
-| `SEB_CONFIG_ENCRYPTION_CERT_PATH`       | Unset     | Public certificate path; used by the Compose secret mount.                       |
-| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM`  | Unset     | Local-development fallback; insufficient for hardened validation.                |
-| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH` | Unset     | File form of the local public-key fallback.                                      |
-| `HOST`                                  | `0.0.0.0` | Bind address.                                                                    |
-| `USE_IN_MEMORY_STORE`                   | `false`   | Local/test only; hardened runtimes reject it.                                    |
-| `APP_DEBUG_ENABLED`                     | `false`   | Hardened runtimes reject true.                                                   |
-| `APP_DETECTOR_DIAGNOSTICS_ENABLED`      | `false`   | Sanitized detector detail; production profile rejects true.                      |
-| `APP_ASSET_VERSION`                     | Unset     | Optional client cache version; `K_REVISION` is used when present.                |
+| Variable                                | Default   | Notes                                                                                                                                                                               |
+| --------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEB_QUIT_PASSWORD`                     | Unset     | Optional managed exit-password fallback; must pass password policy.                                                                                                                 |
+| `SEB_REQUIRED_DOMAINS`                  | Empty     | Concrete reviewed hostnames; wildcards and identity-provider hosts are rejected.                                                                                                    |
+| `SEB_CONFIG_ENCRYPTION_ENABLED`         | `true`    | Set explicitly to `false` to disable certificate wrapping for this instance, including hardened runtimes. A teacher-set start password still wraps that assessment's configuration. |
+| `SEB_CONFIG_ENCRYPTION_CERT_PATH`       | Unset     | Public certificate path; used by the Compose secret mount.                                                                                                                          |
+| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM`  | Unset     | Local-development fallback; insufficient for hardened validation.                                                                                                                   |
+| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH` | Unset     | File form of the local public-key fallback.                                                                                                                                         |
+| `HOST`                                  | `0.0.0.0` | Bind address.                                                                                                                                                                       |
+| `USE_IN_MEMORY_STORE`                   | `false`   | Local/test only; hardened runtimes reject it.                                                                                                                                       |
+| `APP_DEBUG_ENABLED`                     | `false`   | Hardened runtimes reject true.                                                                                                                                                      |
+| `APP_DETECTOR_DIAGNOSTICS_ENABLED`      | `false`   | Sanitized detector detail; production profile rejects true.                                                                                                                         |
+| `APP_ASSET_VERSION`                     | Unset     | Optional client cache version; `K_REVISION` is used when present.                                                                                                                   |
 
 Generated configurations use a Safari-compatible browser user agent on macOS so Google Sheets selects its full-resolution canvas path. SEB appends its own identifier to that user agent. Windows configurations retain SEB's native Chromium-based browser user agent.
+
+Certificate encryption is the default because it restricts a configuration to devices holding the matching private identity. Set `SEB_CONFIG_ENCRYPTION_ENABLED=false` only for an instance whose devices cannot receive that identity. The setting leaves Config Key proof, one-time configuration grants, Canvas session handoff, URL filtering, and SEB lockdown policies enabled, but it does not make a downloaded configuration device-specific. If an instructor sets a start password, SEB still password-protects that configuration.
 
 ## Secret Rotation
 

@@ -51,19 +51,13 @@ describe("SEB config certificate encryption", () => {
       } as AppConfig);
       const plainConfig = Buffer.from("<plist><dict /></plist>");
 
-      expect(() =>
-        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
-      ).not.toThrow();
+      expect(() => service.prepareSebConfigurationDownload(plainConfig)).not.toThrow();
 
       now.mockReturnValue(Date.parse("2026-07-13T12:00:00Z"));
-      expect(() =>
-        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
-      ).toThrow(/certificate is not yet valid/u);
+      expect(() => service.prepareSebConfigurationDownload(plainConfig)).toThrow(/certificate is not yet valid/u);
 
       now.mockReturnValue(Date.parse("2026-07-15T00:00:00Z"));
-      expect(() =>
-        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
-      ).toThrow(/certificate has expired/u);
+      expect(() => service.prepareSebConfigurationDownload(plainConfig)).toThrow(/certificate has expired/u);
     } finally {
       now.mockRestore();
       warning.mockRestore();
@@ -150,7 +144,7 @@ describe("SEB config certificate encryption", () => {
     expect(gunzipSync(decryptRncryptor(innerBlock.subarray(4), "exam-start"))).toEqual(plainConfig);
   });
 
-  it("allows plaintext only when the caller does not require assessment certificate encryption", () => {
+  it("allows plaintext configuration when instance certificate encryption is disabled", () => {
     const previous = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
     process.env.SEB_CONFIG_ENCRYPTION_ENABLED = "false";
     try {
@@ -158,15 +152,12 @@ describe("SEB config certificate encryption", () => {
       const plainConfig = Buffer.from("<plist><dict /></plist>");
 
       expect(service.prepareSebConfigurationDownload(plainConfig)).toBe(plainConfig);
-      expect(() =>
-        service.prepareSebConfigurationDownload(plainConfig, { requireCertificateEncryption: true })
-      ).toThrow(/Certificate encryption is required/u);
     } finally {
       restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previous);
     }
   });
 
-  it("allows password-only wrapping for non-assessment callers when certificate encryption is not required", () => {
+  it("uses start-password wrapping when instance certificate encryption is disabled", () => {
     const previous = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
     process.env.SEB_CONFIG_ENCRYPTION_ENABLED = "false";
     try {
