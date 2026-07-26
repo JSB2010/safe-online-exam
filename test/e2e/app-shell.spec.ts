@@ -121,6 +121,300 @@ test("renders OAuth completion without resuming privileged management UI", async
   expect(browserErrors).toEqual([]);
 });
 
+test("returns the existing LTI page after an instructor OAuth popup completes", async ({ context, page }) => {
+  const browserErrors: string[] = [];
+  const trackErrors = (target: typeof page) => {
+    target.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
+    target.on("pageerror", (error) => browserErrors.push(error.message));
+  };
+  trackErrors(page);
+  context.on("page", trackErrors);
+
+  await context.route("**/oauth-popup-start", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "canvas-oauth-connected",
+          data: { canvasReturnUrl: "https://canvas.example.edu/courses/course-1" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await context.route("**/authorization-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: { authUrl: "/oauth-popup-start", message: "Connect Canvas to continue." }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await context.route("**/lti/launch?connected=1", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Instructor workspace</h1></body></html>"
+    });
+  });
+
+  await page.goto("/authorization-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+
+  await expect(page).toHaveURL(/\/lti\/launch\?connected=1$/u);
+  await expect(page.getByRole("heading", { name: "Instructor workspace" })).toBeVisible();
+  await expect.poll(() => popup.isClosed()).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test("ignores a forged OAuth completion message that did not come from the opened popup", async ({ context, page }) => {
+  await context.route("**/oauth-popup-pending", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><p>Canvas authorization pending</p></body></html>"
+    });
+  });
+  await context.route("**/authorization-spoof-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: { authUrl: "/oauth-popup-pending", message: "Connect Canvas to continue." }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/authorization-spoof-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: window.location.origin,
+        source: window,
+        data: { type: "seb-canvas-oauth-connected" }
+      })
+    );
+  });
+
+  await expect(page).toHaveURL(/\/authorization-spoof-preview$/u);
+  await expect(page.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+  await popup.close();
+  await expect(page.getByRole("alert")).toContainText("closed before it finished");
+});
+
+test("returns the existing LTI page after a student session OAuth popup completes with a validated return URL", async ({
+  context,
+  page
+}) => {
+  const browserErrors: string[] = [];
+  const trackErrors = (target: typeof page) => {
+    target.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
+    target.on("pageerror", (error) => browserErrors.push(error.message));
+  };
+  trackErrors(page);
+  context.on("page", trackErrors);
+
+  await context.route("**/student-session-popup-start", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><body><script>window.opener.postMessage({ type: "seb-canvas-session-connected", returnUrl: "/lti/launch?resumed=1" }, window.location.origin);</script></body></html>`
+    });
+  });
+  await context.route("**/authorization-student-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "student-session-authorization",
+          data: { authUrl: "/student-session-popup-start" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await context.route("**/lti/launch?resumed=1", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Resumed quiz workspace</h1></body></html>"
+    });
+  });
+
+  await page.goto("/authorization-student-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+
+  await expect(page).toHaveURL(/\/lti\/launch\?resumed=1$/u);
+  await expect(page.getByRole("heading", { name: "Resumed quiz workspace" })).toBeVisible();
+  await expect.poll(() => popup.isClosed()).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test("falls back to the default destination when a student session popup reports a cross-origin return URL", async ({
+  context,
+  page
+}) => {
+  const browserErrors: string[] = [];
+  const trackErrors = (target: typeof page) => {
+    target.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
+    target.on("pageerror", (error) => browserErrors.push(error.message));
+  };
+  trackErrors(page);
+  context.on("page", trackErrors);
+
+  await context.route("**/student-session-popup-malicious", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><body><script>window.opener.postMessage({ type: "seb-canvas-session-connected", returnUrl: "https://attacker.example.com/steal-session" }, window.location.origin);</script></body></html>`
+    });
+  });
+  await context.route("**/authorization-student-malicious-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "student-session-authorization",
+          data: { authUrl: "/student-session-popup-malicious" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await context.route("**/lti/launch?connected=1", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Default quiz workspace</h1></body></html>"
+    });
+  });
+
+  await page.goto("/authorization-student-malicious-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+
+  await expect(page).toHaveURL(/\/lti\/launch\?connected=1$/u);
+  await expect(page.getByRole("heading", { name: "Default quiz workspace" })).toBeVisible();
+  await expect(page).not.toHaveURL(/attacker\.example\.com/u);
+  await expect.poll(() => popup.isClosed()).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test("sanitizes a cross-origin authUrl before opening the Canvas connection popup", async ({ context, page }) => {
+  const browserErrors: string[] = [];
+  const trackErrors = (target: typeof page) => {
+    target.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
+    target.on("pageerror", (error) => browserErrors.push(error.message));
+  };
+  trackErrors(page);
+  context.on("page", trackErrors);
+
+  await context.route("**/api/oauth2authorize", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Sanitized fallback authorization</h1></body></html>"
+    });
+  });
+  await context.route("**/authorization-untrusted-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: { authUrl: "https://attacker.example.com/phish", message: "Connect Canvas to continue." }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/authorization-untrusted-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+  await popup.waitForLoadState();
+
+  expect(new URL(popup.url()).origin).toBe(new URL(page.url()).origin);
+  expect(popup.url()).toContain("/api/oauth2authorize");
+  await expect(popup.getByRole("heading", { name: "Sanitized fallback authorization" })).toBeVisible();
+  await popup.close();
+  expect(browserErrors).toEqual([]);
+});
+
+test("falls back to direct navigation when the Canvas connection popup is blocked", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await page.addInitScript(() => {
+    window.open = () => null;
+  });
+  await page.route("**/oauth-fallback-target", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Fallback authorization page</h1></body></html>"
+    });
+  });
+  await page.route("**/authorization-blocked-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: { authUrl: "/oauth-fallback-target", message: "Connect Canvas to continue." }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/authorization-blocked-preview");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+
+  await expect(page).toHaveURL(/\/oauth-fallback-target$/u);
+  await expect(page.getByRole("heading", { name: "Fallback authorization page" })).toBeVisible();
+  expect(browserErrors).toEqual([]);
+});
+
+test("renders the Canvas connected fallback without a return action when no return URL is provided", async ({
+  page
+}) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/oauth-connected-no-return-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "canvas-oauth-connected",
+          data: {}
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/oauth-connected-no-return-preview");
+
+  await expect(page.getByRole("heading", { name: "Canvas Connected" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Return to Canvas" })).toHaveCount(0);
+  expect(browserErrors).toEqual([]);
+});
+
 test("renders the responsive root-account administrator workspace and controlled secret reveal", async ({ page }) => {
   const browserErrors: string[] = [];
   page.on("console", (message) => {
