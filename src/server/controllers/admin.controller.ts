@@ -80,9 +80,9 @@ export class AdminController {
   @Get("/courses")
   async listCourses(
     @Req() request: Request,
-    @Query("search") search?: string,
-    @Query("cursor") cursor?: string,
-    @Query("limit") rawLimit?: string
+    @Query("search") search?: unknown,
+    @Query("cursor") cursor?: unknown,
+    @Query("limit") rawLimit?: unknown
   ): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireAdmin(request);
     await this.ensureLegacyCourseConnections(principal);
@@ -133,11 +133,11 @@ export class AdminController {
   @Get("/course-catalog")
   async courseCatalog(
     @Req() request: Request,
-    @Query("search") search?: string,
-    @Query("termId") termId?: string,
-    @Query("cursor") cursor?: string,
-    @Query("includeUnpublished") includeUnpublished?: string,
-    @Query("withEnrollments") withEnrollments?: string
+    @Query("search") search?: unknown,
+    @Query("termId") termId?: unknown,
+    @Query("cursor") cursor?: unknown,
+    @Query("includeUnpublished") includeUnpublished?: unknown,
+    @Query("withEnrollments") withEnrollments?: unknown
   ): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireAdmin(request);
     const page = decodeCanvasPageCursor(cursor);
@@ -145,7 +145,7 @@ export class AdminController {
       page,
       perPage: ADMIN_PAGE_SIZE,
       search: normalizedSearch(search),
-      termId,
+      termId: scalarQueryString(termId),
       includeUnpublished: includeUnpublished === "true",
       withEnrollments: withEnrollments !== "false"
     });
@@ -874,12 +874,15 @@ function adminCourseListView(course: AdminCourseConnectionRecord) {
   };
 }
 
-function normalizedPageSize(value?: string): number {
+function normalizedPageSize(value: unknown): number {
+  if (typeof value !== "string" || !/^[0-9]{1,3}$/u.test(value)) {
+    return ADMIN_PAGE_SIZE;
+  }
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 50) : ADMIN_PAGE_SIZE;
 }
 
-function normalizedSearch(value?: string): string | undefined {
+function normalizedSearch(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -887,12 +890,16 @@ function normalizedSearch(value?: string): string | undefined {
   return normalized || undefined;
 }
 
+function scalarQueryString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function encodeCourseCursor(course: Pick<AdminCourseConnectionRecord, "name" | "courseId">): string {
   return Buffer.from(JSON.stringify({ name: course.name, courseId: course.courseId }), "utf8").toString("base64url");
 }
 
-function decodeCourseCursor(value?: string): { name: string; courseId: string } | null {
-  if (!value || value.length > 1_000) {
+function decodeCourseCursor(value: unknown): { name: string; courseId: string } | null {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,1000}$/u.test(value)) {
     return null;
   }
   try {
@@ -909,8 +916,11 @@ function encodeCanvasPageCursor(page: number): string {
   return Buffer.from(String(page), "utf8").toString("base64url");
 }
 
-function decodeCanvasPageCursor(value?: string): number {
-  if (!value) {
+function decodeCanvasPageCursor(value: unknown): number {
+  if (value === undefined) {
+    return 1;
+  }
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,100}$/u.test(value)) {
     return 1;
   }
   try {

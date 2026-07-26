@@ -14,6 +14,13 @@ done
 
 gh auth status >/dev/null
 
+jq -n '{
+  allow_auto_merge: true,
+  allow_rebase_merge: false,
+  delete_branch_on_merge: true
+}' | gh api --method PATCH "repos/$repository" --input - >/dev/null
+echo "enabled auto-merge and merged-branch cleanup; disabled unsigned rebase merges"
+
 existing_ruleset_id="$(
   gh api "repos/$repository/rulesets" \
     --jq ".[] | select(.name == \"$ruleset_name\" and .target == \"branch\") | .id" |
@@ -36,6 +43,11 @@ jq -n '{enabled: true, allowed_actions: "all", sha_pinning_required: true}' |
   gh api --method PUT "repos/$repository/actions/permissions" --input - >/dev/null
 echo "required full-length action SHA pins"
 
+gh api --method PUT "repos/$repository/vulnerability-alerts" >/dev/null
+gh api --method PUT "repos/$repository/automated-security-fixes" >/dev/null
+gh api --method PUT "repos/$repository/private-vulnerability-reporting" >/dev/null
+echo "enabled Dependabot alerts/security fixes and private vulnerability reporting"
+
 gh api --method PUT \
   -H "X-GitHub-Api-Version: 2026-03-10" \
   "repos/$repository/immutable-releases" >/dev/null
@@ -44,5 +56,14 @@ echo "enabled immutable GitHub Releases"
 gh api "repos/$repository/rulesets/$existing_ruleset_id" \
   --jq '{id, name, enforcement, conditions, rules}'
 gh api "repos/$repository/actions/permissions"
+gh api "repos/$repository" \
+  --jq '{
+    allow_auto_merge,
+    allow_rebase_merge,
+    delete_branch_on_merge,
+    security_and_analysis
+  }'
+gh api "repos/$repository/automated-security-fixes"
+gh api "repos/$repository/private-vulnerability-reporting"
 gh api -H "X-GitHub-Api-Version: 2026-03-10" \
   "repos/$repository/immutable-releases"

@@ -17,6 +17,9 @@
       "type": "non_fast_forward"
     },
     {
+      "type": "required_signatures"
+    },
+    {
       "type": "pull_request",
       "parameters": {
         "require_code_owner_review": false,
@@ -40,6 +43,10 @@
           },
           {
             "context": "Production Compose smoke",
+            "integration_id": 15368
+          },
+          {
+            "context": "Dependency review",
             "integration_id": 15368
           },
           {

@@ -6,6 +6,12 @@ suffix="${suffix//[^a-zA-Z0-9_.-]/-}"
 network="seb-postgres-test-${suffix}"
 database_container="seb-postgres-test-db-${suffix}"
 test_image="seb-postgres-integration:${suffix}"
+postgres_image="$(awk '/^[[:space:]]+image:[[:space:]]+/ { print $2; exit }' compose.postgres-test.yaml)"
+
+if [[ ! "$postgres_image" =~ ^postgres:17-alpine@sha256:[0-9a-f]{64}$ ]]; then
+  echo "compose.postgres-test.yaml must pin the PostgreSQL 17 image by digest" >&2
+  exit 1
+fi
 
 cleanup() {
   docker rm --force "$database_container" >/dev/null 2>&1 || true
@@ -19,7 +25,7 @@ docker run --detach --name "$database_container" --network "$network" \
   -e POSTGRES_DB=canvas_seb_test \
   -e POSTGRES_USER=canvas_seb_test \
   -e POSTGRES_PASSWORD=integration-test-only \
-  postgres:17-alpine >/dev/null
+  "$postgres_image" >/dev/null
 
 for _ in $(seq 1 60); do
   if docker exec "$database_container" pg_isready -U canvas_seb_test -d canvas_seb_test >/dev/null 2>&1; then
