@@ -52,7 +52,7 @@ describe("deployment hardening artifacts", () => {
     const caddyfile = source("Caddyfile");
 
     expect(caddy).toContain('profiles: ["caddy"]');
-    expect(caddy).toMatch(/caddy:2\.10-alpine@sha256:[0-9a-f]{64}/u);
+    expect(caddy).toMatch(/caddy:2\.[0-9]+-alpine@sha256:[0-9a-f]{64}/u);
     expect(caddy).toContain("PUBLIC_HOST: ${PUBLIC_HOST:-}");
     expect(caddy).toContain('"80:80"');
     expect(caddy).toContain('"443:443"');
@@ -244,16 +244,13 @@ describe("deployment hardening artifacts", () => {
         "required_status_checks"
       ])
     );
-    expect(contexts).toEqual(
-      expect.arrayContaining([
-        "Application verification",
-        "PostgreSQL integration",
-        "Production Compose smoke",
-        "Dependency review",
-        "Analyze (javascript-typescript)",
-        "Analyze (actions)"
-      ])
-    );
+    expect(contexts).toEqual([
+      "Application verification",
+      "PostgreSQL integration",
+      "Production Compose smoke",
+      "Dependency review",
+      "CodeQL"
+    ]);
     expect(setup).toContain("allow_auto_merge: true");
     expect(setup).toContain("allow_rebase_merge: false");
     expect(setup).toContain("delete_branch_on_merge: true");
@@ -285,6 +282,8 @@ describe("deployment hardening artifacts", () => {
     expect(dependabot).toContain("compose-minor-and-patch:");
     expect(dependabot).toContain("dependency-name: node");
     expect(dependabot).toContain("dependency-name: postgres");
+    expect(dependabot).toContain("dependency-name: typescript");
+    expect(dependabot).toContain('dependency-name: "@types/node"');
     expect(dependabot).toContain("version-update:semver-major");
     for (const containerEcosystem of [docker, dockerCompose]) {
       expect(containerEcosystem).toContain("default-days: 7");

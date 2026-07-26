@@ -51,6 +51,13 @@ updates:
         dependency-type: development
         update-types: ["minor", "patch"]
         patterns: ["*"]
+    # Keep the compiler inside typescript-eslint's supported peer range, and
+    # keep Node declarations aligned with the maintained Node 24 runtime.
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
