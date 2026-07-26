@@ -121,6 +121,96 @@ test("renders OAuth completion without resuming privileged management UI", async
   expect(browserErrors).toEqual([]);
 });
 
+test("returns the existing LTI page after an instructor OAuth popup completes", async ({ context, page }) => {
+  const browserErrors: string[] = [];
+  const trackErrors = (target: typeof page) => {
+    target.on("console", (message) => {
+      if (message.type() === "error") browserErrors.push(message.text());
+    });
+    target.on("pageerror", (error) => browserErrors.push(error.message));
+  };
+  trackErrors(page);
+  context.on("page", trackErrors);
+
+  await context.route("**/oauth-popup-start", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "canvas-oauth-connected",
+          data: { canvasReturnUrl: "https://canvas.example.edu/courses/course-1" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await context.route("**/authorization-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: { authUrl: "/oauth-popup-start", message: "Connect Canvas to continue." }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await context.route("**/lti/launch?connected=1", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Instructor workspace</h1></body></html>"
+    });
+  });
+
+  await page.goto("/authorization-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+
+  await expect(page).toHaveURL(/\/lti\/launch\?connected=1$/u);
+  await expect(page.getByRole("heading", { name: "Instructor workspace" })).toBeVisible();
+  await expect.poll(() => popup.isClosed()).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test("ignores a forged OAuth completion message that did not come from the opened popup", async ({ context, page }) => {
+  await context.route("**/oauth-popup-pending", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><p>Canvas authorization pending</p></body></html>"
+    });
+  });
+  await context.route("**/authorization-spoof-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: { authUrl: "/oauth-popup-pending", message: "Connect Canvas to continue." }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/authorization-spoof-preview");
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+  const popup = await popupPromise;
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: window.location.origin,
+        source: window,
+        data: { type: "seb-canvas-oauth-connected" }
+      })
+    );
+  });
+
+  await expect(page).toHaveURL(/\/authorization-spoof-preview$/u);
+  await expect(page.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+  await popup.close();
+  await expect(page.getByRole("alert")).toContainText("closed before it finished");
+});
+
 test("renders the responsive root-account administrator workspace and controlled secret reveal", async ({ page }) => {
   const browserErrors: string[] = [];
   page.on("console", (message) => {
