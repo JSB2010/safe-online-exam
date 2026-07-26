@@ -74,7 +74,7 @@ describe("OAuthController", () => {
 
   it("derives OAuth state from the verified instructor principal", async () => {
     const response = responseDouble();
-    const request = verifiedRequest();
+    const request = fetchSiteRequest(verifiedRequest(), "same-origin");
 
     await controller.authorize(request, response, {
       user_id: "1",
@@ -142,25 +142,28 @@ describe("OAuthController", () => {
     expect(canvasApi.clearAccessToken).not.toHaveBeenCalled();
   });
 
-  it("rejects explicitly cross-site attempts to start every Canvas authorization flow", async () => {
-    const instructorResponse = responseDouble();
-    const studentResponse = responseDouble();
-    const adminResponse = responseDouble();
+  it.each(["cross-site", "same-site", "none"])(
+    "rejects %s attempts to start every Canvas authorization flow",
+    async (fetchSite) => {
+      const instructorResponse = responseDouble();
+      const studentResponse = responseDouble();
+      const adminResponse = responseDouble();
 
-    await controller.authorize(explicitCrossSiteRequest(verifiedRequest()), instructorResponse, {});
-    await controller.studentSessionAuthorize(
-      explicitCrossSiteRequest(verifiedRequest({ roles: [learnerRole] })),
-      studentResponse
-    );
-    await controller.adminAuthorize(explicitCrossSiteRequest(adminVerifiedRequest()), adminResponse);
+      await controller.authorize(fetchSiteRequest(verifiedRequest(), fetchSite), instructorResponse, {});
+      await controller.studentSessionAuthorize(
+        fetchSiteRequest(verifiedRequest({ roles: [learnerRole] }), fetchSite),
+        studentResponse
+      );
+      await controller.adminAuthorize(fetchSiteRequest(adminVerifiedRequest(), fetchSite), adminResponse);
 
-    for (const response of [instructorResponse, studentResponse, adminResponse]) {
-      expect(response.status).toHaveBeenCalledWith(403);
-      expect(response.send).toHaveBeenCalledWith("Open Canvas authorization from the Safe Online Exam tool.");
-      expect(response.redirect).not.toHaveBeenCalled();
+      for (const response of [instructorResponse, studentResponse, adminResponse]) {
+        expect(response.status).toHaveBeenCalledWith(403);
+        expect(response.send).toHaveBeenCalledWith("Open Canvas authorization from the Safe Online Exam tool.");
+        expect(response.redirect).not.toHaveBeenCalled();
+      }
+      expect(ltiState.createState).not.toHaveBeenCalled();
     }
-    expect(ltiState.createState).not.toHaveBeenCalled();
-  });
+  );
 
   it("derives administrator OAuth state only from the verified root-account launch", async () => {
     const response = responseDouble();
@@ -707,8 +710,8 @@ function adminVerifiedRequest(): any {
   };
 }
 
-function explicitCrossSiteRequest(request: any): any {
-  request.header = (name: string) => (name.toLowerCase() === "sec-fetch-site" ? "cross-site" : undefined);
+function fetchSiteRequest(request: any, fetchSite: string): any {
+  request.header = (name: string) => (name.toLowerCase() === "sec-fetch-site" ? fetchSite : undefined);
   return request;
 }
 

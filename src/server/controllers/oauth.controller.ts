@@ -46,7 +46,7 @@ export class OAuthController {
     @Res() response: Response,
     @Query() query: Record<string, string>
   ): Promise<void> {
-    if (rejectExplicitCrossSiteAuthorizationStart(request, response)) {
+    if (rejectNonSameOriginAuthorizationStart(request, response)) {
       return;
     }
     const principal = verifiedLtiPrincipal(request);
@@ -84,7 +84,7 @@ export class OAuthController {
 
   @Get("/student-session-authorize")
   async studentSessionAuthorize(@Req() request: Request, @Res() response: Response): Promise<void> {
-    if (rejectExplicitCrossSiteAuthorizationStart(request, response)) {
+    if (rejectNonSameOriginAuthorizationStart(request, response)) {
       return;
     }
     const principal = verifiedLtiPrincipal(request);
@@ -113,7 +113,7 @@ export class OAuthController {
 
   @Get("/admin/oauth2authorize")
   async adminAuthorize(@Req() request: Request, @Res() response: Response): Promise<void> {
-    if (rejectExplicitCrossSiteAuthorizationStart(request, response)) {
+    if (rejectNonSameOriginAuthorizationStart(request, response)) {
       return;
     }
     const principal = verifiedLtiPrincipal(request);
@@ -482,8 +482,9 @@ function safeLocalRedirect(value?: string): string {
   }
 }
 
-function rejectExplicitCrossSiteAuthorizationStart(request: Request, response: Response): boolean {
-  if (request.header?.("sec-fetch-site")?.trim().toLowerCase() !== "cross-site") {
+function rejectNonSameOriginAuthorizationStart(request: Request, response: Response): boolean {
+  const fetchSite = request.header?.("sec-fetch-site")?.trim().toLowerCase();
+  if (!fetchSite || fetchSite === "same-origin") {
     return false;
   }
   response.status(403).send("Open Canvas authorization from the Safe Online Exam tool.");

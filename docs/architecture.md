@@ -69,7 +69,7 @@ Instructors receive the course management view. Students receive a launch-only f
 
 An LTI launch authenticates a person but does not authorize Canvas API calls. The application uses a separate Canvas OAuth authorization for API access:
 
-1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from the same-origin tool UI created by an existing verified launch. Explicitly cross-site authorization starts are rejected.
+1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from the same-origin tool UI created by an existing verified launch. Browser requests whose Fetch Metadata identifies any other site relationship are rejected.
 2. The service records encrypted, one-time state and redirects to Canvas.
 3. `/api/oauth2callback` verifies state and exchanges the authorization code.
 4. PostgreSQL stores one OAuth grant per Canvas user ID. Administrator authorization upgrades that same record to the complete application-plus-administrator scope set, and `CanvasApiService` refreshes it when necessary.
