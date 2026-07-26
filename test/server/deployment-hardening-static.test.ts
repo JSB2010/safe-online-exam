@@ -170,7 +170,9 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).not.toContain("types: [published]");
     expect(workflow).toContain("node scripts/verify-release.mjs");
     expect(workflow).toContain("git merge-base --is-ancestor");
-    expect(workflow).toContain("verify-release:\n    name: Verify release source");
+    expect(workflow).toContain(
+      "verify-release:\n    name: Verify release source\n    runs-on: ubuntu-24.04\n    # The required-check waiter polls for up to 30 minutes. Leave enough\n    # headroom for checkout, metadata validation, and GitHub API latency.\n    timeout-minutes: 40"
+    );
     expect(workflow).toContain("publish:\n    name: Publish verified release\n    needs: verify-release");
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(
       workflow.indexOf("node scripts/verify-release.mjs")

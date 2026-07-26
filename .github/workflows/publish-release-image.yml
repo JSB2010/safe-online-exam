@@ -19,7 +19,9 @@ jobs:
   verify-release:
     name: Verify release source
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The required-check waiter polls for up to 30 minutes. Leave enough
+    # headroom for checkout, metadata validation, and GitHub API latency.
+    timeout-minutes: 40
     permissions:
       actions: read
       checks: read
