@@ -96,6 +96,19 @@ if (packageLock.version !== version || packageLock.packages?.[""]?.version !== v
   fail("package-lock.json root versions do not match package.json");
 }
 
+const packageManagerVersion = packageJson.packageManager?.match(/^npm@(.+)$/u)?.[1];
+const dockerfilePackageManagerVersion = readText("Dockerfile").match(/npm install -g npm@([^\s]+)/u)?.[1];
+if (!packageManagerVersion) {
+  fail("package.json must pin npm with packageManager");
+}
+if (dockerfilePackageManagerVersion !== packageManagerVersion) {
+  fail(
+    `Dockerfile npm version must match packageManager npm@${packageManagerVersion}, found ${
+      dockerfilePackageManagerVersion ?? "none"
+    }`
+  );
+}
+
 const readme = readText("README.md");
 const readmeVersion = readme.match(/^export VERSION=(.+)$/mu)?.[1];
 if (readmeVersion !== version) {

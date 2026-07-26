@@ -190,6 +190,41 @@ describe("AdminController", () => {
       })
     ).rejects.toThrow("Preset resources must use explicit HTTPS URLs or confirmed domains");
   });
+
+  it("treats non-scalar admin query parameters as invalid instead of coercing them", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: {
+        "7:101": connectionRecord("101", "Biology"),
+        "7:102": connectionRecord("102", "Chemistry")
+      }
+    });
+    const getAdminCoursesPage = vi.fn().mockResolvedValue({ courses: [], nextPage: null });
+    const controller = controllerDouble(repositories, { ...canvasApiDouble(), getAdminCoursesPage });
+
+    await expect(
+      controller.listCourses({} as any, ["Biology"] as any, { cursor: "invalid" } as any, ["1"] as any)
+    ).resolves.toMatchObject({
+      courses: [expect.objectContaining({ id: "101" }), expect.objectContaining({ id: "102" })],
+      nextCursor: null
+    });
+
+    await controller.courseCatalog(
+      {} as any,
+      ["Biology"] as any,
+      ["22"] as any,
+      { cursor: "invalid" } as any,
+      ["true"] as any,
+      ["false"] as any
+    );
+    expect(getAdminCoursesPage).toHaveBeenCalledWith("7", "42", {
+      page: 1,
+      perPage: 25,
+      search: undefined,
+      termId: undefined,
+      includeUnpublished: false,
+      withEnrollments: true
+    });
+  });
 });
 
 function controllerDouble(

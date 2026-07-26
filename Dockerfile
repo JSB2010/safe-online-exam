@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS base
 
 RUN npm install -g npm@11.18.0
 
@@ -16,7 +16,7 @@ FROM deps AS postgres-tests
 COPY . .
 CMD ["npm", "run", "test:postgres"]
 
-FROM node:24-bookworm-slim AS production-deps
+FROM node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS production-deps
 
 # npm is platform-independent JavaScript. Install the pinned CLI once on the
 # native build platform instead of repeating its network install through QEMU.
@@ -36,7 +36,7 @@ RUN npm run format:check
 RUN npm run test:coverage
 RUN npm run build
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:af85d11ce7ef10172855a6e3649e3e8125b1b9e3ca41849ec2918036f05cb212 AS runtime
 
 STOPSIGNAL SIGTERM
 
