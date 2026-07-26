@@ -280,6 +280,7 @@ const studentSessionPopupBody = (returnUrl: string) =>
   `<!doctype html><html><body><script>
     window.addEventListener("message", (event) => {
       if (
+        event.source === window.opener &&
         event.origin === window.location.origin &&
         event.data &&
         event.data.type === "seb-canvas-session-connected:acknowledged"
