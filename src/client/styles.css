@@ -1721,7 +1721,7 @@ select[aria-invalid="true"] {
   padding: 16px 18px;
 }
 
-.student-action-stack {
+.canvas-action-stack {
   display: grid;
   justify-items: start;
   gap: 12px;
