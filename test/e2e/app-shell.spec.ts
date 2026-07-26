@@ -121,6 +121,35 @@ test("renders OAuth completion without resuming privileged management UI", async
   expect(browserErrors).toEqual([]);
 });
 
+test("keeps the OAuth completion fallback open when its opener does not acknowledge it", async ({ context, page }) => {
+  await context.route("**/oauth-unrelated-opener", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Canvas navigation window</h1></body></html>"
+    });
+  });
+  await context.route("**/oauth-unacknowledged-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "canvas-oauth-connected",
+          data: { canvasReturnUrl: "https://canvas.example.edu/courses/course-1" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/oauth-unrelated-opener");
+  const popupPromise = page.waitForEvent("popup");
+  await page.evaluate(() => window.open("/oauth-unacknowledged-preview", "existing_lti_window"));
+  const popup = await popupPromise;
+
+  await expect(popup.getByText(/reopen Safe Online Exam from course or account navigation/u)).toBeVisible();
+  await expect(popup.getByRole("link", { name: "Return to Canvas" })).toBeVisible();
+  expect(popup.isClosed()).toBe(false);
+});
+
 test("returns the existing LTI page after an instructor OAuth popup completes", async ({ context, page }) => {
   const browserErrors: string[] = [];
   const trackErrors = (target: typeof page) => {
@@ -211,6 +240,60 @@ test("ignores a forged OAuth completion message that did not come from the opene
   await expect(page.getByRole("alert")).toContainText("closed before it finished");
 });
 
+test("rejects a same-origin network-path OAuth target", async ({ context, page }) => {
+  await context.route("**/authorization-network-path-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "api-authorization",
+          data: {
+            authUrl: "http://127.0.0.1:8080//attacker.example",
+            message: "Connect Canvas to continue."
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/authorization-network-path-preview");
+  await page.evaluate(() => {
+    const targetWindow = window;
+    Object.defineProperty(window, "open", {
+      configurable: true,
+      value: (target: string | URL | undefined) => {
+        (window as typeof window & { openedOAuthTarget?: string }).openedOAuthTarget = String(target);
+        return targetWindow;
+      }
+    });
+  });
+  await page.getByRole("button", { name: "Connect Canvas" }).click();
+
+  await expect
+    .poll(() => page.evaluate(() => (window as typeof window & { openedOAuthTarget?: string }).openedOAuthTarget))
+    .toBe("/api/oauth2authorize");
+});
+
+// Mirrors the popup half of the completion handshake: report the connection, then close only after the
+// opener acknowledges it. The opener no longer closes the popup on the page's behalf.
+const studentSessionPopupBody = (returnUrl: string) =>
+  `<!doctype html><html><body><script>
+    window.addEventListener("message", (event) => {
+      if (
+        event.source === window.opener &&
+        event.origin === window.location.origin &&
+        event.data &&
+        event.data.type === "seb-canvas-session-connected:acknowledged"
+      ) {
+        window.close();
+      }
+    });
+    window.opener.postMessage(
+      { type: "seb-canvas-session-connected", returnUrl: ${JSON.stringify(returnUrl)} },
+      window.location.origin
+    );
+  </script></body></html>`;
+
 test("returns the existing LTI page after a student session OAuth popup completes with a validated return URL", async ({
   context,
   page
@@ -228,7 +311,7 @@ test("returns the existing LTI page after a student session OAuth popup complete
   await context.route("**/student-session-popup-start", async (route) => {
     await route.fulfill({
       contentType: "text/html",
-      body: `<!doctype html><html><body><script>window.opener.postMessage({ type: "seb-canvas-session-connected", returnUrl: "/lti/launch?resumed=1" }, window.location.origin);</script></body></html>`
+      body: studentSessionPopupBody("/lti/launch?resumed=1")
     });
   });
   await context.route("**/authorization-student-preview", async (route) => {
@@ -277,7 +360,7 @@ test("falls back to the default destination when a student session popup reports
   await context.route("**/student-session-popup-malicious", async (route) => {
     await route.fulfill({
       contentType: "text/html",
-      body: `<!doctype html><html><body><script>window.opener.postMessage({ type: "seb-canvas-session-connected", returnUrl: "https://attacker.example.com/steal-session" }, window.location.origin);</script></body></html>`
+      body: studentSessionPopupBody("https://attacker.example.com/steal-session")
     });
   });
   await context.route("**/authorization-student-malicious-preview", async (route) => {

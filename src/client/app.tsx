@@ -4225,6 +4225,11 @@ function QuizToolSelector({
 }
 
 function AuthorizationPage({ data }: { data: Record<string, any> }) {
+  const authUrl = safeSameOriginNavigationTarget(data.authUrl, "/api/oauth2authorize");
+  const onConnected = useCallback(() => {
+    window.location.replace("/lti/launch?connected=1");
+  }, []);
+
   return (
     <MessagePage
       icon={<KeyRound />}
@@ -4233,23 +4238,68 @@ function AuthorizationPage({ data }: { data: Record<string, any> }) {
         data.message || "Authorize Canvas access so this tool can read quizzes and set access codes for this course."
       }
       action={
-        <div className="student-action-stack">
-          <a className="button primary" href={data.authUrl}>
-            <KeyRound size={16} /> Connect Canvas
-          </a>
-        </div>
+        <CanvasAuthorizationAction
+          authUrl={authUrl}
+          windowName="seb_canvas_authorization"
+          connectedMessageType={CANVAS_OAUTH_CONNECTED_MESSAGE}
+          onConnected={onConnected}
+        />
       }
     />
   );
 }
 
+const CANVAS_OAUTH_CONNECTED_MESSAGE = "seb-canvas-oauth-connected";
 const STUDENT_SESSION_CONNECTED_MESSAGE = "seb-canvas-session-connected";
+const OAUTH_POPUP_ACKNOWLEDGEMENT_SUFFIX = ":acknowledged";
+const OAUTH_POPUP_ACKNOWLEDGEMENT_TIMEOUT_MS = 1000;
+const OAUTH_POPUP_NAVIGATION_DELAY_MS = 100;
+
+function oauthPopupAcknowledgementType(messageType: string): string {
+  return `${messageType}${OAUTH_POPUP_ACKNOWLEDGEMENT_SUFFIX}`;
+}
 
 function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }) {
+  const authUrl = safeSameOriginNavigationTarget(data.authUrl, "/api/student-session-authorize");
+  const onConnected = useCallback((payload: Record<string, unknown>) => {
+    window.location.assign(safeSameOriginNavigationTarget(payload.returnUrl, "/lti/launch?connected=1"));
+  }, []);
+
+  return (
+    <MessagePage
+      icon={<KeyRound />}
+      title="Connect Canvas"
+      message={
+        (data.onboarding as OnboardingContext | undefined)?.resumeAssessment
+          ? "Connect Canvas once, then return to the Safe Online Exam quiz you selected."
+          : "Connect Canvas once to open Safe Online Exam quizzes without signing in again."
+      }
+      action={
+        <CanvasAuthorizationAction
+          authUrl={authUrl}
+          windowName="seb_canvas_session_authorization"
+          connectedMessageType={STUDENT_SESSION_CONNECTED_MESSAGE}
+          onConnected={onConnected}
+        />
+      }
+    />
+  );
+}
+
+function CanvasAuthorizationAction({
+  authUrl,
+  windowName,
+  connectedMessageType,
+  onConnected
+}: {
+  authUrl: string;
+  windowName: string;
+  connectedMessageType: string;
+  onConnected: (payload: Record<string, unknown>) => void;
+}) {
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const popupRef = useRef<Window | null>(null);
-  const authUrl = typeof data.authUrl === "string" ? data.authUrl : "/api/student-session-authorize";
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>) => {
@@ -4258,19 +4308,20 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
         event.source !== popupRef.current ||
         !event.data ||
         typeof event.data !== "object" ||
-        (event.data as { type?: unknown }).type !== STUDENT_SESSION_CONNECTED_MESSAGE
+        (event.data as { type?: unknown }).type !== connectedMessageType
       ) {
         return;
       }
-      const returnUrl = (event.data as { returnUrl?: unknown }).returnUrl;
-      popupRef.current?.close();
-      window.location.assign(
-        typeof returnUrl === "string" && returnUrl.startsWith("/") ? returnUrl : "/lti/launch?connected=1"
-      );
+      const payload = event.data as Record<string, unknown>;
+      const popup = popupRef.current;
+      popupRef.current = null;
+      setConnecting(false);
+      popup?.postMessage({ type: oauthPopupAcknowledgementType(connectedMessageType) }, window.location.origin);
+      window.setTimeout(() => onConnected(payload), OAUTH_POPUP_NAVIGATION_DELAY_MS);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [connectedMessageType, onConnected]);
 
   useEffect(() => {
     if (!connecting) return;
@@ -4286,7 +4337,7 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
 
   const connect = () => {
     setConnectionError("");
-    const popup = window.open(authUrl, "seb_canvas_session_authorization", "popup,width=560,height=720");
+    const popup = window.open(authUrl, windowName, "popup,width=560,height=720");
     if (!popup) {
       window.location.assign(authUrl);
       return;
@@ -4297,40 +4348,70 @@ function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }
   };
 
   return (
-    <MessagePage
-      icon={<KeyRound />}
-      title="Connect Canvas"
-      message={
-        (data.onboarding as OnboardingContext | undefined)?.resumeAssessment
-          ? "Connect Canvas once, then return to the Safe Online Exam quiz you selected."
-          : "Connect Canvas once to open Safe Online Exam quizzes without signing in again."
-      }
-      action={
-        <div className="student-action-stack">
-          <button className="button primary" type="button" disabled={connecting} onClick={connect}>
-            <KeyRound size={16} /> {connecting ? "Connecting…" : "Connect Canvas"}
-          </button>
-          {connectionError && (
-            <span className="field-error" role="alert">
-              {connectionError}
-            </span>
-          )}
-        </div>
-      }
-    />
+    <div className="canvas-action-stack">
+      <button className="button primary" type="button" disabled={connecting} onClick={connect}>
+        <KeyRound size={16} /> {connecting ? "Connecting…" : "Connect Canvas"}
+      </button>
+      {connectionError && (
+        <span className="field-error" role="alert">
+          {connectionError}
+        </span>
+      )}
+    </div>
   );
 }
 
-function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
-  const returnUrl = typeof data.returnUrl === "string" ? data.returnUrl : "/lti/launch";
+function beginOAuthPopupCompletion({
+  messageType,
+  payload,
+  onFallback
+}: {
+  messageType: string;
+  payload: Record<string, unknown>;
+  onFallback: () => void;
+}): () => void {
+  const opener = window.opener;
+  if (!opener || opener.closed) {
+    onFallback();
+    return () => undefined;
+  }
 
-  useEffect(() => {
-    if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: STUDENT_SESSION_CONNECTED_MESSAGE, returnUrl }, window.location.origin);
-      window.setTimeout(() => window.close(), 100);
+  const onMessage = (event: MessageEvent<unknown>) => {
+    if (
+      event.origin !== window.location.origin ||
+      event.source !== opener ||
+      !event.data ||
+      typeof event.data !== "object" ||
+      (event.data as { type?: unknown }).type !== oauthPopupAcknowledgementType(messageType)
+    ) {
       return;
     }
-    window.location.replace(returnUrl);
+    cleanup();
+    window.close();
+  };
+  const cleanup = () => {
+    window.removeEventListener("message", onMessage);
+    window.clearTimeout(fallbackTimer);
+  };
+
+  window.addEventListener("message", onMessage);
+  opener.postMessage({ type: messageType, ...payload }, window.location.origin);
+  const fallbackTimer = window.setTimeout(() => {
+    cleanup();
+    onFallback();
+  }, OAUTH_POPUP_ACKNOWLEDGEMENT_TIMEOUT_MS);
+  return cleanup;
+}
+
+function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
+  const returnUrl = safeSameOriginNavigationTarget(data.returnUrl, "/lti/launch");
+
+  useEffect(() => {
+    return beginOAuthPopupCompletion({
+      messageType: STUDENT_SESSION_CONNECTED_MESSAGE,
+      payload: { returnUrl },
+      onFallback: () => window.location.replace(returnUrl)
+    });
   }, [returnUrl]);
 
   return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Online Exam." />;
@@ -4338,6 +4419,20 @@ function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
 
 function CanvasOAuthConnectedPage({ data }: { data: Record<string, any> }) {
   const canvasReturnUrl = typeof data.canvasReturnUrl === "string" ? data.canvasReturnUrl : "";
+  const [showFallback, setShowFallback] = useState(() => !window.opener || window.opener.closed);
+
+  useEffect(() => {
+    return beginOAuthPopupCompletion({
+      messageType: CANVAS_OAUTH_CONNECTED_MESSAGE,
+      payload: {},
+      onFallback: () => setShowFallback(true)
+    });
+  }, []);
+
+  if (!showFallback) {
+    return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Online Exam." />;
+  }
+
   return (
     <MessagePage
       icon={<Check />}
@@ -5112,6 +5207,20 @@ function redirectForAuth(body: Record<string, any>): boolean {
 
 function actionHeaders(authToken?: string): HeadersInit {
   return authToken ? { "x-auth-token": authToken } : {};
+}
+
+function safeSameOriginNavigationTarget(value: unknown, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.origin === window.location.origin && !url.pathname.startsWith("//")
+      ? `${url.pathname}${url.search}${url.hash}`
+      : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 async function persistStudentReadinessPromptDismissal(authToken?: string): Promise<void> {
