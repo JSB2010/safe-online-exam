@@ -5,12 +5,19 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      pinned-actions:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      container-images:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     # Node 24 is the supported application runtime. Keep receiving image
     # patches/minor updates, but require an intentional runtime migration for
     # a new Node major.

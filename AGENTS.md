@@ -45,6 +45,12 @@ Combined non-browser gate:
 npm run verify
 ```
 
+Release metadata gate:
+
+```bash
+npm run release:check
+```
+
 Local production-build smoke run:
 
 ```bash
@@ -63,6 +69,11 @@ Deploy through Cloud Build:
 gcloud builds submit --config=cloudbuild-dev.yaml
 gcloud builds submit --config=cloudbuild-prod.yaml
 ```
+
+Public releases are tag-driven. After synchronized version metadata is merged
+to `main`, push one annotated `vX.Y.Z` tag. The GitHub workflow owns the draft,
+verification, GHCR publication, attestations, bundle, and immutable release
+publication. Do not manually publish the GitHub Release.
 
 ## Cloud Run Targets
 

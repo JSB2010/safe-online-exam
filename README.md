@@ -23,6 +23,7 @@ One deployment connects to one Canvas tenant and environment. Isolate environmen
 | Guide                                                    | Use it for                                                                                                    |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | [Changelog](CHANGELOG.md)                                | Stable release history and user-visible changes.                                                              |
+| [Releasing](docs/releasing.md)                           | Version preparation, the one-tag release workflow, and failed-run recovery.                                   |
 | [Architecture](docs/architecture.md)                     | Runtime design, PostgreSQL concurrency, trust boundaries, data model, and route contracts.                    |
 | [Canvas setup](docs/canvas-setup.md)                     | Creating the LTI registration, installing it, authorizing API access, and loading the detector script.        |
 | [Configuration](docs/configuration.md)                   | Database, environment, secret-file, Canvas, LTI, and SEB settings.                                            |
@@ -50,7 +51,7 @@ Canvas LTI 1.3 ──────> NestJS service ──────> PostgreSQL
 
 ## Deployment Options
 
-Published stable releases are available as multi-architecture OCI images at `ghcr.io/jsb2010/safe-online-exam`. A release tag `vX.Y.Z` publishes the immutable `X.Y.Z` image and moves `X.Y`, `X`, and `latest` to the same digest. Use the exact release digest in production; moving tags are for discovery only. Every GitHub Release also includes a Compose bundle with that digest already selected.
+Published stable releases are available as multi-architecture OCI images at `ghcr.io/jsb2010/safe-online-exam`. Pushing a `vX.Y.Z` tag from a commit on `main` starts the release authority workflow, which creates a draft, verifies the exact source and image, attaches the digest-pinned Compose bundle, promotes `X.Y.Z`, `X.Y`, `X`, and `latest`, and then publishes the draft as an immutable GitHub Release. Use the exact release digest in production; moving tags are for discovery only.
 
 Google Cloud Run with Cloud SQL is the recommended managed deployment. Existing source-based Cloud Build workflows remain useful for development and maintained environments. A separately reviewed GitHub Release can instead be promoted by digest through `cloudbuild-release-promote.yaml`, which runs its migration job before updating the cleanup job and service.
 
@@ -101,7 +102,7 @@ See [Deployment](docs/deployment.md) for the release workflow, upgrades, backups
 
 ## Continuous Integration
 
-GitHub Actions runs a non-deploying CI workflow for every pull request and push to `main`. It runs the application verification gate, real PostgreSQL integration tests, and the production Compose smoke topology on the pinned Ubuntu 24.04 runner with Node 24. It has read-only repository permission and does not authenticate to Google Cloud or publish container images. npm download caching is enabled through `setup-node`; Dependabot opens weekly update PRs for GitHub Actions and Docker base images. Configure these three checks as required branch-protection checks for `main`.
+GitHub Actions runs a non-deploying CI workflow for every pull request and push to `main`. It runs the application verification gate, real PostgreSQL integration tests, and the production Compose smoke topology on the pinned Ubuntu 24.04 runner with Node 24. It has read-only repository permission and does not authenticate to Google Cloud or publish container images. npm and BuildKit caching are enabled, external actions are pinned to immutable commit SHAs, and Dependabot tracks their updates. The checked-in `Protect main` ruleset requires these jobs and both CodeQL analyses before merge.
 
 ## Local Development
 
@@ -129,6 +130,7 @@ The application does not load `.env` automatically. Export values, use a process
 | ----------------------------------------------------- | ----------------------------------------------------------------------- |
 | `npm run verify`                                      | Typecheck, lint, format check, coverage tests, and production build.    |
 | `npm run verify:postgres`                             | Run migrations and repository concurrency tests against PostgreSQL 17.  |
+| `npm run release:check`                               | Verify synchronized version, changelog, README, and Compose metadata.   |
 | `npm run test:e2e`                                    | Run Playwright desktop/mobile app-shell tests.                          |
 | `npm run db:migrate`                                  | Apply checked, forward-only PostgreSQL schema migrations.               |
 | `npm run db:cleanup`                                  | Drain expired sessions, transient state, and locks in bounded batches.  |

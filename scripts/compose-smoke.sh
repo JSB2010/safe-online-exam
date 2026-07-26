@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_name="safe-online-exam-compose-smoke"
-image="safe-online-exam:compose-smoke"
+project_name="${COMPOSE_SMOKE_PROJECT_NAME:-safe-online-exam-compose-smoke}"
+image="${COMPOSE_SMOKE_IMAGE:-safe-online-exam:compose-smoke}"
+app_port="${COMPOSE_SMOKE_PORT:-18080}"
+skip_build="${COMPOSE_SMOKE_SKIP_BUILD:-false}"
 temporary_directory="$(mktemp -d)"
 environment_file="$temporary_directory/.env"
 secrets_directory="$temporary_directory/secrets"
@@ -24,7 +26,14 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$secrets_directory"
 
-docker build --tag "$image" .
+if [[ "$skip_build" == "true" ]]; then
+  docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
+elif [[ "$skip_build" == "false" ]]; then
+  docker build --tag "$image" .
+else
+  echo "COMPOSE_SMOKE_SKIP_BUILD must be true or false" >&2
+  exit 64
+fi
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
   -subj "/CN=Safe Online Exam Compose Smoke" \
@@ -47,7 +56,7 @@ cat >"$environment_file" <<EOF
 APP_IMAGE=$image
 APP_ENV_FILE=$environment_file
 BIND_ADDRESS=127.0.0.1
-APP_PORT=18080
+APP_PORT=$app_port
 SECRETS_DIRECTORY=$secrets_directory
 PUBLIC_HOST=seb.example.edu
 NODE_ENV=production
@@ -72,12 +81,21 @@ APP_DETECTOR_DIAGNOSTICS_ENABLED=false
 EOF
 chmod 600 "$environment_file"
 
+"${compose_command[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 "${compose_command[@]}" config --quiet
 "${compose_command[@]}" -f compose.caddy.yaml --profile caddy config --quiet
 
 "${compose_command[@]}" up --detach --wait
-curl --fail --silent --show-error http://127.0.0.1:18080/health >/dev/null
-curl --fail --silent --show-error http://127.0.0.1:18080/ready >/dev/null
+base_url="http://127.0.0.1:$app_port"
+for endpoint in \
+  "/health" \
+  "/ready" \
+  "/.well-known/jwks.json" \
+  "/lti/config" \
+  "/js/canvas-seb-detector.js" \
+  "/api/seb/canvas-detector.js"; do
+  curl --fail --silent --show-error "$base_url$endpoint" >/dev/null
+done
 
 "${compose_command[@]}" exec -T postgres \
   psql -U canvas_seb -d canvas_seb -v ON_ERROR_STOP=1 -c \
@@ -85,12 +103,12 @@ curl --fail --silent --show-error http://127.0.0.1:18080/ready >/dev/null
 
 "${compose_command[@]}" restart app >/dev/null
 for _ in $(seq 1 60); do
-  if curl --fail --silent http://127.0.0.1:18080/ready >/dev/null 2>&1; then
+  if curl --fail --silent "$base_url/ready" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-curl --fail --silent --show-error http://127.0.0.1:18080/ready >/dev/null
+curl --fail --silent --show-error "$base_url/ready" >/dev/null
 
 persisted="$({ "${compose_command[@]}" exec -T postgres \
   psql -U canvas_seb -d canvas_seb -Atc "SELECT count(*) FROM courses WHERE id = 'compose-smoke';"; } | tr -d '\r')"

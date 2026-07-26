@@ -34,9 +34,9 @@ npm run verify:postgres
 npm run test:e2e
 ```
 
-`npm run verify` runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. `npm run verify:postgres` starts PostgreSQL 17, applies migrations in isolated schemas, and runs repository atomicity/concurrency tests. The deploy pipeline runs both layers before promotion.
+`npm run verify` first checks release metadata consistency, then runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. `npm run verify:postgres` starts PostgreSQL 17, applies migrations in isolated schemas, and runs repository atomicity/concurrency tests. The deploy pipeline runs both layers before promotion.
 
-GitHub Actions runs those two layers plus the Compose smoke test for every pull request and push to `main`. It uses the pinned Ubuntu 24.04 runner and Node 24—the same supported major runtime as the production container—with npm download caching through `setup-node`. This CI workflow has no cloud credentials and does not publish images or deploy services; use its three jobs as required branch-protection checks before merge. Dependabot opens weekly update PRs for GitHub Actions and Docker base images.
+GitHub Actions runs those two layers plus the Compose smoke test for every pull request and push to `main`. It uses the pinned Ubuntu 24.04 runner and Node 24—the same supported major runtime as the production container—with npm and BuildKit caching. The Compose job builds once through Buildx and passes that image into the smoke script rather than rebuilding it. This CI workflow has no cloud credentials and does not publish images or deploy services. The repository ruleset requires its three jobs plus both CodeQL analyses before merge. Dependabot opens weekly update PRs for the immutable action pins and Docker base images.
 
 Verify the production topology separately:
 
@@ -44,15 +44,15 @@ Verify the production topology separately:
 bash scripts/compose-smoke.sh
 ```
 
-That smoke builds the exact runtime image, waits for the migration/app readiness gates, writes a safe row, restarts the app, and confirms the named PostgreSQL volume retained it.
+By default that smoke builds the exact runtime image. CI and release callers can instead supply `COMPOSE_SMOKE_IMAGE` with `COMPOSE_SMOKE_SKIP_BUILD=true` to test an already-built image. The script waits for the migration/app readiness gates, probes the public health, JWKS, LTI metadata, and detector routes, writes a safe row, restarts the app, and confirms the named PostgreSQL volume retained it.
 
 ## Release Pipeline Checks
 
-Publishing a stable GitHub Release requires a `vX.Y.Z` tag that matches `package.json`. The GitHub workflow checks that the tag commit is on `main`, runs `npm run verify`, `npm run verify:postgres`, and `bash scripts/compose-smoke.sh`, then publishes the `linux/amd64` and `linux/arm64` image manifest, SBOM, provenance, and a digest-pinned Compose bundle.
+Publishing a release requires only pushing a `vX.Y.Z` tag whose version matches the synchronized release metadata and whose commit is on `main`. The workflow waits for that exact commit's already-required application, PostgreSQL, Compose, and CodeQL checks. It then creates or refreshes a draft, builds a staged `linux/amd64` and `linux/arm64` manifest, smokes that exact digest, publishes its SBOM, provenance, and artifact attestation, attaches a digest-pinned Compose bundle and checksum, promotes the final image tags, and publishes the immutable draft.
 
-The multi-architecture Docker build runs the full typecheck, lint, format, coverage, and build gate once on BuildKit's native build platform. It installs production dependencies separately for each target platform before assembling the matching distroless runtime image. This keeps runtime dependencies architecture-correct without rerunning timing-sensitive application tests through QEMU emulation; it does not replace or skip any release-source verification.
+The multi-architecture Docker build runs the full typecheck, lint, format, coverage, and build gate once on BuildKit's native build platform. It installs production dependencies separately for each target platform before assembling the matching distroless runtime image. Persistent BuildKit caches reuse verified dependency layers across CI and release runs without making cache contents a trust decision; BuildKit still invalidates changed inputs and executes uncached gates. Timing-sensitive application tests never run through QEMU emulation.
 
-Before relying on the first public release, inspect the GitHub Release asset, confirm the manifest lists both architectures, and run the bundle's `docker compose ... config --quiet` plus first-install smoke procedure on an isolated host. Before a Cloud Run promotion, use the release digest with `cloudbuild-release-promote.yaml` against development, then confirm its migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets.
+The workflow verifies both architectures, their source/version OCI labels, every promoted tag, the artifact attestation, and GitHub release immutability before reporting success. Before a Cloud Run promotion, use the release digest with `cloudbuild-release-promote.yaml` against development, then confirm its migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets.
 
 ## Test Coverage By Layer
 

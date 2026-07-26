@@ -12,6 +12,7 @@ playwright-report
 .DS_Store
 .env
 .env.*
+!.env.compose.example
 !.env.compose.secrets.example
 secrets/
 postgres-data/

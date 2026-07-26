@@ -24,7 +24,8 @@ describe("deployment hardening artifacts", () => {
     expect(postgresService).not.toContain("ports:");
     expect(dockerfile).toContain("FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base");
     expect(dockerfile).toContain("FROM node:24-bookworm-slim AS production-deps");
-    expect(dockerfile).toContain("RUN npm ci --omit=dev");
+    expect(dockerfile).toContain("npm ci --omit=dev");
+    expect(dockerfile).toContain("COPY --from=base /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm");
     expect(dockerfile).toContain("distroless/nodejs24-debian13:nonroot");
     expect(dockerfile).not.toMatch(/apt-get[\s\S]{0,100}postgres/iu);
   });
@@ -159,25 +160,42 @@ describe("deployment hardening artifacts", () => {
     expect(promotion).not.toContain("docker build");
   });
 
-  it("publishes public release images only from a verified GitHub Release", () => {
+  it("publishes an immutable release from one verified tag push", () => {
     const workflow = source(".github/workflows/publish-release-image.yml");
+    const requiredChecks = source("scripts/wait-for-required-checks.sh");
+    const imageVerifier = source("scripts/verify-release-image.sh");
 
-    expect(workflow).toContain("types: [published]");
-    expect(workflow).toContain('expected_tag="v${package_version}"');
-    expect(workflow).toContain("verified_sha: ${{ steps.source.outputs.verified_sha }}");
-    expect(workflow).toContain("ref: ${{ needs.verify-release.outputs.verified_sha }}");
+    expect(workflow).toContain('tags: ["v*.*.*"]');
+    expect(workflow).not.toContain("types: [published]");
+    expect(workflow).toContain("node scripts/verify-release.mjs");
     expect(workflow).toContain("git merge-base --is-ancestor");
-    expect(workflow).toContain("npm run verify");
-    expect(workflow).toContain("npm run verify:postgres");
+    expect(workflow).toContain('jq -e ".enabled == true"');
+    expect(workflow).toContain("wait-for-required-checks.sh");
+    expect(requiredChecks).toContain("Application verification");
+    expect(requiredChecks).toContain("PostgreSQL integration");
+    expect(requiredChecks).toContain("Production Compose smoke");
+    expect(requiredChecks).toContain("Analyze (javascript-typescript)");
+    expect(requiredChecks).toContain("Analyze (actions)");
+    expect(workflow).toContain("gh release create");
+    expect(workflow).toContain("--verify-tag --draft");
     expect(workflow).toContain("bash scripts/compose-smoke.sh");
+    expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
     expect(workflow).toContain("linux/amd64,linux/arm64");
     expect(workflow).toContain("sbom: true");
-    expect(workflow).toContain("actions/attest@v4");
+    expect(workflow).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
     expect(workflow).toContain("org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0");
     expect(workflow).toContain("type=raw,value=latest");
     expect(workflow).not.toContain("scope: ${{ env.IMAGE_NAME }}@push");
+    expect(workflow).toContain("cache-to: type=registry");
     expect(workflow).toContain("create-release-bundle.sh");
     expect(workflow).toContain("gh release upload");
+    expect(workflow).toContain("docker buildx imagetools create");
+    expect(workflow).toContain("gh attestation verify");
+    expect(workflow).toContain("--draft=false");
+    expect(workflow).toContain(".isImmutable");
+    expect(imageVerifier).toContain("linux/amd64");
+    expect(imageVerifier).toContain("linux/arm64");
+    expect(imageVerifier).toContain("org.opencontainers.image.revision");
   });
 
   it("runs the deploy-equivalent verification layers for pull requests and main pushes without credentials", () => {
@@ -189,7 +207,45 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run verify:postgres");
     expect(workflow).toContain("bash scripts/compose-smoke.sh");
+    expect(workflow).toContain("docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a");
+    expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
     expect(workflow).not.toMatch(/gcloud|google-github-actions|packages: write|id-token: write/iu);
+  });
+
+  it("pins every external workflow action to an immutable commit", () => {
+    const workflows = sourceTree(".github/workflows").join("\n");
+    const references = [...workflows.matchAll(/uses:\s+[^@\s]+@([^\s#]+)/gu)].map((match) => match[1]);
+
+    expect(references.length).toBeGreaterThan(0);
+    for (const reference of references) {
+      expect(reference).toMatch(/^[0-9a-f]{40}$/u);
+    }
+  });
+
+  it("checks in the enforced main rules and repository hardening setup", () => {
+    const ruleset = JSON.parse(source(".github/rulesets/protect-main.json")) as {
+      enforcement: string;
+      rules: Array<{ type: string; parameters?: { required_status_checks?: Array<{ context: string }> } }>;
+    };
+    const setup = source("scripts/configure-github-repository.sh");
+    const requiredStatusRule = ruleset.rules.find((rule) => rule.type === "required_status_checks");
+    const contexts = requiredStatusRule?.parameters?.required_status_checks?.map((check) => check.context);
+
+    expect(ruleset.enforcement).toBe("active");
+    expect(ruleset.rules.map((rule) => rule.type)).toEqual(
+      expect.arrayContaining(["deletion", "non_fast_forward", "pull_request", "required_status_checks"])
+    );
+    expect(contexts).toEqual(
+      expect.arrayContaining([
+        "Application verification",
+        "PostgreSQL integration",
+        "Production Compose smoke",
+        "Analyze (javascript-typescript)",
+        "Analyze (actions)"
+      ])
+    );
+    expect(setup).toContain("sha_pinning_required: true");
+    expect(setup).toContain("immutable-releases");
   });
 
   it("tracks GitHub Actions and Docker base-image updates through Dependabot", () => {
@@ -198,6 +254,8 @@ describe("deployment hardening artifacts", () => {
     expect(dependabot).toContain("package-ecosystem: github-actions");
     expect(dependabot).toContain("package-ecosystem: docker");
     expect(dependabot.match(/interval: weekly/gu)).toHaveLength(2);
+    expect(dependabot).toContain("pinned-actions:");
+    expect(dependabot).toContain("container-images:");
     expect(dependabot).toContain("dependency-name: node");
     expect(dependabot).toContain("version-update:semver-major");
   });

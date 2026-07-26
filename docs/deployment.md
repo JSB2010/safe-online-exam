@@ -9,7 +9,7 @@ The runtime itself is provider-agnostic. It needs a Node.js container, PostgreSQ
 
 ## Public Releases And Image Tags
 
-GitHub Releases are the public release authority. Publishing a stable release from a `vX.Y.Z` tag whose `X.Y.Z` version matches `package.json` runs verification, PostgreSQL integration, and Compose smoke tests before publishing the multi-architecture image:
+GitHub Releases are the public release authority. Pushing a `vX.Y.Z` tag from a commit on `main` is the only manual publication action. The workflow waits for that exact commit's required CI and CodeQL checks, creates a draft release, builds a staged multi-architecture image, smokes its exact digest against PostgreSQL, publishes its attestations and bundle, promotes the final image tags, and publishes the draft as an immutable release:
 
 ```text
 ghcr.io/jsb2010/safe-online-exam:X.Y.Z   immutable release
@@ -18,9 +18,11 @@ ghcr.io/jsb2010/safe-online-exam:X       current stable release for that major
 ghcr.io/jsb2010/safe-online-exam:latest  newest stable GitHub Release
 ```
 
-Each release also publishes a provenance attestation, SBOM, an exact manifest digest, and `safe-online-exam-X.Y.Z-compose.tar.gz`. Pre-releases publish only their exact prerelease tag and never move `latest`, `X`, or `X.Y`. The repository owner must make the linked GHCR package public once in GitHub Packages settings.
+Each release also publishes a provenance attestation, SBOM, an exact manifest digest, `safe-online-exam-X.Y.Z-compose.tar.gz`, and its SHA-256 checksum. Pre-releases publish only their exact prerelease tag and never move `latest`, `X`, or `X.Y`. The linked GHCR package must remain public.
 
 Tags are mutable pointers. Production Compose and Cloud Run deployments must use the exact digest shown in the GitHub Release, for example `ghcr.io/jsb2010/safe-online-exam@sha256:...`.
+
+See [Releasing Safe Online Exam](releasing.md) for version preparation, the one-tag publication command, and failed-run recovery. Do not manually create or publish a GitHub Release; the workflow owns its draft-to-published lifecycle.
 
 ## Release Invariants
 

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base
 
 RUN npm install -g npm@11.18.0
@@ -7,7 +9,7 @@ WORKDIR /app
 FROM base AS deps
 
 COPY package*.json .npmrc ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
 
 FROM deps AS postgres-tests
 
@@ -16,12 +18,14 @@ CMD ["npm", "run", "test:postgres"]
 
 FROM node:24-bookworm-slim AS production-deps
 
-RUN npm install -g npm@11.18.0
+# npm is platform-independent JavaScript. Install the pinned CLI once on the
+# native build platform instead of repeating its network install through QEMU.
+COPY --from=base /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 
 WORKDIR /app
 
 COPY package*.json .npmrc ./
-RUN npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
 
 FROM deps AS verify
 

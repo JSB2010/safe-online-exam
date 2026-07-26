@@ -3,6 +3,21 @@
 This file records the user-visible changes in each stable Safe Online Exam
 release.
 
+## [Unreleased]
+
+### Release engineering
+
+- Reworked publication into a one-tag workflow that creates a draft, waits for
+  the tagged `main` commit's required CI and CodeQL checks, builds and smokes a
+  staged multi-architecture image, and publishes the completed draft as an
+  immutable GitHub Release.
+- Added idempotent draft recovery, final-tag verification, release bundle
+  checksums, persistent BuildKit caching, immutable action SHA pins, and a
+  checked release-metadata consistency command.
+- Added a reproducible `main` ruleset requiring pull requests, application,
+  PostgreSQL, Compose, and CodeQL checks while leaving release tags free to
+  target verified commits on `main`.
+
 ## [1.0.0] - 2026-07-25
 
 Safe Online Exam 1.0.0 is the first stable public release.
@@ -58,4 +73,5 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.0
