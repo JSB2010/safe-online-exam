@@ -17,6 +17,9 @@
       "type": "non_fast_forward"
     },
     {
+      "type": "required_signatures"
+    },
+    {
       "type": "pull_request",
       "parameters": {
         "require_code_owner_review": false,
@@ -43,12 +46,12 @@
             "integration_id": 15368
           },
           {
-            "context": "Analyze (javascript-typescript)",
+            "context": "Dependency review",
             "integration_id": 15368
           },
           {
-            "context": "Analyze (actions)",
-            "integration_id": 15368
+            "context": "CodeQL",
+            "integration_id": 57789
           }
         ],
         "strict_required_status_checks_policy": true

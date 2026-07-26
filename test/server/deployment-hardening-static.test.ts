@@ -14,7 +14,7 @@ describe("deployment hardening artifacts", () => {
     const dockerfile = source("Dockerfile");
 
     expect(compose).toContain("${APP_IMAGE:?");
-    expect(compose).toContain("postgres:17-alpine");
+    expect(compose).toMatch(/postgres:17-alpine@sha256:[0-9a-f]{64}/u);
     expect(compose).toContain("postgres_data:");
     expect(compose).toContain("${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080");
     expect(compose).toContain("pg_isready");
@@ -22,11 +22,11 @@ describe("deployment hardening artifacts", () => {
     expect(compose).toContain("/ready");
     const postgresService = compose.slice(compose.indexOf("  postgres:"), compose.indexOf("  migrate:"));
     expect(postgresService).not.toContain("ports:");
-    expect(dockerfile).toContain("FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base");
-    expect(dockerfile).toContain("FROM node:24-bookworm-slim AS production-deps");
+    expect(dockerfile).toMatch(/FROM --platform=\$BUILDPLATFORM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS base/u);
+    expect(dockerfile).toMatch(/FROM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS production-deps/u);
     expect(dockerfile).toContain("npm ci --omit=dev");
     expect(dockerfile).toContain("COPY --from=base /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm");
-    expect(dockerfile).toContain("distroless/nodejs24-debian13:nonroot");
+    expect(dockerfile).toMatch(/distroless\/nodejs24-debian13:nonroot@sha256:[0-9a-f]{64}/u);
     expect(dockerfile).not.toMatch(/apt-get[\s\S]{0,100}postgres/iu);
   });
 
@@ -52,6 +52,7 @@ describe("deployment hardening artifacts", () => {
     const caddyfile = source("Caddyfile");
 
     expect(caddy).toContain('profiles: ["caddy"]');
+    expect(caddy).toMatch(/caddy:2\.[0-9]+-alpine@sha256:[0-9a-f]{64}/u);
     expect(caddy).toContain("PUBLIC_HOST: ${PUBLIC_HOST:-}");
     expect(caddy).toContain('"80:80"');
     expect(caddy).toContain('"443:443"');
@@ -212,6 +213,8 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("permissions:\n  contents: read");
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run verify:postgres");
+    expect(workflow).toContain("Dependency review");
+    expect(workflow).toContain("actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294");
     expect(workflow).toContain("bash scripts/compose-smoke.sh");
     expect(workflow).toContain("docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a");
     expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
@@ -239,31 +242,68 @@ describe("deployment hardening artifacts", () => {
 
     expect(ruleset.enforcement).toBe("active");
     expect(ruleset.rules.map((rule) => rule.type)).toEqual(
-      expect.arrayContaining(["deletion", "non_fast_forward", "pull_request", "required_status_checks"])
-    );
-    expect(contexts).toEqual(
       expect.arrayContaining([
-        "Application verification",
-        "PostgreSQL integration",
-        "Production Compose smoke",
-        "Analyze (javascript-typescript)",
-        "Analyze (actions)"
+        "deletion",
+        "non_fast_forward",
+        "required_signatures",
+        "pull_request",
+        "required_status_checks"
       ])
     );
+    expect(contexts).toEqual([
+      "Application verification",
+      "PostgreSQL integration",
+      "Production Compose smoke",
+      "Dependency review",
+      "CodeQL"
+    ]);
+    expect(setup).toContain("allow_auto_merge: true");
+    expect(setup).toContain("allow_rebase_merge: false");
+    expect(setup).toContain("delete_branch_on_merge: true");
     expect(setup).toContain("sha_pinning_required: true");
+    expect(setup).toContain("automated-security-fixes");
+    expect(setup).toContain("private-vulnerability-reporting");
     expect(setup).toContain("immutable-releases");
   });
 
-  it("tracks GitHub Actions and Docker base-image updates through Dependabot", () => {
+  it("tracks application, workflow, and container updates through Dependabot", () => {
     const dependabot = source(".github/dependabot.yml");
+    const docker = dependabot.slice(
+      dependabot.indexOf("package-ecosystem: docker\n"),
+      dependabot.indexOf("package-ecosystem: docker-compose")
+    );
+    const dockerCompose = dependabot.slice(dependabot.indexOf("package-ecosystem: docker-compose"));
 
+    expect(dependabot).toContain("package-ecosystem: npm");
     expect(dependabot).toContain("package-ecosystem: github-actions");
     expect(dependabot).toContain("package-ecosystem: docker");
-    expect(dependabot.match(/interval: weekly/gu)).toHaveLength(2);
+    expect(dependabot).toContain("package-ecosystem: docker-compose");
+    expect(dependabot.match(/interval: weekly/gu)).toHaveLength(4);
+    expect(dependabot).toContain("versioning-strategy: increase-if-necessary");
+    expect(dependabot).toContain("applies-to: security-updates");
+    expect(dependabot).toContain("cooldown:");
     expect(dependabot).toContain("pinned-actions:");
-    expect(dependabot).toContain("container-images:");
+    expect(dependabot).toContain("production-minor-and-patch:");
+    expect(dependabot).toContain("docker-minor-and-patch:");
+    expect(dependabot).toContain("compose-minor-and-patch:");
     expect(dependabot).toContain("dependency-name: node");
+    expect(dependabot).toContain("dependency-name: postgres");
+    expect(dependabot).toContain("dependency-name: typescript");
+    expect(dependabot).toContain('dependency-name: "@types/node"');
     expect(dependabot).toContain("version-update:semver-major");
+    for (const containerEcosystem of [docker, dockerCompose]) {
+      expect(containerEcosystem).toContain("default-days: 7");
+      expect(containerEcosystem).not.toMatch(/semver-(major|minor|patch)-days/u);
+    }
+  });
+
+  it("keeps the pinned npm toolchain synchronized across local and container builds", () => {
+    const packageJson = JSON.parse(source("package.json")) as { packageManager?: string };
+    const dockerfile = source("Dockerfile");
+    const npmVersion = packageJson.packageManager?.match(/^npm@(.+)$/u)?.[1];
+
+    expect(npmVersion).toBeTruthy();
+    expect(dockerfile).toContain(`npm install -g npm@${npmVersion}`);
   });
 
   it("allows a school deployment to configure its own Canvas LTI platform endpoints", () => {
@@ -281,6 +321,9 @@ describe("deployment hardening artifacts", () => {
     const integration = source("scripts/cloud-build-postgres-integration.sh");
 
     expect(integration).toContain("--target postgres-tests");
+    expect(integration).toContain("compose.postgres-test.yaml");
+    expect(integration).toContain("postgres:17-alpine@sha256:");
+    expect(integration).not.toMatch(/\n\s*postgres:17-alpine\s/u);
     const dockerfile = source("Dockerfile");
     expect(dockerfile).toContain("FROM deps AS postgres-tests");
     expect(dockerfile.indexOf("FROM deps AS postgres-tests")).toBeLessThan(dockerfile.indexOf("FROM deps AS verify"));

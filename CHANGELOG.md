@@ -17,6 +17,11 @@ release.
 - Added a reproducible `main` ruleset requiring pull requests, application,
   PostgreSQL, Compose, and CodeQL checks while leaving release tags free to
   target verified commits on `main`.
+- Added signed-commit enforcement, pull-request dependency review, immutable
+  container base-image digests, and synchronized npm toolchain validation.
+- Expanded Dependabot to maintain npm and lockfile dependencies, Dockerfile and
+  Compose images, and GitHub Actions with bounded cooldowns and reviewable
+  framework/ecosystem grouping.
 
 ## [1.0.0] - 2026-07-25
 
