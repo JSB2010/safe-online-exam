@@ -86,9 +86,7 @@ updates:
       prefix: build
       include: scope
     cooldown:
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
+      default-days: 7
     groups:
       docker-minor-and-patch:
         patterns: ["*"]
@@ -113,9 +111,7 @@ updates:
       prefix: build
       include: scope
     cooldown:
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
+      default-days: 7
     groups:
       compose-minor-and-patch:
         patterns: ["*"]
