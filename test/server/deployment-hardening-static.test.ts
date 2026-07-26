@@ -115,6 +115,19 @@ describe("deployment hardening artifacts", () => {
     }
   });
 
+  it("includes release consistency inputs in every build context", () => {
+    for (const path of [".dockerignore", ".gcloudignore"]) {
+      const patterns = new Set(
+        source(path)
+          .split(/\r?\n/u)
+          .map((line) => line.trim())
+          .filter((line) => line !== "" && !line.startsWith("#"))
+      );
+
+      expect(patterns.has("!.env.compose.example"), `${path} must include .env.compose.example`).toBe(true);
+    }
+  });
+
   it("does not publish production client source maps", () => {
     expect(source("vite.config.ts")).toContain("sourcemap: false");
     expect(source("vite.config.ts")).toContain('".worktrees/**"');
