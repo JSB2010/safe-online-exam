@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS base
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base
 
 RUN npm install -g npm@11.18.0
 
@@ -14,9 +14,14 @@ FROM deps AS postgres-tests
 COPY . .
 CMD ["npm", "run", "test:postgres"]
 
-FROM deps AS production-deps
+FROM node:24-bookworm-slim AS production-deps
 
-RUN npm prune --omit=dev
+RUN npm install -g npm@11.18.0
+
+WORKDIR /app
+
+COPY package*.json .npmrc ./
+RUN npm ci --omit=dev
 
 FROM deps AS verify
 

@@ -50,6 +50,8 @@ That smoke builds the exact runtime image, waits for the migration/app readiness
 
 Publishing a stable GitHub Release requires a `vX.Y.Z` tag that matches `package.json`. The GitHub workflow checks that the tag commit is on `main`, runs `npm run verify`, `npm run verify:postgres`, and `bash scripts/compose-smoke.sh`, then publishes the `linux/amd64` and `linux/arm64` image manifest, SBOM, provenance, and a digest-pinned Compose bundle.
 
+The multi-architecture Docker build runs the full typecheck, lint, format, coverage, and build gate once on BuildKit's native build platform. It installs production dependencies separately for each target platform before assembling the matching distroless runtime image. This keeps runtime dependencies architecture-correct without rerunning timing-sensitive application tests through QEMU emulation; it does not replace or skip any release-source verification.
+
 Before relying on the first public release, inspect the GitHub Release asset, confirm the manifest lists both architectures, and run the bundle's `docker compose ... config --quiet` plus first-install smoke procedure on an isolated host. Before a Cloud Run promotion, use the release digest with `cloudbuild-release-promote.yaml` against development, then confirm its migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets.
 
 ## Test Coverage By Layer

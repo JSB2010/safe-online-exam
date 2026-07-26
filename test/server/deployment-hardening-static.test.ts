@@ -22,7 +22,9 @@ describe("deployment hardening artifacts", () => {
     expect(compose).toContain("/ready");
     const postgresService = compose.slice(compose.indexOf("  postgres:"), compose.indexOf("  migrate:"));
     expect(postgresService).not.toContain("ports:");
-    expect(dockerfile).toContain("FROM node:24-bookworm-slim AS base");
+    expect(dockerfile).toContain("FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base");
+    expect(dockerfile).toContain("FROM node:24-bookworm-slim AS production-deps");
+    expect(dockerfile).toContain("RUN npm ci --omit=dev");
     expect(dockerfile).toContain("distroless/nodejs24-debian13:nonroot");
     expect(dockerfile).not.toMatch(/apt-get[\s\S]{0,100}postgres/iu);
   });
