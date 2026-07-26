@@ -69,10 +69,11 @@ Instructors receive the course management view. Students receive a launch-only f
 
 An LTI launch authenticates a person but does not authorize Canvas API calls. The application uses a separate Canvas OAuth authorization for API access:
 
-1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from an existing verified launch.
+1. An instructor opens `/api/oauth2authorize` or `/api/oauth2reauthorize` from the same-origin tool UI created by an existing verified launch. Browser requests whose Fetch Metadata identifies any other site relationship are rejected.
 2. The service records encrypted, one-time state and redirects to Canvas.
 3. `/api/oauth2callback` verifies state and exchanges the authorization code.
 4. PostgreSQL stores one OAuth grant per Canvas user ID. Administrator authorization upgrades that same record to the complete application-plus-administrator scope set, and `CanvasApiService` refreshes it when necessary.
+5. Instructor and administrator callbacks render a non-privileged completion screen. The user returns to Canvas and reopens the tool so privileged UI is created only by a fresh signed LTI launch; an OAuth callback never resumes an authenticated management view.
 
 Every Canvas OAuth connection requests the same complete application scope set, including the course-list permission used for teacher-scoped tool duplication (`url:GET|/api/v1/courses`) and the session-token permission required for SEB handoff (`url:GET|/api/v1/login/session_token`). This keeps one durable grant valid when a person is an instructor in one course and a student in another; Canvas still enforces their actual course permissions. The one-time Canvas session URL is generated server-side for each student configuration download. Browser cookies are never copied to the configuration or exposed through the API.
 

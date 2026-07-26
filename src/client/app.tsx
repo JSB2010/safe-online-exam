@@ -154,6 +154,8 @@ export function App() {
       return <StudentSessionAuthorizationPage data={bootstrap.data} />;
     case "student-session-connected":
       return <StudentSessionConnectedPage data={bootstrap.data} />;
+    case "canvas-oauth-connected":
+      return <CanvasOAuthConnectedPage data={bootstrap.data} />;
     case "seb-required":
     case "seb-download":
       return <SebDownloadPage data={bootstrap.data} />;
@@ -4332,6 +4334,24 @@ function StudentSessionConnectedPage({ data }: { data: Record<string, any> }) {
   }, [returnUrl]);
 
   return <MessagePage icon={<Check />} title="Canvas Connected" message="Returning to Safe Online Exam." />;
+}
+
+function CanvasOAuthConnectedPage({ data }: { data: Record<string, any> }) {
+  const canvasReturnUrl = typeof data.canvasReturnUrl === "string" ? data.canvasReturnUrl : "";
+  return (
+    <MessagePage
+      icon={<Check />}
+      title="Canvas Connected"
+      message="Your Canvas connection is ready. Return to Canvas, then reopen Safe Online Exam from course or account navigation."
+      action={
+        canvasReturnUrl ? (
+          <a className="button primary" href={canvasReturnUrl} target="_top" rel="noreferrer">
+            <ArrowLeft size={16} /> Return to Canvas
+          </a>
+        ) : undefined
+      }
+    />
+  );
 }
 
 function SebDownloadPage({ data }: { data: Record<string, any> }) {

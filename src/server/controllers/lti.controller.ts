@@ -236,16 +236,13 @@ export class LtiController {
   ): Promise<void> {
     const principal = verifiedLtiPrincipal(request);
     const launchData = sessionValue<LtiLaunchData>(request, "launchData");
-    if (isCrossSiteIframeNavigation(request) && !consumeValidatedOAuthCallbackResume(request, principal, launchData)) {
+    if (isCrossSiteIframeNavigation(request)) {
       response
         .status(403)
         .send(
           renderFallbackHtml("Forbidden", "<h1>Forbidden</h1><p>Reopen this tool from Canvas course navigation.</p>")
         );
       return;
-    }
-    if (isCrossSiteIframeNavigation(request)) {
-      await saveSession(request);
     }
     if (!principal || !launchData) {
       response.redirect("/login");
@@ -984,32 +981,6 @@ function isCrossSiteIframeNavigation(request: Request): boolean {
   const destination = request.header?.("sec-fetch-dest")?.trim().toLowerCase();
   const site = request.header?.("sec-fetch-site")?.trim().toLowerCase();
   return destination === "iframe" && site === "cross-site";
-}
-
-function consumeValidatedOAuthCallbackResume(
-  request: Request,
-  principal: VerifiedLtiPrincipal | null,
-  launchData: LtiLaunchData | undefined
-): boolean {
-  const resume = request.session?.oauthCallbackResume;
-  if (request.session) {
-    delete request.session.oauthCallbackResume;
-  }
-  return (
-    !!resume &&
-    Date.now() - resume.issuedAt >= 0 &&
-    Date.now() - resume.issuedAt <= 120_000 &&
-    !!principal &&
-    !!launchData &&
-    resume.path === "/lti/launch" &&
-    resume.canvasUserId === principal.canvasUserId &&
-    resume.ltiSubject === principal.subject &&
-    resume.courseId === principal.courseId &&
-    resume.issuer === principal.issuer &&
-    resume.deploymentId === principal.deploymentId &&
-    launchData.courseId === principal.courseId &&
-    launchData.deploymentId === principal.deploymentId
-  );
 }
 
 function sessionValue<T>(request: Request, key: string): T | undefined {

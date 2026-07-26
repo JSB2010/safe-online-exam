@@ -854,7 +854,7 @@ describe("LtiController role routing", () => {
     expect(assessments.refreshCourseContent).not.toHaveBeenCalled();
   });
 
-  it("allows exactly one cross-site Canvas iframe resume after a bound instructor OAuth callback", async () => {
+  it("does not let legacy OAuth callback session data bypass cross-site iframe rejection", async () => {
     const response = responseDouble();
     const request = requestDouble({
       userId: "teacher-1",
@@ -870,7 +870,6 @@ describe("LtiController role routing", () => {
       path: "/lti/launch",
       issuedAt: Date.now()
     };
-    request.session.save = vi.fn((callback: (error?: Error) => void) => callback());
     request.header = (name: string) =>
       ({
         "sec-fetch-dest": "iframe",
@@ -879,67 +878,8 @@ describe("LtiController role routing", () => {
 
     await controller.launchGet(request, response);
 
-    expect(request.session.oauthCallbackResume).toBeUndefined();
-    expect(request.session.save).toHaveBeenCalled();
-    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
-    expect(canvasApi.hasAccessToken).toHaveBeenCalledWith("teacher-1");
-  });
-
-  it("rejects a cross-site iframe resume marker that is not bound to the active instructor course", async () => {
-    const response = responseDouble();
-    const request = requestDouble({
-      userId: "teacher-1",
-      courseId: "course-1",
-      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
-    });
-    request.session.oauthCallbackResume = {
-      canvasUserId: "teacher-1",
-      ltiSubject: "opaque-teacher-1",
-      courseId: "other-course",
-      issuer: "https://canvas.example.test",
-      deploymentId: "deployment-1",
-      path: "/lti/launch",
-      issuedAt: Date.now()
-    };
-    request.header = (name: string) =>
-      ({
-        "sec-fetch-dest": "iframe",
-        "sec-fetch-site": "cross-site"
-      })[name.toLowerCase()];
-
-    await controller.launchGet(request, response);
-
-    expect(request.session.oauthCallbackResume).toBeUndefined();
     expect(response.status).toHaveBeenCalledWith(403);
-    expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("rejects an expired cross-site iframe OAuth resume marker", async () => {
-    const response = responseDouble();
-    const request = requestDouble({
-      userId: "teacher-1",
-      courseId: "course-1",
-      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
-    });
-    request.session.oauthCallbackResume = {
-      canvasUserId: "teacher-1",
-      ltiSubject: "opaque-teacher-1",
-      courseId: "course-1",
-      issuer: "https://canvas.example.test",
-      deploymentId: "deployment-1",
-      path: "/lti/launch",
-      issuedAt: Date.now() - 120_001
-    };
-    request.header = (name: string) =>
-      ({
-        "sec-fetch-dest": "iframe",
-        "sec-fetch-site": "cross-site"
-      })[name.toLowerCase()];
-
-    await controller.launchGet(request, response);
-
-    expect(request.session.oauthCallbackResume).toBeUndefined();
-    expect(response.status).toHaveBeenCalledWith(403);
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
     expect(canvasApi.hasAccessToken).not.toHaveBeenCalled();
   });
 
