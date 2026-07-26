@@ -142,6 +142,26 @@ describe("OAuthController", () => {
     expect(canvasApi.clearAccessToken).not.toHaveBeenCalled();
   });
 
+  it("rejects explicitly cross-site attempts to start every Canvas authorization flow", async () => {
+    const instructorResponse = responseDouble();
+    const studentResponse = responseDouble();
+    const adminResponse = responseDouble();
+
+    await controller.authorize(explicitCrossSiteRequest(verifiedRequest()), instructorResponse, {});
+    await controller.studentSessionAuthorize(
+      explicitCrossSiteRequest(verifiedRequest({ roles: [learnerRole] })),
+      studentResponse
+    );
+    await controller.adminAuthorize(explicitCrossSiteRequest(adminVerifiedRequest()), adminResponse);
+
+    for (const response of [instructorResponse, studentResponse, adminResponse]) {
+      expect(response.status).toHaveBeenCalledWith(403);
+      expect(response.send).toHaveBeenCalledWith("Open Canvas authorization from the Safe Online Exam tool.");
+      expect(response.redirect).not.toHaveBeenCalled();
+    }
+    expect(ltiState.createState).not.toHaveBeenCalled();
+  });
+
   it("derives administrator OAuth state only from the verified root-account launch", async () => {
     const response = responseDouble();
 
@@ -310,7 +330,7 @@ describe("OAuthController", () => {
     expect(ltiState.createState).not.toHaveBeenCalled();
   });
 
-  it("stores a callback token only under its verified Canvas owner and does not restore session roles", async () => {
+  it("stores a callback token only under its verified Canvas owner and renders a non-privileged completion page", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       tokenResponse({
         access_token: "access-token",
@@ -339,19 +359,14 @@ describe("OAuthController", () => {
       oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION,
       expiresIn: 3600
     });
-    expect(request.session).toEqual({
-      ...originalSession,
-      oauthCallbackResume: {
-        canvasUserId: "1",
-        ltiSubject: "lti-subject-1",
-        courseId: "course-1",
-        issuer: "https://canvas.example.edu",
-        deploymentId: "deployment-1",
-        path: "/lti/launch",
-        issuedAt: expect.any(Number)
-      }
-    });
-    expect(response.redirect).toHaveBeenCalledWith("/lti/launch");
+    expect(request.session).toEqual(originalSession);
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"canvas-oauth-connected"'));
+    expect(response.send).toHaveBeenCalledWith(
+      expect.stringContaining('"canvasReturnUrl":"https://canvas.example.edu/courses/course-1"')
+    );
+    expect(response.send.mock.calls[0][0]).not.toContain('"authToken"');
+    expect(response.send.mock.calls[0][0]).not.toContain('"view":"teacher"');
+    expect(response.redirect).not.toHaveBeenCalled();
   });
 
   it("stores the verified Canvas name and bound LTI email alongside an OAuth token", async () => {
@@ -383,7 +398,7 @@ describe("OAuthController", () => {
     );
   });
 
-  it("does not create an iframe-resume marker for an unrelated safe local redirect", async () => {
+  it("does not resume an unrelated local route after instructor authorization", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       tokenResponse({ access_token: "access-token", refresh_token: "refresh-token", user: { id: 1 } })
     );
@@ -393,8 +408,8 @@ describe("OAuthController", () => {
 
     await controller.callback(request, response, { code: "oauth-code", state: "state" });
 
-    expect(request.session.oauthCallbackResume).toBeUndefined();
-    expect(response.redirect).toHaveBeenCalledWith("/setup");
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"canvas-oauth-connected"'));
+    expect(response.redirect).not.toHaveBeenCalled();
   });
 
   it("stores an administrator callback as the user's complete shared grant", async () => {
@@ -425,12 +440,12 @@ describe("OAuthController", () => {
       oauthScopeVersion: CANVAS_OAUTH_SCOPE_VERSION,
       expiresIn: undefined
     });
-    expect(request.session.oauthCallbackResume).toMatchObject({
-      canvasUserId: "42",
-      courseId: "",
-      path: "/lti/launch"
-    });
-    expect(response.redirect).toHaveBeenCalledWith("/lti/launch?connected=1");
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"canvas-oauth-connected"'));
+    expect(response.send).toHaveBeenCalledWith(
+      expect.stringContaining('"canvasReturnUrl":"https://canvas.example.edu/accounts/7"')
+    );
+    expect(response.send.mock.calls[0][0]).not.toContain('"authToken"');
+    expect(response.redirect).not.toHaveBeenCalled();
   });
 
   it("keeps the administrator scope profile when a later course callback replaces the token", async () => {
@@ -690,6 +705,11 @@ function adminVerifiedRequest(): any {
       }
     }
   };
+}
+
+function explicitCrossSiteRequest(request: any): any {
+  request.header = (name: string) => (name.toLowerCase() === "sec-fetch-site" ? "cross-site" : undefined);
+  return request;
 }
 
 function validState(overrides: Record<string, string> = {}): Record<string, string> {

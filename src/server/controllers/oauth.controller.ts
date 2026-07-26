@@ -46,6 +46,9 @@ export class OAuthController {
     @Res() response: Response,
     @Query() query: Record<string, string>
   ): Promise<void> {
+    if (rejectExplicitCrossSiteAuthorizationStart(request, response)) {
+      return;
+    }
     const principal = verifiedLtiPrincipal(request);
     if (!principal) {
       response.status(401).send("A validated Canvas launch is required");
@@ -81,6 +84,9 @@ export class OAuthController {
 
   @Get("/student-session-authorize")
   async studentSessionAuthorize(@Req() request: Request, @Res() response: Response): Promise<void> {
+    if (rejectExplicitCrossSiteAuthorizationStart(request, response)) {
+      return;
+    }
     const principal = verifiedLtiPrincipal(request);
     if (!principal) {
       response.status(401).send("A validated Canvas launch is required");
@@ -107,6 +113,9 @@ export class OAuthController {
 
   @Get("/admin/oauth2authorize")
   async adminAuthorize(@Req() request: Request, @Res() response: Response): Promise<void> {
+    if (rejectExplicitCrossSiteAuthorizationStart(request, response)) {
+      return;
+    }
     const principal = verifiedLtiPrincipal(request);
     if (!principal) {
       response.status(401).send("A validated Canvas launch is required");
@@ -200,20 +209,16 @@ export class OAuthController {
         );
         return;
       }
-      const redirectUrl = safeLocalRedirect(state.redirectUrl);
-      if (isLtiLaunchRedirect(redirectUrl)) {
-        request.session!.oauthCallbackResume = {
-          canvasUserId: principal.canvasUserId,
-          ltiSubject: principal.subject,
-          courseId: principal.courseId,
-          issuer: principal.issuer,
-          deploymentId: principal.deploymentId,
-          path: "/lti/launch",
-          issuedAt: Date.now()
-        };
-        await saveSession(request);
-      }
-      response.redirect(redirectUrl);
+      // A Canvas OAuth callback is not a signed LTI launch. Ending on a
+      // non-privileged page prevents Canvas-origin content from using OAuth
+      // redirects to recover an instructor or administrator management view.
+      response.send(
+        renderAppShell({
+          title: "Canvas Connected",
+          view: "canvas-oauth-connected",
+          initialData: { canvasReturnUrl: canvasReturnUrl(this.config, principal) }
+        })
+      );
     } catch {
       response.status(400).send(
         renderAppShell({
@@ -477,21 +482,22 @@ function safeLocalRedirect(value?: string): string {
   }
 }
 
-function isLtiLaunchRedirect(value: string): boolean {
-  try {
-    return new URL(value, "https://placeholder.invalid").pathname === "/lti/launch";
-  } catch {
+function rejectExplicitCrossSiteAuthorizationStart(request: Request, response: Response): boolean {
+  if (request.header?.("sec-fetch-site")?.trim().toLowerCase() !== "cross-site") {
     return false;
   }
+  response.status(403).send("Open Canvas authorization from the Safe Online Exam tool.");
+  return true;
 }
 
-async function saveSession(request: Request): Promise<void> {
-  if (!request.session?.save) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    request.session!.save((error) => (error ? reject(error) : resolve()));
-  });
+function canvasReturnUrl(config: AppConfig, principal: NonNullable<ReturnType<typeof verifiedLtiPrincipal>>): string {
+  const url = new URL(config.getCanvasDomain());
+  url.pathname = isVerifiedAccountAdmin(principal)
+    ? `/accounts/${encodeURIComponent(principal.accountId)}`
+    : `/courses/${encodeURIComponent(principal.courseId)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function oauthSessionBinding(sessionId: string): string {

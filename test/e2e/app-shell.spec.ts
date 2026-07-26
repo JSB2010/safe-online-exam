@@ -91,6 +91,36 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
   expect(favicon.headers()["content-type"]).toContain("image/x-icon");
 });
 
+test("renders OAuth completion without resuming privileged management UI", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/oauth-connected-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "canvas-oauth-connected",
+          data: { canvasReturnUrl: "https://canvas.example.edu/courses/course-1" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/oauth-connected-preview");
+
+  await expect(page.getByRole("heading", { name: "Canvas Connected" })).toBeVisible();
+  await expect(page.getByText(/reopen Safe Online Exam from course or account navigation/u)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Return to Canvas" })).toHaveAttribute(
+    "href",
+    "https://canvas.example.edu/courses/course-1"
+  );
+  await expect(page.getByRole("link", { name: "Return to Canvas" })).toHaveAttribute("target", "_top");
+  expect(browserErrors).toEqual([]);
+});
+
 test("renders the responsive root-account administrator workspace and controlled secret reveal", async ({ page }) => {
   const browserErrors: string[] = [];
   page.on("console", (message) => {
