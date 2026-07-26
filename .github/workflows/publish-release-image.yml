@@ -16,17 +16,22 @@ env:
   IMAGE_NAME: jsb2010/safe-online-exam
 
 jobs:
-  publish:
-    name: Verify and publish release
+  verify-release:
+    name: Verify release source
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The required-check waiter polls for up to 30 minutes. Leave enough
+    # headroom for checkout, metadata validation, and GitHub API latency.
+    timeout-minutes: 40
     permissions:
       actions: read
-      attestations: write
       checks: read
-      contents: write
-      id-token: write
-      packages: write
+      contents: read
+    outputs:
+      draft_exists: ${{ steps.release.outputs.draft_exists }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      tag: ${{ steps.release.outputs.tag }}
+      verified_sha: ${{ steps.source.outputs.verified_sha }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,26 +40,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify the tag is based on main
+        id: source
+        run: |
+          verified_sha="$(git rev-parse HEAD)"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$verified_sha" refs/remotes/origin/main
+          printf 'verified_sha=%s\n' "$verified_sha" >>"$GITHUB_OUTPUT"
+
       - name: Set up Node.js 24
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
-      - name: Validate release source and metadata
+      - name: Validate release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/verify-release.mjs --tag "$RELEASE_TAG"
+
+      - name: Validate repository release settings
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          mkdir -p release-artifacts
-          node scripts/verify-release.mjs \
-            --tag "$RELEASE_TAG" \
-            --notes-output release-artifacts/release-notes.md
-
-          verified_sha="$(git rev-parse HEAD)"
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$verified_sha" refs/remotes/origin/main
-
           immutable_releases="$(
             gh api \
               -H "X-GitHub-Api-Version: 2026-03-10" \
@@ -81,22 +91,55 @@ jobs:
 
           printf 'tag=%s\n' "$RELEASE_TAG" >>"$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
-          printf 'verified_sha=%s\n' "$verified_sha" >>"$GITHUB_OUTPUT"
           printf 'prerelease=%s\n' "$prerelease" >>"$GITHUB_OUTPUT"
           printf 'draft_exists=%s\n' "$draft_exists" >>"$GITHUB_OUTPUT"
 
       - name: Require successful main and CodeQL checks
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/wait-for-required-checks.sh "${{ steps.release.outputs.verified_sha }}"
+          VERIFIED_SHA: ${{ steps.source.outputs.verified_sha }}
+        run: bash scripts/wait-for-required-checks.sh "$VERIFIED_SHA"
+
+  publish:
+    name: Publish verified release
+    needs: verify-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      attestations: write
+      checks: read
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out the verified release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify-release.outputs.verified_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Generate verified release notes
+        env:
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
+        run: |
+          mkdir -p release-artifacts
+          node scripts/verify-release.mjs \
+            --tag "$RELEASE_TAG" \
+            --notes-output release-artifacts/release-notes.md
 
       - name: Create or refresh the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
-          DRAFT_EXISTS: ${{ steps.release.outputs.draft_exists }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.verify-release.outputs.version }}
+          PRERELEASE: ${{ needs.verify-release.outputs.prerelease }}
+          DRAFT_EXISTS: ${{ needs.verify-release.outputs.draft_exists }}
         run: |
           common_arguments=(
             "$RELEASE_TAG"
@@ -138,10 +181,10 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.release.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.tag }},enable=${{ steps.release.outputs.prerelease == 'false' }}
-            type=semver,pattern={{major}},value=${{ steps.release.outputs.tag }},enable=${{ steps.release.outputs.prerelease == 'false' }}
-            type=raw,value=latest,enable=${{ steps.release.outputs.prerelease == 'false' }}
+            type=semver,pattern={{version}},value=${{ needs.verify-release.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.verify-release.outputs.tag }},enable=${{ needs.verify-release.outputs.prerelease == 'false' }}
+            type=semver,pattern={{major}},value=${{ needs.verify-release.outputs.tag }},enable=${{ needs.verify-release.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.verify-release.outputs.prerelease == 'false' }}
           labels: |
             org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0
 
@@ -149,8 +192,8 @@ jobs:
         id: existing-image
         env:
           IMAGE_REPOSITORY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          VERIFIED_SHA: ${{ steps.release.outputs.verified_sha }}
+          RELEASE_VERSION: ${{ needs.verify-release.outputs.version }}
+          VERIFIED_SHA: ${{ needs.verify-release.outputs.verified_sha }}
         run: |
           if manifest="$(
             docker buildx imagetools inspect "$IMAGE_REPOSITORY:$RELEASE_VERSION" \
@@ -174,7 +217,7 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ steps.release.outputs.verified_sha }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ needs.verify-release.outputs.verified_sha }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
@@ -217,8 +260,8 @@ jobs:
         id: bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.verify-release.outputs.version }}
           RELEASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
         run: |
           archive="$(
@@ -254,8 +297,8 @@ jobs:
           FINAL_TAGS: ${{ steps.meta.outputs.tags }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           IMAGE_REPOSITORY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          VERIFIED_SHA: ${{ steps.release.outputs.verified_sha }}
+          RELEASE_VERSION: ${{ needs.verify-release.outputs.version }}
+          VERIFIED_SHA: ${{ needs.verify-release.outputs.verified_sha }}
         run: |
           promotion=(docker buildx imagetools create)
           tag_names=()
@@ -280,8 +323,8 @@ jobs:
       - name: Publish the completed draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          PRERELEASE: ${{ needs.verify-release.outputs.prerelease }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
         run: |
           if [[ "$PRERELEASE" == "true" ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
@@ -308,7 +351,7 @@ jobs:
       - name: Summarize the release
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
         run: |
           {
             echo "## Published $RELEASE_TAG"
@@ -321,7 +364,7 @@ jobs:
       - name: Preserve draft recovery instructions on failure
         if: failure()
         env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag || github.ref_name }}
         run: |
           {
             echo "## Release did not publish"
