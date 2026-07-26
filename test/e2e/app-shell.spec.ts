@@ -274,6 +274,25 @@ test("rejects a same-origin network-path OAuth target", async ({ context, page }
     .toBe("/api/oauth2authorize");
 });
 
+// Mirrors the popup half of the completion handshake: report the connection, then close only after the
+// opener acknowledges it. The opener no longer closes the popup on the page's behalf.
+const studentSessionPopupBody = (returnUrl: string) =>
+  `<!doctype html><html><body><script>
+    window.addEventListener("message", (event) => {
+      if (
+        event.origin === window.location.origin &&
+        event.data &&
+        event.data.type === "seb-canvas-session-connected:acknowledged"
+      ) {
+        window.close();
+      }
+    });
+    window.opener.postMessage(
+      { type: "seb-canvas-session-connected", returnUrl: ${JSON.stringify(returnUrl)} },
+      window.location.origin
+    );
+  </script></body></html>`;
+
 test("returns the existing LTI page after a student session OAuth popup completes with a validated return URL", async ({
   context,
   page
@@ -291,7 +310,7 @@ test("returns the existing LTI page after a student session OAuth popup complete
   await context.route("**/student-session-popup-start", async (route) => {
     await route.fulfill({
       contentType: "text/html",
-      body: `<!doctype html><html><body><script>window.opener.postMessage({ type: "seb-canvas-session-connected", returnUrl: "/lti/launch?resumed=1" }, window.location.origin);</script></body></html>`
+      body: studentSessionPopupBody("/lti/launch?resumed=1")
     });
   });
   await context.route("**/authorization-student-preview", async (route) => {
@@ -340,7 +359,7 @@ test("falls back to the default destination when a student session popup reports
   await context.route("**/student-session-popup-malicious", async (route) => {
     await route.fulfill({
       contentType: "text/html",
-      body: `<!doctype html><html><body><script>window.opener.postMessage({ type: "seb-canvas-session-connected", returnUrl: "https://attacker.example.com/steal-session" }, window.location.origin);</script></body></html>`
+      body: studentSessionPopupBody("https://attacker.example.com/steal-session")
     });
   });
   await context.route("**/authorization-student-malicious-preview", async (route) => {
