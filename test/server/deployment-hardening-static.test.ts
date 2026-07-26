@@ -175,7 +175,7 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("actions/attest@v4");
     expect(workflow).toContain("org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0");
     expect(workflow).toContain("type=raw,value=latest");
-    expect(workflow).toContain("scope: ${{ env.IMAGE_NAME }}@push");
+    expect(workflow).not.toContain("scope: ${{ env.IMAGE_NAME }}@push");
     expect(workflow).toContain("create-release-bundle.sh");
     expect(workflow).toContain("gh release upload");
   });
