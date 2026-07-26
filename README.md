@@ -22,6 +22,7 @@ One deployment connects to one Canvas tenant and environment. Isolate environmen
 
 | Guide                                                    | Use it for                                                                                                    |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [Changelog](CHANGELOG.md)                                | Stable release history and user-visible changes.                                                              |
 | [Architecture](docs/architecture.md)                     | Runtime design, PostgreSQL concurrency, trust boundaries, data model, and route contracts.                    |
 | [Canvas setup](docs/canvas-setup.md)                     | Creating the LTI registration, installing it, authorizing API access, and loading the detector script.        |
 | [Configuration](docs/configuration.md)                   | Database, environment, secret-file, Canvas, LTI, and SEB settings.                                            |
