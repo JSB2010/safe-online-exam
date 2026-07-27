@@ -86,6 +86,12 @@ describe("deployment hardening artifacts", () => {
     expect(source("scripts/compose-smoke.sh")).toContain("compose.caddy.yaml --profile caddy config --quiet");
     expect(source("scripts/compose-smoke.sh")).toContain('docker run --rm --entrypoint /nodejs/bin/node "$image"');
     expect(source("scripts/compose-smoke.sh")).toContain("scripts/upgrade-compose.sh");
+    expect(source("scripts/compose-smoke.sh")).toContain("COMPOSE_SMOKE_ACTIVE=true");
+    expect(source("scripts/compose-smoke.sh")).toContain("--local-smoke-image");
+    expect(source("scripts/upgrade-compose.sh")).toContain(
+      "--local-smoke-image is reserved for the isolated Compose smoke test"
+    );
+    expect(source("scripts/upgrade-compose.sh")).toContain("^ghcr\\.io/jsb2010/safe-online-exam@sha256:[0-9a-f]{64}$");
     expect(source("scripts/compose-smoke.sh")).not.toContain("node scripts/generate-lti-private-key.mjs compose-smoke");
   });
 

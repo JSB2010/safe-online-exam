@@ -29,6 +29,13 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
 
 FROM deps AS verify
 
+# Repository-wide verification exercises the portable deployment installers.
+# Keep their host-tool dependencies in this build-only stage; they are not
+# copied into the distroless runtime image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends jq openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 RUN npm run typecheck
 RUN npm run lint

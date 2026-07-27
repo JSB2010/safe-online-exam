@@ -115,6 +115,8 @@ persisted="$({ "${compose_command[@]}" exec -T postgres \
 test "$persisted" = "1"
 
 COMPOSE_PROJECT_NAME="$project_name" \
+  COMPOSE_SMOKE_ACTIVE=true \
+  COMPOSE_SMOKE_IMAGE="$image" \
   BACKUP_DIRECTORY="$temporary_directory/backups" \
-  bash scripts/upgrade-compose.sh "$environment_file" >/dev/null
+  bash scripts/upgrade-compose.sh "$environment_file" --local-smoke-image >/dev/null
 test -s "$temporary_directory/backups/"*.dump

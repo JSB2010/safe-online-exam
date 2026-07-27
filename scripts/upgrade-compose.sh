@@ -3,16 +3,23 @@ set -Eeuo pipefail
 umask 077
 
 if [[ $# -gt 2 ]]; then
-  echo "usage: $0 [ENV_FILE] [--caddy]" >&2
+  echo "usage: $0 [ENV_FILE] [--caddy|--local-smoke-image]" >&2
   exit 64
 fi
 
 environment_file="${1:-.env.secrets}"
-caddy_mode="${2:-}"
-[[ "$caddy_mode" == "" || "$caddy_mode" == "--caddy" ]] || {
-  echo "second argument must be --caddy when the Caddy profile is enabled" >&2
-  exit 64
-}
+mode="${2:-}"
+caddy_mode=""
+local_smoke_image=false
+case "$mode" in
+  "") ;;
+  --caddy) caddy_mode="$mode" ;;
+  --local-smoke-image) local_smoke_image=true ;;
+  *)
+    echo "second argument must be --caddy or --local-smoke-image" >&2
+    exit 64
+    ;;
+esac
 [[ -f "$environment_file" && ! -L "$environment_file" ]] || {
   echo "configuration file must be a regular file: $environment_file" >&2
   exit 64
@@ -28,10 +35,25 @@ for command_name in curl docker; do
     exit 69
   }
 done
-[[ "${APP_IMAGE:-}" =~ ^ghcr\.io/jsb2010/safe-online-exam@sha256:[0-9a-f]{64}$ ]] || {
-  echo "APP_IMAGE must be the exact published Safe Online Exam GHCR digest" >&2
-  exit 64
-}
+if [[ "$local_smoke_image" == "true" ]]; then
+  [[ "${COMPOSE_SMOKE_ACTIVE:-}" == "true" ]] || {
+    echo "--local-smoke-image is reserved for the isolated Compose smoke test" >&2
+    exit 64
+  }
+  [[ -n "${COMPOSE_SMOKE_IMAGE:-}" && "${APP_IMAGE:-}" == "$COMPOSE_SMOKE_IMAGE" ]] || {
+    echo "the configured image does not match the isolated Compose smoke image" >&2
+    exit 64
+  }
+  docker image inspect "${APP_IMAGE:-}" >/dev/null 2>&1 || {
+    echo "the local Compose smoke image is unavailable: ${APP_IMAGE:-unset}" >&2
+    exit 64
+  }
+else
+  [[ "${APP_IMAGE:-}" =~ ^ghcr\.io/jsb2010/safe-online-exam@sha256:[0-9a-f]{64}$ ]] || {
+    echo "APP_IMAGE must be the exact published Safe Online Exam GHCR digest" >&2
+    exit 64
+  }
+fi
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -x "$script_directory/backup.sh" ]]; then
@@ -47,7 +69,9 @@ if [[ "$caddy_mode" == "--caddy" ]]; then
 fi
 
 "${compose[@]}" config --quiet
-"${compose[@]}" pull
+if [[ "$local_smoke_image" != "true" ]]; then
+  "${compose[@]}" pull
+fi
 "${compose[@]}" up -d --wait
 
 bind_address="${BIND_ADDRESS:-127.0.0.1}"
