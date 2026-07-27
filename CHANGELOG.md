@@ -5,6 +5,23 @@ release.
 
 ## [Unreleased]
 
+### Documentation
+
+- Reorganized the public documentation around evaluators, deployers, Canvas
+  administrators, instructors, students, support staff, contributors, and
+  release maintainers.
+- Added a documentation hub, role-based user guide, and symptom-driven
+  troubleshooting guide.
+- Replaced the duplicated deployment monolith with a mode-selection and
+  operations guide while keeping the Compose and Cloud Run bundle manuals
+  self-contained.
+- Revalidated public routes, OAuth scopes, runtime variables, PostgreSQL
+  schema, certificate behavior, deployment workflows, test gates, and release
+  behavior against the implementation.
+- Clarified that `/lti/config` is Canvas’s JSON configuration URL rather than
+  the separate OpenID Dynamic Registration protocol, and documented the
+  Compose two-pass Canvas bootstrap.
+
 ### Release engineering
 
 - Reworked publication into a one-tag workflow that creates a draft, waits for

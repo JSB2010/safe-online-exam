@@ -2,6 +2,14 @@
 
 By default, deployments encrypt generated `.seb` files to a configured public X.509 certificate. The service receives only the public certificate; the matching private identity is installed only on approved client devices. This protects the configuration file separately from Config Key proof, which protects access-code release after SEB starts.
 
+This identity is not the service’s HTTPS certificate and is not the LTI JWK.
+It exists only to let approved SEB clients decrypt generated configuration
+files. SEB’s
+[encrypted file format](https://safeexambrowser.org/developer/seb-file-format.html)
+and [Config Key documentation](https://safeexambrowser.org/developer/seb-config-key.html)
+describe the upstream mechanisms; this guide describes this application’s
+deployment model.
+
 An instance may explicitly set `SEB_CONFIG_ENCRYPTION_ENABLED=false` when it cannot distribute a private identity to student devices. This is a compatibility decision, not an equivalent security posture: the downloaded configuration is no longer restricted to devices holding that identity. A teacher-set start password still adds SEB password wrapping, and Config Key proof remains enabled.
 
 ## Trust Model
@@ -46,12 +54,30 @@ Immediately move the private PEM, `.p12`, and passphrase file into approved rest
 
 On Google Cloud, store the public certificate in Secret Manager and inject it as `SEB_CONFIG_ENCRYPTION_CERT_PEM`. On Docker/VPS or another orchestrator, provide a protected runtime file through `SEB_CONFIG_ENCRYPTION_CERT_PATH`. [Deployment](deployment.md) shows both procedures.
 
-When `SEB_CONFIG_ENCRYPTION_ENABLED` is unset or `true`, the service validates the X.509 certificate when it starts and when it creates a download. In any runtime:
+When `SEB_CONFIG_ENCRYPTION_ENABLED` is unset or `true`, the service validates
+the X.509 certificate when it starts in hardened runtimes and again when it
+creates a download.
 
-- A valid public X.509 certificate is required.
-- A public-key-only fallback is not sufficient.
+- A hardened runtime requires a valid public X.509 certificate.
+- A public-key-only input is a local-development compatibility path and is not
+  accepted as the production trust identity.
+- The certificate must be a currently valid end-entity certificate with an RSA
+  public key and Key Usage that permits key/data encipherment.
 
-Set `SEB_CONFIG_ENCRYPTION_ENABLED=false` only for an instance that cannot deploy the client private identity. The service does not load or use certificate material in that mode, and the certificate download endpoints return `404`. Assessment configurations are plaintext unless the instructor has set a start password, in which case SEB's password (`pswd`) wrapping remains active.
+Local development keeps certificate loading lazy so configuration and unit
+work can run without a production identity. A real encrypted download still
+needs usable key material.
+
+Set `SEB_CONFIG_ENCRYPTION_ENABLED=false` only for an instance that cannot
+deploy the client private identity. The service does not load or use
+certificate material in that mode, and the certificate download endpoints
+return `404`. Assessment configurations are plaintext unless the instructor
+has set a start password, in which case SEB's password (`pswd`) wrapping
+remains active.
+
+When both controls are configured, the service applies inner `pswd` start
+password protection and then the outer certificate-encrypted `pkhs` envelope.
+Config Key proof is independent and remains required after SEB opens the file.
 
 The configured public certificate is available for verification at:
 

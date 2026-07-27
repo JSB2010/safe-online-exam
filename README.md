@@ -1,173 +1,201 @@
 # Safe Online Exam
 
-Safe Online Exam connects Canvas assessments to [Safe Exam Browser (SEB)](https://safeexambrowser.org/). Instructors configure Classic Quizzes and New Quizzes from a Canvas course-navigation placement, while root-account Canvas administrators receive a separate school-wide account-navigation dashboard. Students receive a certificate-encrypted `.seb` configuration by default, and the Canvas access code is released only after Config Key proof succeeds.
+Safe Online Exam helps schools run Canvas Classic Quizzes and New Quizzes in
+[Safe Exam Browser (SEB)](https://safeexambrowser.org/). Instructors decide
+which assessments require SEB, students receive a purpose-built `.seb`
+configuration, and the Canvas access code is released only after SEB proves it
+is using the current configuration.
 
-The application supports Canvas LTI 1.3, Canvas OAuth, protected Canvas session handoff, approved web exam tools, one-time access proof, and the Canvas detector script. It runs on Node.js 24 with PostgreSQL 17 and can be deployed with Docker Compose, on a conventional container platform, or on Google Cloud Run with Cloud SQL.
+The project is designed for institution-managed deployments. It includes a
+Canvas LTI 1.3 application, a root-account administration workspace, an
+instructor course workspace, a student launch and readiness flow, and
+production deployment tooling for Docker Compose or Google Cloud Run.
 
-## What It Does
+> Safe Online Exam adds technical controls around a Canvas assessment. It does
+> not replace instructional planning, identity verification, accommodations,
+> device management, proctoring, incident response, or a school’s security and
+> privacy review.
 
-- Discovers and manages Classic Quizzes and New Quizzes.
-- Gives verified root-account administrators a Canvas-embedded view of connected courses, assessment state, password recovery, active-course discovery, and reusable school tool presets with bulk rollout.
-- Sets and rotates Canvas access codes without returning them in routine UI or API responses.
-- Lets instructors select course tools, define a tool that exists only for one quiz, and duplicate a saved course tool into other active Canvas courses where they are teachers.
-- Generates certificate-encrypted SEB configurations by default, with optional start and exit passwords and an instance-level compatibility setting for unmanaged devices.
-- Transfers a scoped Canvas session into SEB without copying the normal browser's cookies.
-- Uses the SEB JavaScript API and a short-lived one-time proof before releasing access, approved tools, or exit capability.
-- Persists settings, OAuth tokens, sessions, transient claims, and distributed locks in PostgreSQL.
-- Stores one Canvas OAuth grant per user; administrator authorization upgrades that same grant with the additional account scopes.
+## Who It Is For
 
-One deployment connects to one Canvas tenant and environment. Isolate environments with separate service URLs, PostgreSQL databases or clusters, secrets, LTI deployments, and OAuth credentials.
+- **Canvas administrators** install the LTI and OAuth Developer Keys, load the
+  detector through the Canvas theme, and operate the school dashboard.
+- **Infrastructure teams** deploy the service, PostgreSQL, secrets, backups,
+  cleanup, monitoring, and the SEB client identity.
+- **Instructors** choose assessments, configure course policy and approved exam
+  tools, and enable or disable SEB from Canvas.
+- **Students** connect Canvas once, run an optional setup check, and open each
+  protected assessment in SEB.
 
-## Documentation
+One deployment connects to one Canvas tenant and environment. Use separate
+service URLs, databases, secrets, LTI installations, and OAuth credentials for
+production, test, beta, or independent Canvas instances.
 
-| Guide                                                    | Use it for                                                                                                    |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| [Changelog](CHANGELOG.md)                                | Stable release history and user-visible changes.                                                              |
-| [Releasing](docs/releasing.md)                           | Version preparation, the one-tag release workflow, and failed-run recovery.                                   |
-| [Architecture](docs/architecture.md)                     | Runtime design, PostgreSQL concurrency, trust boundaries, data model, and route contracts.                    |
-| [Canvas setup](docs/canvas-setup.md)                     | Creating the LTI registration, installing it, authorizing API access, and loading the detector script.        |
-| [Configuration](docs/configuration.md)                   | Database, environment, secret-file, Canvas, LTI, and SEB settings.                                            |
-| [Deployment](docs/deployment.md)                         | Recommended Google Cloud setup and generic Docker/VPS setup, including SQL, secrets, backups, and operations. |
-| [Certificate management](docs/certificate-management.md) | Creating, distributing, rotating, and validating SEB configuration-encryption identities.                     |
-| [Testing](docs/testing.md)                               | Unit, real-PostgreSQL, Compose, Playwright, and manual Canvas/SEB acceptance checks.                          |
+## What Version 1 Includes
 
-## Architecture At A Glance
+- Canvas LTI 1.3 course navigation and root-account administration placements.
+- Canvas OAuth with separate instructor/student and root-account
+  administrator capabilities.
+- Discovery and management of Classic Quizzes and New Quizzes.
+- Course defaults, assessment overrides, start and exit passwords, URL rules,
+  course exam tools, quiz-only tools, and school-managed tool presets.
+- Certificate-encrypted `.seb` files by default, with an explicit
+  instance-level compatibility mode when managed certificate distribution is
+  not possible.
+- Scoped Canvas session handoff into SEB without copying browser cookies.
+- SEB Config Key proof, one-time access-code release, approved-tool release,
+  and completion-bound exit.
+- PostgreSQL-backed sessions, OAuth grants, settings, one-time state,
+  admission limits, and distributed locks.
+- Multi-architecture release images for `linux/amd64` and `linux/arm64`.
 
-```text
-Canvas LTI 1.3 ──────> NestJS service ──────> PostgreSQL 17+
-      │                     │                    │
-      │                     ├─ React app shell    ├─ settings and OAuth tokens
-      │                     ├─ Canvas OAuth       ├─ sessions and one-time state
-      │                     └─ SEB configuration  └─ admission budgets and locks
-      │
-      └─ Canvas theme loader ──> detector script ──> SEB proof/access-code flow
-```
+## Start Here
 
-- Backend: NestJS 11 on Express under `src/server`.
-- Frontend: React 19 and Vite under `src/client`.
-- Shared types: `src/shared`.
-- Persistence: PostgreSQL in deployed environments; in-memory repositories only for local tests and UI smoke work.
-- Packaging: a nonroot distroless Node.js 24 container.
+The documentation is organized by task instead of implementation area:
 
-## Deployment Options
+| If you need to…                                  | Read                                                     |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| Understand the project and choose a path         | [Documentation guide](docs/README.md)                    |
+| Install a published release                      | [Deployment](docs/deployment.md)                         |
+| Register the application in Canvas               | [Canvas setup](docs/canvas-setup.md)                     |
+| Use the admin, instructor, or student workflows  | [User guide](docs/user-guide.md)                         |
+| Configure environment variables and secrets      | [Configuration reference](docs/configuration.md)         |
+| Deploy and rotate the SEB client identity        | [Certificate management](docs/certificate-management.md) |
+| Understand trust boundaries and data flow        | [Architecture](docs/architecture.md)                     |
+| Test a change or complete release acceptance     | [Testing and acceptance](docs/testing.md)                |
+| Diagnose a launch, OAuth, detector, or SEB issue | [Troubleshooting](docs/troubleshooting.md)               |
+| Prepare a new public release                     | [Maintainer release guide](docs/releasing.md)            |
+| Review changes between stable versions           | [Changelog](CHANGELOG.md)                                |
+| Report a vulnerability privately                 | [Security policy](.github/SECURITY.md)                   |
 
-Published stable releases are available as multi-architecture OCI images at `ghcr.io/jsb2010/safe-online-exam`. Pushing a `vX.Y.Z` tag from a commit on `main` starts the release authority workflow, which creates a draft, verifies the exact source and image, attaches checksum-protected Compose and Cloud Run bundles, promotes `X.Y.Z`, `X.Y`, `X`, and `latest`, and then publishes the draft as an immutable GitHub Release. Use the exact release digest in production; moving tags are for discovery only.
+## Install A Published Release
 
-Google Cloud Run with Cloud SQL is the recommended managed deployment. The
-portable release bundle supports a first install and a backup/migration/staged
-traffic upgrade using plain `gcloud`, Docker, `jq`, OpenSSL, and `curl`, without
-cloning application source. Existing source-based Cloud Build workflows remain
-useful for development and maintained environments. A separately reviewed
-GitHub Release can also be promoted by digest through
-`cloudbuild-release-promote.yaml`.
+Production deployments should use a versioned GitHub Release and the exact
+container digest recorded by that release. Moving tags such as `latest` are
+for discovery, not production pinning.
 
-```bash
-gcloud builds submit --config=cloudbuild-dev.yaml
-gcloud builds submit --config=cloudbuild-prod.yaml
-```
+### Docker Compose
 
-First-time Google Cloud provisioning requires Cloud SQL, runtime/build IAM, Secret Manager versions, a stable service URL, and a two-pass Canvas LTI bootstrap. Follow the exact commands in [Deployment](docs/deployment.md); a bare build submission is only sufficient after those resources exist.
-
-The same container is portable to a conventional VPS or any platform that provides PostgreSQL 17+, HTTPS ingress, secret injection, a migration job, and scheduled cleanup.
-
-Releases containing the portable Cloud Run bundle can be installed without a
-repository checkout:
-
-```bash
-export CLOUDRUN_VERSION="X.Y.Z"
-curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
-curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
-sha256sum --check "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
-tar -xzf "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
-```
-
-The bundle README covers its read-only deployment doctor, consistently branded
-new-resource names, guided and unattended setup, explicit cost-gated Cloud SQL
-profiles, Canvas bootstrap, exact Secret Manager version pins, cleanup
-scheduling, traffic-safe upgrades, and guarded application rollback.
-
-## Quick Start With Docker Compose
-
-Download a specific GitHub Release asset, rather than cloning this repository or building application source on the target host:
+The release bundle contains PostgreSQL 17, migrations, scheduled-cleanup
+support, protected secret bootstrap, an upgrade helper, and optional Caddy
+HTTPS.
 
 ```bash
 export VERSION=1.0.0
-curl -fL -O "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
+curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
+curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz.sha256"
+sha256sum --check "safe-online-exam-${VERSION}-compose.tar.gz.sha256"
 tar -xzf "safe-online-exam-${VERSION}-compose.tar.gz"
 cd "safe-online-exam-${VERSION}"
 ./setup.sh
 ```
 
-The guided setup collects the non-secret Canvas/LTI values, generates
-protected runtime secrets and the client-only SEB identity, accepts the Canvas
-API secret without echo, validates the topology, and waits for readiness.
-Never place the generated `.p12`, private PEM, or its password in the server
-runtime.
+The application binds to loopback by default. Canvas requires a stable public
+HTTPS origin, so place a trusted TLS reverse proxy in front or use the bundle’s
+optional Caddy profile.
+
+### Google Cloud Run
+
+The Cloud Run release bundle provisions or validates the required Google Cloud
+resources, reserves a stable service URL, supports the two Canvas setup
+handoffs, pins numbered Secret Manager versions, runs migrations before
+traffic, schedules cleanup, and stages upgrades without traffic until
+readiness checks pass.
 
 ```bash
-./setup.sh \
-  --non-interactive \
-  --bootstrap \
-  --no-caddy \
-  --env-file .env.secrets \
-  --canvas-api-client-secret-file /secure/input/canvas-api-secret
+export CLOUDRUN_VERSION="1.0.0"
+curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
+curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
+sha256sum --check "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
+tar -xzf "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
+cd "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run"
+./setup.sh
 ```
 
-Compose runs schema migrations before the app and stores PostgreSQL data in the `postgres_data` volume. It binds only to loopback by default. Put a TLS reverse proxy in front before exposing the service to Canvas; production `TOOL_URL` must be HTTPS.
+See [Deployment](docs/deployment.md) before choosing a Cloud SQL profile,
+opening public access, or moving an existing installation.
 
-For a bare VPS, set `PUBLIC_HOST` in `.env.secrets`, open ports 80 and 443, and add the optional Caddy profile:
+## How The Protection Flow Works
 
-```bash
-docker compose --env-file .env.secrets \
-  -f compose.yaml -f compose.secrets.yaml -f compose.caddy.yaml \
-  --profile caddy up -d --wait
+```mermaid
+sequenceDiagram
+  participant Student
+  participant Canvas
+  participant App as Safe Online Exam
+  participant SEB as Safe Exam Browser
+
+  Student->>Canvas: Launches the LTI from a course
+  Canvas->>App: Sends a signed LTI launch
+  App->>Canvas: Requests a one-time Canvas session URL
+  App-->>Student: Issues a one-time configuration grant
+  Student->>App: Downloads the current .seb configuration
+  Student->>SEB: Opens the configuration
+  SEB->>Canvas: Opens the assessment through the session handoff
+  SEB->>App: Proves the current Config Key
+  App-->>SEB: Releases a one-time access code and approved tools
+  SEB->>Canvas: Completes the assessment
+  App-->>SEB: Allows the settings-bound exit flow
 ```
 
-See [Deployment](docs/deployment.md) for the release workflow, guided and
-unattended setup, upgrades, backups, Cloud Run promotion, and Canvas bootstrap.
+The detector’s buttons and sidebar are user-interface affordances. The
+generated SEB URL filter, current configuration fingerprint, server-side
+proof, and Canvas-authored completion state are the enforcement boundaries.
 
-## Continuous Integration
+## Technology And Runtime
 
-GitHub Actions runs a non-deploying CI workflow for every pull request and push to `main`. It runs the application verification gate, real PostgreSQL integration tests, and the production Compose smoke topology on the pinned Ubuntu 24.04 runner with Node 24. It has read-only repository permission and does not authenticate to Google Cloud or publish container images. npm and BuildKit caching are enabled, external actions are pinned to immutable commit SHAs, and Dependabot tracks their updates. The checked-in `Protect main` ruleset requires these jobs and both CodeQL analyses before merge.
+- Node.js 24 and npm 11
+- NestJS 11 on Express
+- React 19 and Vite
+- PostgreSQL 17 or newer
+- Vitest and Playwright
+- A nonroot distroless production image
+
+The runtime is provider-neutral: it needs PostgreSQL, a public HTTPS origin,
+secret injection, a migration job before application traffic, and scheduled
+cleanup. The maintained deployment targets are Docker Compose and Google Cloud
+Run with Cloud SQL.
+
+Google Cloud Run with Cloud SQL is the recommended managed deployment. Docker
+Compose is the maintained self-hosted alternative.
 
 ## Local Development
+
+Install the pinned dependency graph and run the complete non-browser gate:
 
 ```bash
 npm ci
 npm run verify
+```
+
+Then run the PostgreSQL and browser layers when relevant:
+
+```bash
 npm run verify:postgres
 npm run test:e2e
 ```
 
-For a route/UI smoke server that does not connect to Canvas or PostgreSQL:
+For a local UI and public-route smoke server that does not contact Canvas or
+PostgreSQL:
 
 ```bash
 npm run build
-HOST=127.0.0.1 USE_IN_MEMORY_STORE=true TOOL_URL=http://localhost:8080 \
-  LTI_CLIENT_ID=test-client CANVAS_API_CLIENT_ID=test \
-  CANVAS_API_CLIENT_SECRET=test npm start
+HOST=127.0.0.1 \
+USE_IN_MEMORY_STORE=true \
+TOOL_URL=http://localhost:8080 \
+LTI_CLIENT_ID=test-client \
+CANVAS_API_CLIENT_ID=test \
+CANVAS_API_CLIENT_SECRET=test \
+npm start
 ```
 
-The application does not load `.env` automatically. Export values, use a process manager, or use the Compose `env_file`. See [.env.example](.env.example) and [.env.compose.example](.env.compose.example).
+The application does not automatically load `.env`. Export variables, use a
+process manager, or use Compose’s explicit environment file. Start with
+[`.env.example`](.env.example) for local development and read the
+[configuration reference](docs/configuration.md) before a deployed install.
 
-## Core Commands
+## Compatibility Contracts
 
-| Command                                               | Purpose                                                                 |
-| ----------------------------------------------------- | ----------------------------------------------------------------------- |
-| `npm run verify`                                      | Typecheck, lint, format check, coverage tests, and production build.    |
-| `npm run verify:postgres`                             | Run migrations and repository concurrency tests against PostgreSQL 17.  |
-| `npm run release:check`                               | Verify synchronized version, changelog, README, and Compose metadata.   |
-| `npm run test:e2e`                                    | Run Playwright desktop/mobile app-shell tests.                          |
-| `npm run db:migrate`                                  | Apply checked, forward-only PostgreSQL schema migrations.               |
-| `npm run db:cleanup`                                  | Drain expired sessions, transient state, and locks in bounded batches.  |
-| `npm run db:reset:gcloud:dev -- --project PROJECT_ID` | Interactively destroy and recreate only the maintained dev database.    |
-| `npm run migrate:exam-tools -- --dry-run`             | Preview the course exam-tool catalog migration.                         |
-| `npm run generate:lti-key`                            | Generate an RSA private JWK for `LTI_PRIVATE_KEY`.                      |
-| `bash scripts/compose-smoke.sh`                       | Build and verify the full Compose migration/readiness/persistence path. |
-
-## Public Contracts
-
-These routes must stay stable unless Canvas and managed clients are updated together:
+Canvas and deployed clients depend on these stable public routes:
 
 - `GET /lti/config`
 - `GET|POST /lti/login`
@@ -180,24 +208,31 @@ These routes must stay stable unless Canvas and managed clients are updated toge
 - `GET /api/oauth2callback`
 - `GET /seb/config/:courseId/:contentId.seb`
 
-Classic Quiz content IDs are `classicquiz_{quizId}`. New Quiz content IDs are `newquiz:{courseId}:{assignmentId}`.
+Classic Quiz content IDs are `classicquiz_{quizId}`. New Quiz content IDs are
+`newquiz:{courseId}:{assignmentId}`. Treat route, identifier, migration, and
+configuration changes as compatibility changes.
 
-## Security Notes
+## Project Status And Support
 
-- Production requires HTTPS, a real LTI deployment ID, PostgreSQL, independent session/state secrets, and a valid end-entity X.509 encryption certificate.
-- Use `*_FILE` inputs or a secret manager for secret values. Never commit `.env`, private keys, `.p12`, or database dumps.
-- The matching SEB configuration private identity belongs only on managed clients, never in the server image or runtime.
-- The app refuses `USE_IN_MEMORY_STORE=true`, debug mode, unsafe URLs, and disabled configuration encryption in hardened runtimes.
-- Relevant settings changes invalidate downloaded configurations; require a fresh `.seb` file.
+Version 1 is a stable public release line, but every institution remains
+responsible for validating its own Canvas configuration, supported SEB client
+versions, operating systems, accessibility requirements, security controls,
+backup recovery, and assessment workflow before production use.
 
-## License And Commercial Use
+Use GitHub issues for reproducible non-sensitive bugs and feature proposals.
+Do not put student data, school URLs, credentials, access codes, session URLs,
+or private keys in an issue. Report suspected vulnerabilities through
+[GitHub private vulnerability reporting](https://github.com/JSB2010/safe-online-exam/security/advisories/new).
 
-Safe Online Exam is source-available under the [PolyForm Noncommercial
-License 1.0.0](LICENSE), not an OSI-approved open-source license. Eligible
-educational institutions may self-host and modify the software for their own
-use without purchasing a commercial license.
+## License
 
-Commercial managed hosting, installation, implementation, support, resale,
-and competing hosted services are reserved for separately licensed use. See
-[Commercial licensing](COMMERCIAL-LICENSE.md), [third-party notices](THIRD-PARTY-NOTICES.md),
-[contributing](CONTRIBUTING.md), and [trademark guidance](TRADEMARKS.md).
+Safe Online Exam is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE), not an OSI-approved
+open-source license. Eligible institutions may self-host and modify it for
+permitted noncommercial use. Commercial hosting, implementation, support,
+resale, and competing services require separate permission.
+
+Read [commercial licensing](COMMERCIAL-LICENSE.md),
+[contributing](CONTRIBUTING.md), [third-party notices](THIRD-PARTY-NOTICES.md),
+and [trademark guidance](TRADEMARKS.md) before redistribution or commercial
+use.

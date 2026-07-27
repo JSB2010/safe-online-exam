@@ -1,20 +1,41 @@
-# Canvas Setup
+# Canvas Installation And Setup
 
-This guide installs a deployed Safe Online Exam service in Canvas. Complete [Configuration](configuration.md) and the initial deployment first: the public `TOOL_URL` must be final before creating Canvas registrations. For a new Google Cloud installation, follow the stable-URL and two-pass LTI bootstrap in [Deployment](deployment.md); for Docker/VPS, establish DNS and TLS before creating the keys.
+This guide is for a Canvas root-account administrator installing a deployed
+Safe Online Exam service. Complete [Configuration](configuration.md) and the
+initial [deployment](deployment.md) first: the public `TOOL_URL` must be final
+before creating Canvas registrations. For Docker/VPS, establish DNS and TLS
+before creating either Developer Key. The Cloud Run bundle reserves the stable
+URL before it pauses for the Canvas steps.
+
+Canvas changes its administrative interface over time. The durable contract is
+the pair of Developer Keys, the external-app installation, and the theme
+loader—not a particular button position. In current Canvas terminology, LTI
+1.3 tools may be installed manually by JSON, configuration URL, or UI; this
+service provides the configuration URL `${TOOL_URL}/lti/config`. It does not
+implement the separate OpenID Dynamic Registration protocol. See Canvas’s
+[LTI registration documentation](https://developerdocs.instructure.com/services/canvas/external-tools/lti/file.registration)
+and [OAuth documentation](https://developerdocs.instructure.com/services/canvas/oauth2/file.oauth)
+when the current UI differs from this guide.
 
 The service is portable across Canvas environments, but each deployment is configured for one Canvas origin. Keep separate client IDs, deployment IDs, OAuth credentials, PostgreSQL databases, secrets, and service URLs for environments that must remain isolated.
+
+## Deployment Boundary
 
 ### Why a second Canvas needs a second deployment
 
 The service has one active LTI platform configuration: `CANVAS_DOMAIN`, `LTI_ISSUER`, `LTI_KEY_SET_URL`, `LTI_AUTH_URL`, `LTI_CLIENT_ID`, and `LTI_DEPLOYMENT_ID`. Canvas cloud values are the defaults. If a service configured with those defaults is registered in a self-hosted Canvas, `/lti/login` redirects the embedded tool frame to `sso.canvaslms.com`; that page is intentionally not embeddable by the self-hosted Canvas and the browser shows `sso.canvaslms.com refused to connect`.
 
-Deploy a separate service for each independent Canvas instance. For self-hosted Canvas, set its JWKS and authorization endpoints (normally `${CANVAS_DOMAIN}/api/lti/security/jwks` and `${CANVAS_DOMAIN}/api/lti/authorize_redirect`). Set `LTI_ISSUER` to the exact `iss` value Canvas sends, not by inferring it from `CANVAS_DOMAIN`: a self-hosted Canvas can still use `https://canvas.instructure.com` as its issuer. See [Configuration](configuration.md#canvas-and-lti-endpoints) and the self-hosted overrides in [Deployment](deployment.md#cloud-build-deployment).
+Deploy a separate service for each independent Canvas instance. For self-hosted Canvas, set its JWKS and authorization endpoints (normally `${CANVAS_DOMAIN}/api/lti/security/jwks` and `${CANVAS_DOMAIN}/api/lti/authorize_redirect`). Set `LTI_ISSUER` to the exact `iss` value Canvas sends, not by inferring it from `CANVAS_DOMAIN`: a self-hosted Canvas can still use `https://canvas.instructure.com` as its issuer. See [Configuration](configuration.md#canvas-and-lti-endpoints) and the self-hosted overrides in [Deployment](deployment.md#maintained-source-based-cloud-build-deployments).
 
 ### Self-hosted Canvas signing keys
 
 Canvas must sign LTI launch tokens with an RSA key of at least 2048 bits. Before registering a tool, inspect `${CANVAS_DOMAIN}/api/lti/security/jwks`; do not use the legacy sample JWKs shipped with some Canvas Docker configurations. A verifier must reject undersized `RS256` keys rather than accepting a weaker platform signature.
 
-For a running Canvas instance, rotate the three platform keys through Canvas's own `Lti::KeyStorage` and restart its web service so its JWKS response reloads the new keys. For example, run this in the Canvas web container:
+For a running Canvas instance, rotate the three platform keys through Canvas's
+own `Lti::KeyStorage` and restart its web service so its JWKS response reloads
+the new keys. Canvas internal APIs are version-sensitive; take a backup and
+confirm this operation against the exact Canvas source/version first. A
+current self-hosted installation may use a Rails runner operation like:
 
 ```bash
 bundle exec rails runner '
@@ -74,7 +95,9 @@ The LTI client ID and Canvas API OAuth client ID come from different registratio
 
 The application uses user-scoped Canvas OAuth tokens for assessment discovery and access-code changes. Do not replace this with a personal access token.
 
-In the root account’s Developer Keys area, create an API key with this redirect URI:
+In Canvas, open **Admin**, select the root account, open **Developer Keys**, and
+create an **API Key**. Use a recognizable name, owner email, and purpose, then
+set this exact redirect URI:
 
 ```text
 ${TOOL_URL}/api/oauth2callback
@@ -108,33 +131,51 @@ The administrator authorization requests the complete application scope set—in
 
 Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have each affected administrator select **Reconnect Canvas** once. Administrator-only scope additions do not invalidate ordinary instructor or student connections. Scope changes apply only to newly issued tokens.
 
-Store the API key’s client ID and secret in the deployment’s secret manager as `CANVAS_API_CLIENT_ID` and `CANVAS_API_CLIENT_SECRET`. If you change the redirect URI or scope set, affected users must reauthorize. This release adds `url:GET|/api/v1/courses`, so instructors with an older grant must select **Reconnect Canvas** before using course-to-course exam-tool copy.
+Store the API key’s client ID and secret in the deployment’s secret manager as
+`CANVAS_API_CLIENT_ID` and `CANVAS_API_CLIENT_SECRET`. If you change the
+redirect URI or scope set, affected users must reauthorize. Grants issued
+before OAuth scope contract version 3 may not include
+`url:GET|/api/v1/courses`; those instructors must select **Reconnect Canvas**
+before using course-to-course exam-tool copy.
 
 ## 2. Create the LTI 1.3 Developer Key
 
-Create a separate LTI 1.3 Developer Key and use dynamic registration configuration where Canvas offers it:
+Return to the root account’s **Developer Keys**, create an **LTI Key**, and
+choose Canvas’s JSON configuration URL option:
 
 ```text
 ${TOOL_URL}/lti/config
 ```
 
-The dynamic document supplies the title, course-navigation and root-account-navigation placements, OIDC initiation URL, target link URI, public JWKS URL, and signed course/account/user/role custom fields. Prefer it over manually copying fields because the deployed service remains the registration source of truth. The account placement is marked root-account-only and administrator-visible; the server still independently requires the signed LTI Administrator role, Canvas's signed root-admin substitution, numeric account identifiers, and a matching account-admin OAuth grant.
+The configuration document supplies the title, course-navigation and
+root-account-navigation placements, OIDC initiation URL, target link URI,
+public JWKS URL, and signed course/account/user/role custom fields. Prefer it
+over manually copying fields because the deployed service remains the
+registration source of truth. The account placement is marked
+root-account-only and administrator-visible; the server still independently
+requires the signed LTI Administrator role, Canvas's signed root-admin
+substitution, numeric account identifiers, and a matching account-admin OAuth
+grant.
 
 The relevant values are:
 
-| Canvas field               | Value                               |
-| -------------------------- | ----------------------------------- |
-| Dynamic JSON configuration | `${TOOL_URL}/lti/config`            |
-| OIDC initiation URL        | `${TOOL_URL}/lti/login`             |
-| Target link URI            | `${TOOL_URL}/lti/launch`            |
-| Redirect URI               | `${TOOL_URL}/lti/launch`            |
-| Public JWK URL             | `${TOOL_URL}/.well-known/jwks.json` |
+| Canvas field           | Value                               |
+| ---------------------- | ----------------------------------- |
+| JSON configuration URL | `${TOOL_URL}/lti/config`            |
+| OIDC initiation URL    | `${TOOL_URL}/lti/login`             |
+| Target link URI        | `${TOOL_URL}/lti/launch`            |
+| Redirect URI           | `${TOOL_URL}/lti/launch`            |
+| Public JWK URL         | `${TOOL_URL}/.well-known/jwks.json` |
 
 Enable the key and record its client ID as `LTI_CLIENT_ID`.
 
 ## 3. Install the External App
 
-At the root account or the desired account scope, open the external-app configuration area and add the app by client ID. Paste the LTI client ID from the previous step, approve the registration, and record the deployment ID Canvas assigns.
+At the root account or desired account scope, open **Settings**, **Apps**, then
+**View App Configurations**. Add an app **By Client ID**, paste the LTI client
+ID from the previous step, approve the registration, and record the deployment
+ID Canvas assigns. If Canvas has moved these controls, use its current External
+Apps installation flow while preserving the same client and deployment IDs.
 
 By default, set the deployment ID in `LTI_DEPLOYMENT_ID`, update the LTI client ID secret/value, and deploy a new service revision before testing. On Google Cloud, add numbered Secret Manager versions and submit Cloud Build with those exact version pins. On Docker/VPS, update the protected environment or mounted secret and recreate the application container. The default policy rejects launches from a deployment ID that is not explicitly configured.
 
@@ -176,7 +217,12 @@ Create a small JavaScript loader, replacing `${TOOL_URL}` before upload:
 
 The pattern includes Classic Quiz `/take` pages and New Quiz assignment routes, including their Canvas-generated descendants. `script.src` must be a plain JavaScript URL string, not a Markdown link.
 
-Upload the loader as the account theme’s desktop JavaScript and apply the theme at the intended account scope. Theme upload capability and inherited themes vary by Canvas configuration; if the upload control is unavailable, resolve that account setting before treating the detector as installed. Retest the loader after significant Canvas theme, CSP, or quiz-rendering changes.
+From **Admin**, select the intended account, open **Themes**, edit or create the
+active theme, and upload the loader as its desktop JavaScript. Preview, save,
+and apply the theme. Theme upload capability and inherited themes vary by
+Canvas configuration; if the upload control is unavailable, resolve that
+account setting before treating the detector as installed. Retest the loader
+after significant Canvas theme, CSP, or quiz-rendering changes.
 
 ### Self-hosted Canvas local-file workaround
 
@@ -204,7 +250,12 @@ replacement.sync_to_s3_and_save_to_account!(nil, account)
 
 For a broader Canvas deployment, configure S3-compatible attachment storage and re-upload the theme file. Canvas then serves uploaded theme assets from object storage instead of the local files controller. That is the durable solution for arbitrary uploaded theme JavaScript, CSS, and similar assets; the hosted loader is the smallest safe fix for this integration.
 
-The service also exposes `/api/seb/canvas-detector.js` for an existing installation that uses that path, but new loaders should use `/js/canvas-seb-detector.js`.
+The service also exposes `/api/seb/canvas-detector.js` for an existing
+installation that uses that path, but new loaders should use
+`/js/canvas-seb-detector.js`. Canvas’s
+[account theme documentation](https://community.canvaslms.com/html/assets/Canvas_Admin_Guide.pdf)
+describes the current custom JavaScript upload and account/sub-account
+inheritance behavior.
 
 ## 5. Verify The Integration
 

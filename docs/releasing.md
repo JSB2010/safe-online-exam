@@ -37,8 +37,10 @@ npm version 1.0.1 --no-git-tag-version
 Then update:
 
 1. `CHANGELOG.md` with a dated `[X.Y.Z]` section and canonical release link.
-2. The quick-start `VERSION` in `README.md`.
+2. Both public quick-start version examples in `README.md`.
 3. The `APP_IMAGE` tag in `.env.compose.example`.
+4. `APP_VERSION` in `deploy/cloudrun.env.example`; keep its `APP_IMAGE` as the
+   release-digest placeholder.
 
 Check all synchronized release metadata:
 
@@ -51,6 +53,9 @@ and merge it into `main`. The `Protect main` repository ruleset requires the
 application, PostgreSQL, Compose, and CodeQL checks. No approval is required
 for a solo-maintainer pull request, but the pull request and checks provide a
 durable release record.
+
+Before tagging, confirm `git status` is clean and the intended release commit
+is reachable from `main`. Do not tag a local-only or pull-request-only commit.
 
 ## Publish With One Tag
 

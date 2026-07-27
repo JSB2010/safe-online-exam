@@ -1,4 +1,9 @@
-# Architecture
+# Architecture And Security Model
+
+This guide explains the implementation boundaries that matter to operators,
+reviewers, and contributors. For deployment commands, use
+[Deployment](deployment.md). For the visible Canvas workflows, use the
+[User guide](user-guide.md).
 
 ## System Purpose
 
@@ -35,17 +40,17 @@ Cloud Run, Cloud SQL, Artifact Registry, Secret Manager, and Cloud Build are the
 
 ## Code Ownership
 
-| Area                      | Primary locations                                                           | Responsibility                                                                                                     |
-| ------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Bootstrap and HTTP policy | `src/server/main.ts`, `src/server/http/`                                    | Express session setup, CORS, security headers, app-shell rendering, request integrity, bounded upstream responses. |
-| Configuration             | `src/server/config/app-config.ts`                                           | Environment parsing, normalizing aliases, and hardened-runtime validation.                                         |
-| LTI                       | `lti.controller.ts`, `lti.service.ts`, `lti-state.service.ts`               | OIDC initiation, signed token validation, state encryption/replay claim, role routing, dynamic registration.       |
-| Canvas OAuth and APIs     | `oauth.controller.ts`, `canvas-api.service.ts`                              | Purpose-scoped instructor/student/admin authorization, token refresh, bounded Canvas REST/New Quiz requests.       |
-| Account administration    | `admin.controller.ts`, `admin-authorization.service.ts`                     | Root-scoped course connections, recovery actions, password reveal, account-bound authorization, and tool rollout.  |
-| Assessment policy         | `quiz.controller.ts`, `assessment.service.ts`, `course-settings.service.ts` | Discovery, Canvas access-code mutations, course defaults, per-assessment overrides, exam tools.                    |
-| SEB lifecycle             | `seb.controller.ts`, `seb-configuration.service.ts`, `seb-*.service.ts`     | Configuration grants, configuration generation, proof, access-code redemption, setup check, exit grants.           |
-| Browser detector          | `src/server/assets/canvas-seb-detector.js`, `static-js.controller.ts`       | Quiz-page launch UI, access-code filling, approved tools, completion detection, diagnostic reporting.              |
-| Persistence               | `src/server/data/`, `session-store.ts`                                      | PostgreSQL migrations, atomic consumption/claims, distributed rate budgets, locks, Express sessions.               |
+| Area                      | Primary locations                                                           | Responsibility                                                                                                        |
+| ------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap and HTTP policy | `src/server/main.ts`, `src/server/http/`                                    | Express session setup, CORS, security headers, app-shell rendering, request integrity, bounded upstream responses.    |
+| Configuration             | `src/server/config/app-config.ts`                                           | Environment parsing, normalizing aliases, and hardened-runtime validation.                                            |
+| LTI                       | `lti.controller.ts`, `lti.service.ts`, `lti-state.service.ts`               | OIDC initiation, signed token validation, state encryption/replay claim, role routing, and Canvas JSON configuration. |
+| Canvas OAuth and APIs     | `oauth.controller.ts`, `canvas-api.service.ts`                              | Purpose-scoped instructor/student/admin authorization, token refresh, bounded Canvas REST/New Quiz requests.          |
+| Account administration    | `admin.controller.ts`, `admin-authorization.service.ts`                     | Root-scoped course connections, recovery actions, password reveal, account-bound authorization, and tool rollout.     |
+| Assessment policy         | `quiz.controller.ts`, `assessment.service.ts`, `course-settings.service.ts` | Discovery, Canvas access-code mutations, course defaults, per-assessment overrides, exam tools.                       |
+| SEB lifecycle             | `seb.controller.ts`, `seb-configuration.service.ts`, `seb-*.service.ts`     | Configuration grants, configuration generation, proof, access-code redemption, setup check, exit grants.              |
+| Browser detector          | `src/server/assets/canvas-seb-detector.js`, `static-js.controller.ts`       | Quiz-page launch UI, access-code filling, approved tools, completion detection, diagnostic reporting.                 |
+| Persistence               | `src/server/data/`, `session-store.ts`                                      | PostgreSQL migrations, atomic consumption/claims, distributed rate budgets, locks, Express sessions.                  |
 
 ## Identity And Authorization
 
@@ -187,7 +192,7 @@ Schema changes are explicit, ordered migrations recorded with checksums in `sche
 | `GET /health`, `GET /login/health`, `GET /js/health` | Lightweight health responses.                        |
 | `GET /setup`, `GET /setup/guide`                     | Public role-oriented setup handoff.                  |
 | `GET /.well-known/jwks.json`                         | Public LTI signing keys.                             |
-| `GET /lti/config`                                    | Dynamic Canvas LTI registration document.            |
+| `GET /lti/config`                                    | Canvas LTI 1.3 JSON configuration document.          |
 | `GET /lti/login`, `POST /lti/login`                  | OIDC initiation.                                     |
 | `GET /lti/launch`, `POST /lti/launch`                | Signed LTI launch handling and session-based reload. |
 
@@ -221,8 +226,8 @@ All routes below are under `/api/admin`, require a verified root-account adminis
 | `POST /api/admin/courses/:courseId/assessments/:assessmentId/reset-defaults`      | Reset an assessment to its course defaults.                       |
 | `POST /api/admin/courses/:courseId/assessments/:assessmentId/regenerate-code`     | Rotate the Canvas access code.                                    |
 | `PUT /api/admin/courses/:courseId/assessments/:assessmentId/seb`                  | Enable or disable SEB enforcement.                                |
-| `POST /api/admin/tool-presets`                                                    | Create a validated school tool preset.                            |
-| `PUT`, `DELETE /api/admin/tool-presets/:presetId`                                 | Update or delete a school tool preset and synchronize courses.    |
+| `GET`, `POST /api/admin/tool-presets`                                             | List or create validated school tool presets.                     |
+| `PUT`, `DELETE /api/admin/tool-presets/:presetId`                                 | Update a preset or delete one after all assignments are removed.  |
 | `PUT /api/admin/tool-presets/:presetId/courses/:courseId`                         | Assign or unassign a preset for one Canvas course.                |
 | `PUT /api/admin/tool-presets/:presetId/assignments`                               | Queue a selected-course or all-course preset rollout.             |
 | `POST /api/admin/tool-presets/:presetId/assignments/reconcile`                    | Process or retry a bounded rollout batch.                         |
@@ -265,6 +270,7 @@ All routes below are under `/api/quizzes` and require the verified instructor/re
 | `POST /api/seb/access-code/:courseId/:quizId`                                                     | Redeem a proof for the access code, approved tools, and exit grant.                  |
 | `GET /api/seb/access-code/:courseId/:quizId`                                                      | Explicit method guidance; redemption is POST-only.                                   |
 | `GET /api/seb/tools/:courseId/:quizId`                                                            | Return the current approved tool view under the proof/session boundary.              |
+| `GET /seb/tool/youtube/:videoId`                                                                  | Render the server-owned, single-video YouTube player used by an approved video tool. |
 | `GET /seb/exit/session/:courseId/:quizId/:grant`                                                  | Render a validated post-submission exit page.                                        |
 | `GET /seb/exit/:courseId/:quizId`                                                                 | Render a non-terminal/manual exit page.                                              |
 | `GET /seb/exit/quit/:courseId/:quizId/:grant`                                                     | Redirect a validated exit grant to the configuration-bound SEB quit URL.             |

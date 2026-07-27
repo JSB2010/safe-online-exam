@@ -1,6 +1,21 @@
 # Configuration Reference
 
-The application reads process environment variables. It does not load `.env` files itself; [.env.example](../.env.example) is a reference and Compose explicitly loads an environment file. Protect local production files with `chmod 600 .env` and keep them outside version control.
+The application reads process environment variables. It does not load `.env`
+files itself; [`.env.example`](../.env.example) is a local-development
+reference and Compose explicitly loads an environment file. Protect local
+production files with `chmod 600 .env` and keep them outside version control.
+
+For a new deployment, use the template shipped with that deployment mode:
+
+- source checkout: [`.env.example`](../.env.example);
+- Compose source topology: [`.env.compose.example`](../.env.compose.example)
+  or [`.env.compose.secrets.example`](../.env.compose.secrets.example); and
+- Cloud Run release bundle:
+  [`deploy/cloudrun.env.example`](../deploy/cloudrun.env.example).
+
+Do not combine templates blindly. Deployment-only variables such as
+`APP_IMAGE`, `PROJECT_ID`, or `PUBLIC_HOST` are consumed by scripts/Compose and
+are not application runtime settings.
 
 ## Profiles And Validation
 
@@ -13,6 +28,12 @@ Profile resolution uses the first non-empty value from `APP_ENV`, `NODE_ENV`, an
 | Any other value, or all values unset | Development profile.                               |
 
 Cloud Run is always treated as hardened, including an isolated `APP_ENV=dev` service. Hardened validation requires real database, Canvas, LTI, OAuth, secret, URL, and certificate values. Startup fails before listening if the configuration is unsafe or incomplete.
+
+The parser retains a small number of historical aliases for maintained
+deployments, including `APP_BASE_URL`, `CANVAS_BASE_URL`, `DEPLOYMENT_ID`, and
+the `DEV_*`/`PROD_*` credential names. New public installations should use the
+canonical names in this guide. In a hardened runtime, any supplied
+`APP_BASE_URL` or `BASE_URL` must match `TOOL_URL`.
 
 ## PostgreSQL
 
@@ -71,6 +92,10 @@ Run `npm run db:migrate` before a new application revision. Run `npm run db:clea
 
 `SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients. Neither certificate input is required when certificate encryption is disabled.
 
+`LTI_PRIVATE_KEY`, `CANVAS_API_CLIENT_SECRET`, `DATABASE_PASSWORD`,
+`SESSION_SECRET`, `STATE_ENCRYPTION_KEY`, and `SEB_QUIT_PASSWORD` also have the
+file alternatives listed below. Use only one form for each value.
+
 ## Deployment-ID Policy
 
 `LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true` is the default and restricts launches to the IDs in `LTI_DEPLOYMENT_ID`. Set it to `false` only when the configured Canvas issuer and LTI client ID are intentionally trusted to create course-level installations. Disabled mode still requires Canvas's signed deployment-ID claim and retains token signature, issuer, audience, nonce, target-link, and browser/state binding validation; it removes only the preconfigured deployment-ID allowlist.
@@ -103,6 +128,11 @@ Canvas cloud defaults are built in. Override the authorization and JWKS URLs for
 | `CANVAS_REDIRECT_URI` | `${TOOL_URL}/api/oauth2callback`                       | If supplied, must equal the exact callback in hardened runtimes. |
 
 The registration document is `${TOOL_URL}/lti/config` and publishes the login, launch, and JWKS endpoints.
+
+`LTI_PRIVATE_KEY` is the tool’s own signing key. It is unrelated to Canvas’s
+platform JWKS at `LTI_KEY_SET_URL` and unrelated to the SEB configuration
+certificate. Generate it with `npm run generate:lti-key` or the release
+bundle’s bootstrap helper; never reuse another application’s JWK.
 
 ## SEB And Diagnostics
 

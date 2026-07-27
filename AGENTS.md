@@ -209,9 +209,13 @@ Update docs when changing architecture, deployment, required secrets, public rou
 Primary docs:
 
 - `README.md`
+- `docs/README.md`
 - `docs/architecture.md`
 - `docs/canvas-setup.md`
+- `docs/user-guide.md`
 - `docs/configuration.md`
 - `docs/deployment.md`
 - `docs/certificate-management.md`
 - `docs/testing.md`
+- `docs/troubleshooting.md`
+- `docs/releasing.md`

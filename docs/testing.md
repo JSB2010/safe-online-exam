@@ -2,6 +2,11 @@
 
 Testing is layered because the critical path crosses server code, Canvas, and a native SEB client. Automated tests protect application contracts; a real Canvas/SEB acceptance run protects the integration boundaries that cannot be reproduced fully in a unit test.
 
+Use the smallest gate that can disprove the change while iterating, then run
+the complete applicable gate before handoff. Documentation-only changes still
+run Prettier, release metadata validation, link checks, and any static tests
+that enforce documented deployment invariants.
+
 ## Automated Checks
 
 Install dependencies once:
@@ -122,7 +127,7 @@ curl -fsS http://127.0.0.1:8080/js/canvas-seb-detector.js | head
 
 This mode cannot validate Canvas OAuth, PostgreSQL, certificate decryption, or SEB runtime behavior.
 
-## Canvas And SEB Acceptance Sequence
+## Canvas And SEB Acceptance
 
 Run this sequence after a deployment that affects authentication, Canvas interaction, settings, configuration generation, the detector, certificate material, or exit behavior. Use separate administrator, instructor, and student accounts.
 
