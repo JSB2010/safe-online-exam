@@ -5,6 +5,82 @@ release.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-27
+
+Safe Online Exam 1.0.1 is a backward-compatible security, deployment, and
+release-engineering update. It closes a privileged OAuth callback-resume path,
+returns users to an existing signed LTI session through a constrained popup
+handshake, and completes the supported Cloud Run and Docker Compose operator
+bundles.
+
+This release adds no database migration and does not change the Canvas LTI
+registration URLs, OAuth callback URL, required Canvas scopes, or public SEB
+compatibility endpoints.
+
+### Canvas authorization and security
+
+- Require instructor, student, and administrator Canvas authorization to start
+  from the application's own origin, rejecting explicitly cross-site
+  navigation attempts.
+- Stop OAuth callbacks from resuming or rendering privileged instructor and
+  administrator views. Successful callbacks now end on a non-privileged
+  completion screen, and management access still requires the original signed
+  LTI launch.
+- Open Canvas authorization in a popup while preserving the signed LTI page,
+  then return that page to its role-appropriate workspace only after an
+  exact-origin, exact-window completion message and two-way acknowledgement.
+- Sanitize OAuth and student-session navigation targets to same-origin paths,
+  reject network-path and cross-origin values, and retain a safe completion
+  screen when popups or opener acknowledgement are unavailable.
+- Harden root-account course query parsing so repeated, malformed, or
+  non-scalar search, pagination, term, and limit values fall back safely.
+
+### Deployment and upgrades
+
+- Add checksum-protected, source-free Cloud Run and Docker Compose release
+  bundles, each with a guided top-level installer and an explicit unattended
+  file-based interface.
+- Add Cloud Run preflight, preparation, secret bootstrap, first-install,
+  two-pass Canvas registration, finalization, upgrade, and guarded rollback
+  commands using plain `gcloud`, `docker`, `jq`, `openssl`, and `curl`.
+- Pin exact Secret Manager versions, run migrations before application traffic
+  changes, schedule bounded cleanup, verify Cloud SQL backups, stage
+  zero-traffic revisions, and require an explicit verified traffic cutover.
+- Add an interactive Cloud SQL profile chooser with a cost-conscious dedicated
+  zonal default, optional high-availability and capacity profiles, connector
+  enforcement, backups, point-in-time recovery, deletion protection, and
+  opt-in resource creation.
+- Add verified Compose backup and upgrade helpers that preserve protected
+  secret files and the PostgreSQL volume before pulling or restarting the
+  application.
+- Document and propagate the per-instance
+  `SEB_CONFIG_ENCRYPTION_ENABLED=false` compatibility mode while retaining
+  start-password wrapping, Config Key proof, grants, lockdown behavior, and
+  certificate encryption as the secure default.
+
+### Release engineering and supply chain
+
+- Replace manual publication with a one-tag workflow that first proves the
+  tagged commit is on `main` using read-only permissions, waits for that exact
+  commit's application, PostgreSQL, Compose, and CodeQL checks, and only then
+  grants publication credentials.
+- Build and smoke the exact staged `linux/amd64` and `linux/arm64` image before
+  promoting the `1.0.1`, `1.0`, `1`, and `latest` aliases to one verified
+  digest.
+- Publish the completed GitHub Release as immutable only after generating the
+  final digest-specific notes, provenance, SBOM, GitHub attestation, Compose
+  and Cloud Run archives, and SHA-256 checksum files.
+- Add idempotent draft recovery, final-tag and image-label verification,
+  persistent BuildKit caching, immutable action SHA pins, and the
+  `npm run release:check` metadata-consistency gate.
+- Add a reproducible protected-`main` ruleset with pull requests, signed final
+  commits, required application/PostgreSQL/Compose/CodeQL checks, dependency
+  review, and narrowly scoped automatic merging for eligible Dependabot npm
+  patch updates.
+- Pin the Node.js 24 build/runtime, PostgreSQL 17, and Caddy base images by
+  digest while retaining reviewable automated update coverage for npm,
+  GitHub Actions, Dockerfiles, and Compose.
+
 ### Documentation
 
 - Reorganized the public documentation around evaluators, deployers, Canvas
@@ -22,45 +98,11 @@ release.
   the separate OpenID Dynamic Registration protocol, and documented the
   Compose two-pass Canvas bootstrap.
 
-### Release engineering
+### Dependency maintenance
 
-- Reworked publication into a one-tag workflow that creates a draft, waits for
-  the tagged `main` commit's required CI and CodeQL checks, builds and smokes a
-  staged multi-architecture image, and publishes the completed draft as an
-  immutable GitHub Release.
-- Added idempotent draft recovery, final-tag verification, release bundle
-  checksums, persistent BuildKit caching, immutable action SHA pins, and a
-  checked release-metadata consistency command.
-- Added a reproducible `main` ruleset requiring pull requests, application,
-  PostgreSQL, Compose, and CodeQL checks while leaving release tags free to
-  target verified commits on `main`.
-- Added signed-commit enforcement, pull-request dependency review, immutable
-  container base-image digests, and synchronized npm toolchain validation.
-- Expanded Dependabot to maintain npm and lockfile dependencies, Dockerfile and
-  Compose images, and GitHub Actions with bounded cooldowns and reviewable
-  framework/ecosystem grouping.
-- Added checksum-protected, source-free Cloud Run and Compose release bundles.
-  The Cloud Run path provisions application infrastructure, pins exact Secret
-  Manager versions, supports two-pass Canvas registration, schedules cleanup,
-  verifies a Cloud SQL backup, gates on migrations, stages a zero-traffic
-  revision, and performs an explicit verified cutover with guarded rollback.
-- Added verified Compose backup/upgrade helpers, strict release-attestation
-  verification, a shared deployment contract with Cloud Build drift checks,
-  self-hosted Canvas endpoint support, and explicit per-instance SEB
-  certificate-encryption configuration.
-- Added a read-only Cloud Run deployment doctor, consistent
-  `safe-online-exam` names for newly provisioned portable resources, and an
-  interactive Cloud SQL chooser with dated price/term guidance, a
-  cost-conscious dedicated zonal default, optional HA/capacity and clearly
-  labeled pilot/development profiles, exact unattended flags, backups,
-  point-in-time recovery, deletion protection, connector enforcement, and
-  opt-in creation. Existing maintained `canvas-seb-*` targets remain
-  unchanged.
-- Added guided top-level installers for the Cloud Run and Docker Compose
-  release bundles. Both retain explicit unattended contracts; secrets use
-  protected files or no-echo prompts, Cloud Run exposes resumable stages around
-  Canvas administration handoffs, and Compose can bootstrap, validate, start,
-  and health-check the complete topology.
+- Update React and React DOM to 19.2.8, `jose` to 6.2.4, `lucide-react` to
+  1.25.0, `@vitejs/plugin-react` to 6.0.4, Prettier to 3.9.6, and Caddy to the
+  2.11 release line.
 
 ## [1.0.0] - 2026-07-25
 
@@ -117,5 +159,6 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.0
