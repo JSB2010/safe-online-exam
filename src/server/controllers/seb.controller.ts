@@ -302,6 +302,12 @@ export class SebController {
       response.status(403).setHeader("cache-control", "no-store").send();
       return;
     }
+    try {
+      this.sebConfig.assertConfigurationDownloadReady({ requireCertificateEncryption: true });
+    } catch {
+      response.status(400).setHeader("cache-control", "no-store").send();
+      return;
+    }
     // Windows SEB validates a configuration URL with HEAD before its single
     // GET download. Do not consume the grant here: only downloadConfig may
     // mint the assessment's session handoff and release encrypted bytes.

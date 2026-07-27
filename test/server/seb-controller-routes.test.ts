@@ -466,7 +466,10 @@ describe("SebController route contracts", () => {
   });
 
   it("accepts Windows HEAD probes without consuming the GET grant path", async () => {
-    const { controller, configGrants } = controllerWith();
+    const sebConfig = {
+      assertConfigurationDownloadReady: vi.fn()
+    };
+    const { controller, configGrants } = controllerWith({ sebConfig });
     configGrants.validateGrant = vi.fn().mockResolvedValue(true);
     const response = responseDouble();
 
@@ -481,6 +484,9 @@ describe("SebController route contracts", () => {
     expect(response.status).toHaveBeenCalledWith(200);
     expect(configGrants.validateGrant).toHaveBeenCalledWith("g".repeat(43), "course-1", "classicquiz_23455");
     expect(configGrants.consumeGrant).not.toHaveBeenCalled();
+    expect(sebConfig.assertConfigurationDownloadReady).toHaveBeenCalledWith({
+      requireCertificateEncryption: true
+    });
   });
 
   it("caches the stable protected setup-check download across repeated allowed requests", async () => {

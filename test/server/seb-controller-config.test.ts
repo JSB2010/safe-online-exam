@@ -22,13 +22,16 @@ describe("SEB config downloads", () => {
       validateGrant: vi.fn().mockResolvedValue(true),
       consumeGrant: vi.fn()
     };
+    const sebConfig = {
+      assertConfigurationDownloadReady: vi.fn()
+    };
     const controller = new SebController(
       new AppConfig(),
       {} as any,
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
+      sebConfig as any,
       {} as any,
       proofService(),
       configGrants as any,
@@ -40,8 +43,43 @@ describe("SEB config downloads", () => {
 
     expect(configGrants.validateGrant).toHaveBeenCalledWith("a".repeat(43), "11825", "classicquiz_23455");
     expect(configGrants.consumeGrant).not.toHaveBeenCalled();
+    expect(sebConfig.assertConfigurationDownloadReady).toHaveBeenCalledWith({
+      requireCertificateEncryption: true
+    });
     expect(response.status).toHaveBeenCalledWith(200);
     expect(response.type).toHaveBeenCalledWith("application/octet-stream");
+  });
+
+  it("rejects the Windows HEAD probe without consuming its grant when assessment encryption is unavailable", async () => {
+    await withConfig(
+      async () => {
+        const configGrants = {
+          validateGrant: vi.fn().mockResolvedValue(true),
+          consumeGrant: vi.fn()
+        };
+        const controller = new SebController(
+          new AppConfig(),
+          {} as any,
+          {} as any,
+          {} as any,
+          {} as any,
+          new SebConfigurationService(new AppConfig()),
+          {} as any,
+          proofService(),
+          configGrants as any,
+          admissionDouble()
+        );
+        const response = responseDouble();
+
+        await controller.inspectConfigDownload(response as any, "11825", "classicquiz_23455", "a".repeat(43));
+
+        expect(configGrants.validateGrant).toHaveBeenCalledWith("a".repeat(43), "11825", "classicquiz_23455");
+        expect(configGrants.consumeGrant).not.toHaveBeenCalled();
+        expect(response.status).toHaveBeenCalledWith(400);
+        expect(response.type).not.toHaveBeenCalled();
+      },
+      { encryptionEnabled: false }
+    );
   });
 
   it("uses a fresh Canvas session URL only while creating a connected student's SEB config", async () => {
