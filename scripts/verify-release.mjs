@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 
@@ -119,6 +119,90 @@ const composeEnvironment = readText(".env.compose.example");
 const composeVersion = composeEnvironment.match(/^APP_IMAGE=ghcr\.io\/jsb2010\/safe-online-exam:([^\s]+)$/mu)?.[1];
 if (composeVersion !== version) {
   fail(`.env.compose.example image version must be ${version}, found ${composeVersion ?? "none"}`);
+}
+
+const cloudRunEnvironment = readText("deploy/cloudrun.env.example");
+const cloudRunVersion = cloudRunEnvironment.match(/^APP_VERSION=(.+)$/mu)?.[1];
+if (cloudRunVersion !== version) {
+  fail(`deploy/cloudrun.env.example APP_VERSION must be ${version}, found ${cloudRunVersion ?? "none"}`);
+}
+if (!/^APP_IMAGE=ghcr\.io\/jsb2010\/safe-online-exam@sha256:REPLACE_WITH_RELEASE_DIGEST$/mu.test(cloudRunEnvironment)) {
+  fail("deploy/cloudrun.env.example must use the release-digest placeholder");
+}
+
+const cloudRunContract = readJson("deploy/cloud-run-contract.json");
+const requiredCloudRunEnvironment = new Set(cloudRunContract.requiredEnvironment);
+const canvasEndpointEnvironment = new Set(cloudRunContract.canvasEndpointEnvironment);
+const requiredCloudRunSecrets = new Set(cloudRunContract.secrets.map((secret) => secret.environment));
+
+function parseCloudRunBindings(config, flag) {
+  return [...config.matchAll(new RegExp(`"${escapeRegExp(flag)}=([^"]+)"`, "gu"))].map(
+    (match) => new Set(match[1].split(",").map((binding) => binding.split("=")[0]))
+  );
+}
+
+const portableCloudRunConfig = readText("deploy/cloud-run-config.sh");
+for (const configuredName of [...requiredCloudRunEnvironment, ...canvasEndpointEnvironment]) {
+  if (!portableCloudRunConfig.includes(`${configuredName}=`)) {
+    fail(`portable Cloud Run environment renderer is missing ${configuredName}`);
+  }
+}
+
+for (const configPath of [
+  "cloudbuild-dev.yaml",
+  "cloudbuild-prod.yaml",
+  "cloudbuild-school.yaml",
+  "cloudbuild-release-promote.yaml"
+]) {
+  const config = readText(configPath);
+  const rawEnvironmentBindings = [...config.matchAll(/"--set-env-vars=([^"]+)"/gu)].map((match) => match[1]);
+  const rawSecretBindings = [...config.matchAll(/"--set-secrets=([^"]+)"/gu)].map((match) => match[1]);
+  const environmentBindings = parseCloudRunBindings(config, "--set-env-vars");
+  const secretBindings = parseCloudRunBindings(config, "--set-secrets");
+  if (environmentBindings.length !== 3 || secretBindings.length !== 3) {
+    fail(`${configPath} must configure the migrate job, cleanup job, and service`);
+  }
+  if (new Set(rawEnvironmentBindings).size !== 1 || new Set(rawSecretBindings).size !== 1) {
+    fail(`${configPath} must give the migrate job, cleanup job, and service identical configuration`);
+  }
+
+  for (const binding of environmentBindings) {
+    for (const requiredName of requiredCloudRunEnvironment) {
+      if (!binding.has(requiredName)) {
+        fail(`${configPath} Cloud Run environment is missing ${requiredName}`);
+      }
+    }
+    const configuredCanvasEndpoints = [...canvasEndpointEnvironment].filter((name) => binding.has(name));
+    if (configuredCanvasEndpoints.length !== 0 && configuredCanvasEndpoints.length !== canvasEndpointEnvironment.size) {
+      fail(`${configPath} must configure all Canvas endpoint overrides together`);
+    }
+  }
+  for (const binding of secretBindings) {
+    if (
+      binding.size !== requiredCloudRunSecrets.size ||
+      [...requiredCloudRunSecrets].some((requiredName) => !binding.has(requiredName))
+    ) {
+      fail(`${configPath} Secret Manager bindings have drifted from deploy/cloud-run-contract.json`);
+    }
+  }
+}
+
+for (const scriptPath of [
+  "scripts/bootstrap-cloud-run-secrets.sh",
+  "scripts/doctor-cloud-run.sh",
+  "scripts/prepare-cloud-run.sh",
+  "scripts/install-cloud-run.sh",
+  "scripts/finalize-cloud-run-lti.sh",
+  "scripts/upgrade-cloud-run.sh",
+  "scripts/rollback-cloud-run.sh",
+  "scripts/backup-compose.sh",
+  "scripts/upgrade-compose.sh",
+  "scripts/create-cloud-run-bundle.sh",
+  "scripts/render-release-deployment-notes.sh"
+]) {
+  if ((statSync(resolve(ROOT, scriptPath)).mode & 0o111) === 0) {
+    fail(`${scriptPath} must be executable`);
+  }
 }
 
 const changelog = readText("CHANGELOG.md");

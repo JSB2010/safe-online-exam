@@ -113,3 +113,8 @@ curl --fail --silent --show-error "$base_url/ready" >/dev/null
 persisted="$({ "${compose_command[@]}" exec -T postgres \
   psql -U canvas_seb -d canvas_seb -Atc "SELECT count(*) FROM courses WHERE id = 'compose-smoke';"; } | tr -d '\r')"
 test "$persisted" = "1"
+
+COMPOSE_PROJECT_NAME="$project_name" \
+  BACKUP_DIRECTORY="$temporary_directory/backups" \
+  bash scripts/upgrade-compose.sh "$environment_file" >/dev/null
+test -s "$temporary_directory/backups/"*.dump

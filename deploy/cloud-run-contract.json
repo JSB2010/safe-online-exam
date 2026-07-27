@@ -1,0 +1,85 @@
+{
+  "requiredEnvironment": [
+    "NODE_ENV",
+    "APP_ENV",
+    "APP_DEBUG_ENABLED",
+    "APP_DETECTOR_DIAGNOSTICS_ENABLED",
+    "LTI_DEPLOYMENT_ID_CHECKING_ENABLED",
+    "SEB_CONFIG_ENCRYPTION_ENABLED",
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_NAME",
+    "DATABASE_USER",
+    "DATABASE_SSL_MODE",
+    "DATABASE_POOL_MAX"
+  ],
+  "canvasEndpointEnvironment": ["LTI_ISSUER", "LTI_KEY_SET_URL", "LTI_AUTH_URL"],
+  "secrets": [
+    {
+      "environment": "CANVAS_DOMAIN",
+      "suffix": "canvas_domain",
+      "file": "canvas_domain",
+      "versionKey": "CANVAS_DOMAIN_SECRET_VERSION"
+    },
+    {
+      "environment": "LTI_CLIENT_ID",
+      "suffix": "lti_client_id",
+      "file": "lti_client_id",
+      "versionKey": "LTI_CLIENT_ID_SECRET_VERSION"
+    },
+    {
+      "environment": "LTI_DEPLOYMENT_ID",
+      "suffix": "lti_deployment_id",
+      "file": "lti_deployment_id",
+      "versionKey": "LTI_DEPLOYMENT_ID_SECRET_VERSION"
+    },
+    {
+      "environment": "TOOL_URL",
+      "suffix": "tool_url",
+      "file": "tool_url",
+      "versionKey": "TOOL_URL_SECRET_VERSION"
+    },
+    {
+      "environment": "LTI_PRIVATE_KEY",
+      "suffix": "lti_private_key",
+      "file": "lti_private_key",
+      "versionKey": "LTI_PRIVATE_KEY_SECRET_VERSION"
+    },
+    {
+      "environment": "SESSION_SECRET",
+      "suffix": "session_secret",
+      "file": "session_secret",
+      "versionKey": "SESSION_SECRET_SECRET_VERSION"
+    },
+    {
+      "environment": "STATE_ENCRYPTION_KEY",
+      "suffix": "state_encryption_key",
+      "file": "state_encryption_key",
+      "versionKey": "STATE_ENCRYPTION_KEY_SECRET_VERSION"
+    },
+    {
+      "environment": "CANVAS_API_CLIENT_ID",
+      "suffix": "api_client_id",
+      "file": "canvas_api_client_id",
+      "versionKey": "CANVAS_API_CLIENT_ID_SECRET_VERSION"
+    },
+    {
+      "environment": "CANVAS_API_CLIENT_SECRET",
+      "suffix": "api_client_secret",
+      "file": "canvas_api_client_secret",
+      "versionKey": "CANVAS_API_CLIENT_SECRET_SECRET_VERSION"
+    },
+    {
+      "environment": "SEB_CONFIG_ENCRYPTION_CERT_PEM",
+      "suffix": "seb_config_encryption_cert_pem",
+      "file": "seb-config-encryption.crt.pem",
+      "versionKey": "SEB_CONFIG_ENCRYPTION_CERT_PEM_SECRET_VERSION"
+    },
+    {
+      "environment": "DATABASE_PASSWORD",
+      "suffix": "database_password",
+      "file": "database_password",
+      "versionKey": "DATABASE_PASSWORD_SECRET_VERSION"
+    }
+  ]
+}

@@ -1,23 +1,23 @@
 substitutions:
   _LOCATION: us-central1
-  _REPOSITORY: canvas-seb-repo
-  _SERVICE: canvas-seb
-  _IMAGE: canvas-seb
+  _REPOSITORY: safe-online-exam
+  _SERVICE: safe-online-exam
+  _IMAGE: safe-online-exam
   _CACHE_TAG: cache
   _APP_ENV: prod
-  _CLOUD_SQL_INSTANCE: canvas-seb
-  _DATABASE_NAME: canvas_seb
-  _DATABASE_USER: canvas_seb
+  _CLOUD_SQL_INSTANCE: safe-online-exam
+  _DATABASE_NAME: safe_online_exam
+  _DATABASE_USER: safe_online_exam
   _DATABASE_POOL_MAX: "5"
   _LTI_ISSUER: https://canvas.instructure.com
   _LTI_KEY_SET_URL: https://sso.canvaslms.com/api/lti/security/jwks
   _LTI_AUTH_URL: https://sso.canvaslms.com/api/lti/authorize_redirect
-  _SECRET_PREFIX: canvas_seb
+  _SECRET_PREFIX: safe_online_exam
   _SECRET_VERSION: "1"
   _LTI_DEPLOYMENT_ID_CHECKING_ENABLED: "true"
   _SEB_CONFIG_ENCRYPTION_ENABLED: "true"
   _DATABASE_PASSWORD_SECRET_VERSION: "1"
-  _SERVICE_ACCOUNT: seb-canvas
+  _SERVICE_ACCOUNT: safe-online-exam
   _MIN_INSTANCES: "0"
   _MAX_INSTANCES: "10"
 

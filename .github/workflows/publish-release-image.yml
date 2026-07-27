@@ -89,10 +89,12 @@ jobs:
           prerelease=false
           [[ "$version" == *-* ]] && prerelease=true
 
-          printf 'tag=%s\n' "$RELEASE_TAG" >>"$GITHUB_OUTPUT"
-          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
-          printf 'prerelease=%s\n' "$prerelease" >>"$GITHUB_OUTPUT"
-          printf 'draft_exists=%s\n' "$draft_exists" >>"$GITHUB_OUTPUT"
+          {
+            printf 'tag=%s\n' "$RELEASE_TAG"
+            printf 'version=%s\n' "$version"
+            printf 'prerelease=%s\n' "$prerelease"
+            printf 'draft_exists=%s\n' "$draft_exists"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Require successful main and CodeQL checks
         env:
@@ -256,41 +258,57 @@ jobs:
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
 
-      - name: Build and upload the versioned Compose bundle
-        id: bundle
+      - name: Build and upload the versioned deployment bundles
+        id: bundles
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
           RELEASE_VERSION: ${{ needs.verify-release.outputs.version }}
           RELEASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
+          VERIFIED_SHA: ${{ needs.verify-release.outputs.verified_sha }}
         run: |
-          archive="$(
+          compose_archive="$(
             bash scripts/create-release-bundle.sh \
               "$RELEASE_VERSION" "$RELEASE_IMAGE" release-artifacts
           )"
-          checksum="$archive.sha256"
+          cloud_run_archive="$(
+            bash scripts/create-cloud-run-bundle.sh \
+              "$RELEASE_VERSION" "$RELEASE_IMAGE" release-artifacts
+          )"
+          compose_checksum="$compose_archive.sha256"
+          cloud_run_checksum="$cloud_run_archive.sha256"
           (
-            cd "$(dirname "$archive")"
-            sha256sum "$(basename "$archive")"
-          ) >"$checksum"
+            cd "$(dirname "$compose_archive")"
+            sha256sum "$(basename "$compose_archive")"
+          ) >"$compose_checksum"
+          (
+            cd "$(dirname "$cloud_run_archive")"
+            sha256sum "$(basename "$cloud_run_archive")"
+          ) >"$cloud_run_checksum"
 
-          cat >>release-artifacts/release-notes.md <<EOF
-
-          ## Published container image
-
-          \`$RELEASE_IMAGE\`
-
-          Production deployments must use this immutable digest. Moving tags are provided only for discovery and upgrade notifications.
-          EOF
+          bash scripts/render-release-deployment-notes.sh \
+            "$RELEASE_VERSION" \
+            "$RELEASE_IMAGE" \
+            "$VERIFIED_SHA" \
+            release-artifacts/release-notes.md
 
           gh release edit "$RELEASE_TAG" \
             --title "Safe Online Exam $RELEASE_VERSION" \
             --notes-file release-artifacts/release-notes.md \
             --draft=true
-          gh release upload "$RELEASE_TAG" "$archive" "$checksum" --clobber
+          gh release upload "$RELEASE_TAG" \
+            "$compose_archive" \
+            "$compose_checksum" \
+            "$cloud_run_archive" \
+            "$cloud_run_checksum" \
+            --clobber
 
-          printf 'archive=%s\n' "$archive" >>"$GITHUB_OUTPUT"
-          printf 'checksum=%s\n' "$checksum" >>"$GITHUB_OUTPUT"
+          {
+            printf 'compose_archive=%s\n' "$compose_archive"
+            printf 'compose_checksum=%s\n' "$compose_checksum"
+            printf 'cloud_run_archive=%s\n' "$cloud_run_archive"
+            printf 'cloud_run_checksum=%s\n' "$cloud_run_checksum"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Promote and verify immutable release tags
         env:
@@ -318,7 +336,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_IMAGE: oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
-        run: gh attestation verify "$RELEASE_IMAGE" --repo "$GITHUB_REPOSITORY"
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
+          VERIFIED_SHA: ${{ needs.verify-release.outputs.verified_sha }}
+        run: |
+          gh attestation verify "$RELEASE_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-release-image.yml" \
+            --source-digest "$VERIFIED_SHA" \
+            --source-ref "refs/tags/$RELEASE_TAG"
 
       - name: Publish the completed draft release
         env:
@@ -332,7 +357,7 @@ jobs:
             gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
           fi
 
-          for attempt in $(seq 1 10); do
+          for _ in $(seq 1 10); do
             release="$(
               gh release view "$RELEASE_TAG" \
                 --json isDraft,isImmutable,isPrerelease,url
@@ -358,6 +383,7 @@ jobs:
             echo
             echo "- Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$IMAGE_DIGEST\`"
             echo "- Architectures: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- Assets: checksum-protected Compose and Cloud Run operator bundles"
             echo "- Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
           } >>"$GITHUB_STEP_SUMMARY"
 

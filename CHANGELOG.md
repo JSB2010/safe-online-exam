@@ -22,6 +22,28 @@ release.
 - Expanded Dependabot to maintain npm and lockfile dependencies, Dockerfile and
   Compose images, and GitHub Actions with bounded cooldowns and reviewable
   framework/ecosystem grouping.
+- Added checksum-protected, source-free Cloud Run and Compose release bundles.
+  The Cloud Run path provisions application infrastructure, pins exact Secret
+  Manager versions, supports two-pass Canvas registration, schedules cleanup,
+  verifies a Cloud SQL backup, gates on migrations, stages a zero-traffic
+  revision, and performs an explicit verified cutover with guarded rollback.
+- Added verified Compose backup/upgrade helpers, strict release-attestation
+  verification, a shared deployment contract with Cloud Build drift checks,
+  self-hosted Canvas endpoint support, and explicit per-instance SEB
+  certificate-encryption configuration.
+- Added a read-only Cloud Run deployment doctor, consistent
+  `safe-online-exam` names for newly provisioned portable resources, and an
+  interactive Cloud SQL chooser with dated price/term guidance, a
+  cost-conscious dedicated zonal default, optional HA/capacity and clearly
+  labeled pilot/development profiles, exact unattended flags, backups,
+  point-in-time recovery, deletion protection, connector enforcement, and
+  opt-in creation. Existing maintained `canvas-seb-*` targets remain
+  unchanged.
+- Added guided top-level installers for the Cloud Run and Docker Compose
+  release bundles. Both retain explicit unattended contracts; secrets use
+  protected files or no-echo prompts, Cloud Run exposes resumable stages around
+  Canvas administration handoffs, and Compose can bootstrap, validate, start,
+  and health-check the complete topology.
 
 ## [1.0.0] - 2026-07-25
 

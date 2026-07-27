@@ -18,7 +18,12 @@ ghcr.io/jsb2010/safe-online-exam:X       current stable release for that major
 ghcr.io/jsb2010/safe-online-exam:latest  newest stable GitHub Release
 ```
 
-Each release also publishes a provenance attestation, SBOM, an exact manifest digest, `safe-online-exam-X.Y.Z-compose.tar.gz`, and its SHA-256 checksum. Pre-releases publish only their exact prerelease tag and never move `latest`, `X`, or `X.Y`. The linked GHCR package must remain public.
+Each release produced by the current workflow also publishes a provenance
+attestation, SBOM, an exact manifest digest, checksum-protected
+`safe-online-exam-X.Y.Z-compose.tar.gz` and
+`safe-online-exam-X.Y.Z-cloud-run.tar.gz` bundles. Pre-releases publish only
+their exact prerelease tag and never move `latest`, `X`, or `X.Y`. The linked
+GHCR package must remain public.
 
 Tags are mutable pointers. Production Compose and Cloud Run deployments must use the exact digest shown in the GitHub Release, for example `ghcr.io/jsb2010/safe-online-exam@sha256:...`.
 
@@ -33,6 +38,111 @@ See [Releasing Safe Online Exam](releasing.md) for version preparation, the one-
 - Keep PostgreSQL private. Only the HTTPS application endpoint is public.
 - Use `/health` for process liveness and `/ready` for database and schema readiness.
 - Do not change an existing Cloud Run service name, project, or region unless a Canvas URL change is intentional.
+
+## Portable Cloud Run Release Bundle
+
+The public Cloud Run bundle is the recommended release-image path for an
+institution that does not maintain this source repository. It needs only
+`gcloud`, Docker, `jq`, OpenSSL, and `curl`; `gh` is used for provenance
+verification. It does not run Cloud Build, clone source, or build an image.
+
+Both public bundles include a top-level `setup.sh`. On a terminal it is a
+guided installer; with `--non-interactive` it consumes protected configuration
+and secret files without prompting. The Cloud Run setup exposes resumable
+`prepare`, `install`, and `finalize` stages around the two unavoidable Canvas
+administration handoffs. The Compose setup can configure, bootstrap, validate,
+start, and health-check the complete topology in one invocation. The original
+phase scripts remain deterministic automation interfaces.
+
+The bundle script interfaces are deliberately layered:
+
+| Bundle    | Command                    | Guided use                                                        | Unattended use                                                                   |
+| --------- | -------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Cloud Run | `setup.sh`                 | Complete resumable walkthrough                                    | `--non-interactive --stage ...` plus environment and protected secret files      |
+| Cloud Run | `doctor.sh`                | Read-only explanations                                            | Deterministic read-only preflight                                                |
+| Cloud Run | `prepare.sh`               | SQL catalog, selection, and typed cost confirmation               | `--non-interactive --create-sql --cloud-sql-profile ...`                         |
+| Cloud Run | bootstrap/install/finalize | Called and explained by `setup.sh`                                | Direct phase commands with protected files                                       |
+| Cloud Run | upgrade/rollback           | Documented operational commands with explicit backup/schema gates | Direct deterministic commands                                                    |
+| Compose   | `setup.sh`                 | Complete HTTPS, Canvas, secret, startup, and health walkthrough   | `--non-interactive`, explicit HTTPS mode, environment, and protected secret file |
+| Compose   | bootstrap/backup/upgrade   | Called or explained by `setup.sh` and the bundle README           | Direct deterministic commands                                                    |
+
+Backup and diagnostic commands do not prompt because they have no ambiguous
+setup decisions. Rollback retains its stronger explicit schema-compatibility
+flag rather than replacing it with a casual yes/no prompt.
+
+Verify the archive checksum and image attestation exactly as shown in the
+release notes. After extraction, start the walkthrough:
+
+```bash
+./setup.sh
+```
+
+Alternatively, copy `cloudrun.env.example` to a protected `cloudrun.env`. The
+bundle README supplies the unattended staged contract and explicit
+first-install sequence:
+
+```bash
+./doctor.sh cloudrun.env
+./bootstrap-secrets.sh cloudrun.env
+./prepare.sh cloudrun.env --create-sql
+./install.sh cloudrun.env
+# After Canvas provides the real LTI client and deployment IDs:
+./finalize-lti.sh cloudrun.env
+```
+
+New portable installations use the `safe-online-exam` resource stem and the
+cost-conscious `production-zonal` Cloud SQL profile: PostgreSQL 17 Enterprise,
+one dedicated vCPU, 3.75 GiB, SSD auto-growth, daily backups, seven-day PITR,
+retained/final backups, deletion protection, connector enforcement, and
+encrypted-only connections. This default trades automatic cross-zone failover
+and the HA SLA for lower cost.
+
+`./prepare.sh --list-cloud-sql-profiles` prints every supported option with its
+name, current us-central1 price reference, features, recommendation, and term.
+On a terminal, `--create-sql` opens the chooser and requires the SQL instance
+name as a second confirmation. Unattended installations use
+`--non-interactive --cloud-sql-profile PROFILE`; the protected
+`CLOUD_SQL_PROFILE` environment value remains supported too. The installer
+shows committed-use estimates but does not purchase a non-cancelable billing
+commitment. `existing-reviewed` never creates Cloud SQL. See the bundle README
+for the full catalog, current cost guidance, validation behavior, and resource
+name map.
+
+The scripts handle required APIs, runtime and scheduler identities, Cloud SQL
+Client IAM, database/user creation, stable service URL, public invocation when
+allowed, Secret Manager containers and exact numbered versions, migration and
+cleanup jobs, cleanup scheduling, candidate readiness, and traffic cutover.
+
+The generated SEB client `.p12`, private PEM, and passphrase are isolated from
+server runtime material. Move them to the approved MDM/client vault. Never
+upload them to Secret Manager or copy them into a release archive.
+
+For an existing bundle-managed service, preserve the protected configuration,
+bootstrap and state directories, merge newly documented keys from the next
+template, then run:
+
+```bash
+./upgrade.sh cloudrun.env
+```
+
+The upgrade validates the configured service and jobs, creates and verifies an
+on-demand backup of `SQL_INSTANCE`, executes the new image's migration job,
+updates cleanup, deploys the app with `--no-traffic`, probes the tagged URL,
+and explicitly moves 100% of traffic to the verified revision. Every `gcloud`
+operation includes `--project` and region or location. A failure before
+cutover leaves application traffic on the prior revision.
+
+The generated rollback record can restore application traffic only after an
+operator explicitly confirms schema compatibility:
+
+```bash
+./rollback.sh cloudrun.env .state/rollback-X.Y.Z-TIMESTAMP.env \
+  --confirm-schema-compatible
+```
+
+Traffic rollback does not reverse PostgreSQL migrations. Restore a verified
+backup only into a controlled recovery target; do not automate destructive
+down-migrations.
 
 ## Mode 1: Google Cloud Run With Cloud SQL (Recommended)
 
@@ -422,7 +532,18 @@ gcloud builds submit \
   --substitutions=_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true
 ```
 
-`cloudbuild-school.yaml` is the parameterized template for another installation. With `_SECRET_PREFIX=canvas_seb`, it expects the same suffixes shown above under `canvas_seb_*` secret names:
+`cloudbuild-school.yaml` is the source-based parameterized template for a new
+installation. Its new-install defaults use `safe-online-exam` for the Artifact
+Registry repository, image, Cloud Run service, Cloud SQL instance, and runtime
+service account, plus `safe_online_exam` for the database, user, and Secret
+Manager prefix. With `_SECRET_PREFIX=safe_online_exam`, it expects the same
+suffixes shown above under `safe_online_exam_*` secret names.
+
+These are defaults for new infrastructure only. An existing school deployment
+that already uses legacy `canvas-seb` names must keep passing its exact prior
+substitutions; changing a Cloud Run service name changes the Canvas-facing URL.
+The maintained `cloudbuild-dev.yaml`, `cloudbuild-prod.yaml`, and release
+promotion targets retain their existing provisioned names.
 
 For a self-hosted Canvas platform, override its authorization and JWKS endpoints. The Canvas cloud defaults are intentionally retained in the template, but their authorization endpoint redirects a self-hosted launch to `sso.canvaslms.com` and will fail inside the Canvas iframe. Do not infer `_LTI_ISSUER` from the Canvas hostname: retain its default unless the actual Canvas launch's `iss` field differs.
 
@@ -434,7 +555,7 @@ _LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect
 ```bash
 gcloud builds submit \
   --config=cloudbuild-school.yaml \
-  --substitutions=_LOCATION=us-central1,_REPOSITORY=canvas-seb-repo,_SERVICE=canvas-seb,_IMAGE=canvas-seb,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_LTI_KEY_SET_URL=https://canvas.example.edu/api/lti/security/jwks,_LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect,_SECRET_PREFIX=canvas_seb,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas,_MIN_INSTANCES=0,_MAX_INSTANCES=10
+  --substitutions=_LOCATION=us-central1,_REPOSITORY=safe-online-exam,_SERVICE=safe-online-exam,_IMAGE=safe-online-exam,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=safe-online-exam,_DATABASE_NAME=safe_online_exam,_DATABASE_USER=safe_online_exam,_DATABASE_POOL_MAX=5,_LTI_KEY_SET_URL=https://canvas.example.edu/api/lti/security/jwks,_LTI_AUTH_URL=https://canvas.example.edu/api/lti/authorize_redirect,_SECRET_PREFIX=safe_online_exam,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true,_SERVICE_ACCOUNT=safe-online-exam,_MIN_INSTANCES=0,_MAX_INSTANCES=10
 ```
 
 Inspect every substitution and referenced secret before the first build.
@@ -531,7 +652,7 @@ export RELEASE_DIGEST="sha256:REPLACE_WITH_THE_GITHUB_RELEASE_DIGEST"
 
 gcloud builds submit \
   --config=cloudbuild-release-promote.yaml \
-  --substitutions=_IMAGE_DIGEST="$RELEASE_DIGEST",_LOCATION=us-central1,_SERVICE=canvas-seb-prod,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb-prod,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_SECRET_PREFIX=prod,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas-prod
+  --substitutions=_IMAGE_DIGEST="$RELEASE_DIGEST",_LOCATION=us-central1,_SERVICE=canvas-seb-prod,_APP_ENV=prod,_CLOUD_SQL_INSTANCE=canvas-seb-prod,_DATABASE_NAME=canvas_seb,_DATABASE_USER=canvas_seb,_DATABASE_POOL_MAX=5,_SECRET_PREFIX=prod,_SECRET_VERSION=1,_DATABASE_PASSWORD_SECRET_VERSION=1,_LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,_SEB_CONFIG_ENCRYPTION_ENABLED=true,_SERVICE_ACCOUNT=seb-canvas-prod
 ```
 
 The public package must remain reachable to Cloud Run. The checked-in promotion helper accepts only the fixed public Safe Online Exam GHCR repository or an Artifact Registry repository, and it rejects non-digest references. Preserve the existing source-based `cloudbuild-dev.yaml`, `cloudbuild-prod.yaml`, and `cloudbuild-school.yaml` workflows for development and deployments that intentionally build the checked-out source.
@@ -562,13 +683,17 @@ Use a supported Linux distribution with current security updates, Docker Engine,
 - no public PostgreSQL port; and
 - encrypted disks, automatic security updates, time synchronization, and off-host monitoring.
 
-Download a versioned Compose bundle from the intended GitHub Release and verify Docker. Do not use `latest` for a production installation:
+Download a versioned Compose bundle from the intended GitHub Release, verify
+its adjacent checksum, and verify Docker. Do not use `latest` for a production
+installation:
 
 ```bash
 docker version
 docker compose version
 export VERSION="X.Y.Z"
 curl -fL -O "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
+curl -fL -O "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz.sha256"
+sha256sum --check "safe-online-exam-${VERSION}-compose.tar.gz.sha256"
 tar -xzf "safe-online-exam-${VERSION}-compose.tar.gz"
 cd "safe-online-exam-${VERSION}"
 ```
@@ -776,20 +901,21 @@ Inspect the eight application/runtime tables plus `schema_migrations`, and exerc
 
 ### 8. Upgrade
 
-Download the next release bundle, confirm its exact digest, copy the protected `.env.secrets` and `secrets/` directory into it, update only the selected `APP_IMAGE` and `APP_ASSET_VERSION`, take a backup, and start the full topology. Compose recreates the migration service for the new image and keeps the application behind its successful completion condition:
+Download and checksum the next release bundle, copy the protected
+`.env.secrets` and `secrets/` directory into it, merge any new template keys,
+and update only the selected `APP_IMAGE` and `APP_ASSET_VERSION`. The bundled
+helper creates a custom-format backup, validates it with `pg_restore --list`,
+pulls the pinned images, runs migrations, starts the app, and verifies
+readiness:
 
 ```bash
-docker pull ghcr.io/jsb2010/safe-online-exam@sha256:REPLACE_WITH_NEW_RELEASE_DIGEST
-# Edit APP_IMAGE in .env.secrets to that exact digest.
-
-docker compose \
-  --env-file .env.secrets \
-  -f compose.yaml \
-  -f compose.secrets.yaml \
-  up --detach --wait
+./upgrade.sh .env.secrets
 ```
 
-Confirm `/ready`, inspect `docker compose ps`, and complete the release smoke checks. Migration checksum validation fails if an applied migration was edited; add a new forward migration instead.
+Copy the validated backup to encrypted off-host storage. Confirm `/ready`,
+inspect `docker compose ps`, and complete the release smoke checks. Migration
+checksum validation fails if an applied migration was edited; add a new
+forward migration instead.
 
 ### 9. Rollback And Host Recovery
 

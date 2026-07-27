@@ -4,8 +4,9 @@ The tag-driven GitHub Actions workflow is the release authority. A maintainer
 prepares and merges the version on `main`, then pushes one annotated
 `vX.Y.Z` tag. The workflow performs every remaining action: it waits for the
 exact commit's required CI and CodeQL checks, creates a draft GitHub Release,
-builds and smokes the image, publishes attestations and the Compose bundle,
-promotes the final GHCR tags, and publishes the draft as an immutable release.
+builds and smokes the image, publishes attestations and checksum-protected
+Compose and Cloud Run bundles, promotes the final GHCR tags, and publishes the
+draft as an immutable release.
 
 Do not manually create or publish a GitHub Release. Do not move or reuse a
 published version tag.
@@ -72,6 +73,23 @@ to one manifest digest. Prereleases publish only the exact prerelease tag.
 Production installations must continue to use the digest recorded in the
 release, not a moving tag.
 
+The release notes are generated after the exact image digest is known. They
+include strict `gh attestation verify` arguments for the repository, signer
+workflow, source commit, and tag, plus checksum-verification and bundle
+install/upgrade commands. The release uploads:
+
+- `safe-online-exam-X.Y.Z-compose.tar.gz` and its `.sha256`;
+- `safe-online-exam-X.Y.Z-cloud-run.tar.gz` and its `.sha256`; and
+- the multi-architecture OCI image, SBOM, provenance, and GitHub attestation.
+
+The Compose bundle includes protected-secret bootstrap, verified backup, and
+upgrade helpers. The Cloud Run bundle includes a read-only preflight doctor,
+branded new-resource defaults, explicit production Cloud SQL profiles,
+first-install provisioning, two-pass Canvas LTI bootstrap, exact secret-version
+state, cleanup scheduling, staged upgrades, and guarded traffic rollback.
+Neither bundle contains application source or client private identity
+material.
+
 ## Failure And Recovery
 
 Before publication, the GitHub Release remains a mutable draft and the final
@@ -85,5 +103,7 @@ different commit. Correct the defect on `main` and prepare a new patch version.
 After a release is published, GitHub release immutability locks its Git tag and
 assets.
 
-Cloud Run promotion is intentionally separate. Use the immutable release digest
-with `cloudbuild-release-promote.yaml` only after the public release succeeds.
+Cloud Run promotion is intentionally separate. Operators may use the
+downloaded Cloud Run bundle with plain `gcloud`, or maintainers may use the
+immutable release digest with `cloudbuild-release-promote.yaml`, only after the
+public release succeeds.

@@ -69,16 +69,23 @@ describe("deployment hardening artifacts", () => {
 
     expect(bundle).toContain("safe-online-exam-${version}");
     expect(bundle).toContain("compose.caddy.yaml");
+    expect(bundle).toContain("setup-compose.sh");
+    expect(bundle).toContain("setup-common.sh");
     expect(bundle).toContain("bootstrap-secrets.sh");
+    expect(bundle).toContain("backup.sh");
+    expect(bundle).toContain("upgrade.sh");
     expect(bundle).toContain("IMAGE_DIGEST");
     expect(bootstrap).toContain("safe-online-exam@sha256");
     expect(bootstrap).toContain("generate-lti-private-key.mjs");
     expect(bootstrap).toContain("seb-client-identity");
     expect(bootstrap).not.toContain("CANVAS_API_CLIENT_SECRET=");
     expect(bundleReadme).toContain("does not contain application source code");
+    expect(bundleReadme).toContain("./setup.sh");
+    expect(bundleReadme).toContain("--non-interactive");
     expect(dockerfile).toContain("scripts/generate-lti-private-key.mjs");
     expect(source("scripts/compose-smoke.sh")).toContain("compose.caddy.yaml --profile caddy config --quiet");
     expect(source("scripts/compose-smoke.sh")).toContain('docker run --rm --entrypoint /nodejs/bin/node "$image"');
+    expect(source("scripts/compose-smoke.sh")).toContain("scripts/upgrade-compose.sh");
     expect(source("scripts/compose-smoke.sh")).not.toContain("node scripts/generate-lti-private-key.mjs compose-smoke");
   });
 
@@ -212,9 +219,14 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).not.toContain("scope: ${{ env.IMAGE_NAME }}@push");
     expect(workflow).toContain("cache-to: type=registry");
     expect(workflow).toContain("create-release-bundle.sh");
+    expect(workflow).toContain("create-cloud-run-bundle.sh");
+    expect(workflow).toContain("render-release-deployment-notes.sh");
     expect(workflow).toContain("gh release upload");
     expect(workflow).toContain("docker buildx imagetools create");
     expect(workflow).toContain("gh attestation verify");
+    expect(workflow).toContain("--signer-workflow");
+    expect(workflow).toContain("--source-digest");
+    expect(workflow).toContain("--source-ref");
     expect(workflow).toContain("--draft=false");
     expect(workflow).toContain(".isImmutable");
     expect(imageVerifier).toContain("linux/amd64");

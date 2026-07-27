@@ -51,9 +51,15 @@ Canvas LTI 1.3 ──────> NestJS service ──────> PostgreSQL
 
 ## Deployment Options
 
-Published stable releases are available as multi-architecture OCI images at `ghcr.io/jsb2010/safe-online-exam`. Pushing a `vX.Y.Z` tag from a commit on `main` starts the release authority workflow, which creates a draft, verifies the exact source and image, attaches the digest-pinned Compose bundle, promotes `X.Y.Z`, `X.Y`, `X`, and `latest`, and then publishes the draft as an immutable GitHub Release. Use the exact release digest in production; moving tags are for discovery only.
+Published stable releases are available as multi-architecture OCI images at `ghcr.io/jsb2010/safe-online-exam`. Pushing a `vX.Y.Z` tag from a commit on `main` starts the release authority workflow, which creates a draft, verifies the exact source and image, attaches checksum-protected Compose and Cloud Run bundles, promotes `X.Y.Z`, `X.Y`, `X`, and `latest`, and then publishes the draft as an immutable GitHub Release. Use the exact release digest in production; moving tags are for discovery only.
 
-Google Cloud Run with Cloud SQL is the recommended managed deployment. Existing source-based Cloud Build workflows remain useful for development and maintained environments. A separately reviewed GitHub Release can instead be promoted by digest through `cloudbuild-release-promote.yaml`, which runs its migration job before updating the cleanup job and service.
+Google Cloud Run with Cloud SQL is the recommended managed deployment. The
+portable release bundle supports a first install and a backup/migration/staged
+traffic upgrade using plain `gcloud`, Docker, `jq`, OpenSSL, and `curl`, without
+cloning application source. Existing source-based Cloud Build workflows remain
+useful for development and maintained environments. A separately reviewed
+GitHub Release can also be promoted by digest through
+`cloudbuild-release-promote.yaml`.
 
 ```bash
 gcloud builds submit --config=cloudbuild-dev.yaml
@@ -64,6 +70,22 @@ First-time Google Cloud provisioning requires Cloud SQL, runtime/build IAM, Secr
 
 The same container is portable to a conventional VPS or any platform that provides PostgreSQL 17+, HTTPS ingress, secret injection, a migration job, and scheduled cleanup.
 
+Releases containing the portable Cloud Run bundle can be installed without a
+repository checkout:
+
+```bash
+export CLOUDRUN_VERSION="X.Y.Z"
+curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
+curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
+sha256sum --check "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
+tar -xzf "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
+```
+
+The bundle README covers its read-only deployment doctor, consistently branded
+new-resource names, guided and unattended setup, explicit cost-gated Cloud SQL
+profiles, Canvas bootstrap, exact Secret Manager version pins, cleanup
+scheduling, traffic-safe upgrades, and guarded application rollback.
+
 ## Quick Start With Docker Compose
 
 Download a specific GitHub Release asset, rather than cloning this repository or building application source on the target host:
@@ -73,19 +95,22 @@ export VERSION=1.0.0
 curl -fL -O "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
 tar -xzf "safe-online-exam-${VERSION}-compose.tar.gz"
 cd "safe-online-exam-${VERSION}"
-cp .env.compose.secrets.example .env.secrets
-chmod 600 .env.secrets
+./setup.sh
 ```
 
-Set the non-secret Canvas/LTI values in `.env.secrets`, then generate protected runtime secrets and the client-only SEB identity. Provide the Canvas API secret after creating its Developer Key; never place the generated `.p12`, private PEM, or its password in the server runtime.
+The guided setup collects the non-secret Canvas/LTI values, generates
+protected runtime secrets and the client-only SEB identity, accepts the Canvas
+API secret without echo, validates the topology, and waits for readiness.
+Never place the generated `.p12`, private PEM, or its password in the server
+runtime.
 
 ```bash
-APP_IMAGE="$(sed -n 's/^APP_IMAGE=//p' .env.compose.secrets.example)" \
-  ./bootstrap-secrets.sh
-# Write the Canvas API secret to secrets/canvas_api_client_secret.
-docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml up -d --wait
-curl -fsS http://127.0.0.1:8080/health
-curl -fsS http://127.0.0.1:8080/ready
+./setup.sh \
+  --non-interactive \
+  --bootstrap \
+  --no-caddy \
+  --env-file .env.secrets \
+  --canvas-api-client-secret-file /secure/input/canvas-api-secret
 ```
 
 Compose runs schema migrations before the app and stores PostgreSQL data in the `postgres_data` volume. It binds only to loopback by default. Put a TLS reverse proxy in front before exposing the service to Canvas; production `TOOL_URL` must be HTTPS.
@@ -98,7 +123,8 @@ docker compose --env-file .env.secrets \
   --profile caddy up -d --wait
 ```
 
-See [Deployment](docs/deployment.md) for the release workflow, upgrades, backups, Cloud Run promotion, and Canvas bootstrap sequence.
+See [Deployment](docs/deployment.md) for the release workflow, guided and
+unattended setup, upgrades, backups, Cloud Run promotion, and Canvas bootstrap.
 
 ## Continuous Integration
 
