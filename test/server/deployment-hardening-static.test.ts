@@ -204,7 +204,7 @@ describe("deployment hardening artifacts", () => {
       workflow.indexOf("node scripts/verify-release.mjs")
     );
     expect(workflow).toContain("ref: ${{ needs.verify-release.outputs.verified_sha }}");
-    expect(workflow).toContain('jq -e ".enabled == true"');
+    expect(workflow).not.toContain("repos/$GITHUB_REPOSITORY/immutable-releases");
     expect(workflow).toContain("VERIFIED_SHA: ${{ steps.source.outputs.verified_sha }}");
     expect(workflow).toContain('wait-for-required-checks.sh "$VERIFIED_SHA"');
     expect(workflow).not.toContain('wait-for-required-checks.sh "${{ steps.source.outputs.verified_sha }}"');
