@@ -73,6 +73,9 @@ compatibility endpoints.
 - Add idempotent draft recovery, final-tag and image-label verification,
   persistent BuildKit caching, immutable action SHA pins, and the
   `npm run release:check` metadata-consistency gate.
+- Verify immutability from the final published release record instead of
+  requiring the read-only workflow token to call GitHub's administration-only
+  repository-settings endpoint.
 - Add a reproducible protected-`main` ruleset with pull requests, signed final
   commits, required application/PostgreSQL/Compose/CodeQL checks, dependency
   review, and narrowly scoped automatic merging for eligible Dependabot npm
