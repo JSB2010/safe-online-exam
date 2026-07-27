@@ -369,10 +369,8 @@ export class SebConfigurationService implements OnModuleInit {
       requireSebPasswordForConfiguration(startPassword, "start");
     }
     const keyMaterial = this.currentEncryptionKeyMaterialForDownload();
+    this.assertAssessmentCertificateConfigured(keyMaterial, options.requireCertificateEncryption);
     if (!keyMaterial) {
-      if (options.requireCertificateEncryption) {
-        throw new Error("Certificate encryption is required for assessment configuration downloads");
-      }
       if (startPassword) {
         return preparePasswordProtectedSebConfig(plainConfig, startPassword);
       }
@@ -387,9 +385,7 @@ export class SebConfigurationService implements OnModuleInit {
     options: Pick<SebConfigurationDownloadOptions, "requireCertificateEncryption"> = {}
   ): void {
     const keyMaterial = this.currentEncryptionKeyMaterialForDownload();
-    if (!keyMaterial && options.requireCertificateEncryption) {
-      throw new Error("Certificate encryption is required for assessment configuration downloads");
-    }
+    this.assertAssessmentCertificateConfigured(keyMaterial, options.requireCertificateEncryption);
   }
 
   getEncryptionCertificate(): { pem: string; der: Buffer; publicKeyHash: Buffer } | null {
@@ -420,6 +416,15 @@ export class SebConfigurationService implements OnModuleInit {
     const keyMaterial = this.getEncryptionKeyMaterial();
     assertSebEncryptionCertificateCurrent(keyMaterial);
     return keyMaterial;
+  }
+
+  private assertAssessmentCertificateConfigured(
+    keyMaterial: SebEncryptionKeyMaterial | null,
+    requireCertificateEncryption = false
+  ): void {
+    if (requireCertificateEncryption && (!keyMaterial?.certificatePem || !keyMaterial.certificateDer)) {
+      throw new Error("A valid X.509 certificate is required for assessment configuration downloads");
+    }
   }
 
   private assessmentQuitToken(courseId: string, contentId: string, accessCode: string): string {

@@ -187,20 +187,51 @@ describe("SEB config certificate encryption", () => {
         service.prepareSebConfigurationDownload(plainConfig, {
           requireCertificateEncryption: true
         })
-      ).toThrow("Certificate encryption is required for assessment configuration downloads");
+      ).toThrow("A valid X.509 certificate is required for assessment configuration downloads");
       expect(() =>
         service.prepareSebConfigurationDownload(plainConfig, {
           startPassword: "unique-start-passphrase",
           requireCertificateEncryption: true
         })
-      ).toThrow("Certificate encryption is required for assessment configuration downloads");
+      ).toThrow("A valid X.509 certificate is required for assessment configuration downloads");
       expect(() =>
         service.assertConfigurationDownloadReady({
           requireCertificateEncryption: true
         })
-      ).toThrow("Certificate encryption is required for assessment configuration downloads");
+      ).toThrow("A valid X.509 certificate is required for assessment configuration downloads");
     } finally {
       restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previous);
+    }
+  });
+
+  it("rejects public-key-only material for assessment downloads", () => {
+    const previousEnabled = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
+    const previousCertPem = process.env.SEB_CONFIG_ENCRYPTION_CERT_PEM;
+    const previousPublicKeyPem = process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    process.env.SEB_CONFIG_ENCRYPTION_ENABLED = "true";
+    delete process.env.SEB_CONFIG_ENCRYPTION_CERT_PEM;
+    process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM = publicKey.export({
+      type: "pkcs1",
+      format: "pem"
+    }) as string;
+    try {
+      const service = new SebConfigurationService(new AppConfig());
+
+      expect(() =>
+        service.prepareSebConfigurationDownload(Buffer.from("<plist />"), {
+          requireCertificateEncryption: true
+        })
+      ).toThrow("A valid X.509 certificate is required for assessment configuration downloads");
+      expect(() =>
+        service.assertConfigurationDownloadReady({
+          requireCertificateEncryption: true
+        })
+      ).toThrow("A valid X.509 certificate is required for assessment configuration downloads");
+    } finally {
+      restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previousEnabled);
+      restoreEnv("SEB_CONFIG_ENCRYPTION_CERT_PEM", previousCertPem);
+      restoreEnv("SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM", previousPublicKeyPem);
     }
   });
 

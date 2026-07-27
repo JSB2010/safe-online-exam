@@ -239,6 +239,23 @@ export class SebController {
       response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
       return;
     }
+    if (!(await this.configGrants.validateGrant(grant, courseId, canonicalContentId))) {
+      response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
+      return;
+    }
+    try {
+      // Fail before consuming the one-time grant or creating a Canvas session
+      // handoff when this instance cannot produce a secure assessment config.
+      this.sebConfig.assertConfigurationDownloadReady({ requireCertificateEncryption: true });
+    } catch {
+      response
+        .status(400)
+        .setHeader("cache-control", "no-store")
+        .send(
+          "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
+        );
+      return;
+    }
     const consumedGrant = await this.configGrants.consumeGrant(grant, courseId, canonicalContentId);
     if (!consumedGrant) {
       response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");

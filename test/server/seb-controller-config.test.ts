@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { generateKeyPairSync } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import * as plist from "plist";
 import { AppConfig } from "../../src/server/config/app-config.js";
@@ -11,10 +10,26 @@ import { SebConfigurationService } from "../../src/server/services/seb-configura
 
 const CANVAS_URL = "https://canvas.example.edu";
 const TOOL_URL = "https://tool.example.edu";
-const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({
-  type: "pkcs1",
-  format: "pem"
-}) as string;
+const TEST_ENCRYPTION_CERTIFICATE = `-----BEGIN CERTIFICATE-----
+MIIDRjCCAi6gAwIBAgIUIUWwbEq9TDxEtWcFeR+mMRSuDq0wDQYJKoZIhvcNAQEL
+BQAwLDEqMCgGA1UEAwwhU0VCIHRlc3QgY29uZmlndXJhdGlvbiBlbmNyeXB0aW9u
+MB4XDTI2MDcyNzAzMjUwN1oXDTM2MDcyNDAzMjUwN1owLDEqMCgGA1UEAwwhU0VC
+IHRlc3QgY29uZmlndXJhdGlvbiBlbmNyeXB0aW9uMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAuo7W3XcmENLgz+SpnGRi8NDja783h6L1ZYp4bym9dmt7
+iMdN718qd4Qe0rO8WvOzc6AUPmWYFS/8e5K4rwE0NYnLMG07zg0Pc5T7nWxfLer3
+S74gDt3nf/9p/j7nR5FFr0aDsHL91bkGOiBT2icPZN1v9+SbusUurxH9kHMai5XD
+0QqU/nNkkT5cE0Wbz2Brsbmzi9JQM/8tkuvE79JVMhETWjN55Oa0+3ece5cZ/eLz
+Jqhhk1ywSzS2NhMX1OXTKWOEVr9yfJ4SDRNzObiPtHHdi2xv9EwH8/U8Dxfy334A
+yDDVl5Ptx7g3U5SLWgDp/W8O5JRzL3N5SyHSWzDiWQIDAQABo2AwXjAdBgNVHQ4E
+FgQUZw4B/+t+fA2M3Jzsh5tTNUIBB6UwHwYDVR0jBBgwFoAUZw4B/+t+fA2M3Jzs
+h5tTNUIBB6UwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBDAwDQYJKoZIhvcN
+AQELBQADggEBAIhipSzud5d5fh8kIFkTbHwhvih7wZ5gwAZ25rRM6RvgMgGd869v
+6a1szIbVJgUxXRe1gyFe8MkeFfcHbQ3a6E+l++16C0Ad9D26lBdZLcOkXA+zk8nu
+qnke31fM6zaBczcso6J57zCSz0DCalIxwLGFnywCjMiQf4lS2pJTb+YSIpangXqR
+Ja6uOox6WtbXNA2r7gpB9CAENrYHcvQ7S7v+AhLLaI/9ajN9ZnLlW4Z2EWwzj0qr
+S1XV/NoHeWAK6aarealzlC8d3PYZtZ3hjzXRLyLAJR+/VFFu1sOXZJn+pw0FUfi9
+0WacwhkuN3POozK2QUahO7OdKFb3W+h9SyA=
+-----END CERTIFICATE-----`;
 
 describe("SEB config downloads", () => {
   it("accepts the Windows HEAD probe without consuming the configuration grant", async () => {
@@ -80,6 +95,46 @@ describe("SEB config downloads", () => {
       },
       { encryptionEnabled: false }
     );
+  });
+
+  it("rejects GET before consuming its grant when assessment encryption is unavailable", async () => {
+    const configGrants = {
+      validateGrant: vi.fn().mockResolvedValue(true),
+      consumeGrant: vi.fn()
+    };
+    const sebConfig = {
+      assertConfigurationDownloadReady: vi.fn(() => {
+        throw new Error("assessment certificate unavailable");
+      })
+    };
+    const controller = new SebController(
+      new AppConfig(),
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      sebConfig as any,
+      {} as any,
+      proofService(),
+      configGrants as any,
+      admissionDouble()
+    );
+    const response = responseDouble();
+
+    await controller.downloadConfig(
+      { ...authenticatedRequest(), method: "GET" } as any,
+      response as any,
+      "11825",
+      "classicquiz_23455",
+      "a".repeat(43)
+    );
+
+    expect(sebConfig.assertConfigurationDownloadReady).toHaveBeenCalledWith({
+      requireCertificateEncryption: true
+    });
+    expect(configGrants.validateGrant).toHaveBeenCalledWith("a".repeat(43), "11825", "classicquiz_23455");
+    expect(configGrants.consumeGrant).not.toHaveBeenCalled();
+    expect(response.status).toHaveBeenCalledWith(400);
   });
 
   it("uses a fresh Canvas session URL only while creating a connected student's SEB config", async () => {
@@ -480,9 +535,10 @@ describe("SEB config downloads", () => {
         expect(first.sent).toBeInstanceOf(Buffer);
         expect(second.sent).toBeInstanceOf(Buffer);
         expect(prepareDownload).toHaveBeenCalledTimes(1);
-        expect(readinessCheck).toHaveBeenCalledTimes(2);
-        expect(readinessCheck).toHaveBeenNthCalledWith(1, { requireCertificateEncryption: true });
-        expect(readinessCheck).toHaveBeenNthCalledWith(2, { requireCertificateEncryption: true });
+        expect(readinessCheck).toHaveBeenCalledTimes(4);
+        for (let call = 1; call <= 4; call += 1) {
+          expect(readinessCheck).toHaveBeenNthCalledWith(call, { requireCertificateEncryption: true });
+        }
       },
       { encryptionEnabled: true }
     );
@@ -498,6 +554,8 @@ describe("SEB config downloads", () => {
         const readinessCheck = vi
           .spyOn(sebConfig, "assertConfigurationDownloadReady")
           .mockImplementationOnce(() => undefined)
+          .mockImplementationOnce(() => undefined)
+          .mockImplementationOnce(() => undefined)
           .mockImplementationOnce(() => {
             throw new Error("SEB config encryption certificate has expired");
           });
@@ -512,9 +570,10 @@ describe("SEB config downloads", () => {
           "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
         );
         expect(prepareDownload).toHaveBeenCalledTimes(1);
-        expect(readinessCheck).toHaveBeenCalledTimes(2);
-        expect(readinessCheck).toHaveBeenNthCalledWith(1, { requireCertificateEncryption: true });
-        expect(readinessCheck).toHaveBeenNthCalledWith(2, { requireCertificateEncryption: true });
+        expect(readinessCheck).toHaveBeenCalledTimes(4);
+        for (let call = 1; call <= 4; call += 1) {
+          expect(readinessCheck).toHaveBeenNthCalledWith(call, { requireCertificateEncryption: true });
+        }
       },
       { encryptionEnabled: true }
     );
@@ -623,6 +682,7 @@ function configGrantDouble() {
     mintGrant: vi.fn(async (_request, _principal, _courseId, _contentId, settingsFingerprint) =>
       String(settingsFingerprint)
     ),
+    validateGrant: vi.fn(async (token) => Boolean(token)),
     consumeGrant: vi.fn(async (token, courseId, contentId) =>
       token
         ? {
@@ -808,6 +868,7 @@ async function withConfig(run: () => Promise<void>, options: { encryptionEnabled
   const previousCanvasBaseUrl = process.env.CANVAS_BASE_URL;
   const previousToolUrl = process.env.TOOL_URL;
   const previousEncryptionEnabled = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
+  const previousCertificatePem = process.env.SEB_CONFIG_ENCRYPTION_CERT_PEM;
   const previousPublicKeyPem = process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
   const previousQuitPassword = process.env.SEB_QUIT_PASSWORD;
   process.env.CANVAS_BASE_URL = CANVAS_URL;
@@ -815,8 +876,10 @@ async function withConfig(run: () => Promise<void>, options: { encryptionEnabled
   process.env.SEB_CONFIG_ENCRYPTION_ENABLED = options.encryptionEnabled ? "true" : "false";
   process.env.SEB_QUIT_PASSWORD = "managed-server-exit";
   if (options.encryptionEnabled) {
-    process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM = TEST_PUBLIC_KEY_PEM;
+    process.env.SEB_CONFIG_ENCRYPTION_CERT_PEM = TEST_ENCRYPTION_CERTIFICATE;
+    delete process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
   } else {
+    delete process.env.SEB_CONFIG_ENCRYPTION_CERT_PEM;
     delete process.env.SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM;
   }
   try {
@@ -825,6 +888,7 @@ async function withConfig(run: () => Promise<void>, options: { encryptionEnabled
     restoreEnv("CANVAS_BASE_URL", previousCanvasBaseUrl);
     restoreEnv("TOOL_URL", previousToolUrl);
     restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previousEncryptionEnabled);
+    restoreEnv("SEB_CONFIG_ENCRYPTION_CERT_PEM", previousCertificatePem);
     restoreEnv("SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM", previousPublicKeyPem);
     restoreEnv("SEB_QUIT_PASSWORD", previousQuitPassword);
   }
