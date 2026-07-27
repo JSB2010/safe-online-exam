@@ -118,6 +118,10 @@ describe("SEB config downloads", () => {
         expect.stringMatching(/^[a-f0-9]{64}$/u),
         `${CANVAS_URL}/courses/11825/quizzes/23455/take`
       );
+      expect(sebConfig.prepareSebConfigurationDownload).toHaveBeenCalledWith(expect.any(Buffer), {
+        startPassword: undefined,
+        requireCertificateEncryption: true
+      });
     });
   });
 
@@ -170,7 +174,8 @@ describe("SEB config downloads", () => {
         expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
         expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/quizzes/23455/take`);
         expect(prepareDownload).toHaveBeenCalledWith(generated, {
-          startPassword: undefined
+          startPassword: undefined,
+          requireCertificateEncryption: true
         });
       },
       { encryptionEnabled: true }
@@ -235,7 +240,8 @@ describe("SEB config downloads", () => {
         expect(parsed.startURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
         expect(parsed.restartExamURL).toBe(`${CANVAS_URL}/courses/11825/assignments/991`);
         expect(prepareDownload).toHaveBeenCalledWith(generated, {
-          startPassword: undefined
+          startPassword: undefined,
+          requireCertificateEncryption: true
         });
       },
       { encryptionEnabled: true }
@@ -349,7 +355,8 @@ describe("SEB config downloads", () => {
         expect(wrapped.subarray(0, 4).toString("utf8")).toBe("pkhs");
         expect(downloaded.toString("utf8")).not.toContain("unique-start-passphrase");
         expect(prepareDownload).toHaveBeenCalledWith(expect.any(Buffer), {
-          startPassword: "unique-start-passphrase"
+          startPassword: "unique-start-passphrase",
+          requireCertificateEncryption: true
         });
         expect(saveConfigKey).not.toHaveBeenCalled();
       },
@@ -357,15 +364,16 @@ describe("SEB config downloads", () => {
     );
   });
 
-  it("delivers plaintext assessment configs when instance certificate encryption is disabled", async () => {
+  it("fails closed when assessment certificate encryption is disabled", async () => {
     await withConfig(
       async () => {
         const controller = classicController(new SebConfigurationService(new AppConfig()));
         const response = await downloadConfigResponse(controller, `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
 
-        expect(response.status).toHaveBeenCalledWith(200);
-        expect(response.sent).toBeInstanceOf(Buffer);
-        expect((response.sent as Buffer).toString("utf8")).toContain("<plist");
+        expect(response.status).toHaveBeenCalledWith(400);
+        expect(response.sent).toBe(
+          "Unable to generate this Safe Online Exam configuration. Ask the instructor to verify the quiz settings."
+        );
       },
       { encryptionEnabled: false }
     );
@@ -435,6 +443,8 @@ describe("SEB config downloads", () => {
         expect(second.sent).toBeInstanceOf(Buffer);
         expect(prepareDownload).toHaveBeenCalledTimes(1);
         expect(readinessCheck).toHaveBeenCalledTimes(2);
+        expect(readinessCheck).toHaveBeenNthCalledWith(1, { requireCertificateEncryption: true });
+        expect(readinessCheck).toHaveBeenNthCalledWith(2, { requireCertificateEncryption: true });
       },
       { encryptionEnabled: true }
     );
@@ -465,6 +475,8 @@ describe("SEB config downloads", () => {
         );
         expect(prepareDownload).toHaveBeenCalledTimes(1);
         expect(readinessCheck).toHaveBeenCalledTimes(2);
+        expect(readinessCheck).toHaveBeenNthCalledWith(1, { requireCertificateEncryption: true });
+        expect(readinessCheck).toHaveBeenNthCalledWith(2, { requireCertificateEncryption: true });
       },
       { encryptionEnabled: true }
     );

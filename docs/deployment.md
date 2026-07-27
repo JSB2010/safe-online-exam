@@ -414,7 +414,7 @@ gcloud run jobs executions list \
 
 ### Production And Parameterized Deployments
 
-`cloudbuild-prod.yaml` preserves `canvas-seb-prod`, uses `APP_ENV=prod`, disables detector diagnostics, keeps one minimum instance, and allows up to ten instances. It expects `prod_canvas_domain`, `prod_lti_client_id`, `prod_lti_deployment_id`, `prod_tool_url`, `prod_lti_private_key`, `prod_session_secret`, `prod_state_encryption_key`, `prod_api_client_id`, `prod_api_client_secret`, `prod_seb_config_encryption_cert_pem`, and `prod_database_password`. Its non-database secrets share `_SECRET_VERSION`; create the same numbered version for every non-database secret before changing that substitution. The database-password version is independently pinned. `_SEB_CONFIG_ENCRYPTION_ENABLED` defaults to `true`; set it to `false` only for an instance that cannot distribute client private identities.
+`cloudbuild-prod.yaml` preserves `canvas-seb-prod`, uses `APP_ENV=prod`, disables detector diagnostics, keeps one minimum instance, and allows up to ten instances. It expects `prod_canvas_domain`, `prod_lti_client_id`, `prod_lti_deployment_id`, `prod_tool_url`, `prod_lti_private_key`, `prod_session_secret`, `prod_state_encryption_key`, `prod_api_client_id`, `prod_api_client_secret`, `prod_seb_config_encryption_cert_pem`, and `prod_database_password`. Its non-database secrets share `_SECRET_VERSION`; create the same numbered version for every non-database secret before changing that substitution. The database-password version is independently pinned. `_SEB_CONFIG_ENCRYPTION_ENABLED` defaults to `true` and must remain enabled for any instance serving assessment configurations; disabled-mode assessment downloads fail closed.
 
 ```bash
 gcloud builds submit \
@@ -811,7 +811,7 @@ The checked-in Cloud Run configs use a pool maximum of 5. Production's ten app i
 
 For a bad release, stop promotion, preserve logs and database state, then decide whether the failure is application-only or schema/data-affecting. Route traffic to a previous revision or image only when its schema contract is compatible. Otherwise ship a reviewed forward correction or restore into a controlled target.
 
-For a secret or certificate incident, pause affected assessments, rotate only the affected material, deploy pinned new versions, distribute any replacement managed-client identity, invalidate affected settings through the normal workflow, and require fresh `.seb` downloads. Do not enable production debug mode, widen URL filters, or place client private identities in the server runtime. If certificate encryption is intentionally disabled for an unmanaged-device instance, document that exception and require start passwords where configuration confidentiality is needed.
+For a secret or certificate incident, pause affected assessments, rotate only the affected material, deploy pinned new versions, distribute any replacement managed-client identity, invalidate affected settings through the normal workflow, and require fresh `.seb` downloads. Do not enable production debug mode, widen URL filters, place client private identities in the server runtime, or disable certificate encryption as a recovery shortcut. Assessment downloads fail closed without certificate encryption because plaintext settings cannot support trustworthy Config Key proof.
 
 ## Official Google Cloud References
 

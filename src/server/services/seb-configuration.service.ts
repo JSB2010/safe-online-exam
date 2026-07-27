@@ -34,6 +34,11 @@ export interface SebSetupCheckConfigurationInput {
   quitUrl: string;
 }
 
+export interface SebConfigurationDownloadOptions {
+  startPassword?: string | null;
+  requireCertificateEncryption?: boolean;
+}
+
 interface UrlFilterRule {
   active: boolean;
   regex: boolean;
@@ -358,13 +363,16 @@ export class SebConfigurationService implements OnModuleInit {
     return Buffer.from(plist.build(plistValue as any), "utf8");
   }
 
-  prepareSebConfigurationDownload(plainConfig: Buffer, options: { startPassword?: string | null } = {}): Buffer {
+  prepareSebConfigurationDownload(plainConfig: Buffer, options: SebConfigurationDownloadOptions = {}): Buffer {
     const startPassword = normalizeSebPassword(options.startPassword);
     if (startPassword) {
       requireSebPasswordForConfiguration(startPassword, "start");
     }
     const keyMaterial = this.currentEncryptionKeyMaterialForDownload();
     if (!keyMaterial) {
+      if (options.requireCertificateEncryption) {
+        throw new Error("Certificate encryption is required for assessment configuration downloads");
+      }
       if (startPassword) {
         return preparePasswordProtectedSebConfig(plainConfig, startPassword);
       }
@@ -375,8 +383,13 @@ export class SebConfigurationService implements OnModuleInit {
     });
   }
 
-  assertConfigurationDownloadReady(): void {
-    this.currentEncryptionKeyMaterialForDownload();
+  assertConfigurationDownloadReady(
+    options: Pick<SebConfigurationDownloadOptions, "requireCertificateEncryption"> = {}
+  ): void {
+    const keyMaterial = this.currentEncryptionKeyMaterialForDownload();
+    if (!keyMaterial && options.requireCertificateEncryption) {
+      throw new Error("Certificate encryption is required for assessment configuration downloads");
+    }
   }
 
   getEncryptionCertificate(): { pem: string; der: Buffer; publicKeyHash: Buffer } | null {

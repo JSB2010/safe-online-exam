@@ -55,7 +55,7 @@ export function loadSebEncryptionKeyMaterial(settings: SebConfigEncryptionSettin
 
   if (!loaded) {
     throw new Error(
-      "SEB config certificate encryption is enabled, but no public certificate or key is configured. Set SEB_CONFIG_ENCRYPTION_CERT_PEM or SEB_CONFIG_ENCRYPTION_CERT_PATH, or set SEB_CONFIG_ENCRYPTION_ENABLED=false."
+      "SEB config certificate encryption is enabled, but no public certificate or key is configured. Set SEB_CONFIG_ENCRYPTION_CERT_PEM or SEB_CONFIG_ENCRYPTION_CERT_PATH. Assessment downloads cannot proceed without certificate encryption."
     );
   }
 

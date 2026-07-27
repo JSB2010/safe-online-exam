@@ -2,7 +2,7 @@
 
 By default, deployments encrypt generated `.seb` files to a configured public X.509 certificate. The service receives only the public certificate; the matching private identity is installed only on approved client devices. This protects the configuration file separately from Config Key proof, which protects access-code release after SEB starts.
 
-An instance may explicitly set `SEB_CONFIG_ENCRYPTION_ENABLED=false` when it cannot distribute a private identity to student devices. This is a compatibility decision, not an equivalent security posture: the downloaded configuration is no longer restricted to devices holding that identity. A teacher-set start password still adds SEB password wrapping, and Config Key proof remains enabled.
+Assessment configurations always require certificate encryption. The Config Key is deterministic from the plaintext settings, so plaintext or password-only assessment output cannot securely prove that a later request came from SEB rather than a normal browser. A teacher-set start password remains an inner protection layer, not a replacement for the client certificate boundary.
 
 ## Trust Model
 
@@ -13,7 +13,7 @@ An instance may explicitly set `SEB_CONFIG_ENCRYPTION_ENABLED=false` when it can
 | Device-management system / restricted vault | Private identity and its protection material                     | Broad user, instructor, or runtime access.                              |
 | Approved SEB client                         | Non-extractable, SEB-restricted private identity where supported | An exportable identity available to a student account or unrelated app. |
 
-Encryption prevents an unapproved device from opening the configuration. Config Key proof prevents an access code from being released when the running configuration does not match current server settings. Use both controls whenever the instance needs device-restricted configurations.
+Encryption prevents an unapproved device from opening the configuration. Config Key proof prevents an access code from being released when the running configuration does not match current server settings. Both controls are required for assessment downloads because disclosing the plaintext configuration also discloses the material needed to reproduce Config Key proof.
 
 ## Generate An Identity
 
@@ -51,7 +51,7 @@ When `SEB_CONFIG_ENCRYPTION_ENABLED` is unset or `true`, the service validates t
 - A valid public X.509 certificate is required.
 - A public-key-only fallback is not sufficient.
 
-Set `SEB_CONFIG_ENCRYPTION_ENABLED=false` only for an instance that cannot deploy the client private identity. The service does not load or use certificate material in that mode, and the certificate download endpoints return `404`. Assessment configurations are plaintext unless the instructor has set a start password, in which case SEB's password (`pswd`) wrapping remains active.
+When `SEB_CONFIG_ENCRYPTION_ENABLED=false`, the service does not load certificate material and the certificate download endpoints return `404`. Non-assessment output may still use plaintext or SEB password (`pswd`) wrapping, but assessment configuration downloads fail closed. An institution that cannot deploy the matching client private identity cannot use the access-code-protected assessment flow securely and must resolve client certificate distribution before enabling assessments.
 
 The configured public certificate is available for verification at:
 

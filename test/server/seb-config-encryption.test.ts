@@ -176,6 +176,34 @@ describe("SEB config certificate encryption", () => {
     }
   });
 
+  it("fails closed for assessment downloads when certificate encryption is disabled", () => {
+    const previous = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
+    process.env.SEB_CONFIG_ENCRYPTION_ENABLED = "false";
+    try {
+      const service = new SebConfigurationService(new AppConfig());
+      const plainConfig = Buffer.from("<plist><dict /></plist>");
+
+      expect(() =>
+        service.prepareSebConfigurationDownload(plainConfig, {
+          requireCertificateEncryption: true
+        })
+      ).toThrow("Certificate encryption is required for assessment configuration downloads");
+      expect(() =>
+        service.prepareSebConfigurationDownload(plainConfig, {
+          startPassword: "unique-start-passphrase",
+          requireCertificateEncryption: true
+        })
+      ).toThrow("Certificate encryption is required for assessment configuration downloads");
+      expect(() =>
+        service.assertConfigurationDownloadReady({
+          requireCertificateEncryption: true
+        })
+      ).toThrow("Certificate encryption is required for assessment configuration downloads");
+    } finally {
+      restoreEnv("SEB_CONFIG_ENCRYPTION_ENABLED", previous);
+    }
+  });
+
   it("fails closed when certificate encryption is enabled without key material", () => {
     const previousEnabled = process.env.SEB_CONFIG_ENCRYPTION_ENABLED;
     const previousCertPem = process.env.SEB_CONFIG_ENCRYPTION_CERT_PEM;

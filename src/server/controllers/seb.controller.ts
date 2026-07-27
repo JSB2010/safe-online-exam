@@ -259,7 +259,7 @@ export class SebController {
       );
       // Certificate validity may change while a configuration is in the short
       // single-flight cache. Recheck it before serving encrypted output.
-      this.sebConfig.assertConfigurationDownloadReady();
+      this.sebConfig.assertConfigurationDownloadReady({ requireCertificateEncryption: true });
       response
         .status(200)
         .type("application/octet-stream")
@@ -1165,7 +1165,8 @@ export class SebController {
       returnTo
     );
     return this.sebConfig.prepareSebConfigurationDownload(plain, {
-      startPassword: target.setting.startPassword
+      startPassword: target.setting.startPassword,
+      requireCertificateEncryption: true
     });
   }
 
@@ -1315,7 +1316,8 @@ export class SebController {
     const plain = await this.generatePlainConfigUncached(courseId, contentId, canvasUrl, startUrlOverride);
     const setting = await this.resolveSebSetting(courseId, contentId);
     return this.sebConfig.prepareSebConfigurationDownload(plain, {
-      startPassword: setting?.startPassword
+      startPassword: setting?.startPassword,
+      requireCertificateEncryption: true
     });
   }
 

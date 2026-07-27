@@ -69,7 +69,7 @@ Run `npm run db:migrate` before a new application revision. Run `npm run db:clea
 | `STATE_ENCRYPTION_KEY`               | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.                                                            |
 | `SEB_CONFIG_ENCRYPTION_CERT_PEM`     | Public X.509 certificate used to encrypt `.seb` output. | Required when certificate encryption is enabled; valid end-entity RSA certificate whose Key Usage permits encryption. |
 
-`SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients. Neither certificate input is required when certificate encryption is disabled.
+`SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients. A runtime with certificate encryption disabled may omit both certificate inputs, but it cannot serve assessment configurations.
 
 ## Deployment-ID Policy
 
@@ -106,23 +106,25 @@ The registration document is `${TOOL_URL}/lti/config` and publishes the login, l
 
 ## SEB And Diagnostics
 
-| Variable                                | Default   | Notes                                                                                                                                                                               |
-| --------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEB_QUIT_PASSWORD`                     | Unset     | Optional managed exit-password fallback; must pass password policy.                                                                                                                 |
-| `SEB_REQUIRED_DOMAINS`                  | Empty     | Concrete reviewed hostnames; wildcards and identity-provider hosts are rejected.                                                                                                    |
-| `SEB_CONFIG_ENCRYPTION_ENABLED`         | `true`    | Set explicitly to `false` to disable certificate wrapping for this instance, including hardened runtimes. A teacher-set start password still wraps that assessment's configuration. |
-| `SEB_CONFIG_ENCRYPTION_CERT_PATH`       | Unset     | Public certificate path; used by the Compose secret mount.                                                                                                                          |
-| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM`  | Unset     | Local-development fallback; insufficient for hardened validation.                                                                                                                   |
-| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH` | Unset     | File form of the local public-key fallback.                                                                                                                                         |
-| `HOST`                                  | `0.0.0.0` | Bind address.                                                                                                                                                                       |
-| `USE_IN_MEMORY_STORE`                   | `false`   | Local/test only; hardened runtimes reject it.                                                                                                                                       |
-| `APP_DEBUG_ENABLED`                     | `false`   | Hardened runtimes reject true.                                                                                                                                                      |
-| `APP_DETECTOR_DIAGNOSTICS_ENABLED`      | `false`   | Sanitized detector detail; production profile rejects true.                                                                                                                         |
-| `APP_ASSET_VERSION`                     | Unset     | Optional client cache version; `K_REVISION` is used when present.                                                                                                                   |
+| Variable                                | Default   | Notes                                                                                                                                                                   |
+| --------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEB_QUIT_PASSWORD`                     | Unset     | Optional managed exit-password fallback; must pass password policy.                                                                                                     |
+| `SEB_REQUIRED_DOMAINS`                  | Empty     | Concrete reviewed hostnames; wildcards and identity-provider hosts are rejected.                                                                                        |
+| `SEB_CONFIG_ENCRYPTION_ENABLED`         | `true`    | Controls certificate wrapping for non-assessment configuration output. Assessment downloads always require certificate encryption and fail closed when this is `false`. |
+| `SEB_CONFIG_ENCRYPTION_CERT_PATH`       | Unset     | Public certificate path; used by the Compose secret mount.                                                                                                              |
+| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PEM`  | Unset     | Local-development fallback; insufficient for hardened validation.                                                                                                       |
+| `SEB_CONFIG_ENCRYPTION_PUBLIC_KEY_PATH` | Unset     | File form of the local public-key fallback.                                                                                                                             |
+| `HOST`                                  | `0.0.0.0` | Bind address.                                                                                                                                                           |
+| `USE_IN_MEMORY_STORE`                   | `false`   | Local/test only; hardened runtimes reject it.                                                                                                                           |
+| `APP_DEBUG_ENABLED`                     | `false`   | Hardened runtimes reject true.                                                                                                                                          |
+| `APP_DETECTOR_DIAGNOSTICS_ENABLED`      | `false`   | Sanitized detector detail; production profile rejects true.                                                                                                             |
+| `APP_ASSET_VERSION`                     | Unset     | Optional client cache version; `K_REVISION` is used when present.                                                                                                       |
 
 Generated configurations use a Safari-compatible browser user agent on macOS so Google Sheets selects its full-resolution canvas path. SEB appends its own identifier to that user agent. Windows configurations retain SEB's native Chromium-based browser user agent.
 
-Certificate encryption is the default because it restricts a configuration to devices holding the matching private identity. Set `SEB_CONFIG_ENCRYPTION_ENABLED=false` only for an instance whose devices cannot receive that identity. The setting leaves Config Key proof, one-time configuration grants, Canvas session handoff, URL filtering, and SEB lockdown policies enabled, but it does not make a downloaded configuration device-specific. If an instructor sets a start password, SEB still password-protects that configuration.
+Certificate encryption is required for assessment configurations because the SEB Config Key is deterministic from the plaintext settings. If an assessment config were served without certificate encryption, a student could compute the same request proof outside SEB and redeem the Canvas access code from a normal browser. A start password is not a substitute for this boundary because the exam taker may know it.
+
+`SEB_CONFIG_ENCRYPTION_ENABLED=false` remains available for non-assessment output such as the setup-check configuration, which cannot redeem an assessment access code. Assessment downloads fail closed in that mode. An instance serving real assessments must keep the setting enabled and distribute the matching private identity to approved SEB clients.
 
 ## Secret Rotation
 
