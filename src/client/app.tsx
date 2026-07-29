@@ -80,7 +80,7 @@ interface OnboardingContext {
   enabledAssessmentCount?: number;
 }
 
-type InstructorSetupStep = "security" | "tools" | "urls" | "enable";
+type InstructorSetupStep = "welcome" | "security" | "tools" | "enable";
 
 type Toast = {
   id: string;
@@ -2288,23 +2288,21 @@ function InstructorSetupWizard({
   useEscapeToClose(required ? undefined : onClose);
   const dialogRef = useRef<HTMLElement>(null);
   useDialogInitialFocus(dialogRef);
-  const [step, setStep] = useState<InstructorSetupStep>("security");
+  const [step, setStep] = useState<InstructorSetupStep>("welcome");
   const [draft, setDraft] = useDefaultsDraft(defaults);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState("");
   const steps: Array<{ id: InstructorSetupStep; label: string }> = [
-    { id: "security", label: "Exit security" },
+    { id: "welcome", label: "Welcome" },
+    { id: "security", label: "Exit password" },
     { id: "tools", label: "Exam tools" },
-    { id: "urls", label: "Advanced URLs" },
     { id: "enable", label: "First assessment" }
   ];
   const stepIndex = steps.findIndex((candidate) => candidate.id === step);
   const previousStep = stepIndex > 0 ? steps[stepIndex - 1].id : null;
   const nextStep = stepIndex < steps.length - 1 ? steps[stepIndex + 1].id : null;
-  const hadCourseExitPassword =
-    (defaults as CourseSebDefaults & { hasQuitPassword?: boolean }).hasQuitPassword === true;
-  const retainsExistingCourseExitPassword = !hadCourseExitPassword || draft.quitPassword !== null;
-  const hasExitSecurity = (securityReady && retainsExistingCourseExitPassword) || !!draft.quitPassword?.trim();
+  const hasExistingExitSecurity = securityReady;
+  const hasExitSecurity = hasExistingExitSecurity || !!draft.quitPassword?.trim();
 
   const finish = async () => {
     setFinishing(true);
@@ -2319,19 +2317,18 @@ function InstructorSetupWizard({
   };
 
   const content = {
+    welcome: {
+      title: "Let’s get your course ready",
+      description:
+        "You will set one required exit password, choose any exam tools students need, then enable an assessment."
+    },
     security: {
-      title: hasExitSecurity ? "Exit security is ready" : "Set the required exit security",
-      description: hasExitSecurity
-        ? "This course already has effective exit security. You can leave it as-is or set a replacement course password."
-        : "Every enabled assessment needs an exit password from this course or a managed school default."
+      title: "Set your course exit password",
+      description: "Students need this password to leave a Safe Online Exam session."
     },
     tools: {
-      title: "Review the default exam tools",
-      description: "Choose the approved tools that assessments inherit. Keeping the existing safe defaults is fine."
-    },
-    urls: {
-      title: "Add allowed URLs only when needed",
-      description: "Most courses can leave this empty. Add only resources students must use during an assessment."
+      title: "Choose course exam tools",
+      description: "Add the approved tools students need during an assessment. You can skip this if they need none."
     },
     enable: {
       title: "Enable the first assessment",
@@ -2390,15 +2387,37 @@ function InstructorSetupWizard({
           </span>
           <h3>{content.title}</h3>
           <p>{content.description}</p>
-          {step !== "enable" && (
+          {step === "welcome" && (
+            <div className="setup-wizard-welcome" aria-label="What you will set up">
+              <div>
+                <Shield size={18} />
+                <span>
+                  <strong>Exit password</strong>
+                  <small>Required before an assessment can be enabled.</small>
+                </span>
+              </div>
+              <div>
+                <Calculator size={18} />
+                <span>
+                  <strong>Exam tools</strong>
+                  <small>Optional tools students can use during the assessment.</small>
+                </span>
+              </div>
+            </div>
+          )}
+          {(step === "security" || step === "tools") && (
             <div className="setup-wizard-editor">
               <DefaultsEditor
                 draft={draft}
                 setDraft={setDraft}
-                visibleSection={step === "security" ? "password" : step === "tools" ? "tools" : "urls"}
+                visibleSection={step === "security" ? "password" : "tools"}
+                requireExitPassword={step === "security" && !hasExistingExitSecurity}
               />
             </div>
           )}
+          <p className="setup-wizard-reassurance">
+            You can always change these later in Course Settings or for an individual quiz.
+          </p>
         </section>
         <footer className="dialog-actions setup-wizard-actions">
           {!required && (
@@ -3076,10 +3095,10 @@ function DefaultsDialog({
               aria-current={section === "urls" ? "page" : undefined}
               onClick={() => setSection("urls")}
             >
-              <ExternalLink size={17} />
+              <SlidersHorizontal size={17} />
               <span>
-                <strong>Allowed URLs</strong>
-                <small>Extra assessment resources</small>
+                <strong>Advanced</strong>
+                <small>Website access rules</small>
               </span>
             </button>
             <button
@@ -3134,6 +3153,7 @@ function DefaultsEditor({
   draft,
   setDraft,
   visibleSection = "all",
+  requireExitPassword = false,
   showToolValidationErrors = false,
   copyableToolIds,
   onCopyTool
@@ -3141,6 +3161,7 @@ function DefaultsEditor({
   draft: CourseSebDefaults;
   setDraft: (value: SetStateAction<CourseSebDefaults>) => void;
   visibleSection?: "all" | "password" | "urls" | "tools";
+  requireExitPassword?: boolean;
   showToolValidationErrors?: boolean;
   copyableToolIds?: ReadonlySet<string>;
   onCopyTool?: (tool: ExternalToolConfig) => void;
@@ -3151,21 +3172,10 @@ function DefaultsEditor({
   const [startPasswordEnabled, setStartPasswordEnabled] = useState(
     () => !!draft.startPassword || !!(draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
   );
-  const [quitPasswordEnabled, setQuitPasswordEnabled] = useState(
-    () => !!draft.quitPassword || !!(draft as CourseSebDefaults & { hasQuitPassword?: boolean }).hasQuitPassword
-  );
-
   const updateStartPasswordEnabled = (enabled: boolean) => {
     setStartPasswordEnabled(enabled);
     if (!enabled) {
       setDraft((current) => ({ ...current, startPassword: null }));
-    }
-  };
-
-  const updateQuitPasswordEnabled = (enabled: boolean) => {
-    setQuitPasswordEnabled(enabled);
-    if (!enabled) {
-      setDraft((current) => ({ ...current, quitPassword: null }));
     }
   };
 
@@ -3197,37 +3207,28 @@ function DefaultsEditor({
           />
           {startPasswordEnabled && <small>{passwordRequirementText("exit")}</small>}
 
-          <SectionHeading title="Exit security" />
-          <label className="toggle-row compact">
-            <input
-              type="checkbox"
-              checked={quitPasswordEnabled}
-              onChange={(event) => updateQuitPasswordEnabled(event.target.checked)}
-            />
-            <span>
-              <strong>Protect exits with a course password</strong>
-              <small>
-                An exit password is required before Safe Online Exam can be enabled unless your school supplies one.
-              </small>
-            </span>
-          </label>
+          <SectionHeading title="Exit password" />
+          <p className="field-help">
+            This course password is required before you can enable Safe Online Exam.{" "}
+            {requireExitPassword ? "Enter one to continue." : "Leave this blank to keep the current protection."}
+          </p>
           <input
             type="password"
             value={draft.quitPassword || ""}
-            disabled={!quitPasswordEnabled}
             onChange={(event) => setDraft((current) => ({ ...current, quitPassword: event.target.value }))}
-            placeholder={quitPasswordEnabled ? "Enter a replacement password, or leave blank to keep it" : "Disabled"}
+            placeholder={requireExitPassword ? "Enter an exit password" : "Enter a replacement password"}
             autoComplete="new-password"
             minLength={8}
             maxLength={128}
+            required={requireExitPassword}
           />
-          {quitPasswordEnabled && <small>{passwordRequirementText("start")}</small>}
+          <small>{passwordRequirementText("start")}</small>
         </section>
       )}
       {showUrls && (
         <section className="settings-section">
           <SectionHeading
-            title="Allowed URLs"
+            title="Advanced website access"
             actionLabel="Add URL"
             onAction={() => setDraft((current) => ({ ...current, urlRules: [...current.urlRules, newUrlRule()] }))}
           />
@@ -3235,6 +3236,9 @@ function DefaultsEditor({
             rules={draft.urlRules}
             onChange={(urlRules) => setDraft((current) => ({ ...current, urlRules }))}
           />
+          <p className="field-help">
+            Use exam tools for student resources whenever possible. Add URLs only when needed.
+          </p>
         </section>
       )}
       {showTools && (
@@ -3328,14 +3332,14 @@ function SettingsSections({
 
       <section className="settings-section">
         <SectionHeading title="Exit password" />
-        <label className="toggle-row compact">
+        <label className="checkbox-row">
           <input
             type="checkbox"
             checked={passwordOverride}
             onChange={(event) => setPasswordOverride(event.target.checked)}
           />
           <span>
-            <strong>Set a quiz-specific exit password</strong>
+            <strong>Use a different exit password for this quiz</strong>
             <small>
               {hasDefaultPassword
                 ? "Otherwise this quiz uses the course or managed server default."
@@ -3358,14 +3362,23 @@ function SettingsSections({
         {passwordOverride && <small>{passwordRequirementText("start")}</small>}
       </section>
 
-      <section className="settings-section">
-        <SectionHeading
-          title="Allowed URLs"
-          actionLabel="Add URL"
-          onAction={() => setUrlRules([...urlRules, newUrlRule()])}
-        />
-        <UrlRuleEditor rules={urlRules} onChange={setUrlRules} />
-      </section>
+      <details className="advanced-settings-disclosure">
+        <summary>
+          <span>
+            <strong>Advanced website access</strong>
+            <small>Use this only when an exam tool cannot cover the resource.</small>
+          </span>
+          <ChevronDown size={18} aria-hidden="true" />
+        </summary>
+        <div className="advanced-settings-content">
+          <SectionHeading
+            title="Allowed URLs"
+            actionLabel="Add URL"
+            onAction={() => setUrlRules([...urlRules, newUrlRule()])}
+          />
+          <UrlRuleEditor rules={urlRules} onChange={setUrlRules} />
+        </div>
+      </details>
 
       <section className="settings-section">
         <SectionHeading title="Exam tools" />

@@ -3610,6 +3610,131 @@ select[aria-invalid="true"] {
   background: #f8fbff;
 }
 
+.field-help {
+  margin: -4px 0 0;
+  color: #667085;
+  font-size: 13px;
+}
+
+.checkbox-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 4px 0;
+  color: #344054;
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: 17px;
+  min-width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: #2563eb;
+}
+
+.checkbox-row strong,
+.checkbox-row small {
+  display: block;
+}
+
+.checkbox-row small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.advanced-settings-disclosure {
+  overflow: hidden;
+  background: #f8fafc;
+  border: 1px solid #dbe3ec;
+  border-radius: 12px;
+}
+
+.advanced-settings-disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  color: #344054;
+  cursor: pointer;
+  list-style: none;
+}
+
+.advanced-settings-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-settings-disclosure summary span {
+  display: grid;
+  gap: 3px;
+}
+
+.advanced-settings-disclosure summary small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.advanced-settings-disclosure summary svg {
+  flex: 0 0 auto;
+  transition: transform 140ms ease;
+}
+
+.advanced-settings-disclosure[open] summary {
+  border-bottom: 1px solid #dbe3ec;
+}
+
+.advanced-settings-disclosure[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.advanced-settings-content {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.setup-wizard-welcome {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.setup-wizard-welcome > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 13px;
+  color: #1d4ed8;
+  background: #ffffff;
+  border: 1px solid #dbe7f4;
+  border-radius: 10px;
+}
+
+.setup-wizard-welcome span {
+  display: grid;
+  gap: 2px;
+  color: #344054;
+}
+
+.setup-wizard-welcome small,
+.setup-wizard-reassurance {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.setup-wizard-reassurance {
+  margin-top: 4px;
+}
+
 @media (max-width: 720px) {
   .settings-layout {
     grid-template-columns: 1fr;
@@ -3667,5 +3792,9 @@ select[aria-invalid="true"] {
   .course-copy-picker-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .setup-wizard-welcome {
+    grid-template-columns: 1fr;
   }
 }
