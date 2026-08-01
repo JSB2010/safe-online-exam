@@ -101,16 +101,18 @@ not authorize another course.
 
 The guided setup has four stages:
 
-1. **Security:** set or confirm an effective exit password. It may come from a
-   managed server default, the course, or an assessment override.
-2. **Exam tools:** review the course catalog and enable only resources students
-   need.
-3. **Allowed URLs:** add any narrowly scoped pages or domains required beyond
-   Canvas and selected tools. Most courses can leave this empty.
-4. **First assessment:** finish the course policy, then enable an assessment
-   from the list.
+1. **Welcome:** review the short course-setup sequence.
+2. **Exit password:** set a course exit password when the course does not
+   already have effective managed protection. This password protects native
+   early quit; it is not a Canvas access code.
+3. **Exam tools:** enable only the approved resources students need. This is
+   optional when an assessment needs no additional tools.
+4. **First assessment:** save the course policy, then enable an assessment from
+   the list.
 
-Course policy remains editable from **Course settings** after onboarding.
+Course policy remains editable from **Course settings** after onboarding. Use
+**Advanced website access** there only when an exam tool cannot express the
+resource a student needs.
 
 ### Refresh Assessments
 
@@ -131,7 +133,7 @@ Course policy provides defaults for:
 
 - an optional start password;
 - the required effective exit password;
-- allowed URL rules; and
+- allowed URL rules under **Advanced website access**; and
 - the course exam-tool catalog.
 
 A start password protects the inner `.seb` payload and is a second check before
@@ -157,6 +159,10 @@ Use the dedicated YouTube-video option for one public video. It creates a
 server-owned embedded player and does not allow general YouTube browsing or
 Google sign-in.
 
+Course and assessment settings keep generic URL rules under **Advanced website
+access**. Use them only when an approved exam tool cannot cover the resource;
+the normal course setup flow does not ask for URL rules.
+
 Instructor-owned course tools can be duplicated to other active courses where
 the same Canvas user is a teacher:
 
@@ -176,7 +182,7 @@ Open an assessment’s settings to:
 - inherit course policy or set assessment-specific start/exit passwords;
 - select a subset of course tools;
 - add tools that exist only for this assessment; and
-- add assessment-specific URL rules.
+- add assessment-specific URL rules from **Advanced website access**.
 
 Selecting no course tools is a valid explicit policy. A quiz-only tool never
 becomes a course default.

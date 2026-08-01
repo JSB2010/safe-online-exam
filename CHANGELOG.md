@@ -5,12 +5,23 @@ release.
 
 ## [Unreleased]
 
-## [1.0.2] - 2026-07-29
+## [1.0.2] - 2026-08-01
 
-Safe Online Exam 1.0.2 is a backward-compatible deployment-hardening release.
-It adds no database migration and does not change Canvas LTI registration URLs,
-OAuth callback URLs, required Canvas scopes, or public SEB compatibility
-endpoints.
+Safe Online Exam 1.0.2 is a backward-compatible instructor-usability and
+deployment-hardening release. It adds no database migration and does not change
+Canvas LTI registration URLs, OAuth callback URLs, required Canvas scopes, or
+public SEB compatibility endpoints.
+
+### Instructor setup and assessment settings
+
+- Start first-time course setup with a concise welcome, then guide instructors
+  through the course exit-password policy, optional exam tools, and their first
+  protected assessment.
+- Keep generic URL rules in **Advanced website access** for course and
+  assessment settings, steering routine resource setup toward reviewed exam
+  tools and leaving URL rules available when they are genuinely required.
+- Clarify the quiz-specific exit-password override and that instructors can
+  return to course or assessment settings after onboarding.
 
 ### Cloud Run deployment reliability
 

@@ -100,7 +100,12 @@ Use the device-management platform’s certificate/profile mechanism, not a user
 
 Use the code-signing requirement and bundle/application identity documented for the supported SEB build. A mutable filesystem path alone is not sufficient application restriction.
 
-`scripts/install-seb-config-cert-login-keychain.sh` is intentionally non-operational for identities: it exits without accepting or importing secrets. Do not build a certificate-distribution workflow around Jamf script parameters, login-keychain passwords, or a P12 passphrase in a command argument.
+`scripts/install-seb-config-identity-login-keychain.sh` is an internal
+LaunchDaemon helper for the Jamf package fallback. It accepts no identity
+arguments and reads identity material only from the root-owned package staging
+location. Do not run it as a standalone MDM script or build a
+certificate-distribution workflow around Jamf script parameters,
+login-keychain passwords, or a P12 passphrase in a command argument.
 
 ### Any MDM: Staged-File Installer
 
