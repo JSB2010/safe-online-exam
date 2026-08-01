@@ -12,6 +12,7 @@ export default tseslint.config(
       "src/test/**",
       "src/server/assets/**",
       "scripts/**",
+      ".local/**",
       "node_modules/**"
     ]
   },

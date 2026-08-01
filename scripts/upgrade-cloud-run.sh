@@ -31,6 +31,72 @@ service_json="$(gcloud run services describe "$SERVICE" \
   --region="$REGION" \
   --format=json)" ||
   cloudrun_die "Cloud Run service is missing: $SERVICE"
+default_url_was_disabled="$(jq -r '
+  .metadata.annotations["run.googleapis.com/default-url-disabled"] == "true"
+' <<<"$service_json")"
+default_url_should_be_disabled="$DISABLE_DEFAULT_URL_AFTER_FINALIZE"
+[[ "$default_url_was_disabled" == "true" ]] && default_url_should_be_disabled=true
+default_url_restore_pending=false
+
+if [[ -n "$TOOL_URL" ]]; then
+  cloudrun_validate_url TOOL_URL "$TOOL_URL"
+fi
+if [[ "$default_url_should_be_disabled" == "true" ]]; then
+  [[ -n "$TOOL_URL" ]] ||
+    cloudrun_die "a disabled generated Cloud Run URL requires a configured custom TOOL_URL"
+  if [[ "$default_url_was_disabled" != "true" ]]; then
+    generated_service_url="$(jq -r '.status.url // empty' <<<"$service_json")"
+    cloudrun_validate_url CLOUD_RUN_SERVICE_URL "$generated_service_url"
+    [[ "${TOOL_URL%/}" != "${generated_service_url%/}" ]] ||
+      cloudrun_die "TOOL_URL must differ from the generated Cloud Run URL before it can be disabled"
+  fi
+fi
+
+cloudrun_restore_upgrade_default_url() {
+  [[ "$default_url_restore_pending" == "true" ]] || return 0
+  if [[ -z "$TOOL_URL" ]]; then
+    printf 'error: cannot restore the disabled Cloud Run URL without TOOL_URL\n' >&2
+    return 1
+  fi
+  if ! cloudrun_verify_url "${TOOL_URL%/}"; then
+    printf 'error: custom TOOL_URL failed before disabling the generated Cloud Run URL\n' >&2
+    return 1
+  fi
+  if ! gcloud run services update "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --no-default-url \
+    --quiet; then
+    printf 'error: could not disable the generated Cloud Run URL\n' >&2
+    return 1
+  fi
+  if ! service_json="$(gcloud run services describe "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --format=json)"; then
+    printf 'error: could not verify the restored Cloud Run URL policy\n' >&2
+    return 1
+  fi
+  if ! jq -e '.metadata.annotations["run.googleapis.com/default-url-disabled"] == "true"' \
+    <<<"$service_json" >/dev/null; then
+    printf 'error: Cloud Run did not confirm that its generated URL is disabled\n' >&2
+    return 1
+  fi
+  if ! cloudrun_verify_url "${TOOL_URL%/}"; then
+    printf 'error: custom TOOL_URL failed after disabling the generated Cloud Run URL\n' >&2
+    return 1
+  fi
+  default_url_restore_pending=false
+}
+
+cloudrun_restore_upgrade_default_url_on_exit() {
+  local exit_code=$?
+  trap - EXIT
+  if ! cloudrun_restore_upgrade_default_url; then
+    exit_code=1
+  fi
+  exit "$exit_code"
+}
 
 mkdir -p "$STATE_DIRECTORY"
 chmod 700 "$STATE_DIRECTORY"
@@ -103,6 +169,16 @@ gcloud run services update "$SERVICE" \
   --no-traffic \
   --tag="$release_tag" \
   --quiet
+if [[ "$default_url_was_disabled" == "true" ]]; then
+  cloudrun_verify_url "${TOOL_URL%/}"
+  default_url_restore_pending=true
+  trap cloudrun_restore_upgrade_default_url_on_exit EXIT
+  gcloud run services update "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --default-url \
+    --quiet
+fi
 deployed_revision="$(cloudrun_cut_over_tag "$release_tag")"
 
 service_url="$(gcloud run services describe "$SERVICE" \
@@ -110,13 +186,26 @@ service_url="$(gcloud run services describe "$SERVICE" \
   --region="$REGION" \
   --format='value(status.url)')"
 cloudrun_verify_url "$service_url"
+if [[ -n "$TOOL_URL" ]]; then
+  cloudrun_verify_url "${TOOL_URL%/}"
+fi
+if [[ "$default_url_should_be_disabled" == "true" ]]; then
+  default_url_restore_pending=true
+  trap cloudrun_restore_upgrade_default_url_on_exit EXIT
+  cloudrun_restore_upgrade_default_url ||
+    cloudrun_die "could not restore the generated Cloud Run URL policy after upgrade"
+  trap - EXIT
+fi
 printf 'DEPLOYED_REVISION=%s\nCOMPLETED_AT=%s\n' \
   "$deployed_revision" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$rollback_state"
+
+display_url="$service_url"
+[[ -n "$TOOL_URL" ]] && display_url="${TOOL_URL%/}"
 
 cat <<EOF
 Cloud Run upgrade completed.
 
-Service:         $service_url
+Service:         $display_url
 Revision:        $deployed_revision
 Image:           $APP_IMAGE
 Verified backup: $backup_id on Cloud SQL instance $SQL_INSTANCE

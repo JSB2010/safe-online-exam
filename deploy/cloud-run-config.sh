@@ -710,20 +710,20 @@ cloudrun_verify_url() {
   if [[ "$PUBLIC_ACCESS" == "true" ]]; then
     curl --fail --silent --show-error --location \
       --retry 8 --retry-delay 2 --retry-all-errors \
-      "$url/ready" >/dev/null
+      "$url/ready" >/dev/null || return 1
     curl --fail --silent --show-error --location \
       --retry 4 --retry-delay 2 --retry-all-errors \
-      "$url/.well-known/jwks.json" >/dev/null
+      "$url/.well-known/jwks.json" >/dev/null || return 1
     return
   fi
 
   local authorization="Authorization: Bearer $(gcloud auth print-identity-token)"
   curl --fail --silent --show-error --location \
     --retry 8 --retry-delay 2 --retry-all-errors \
-    -H "$authorization" "$url/ready" >/dev/null
+    -H "$authorization" "$url/ready" >/dev/null || return 1
   curl --fail --silent --show-error --location \
     --retry 4 --retry-delay 2 --retry-all-errors \
-    -H "$authorization" "$url/.well-known/jwks.json" >/dev/null
+    -H "$authorization" "$url/.well-known/jwks.json" >/dev/null || return 1
 }
 
 cloudrun_disable_default_url_after_finalization() {

@@ -52,6 +52,12 @@ real SEB client.
 | Intermittent 5xx or timeouts under load      | Database/upstream capacity          | PostgreSQL connections, `DATABASE_POOL_MAX × instances`, Canvas response latency, and job load |
 | Expired state or session tables keep growing | Cleanup job or scheduler            | Last successful cleanup execution, scheduler identity, and cleanup logs                        |
 
+If an upgrade stages a Ready candidate but reports no tagged URL, confirm the
+old revision still has traffic and inspect the
+`run.googleapis.com/default-url-disabled` annotation. Use a current helper that
+temporarily enables the generated URL for candidate checks and restores the
+disabled policy after cutover or failure.
+
 For Cloud Run, inspect the active service revision and migration/cleanup job
 executions. For Compose, inspect `docker compose ps`, the one-shot migration
 result, application logs, PostgreSQL health, disk space, and the named

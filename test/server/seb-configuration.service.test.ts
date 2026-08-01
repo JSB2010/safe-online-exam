@@ -567,31 +567,35 @@ describe("SebConfigurationService", () => {
   it("allows the complete Canvas New Quiz assignment route family and tenant platform services", () => {
     const rules = buildAllowlistRules({
       appBaseUrl: "https://app.example.com",
-      canvasBaseUrl: "https://kentdenver.instructure.com",
+      canvasBaseUrl: "https://example-school.instructure.com",
       courseId: "11825",
       contentId: "newquiz:11825:437577",
-      startUrl: "https://kentdenver.instructure.com/courses/11825/assignments/437577",
+      startUrl: "https://example-school.instructure.com/courses/11825/assignments/437577",
       requiredDomains: [],
       additionalDomains: []
     });
     const expressions = rules.map((rule) => rule.expression);
 
     expect(expressions).toContain(
-      "^https://kentdenver\\.instructure\\.com/courses/11825/assignments/437577(?:/.*)?(?:[?#].*)?$"
+      "^https://example-school\\.instructure\\.com/courses/11825/assignments/437577(?:/.*)?(?:[?#].*)?$"
     );
-    expect(expressions).toContain("^https://kentdenver\\.quiz-(?:lti|api)-[a-z0-9-]+\\.instructure\\.com/(?:.*)$");
-    expect(expressions).not.toContain("https://kentdenver.instructure.com/*");
+    expect(expressions).toContain("^https://example-school\\.quiz-(?:lti|api)-[a-z0-9-]+\\.instructure\\.com/(?:.*)$");
+    expect(expressions).not.toContain("https://example-school.instructure.com/*");
 
     const assignmentRule = rules.find((rule) => rule.expression.includes("/assignments/437577(?:/.*)?"));
     expect(assignmentRule?.regex).toBe(true);
     const assignmentPattern = new RegExp(assignmentRule!.expression);
-    expect(assignmentPattern.test("https://kentdenver.instructure.com/courses/11825/assignments/437577/launch")).toBe(
-      true
-    );
     expect(
-      assignmentPattern.test("https://kentdenver.instructure.com/courses/11825/assignments/437577/taking/31299/take")
+      assignmentPattern.test("https://example-school.instructure.com/courses/11825/assignments/437577/launch")
     ).toBe(true);
-    expect(assignmentPattern.test("https://kentdenver.instructure.com/courses/11825/assignments/999999")).toBe(false);
+    expect(
+      assignmentPattern.test(
+        "https://example-school.instructure.com/courses/11825/assignments/437577/taking/31299/take"
+      )
+    ).toBe(true);
+    expect(assignmentPattern.test("https://example-school.instructure.com/courses/11825/assignments/999999")).toBe(
+      false
+    );
   });
 
   it("generates a locked-down setup check configuration for the app host", () => {

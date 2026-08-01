@@ -128,7 +128,7 @@ provisioned resources consistently branded:
 | Secret Manager prefix                    | `safe_online_exam_`                                    |
 
 For multiple installations in one project, use a short school suffix such as
-`RESOURCE_NAME=safe-online-exam-kent` and update the derived names in the
+`RESOURCE_NAME=safe-online-exam-school` and update the derived names in the
 template. Keep the service name, project, and region stable after Canvas is
 configured. These portable defaults do not rename the repository's existing
 maintained `canvas-seb-dev` or `canvas-seb-prod` environments.
@@ -255,8 +255,10 @@ acceptable.
 Set `DISABLE_DEFAULT_URL_AFTER_FINALIZE=true` only after the custom origin has
 passed those checks. Finalization verifies its zero-traffic candidate using the
 generated URL, cuts over only after that succeeds, verifies the custom origin,
-and then disables the generated URL. This prevents an early restriction from
-blocking its own guarded cutover.
+and then disables the generated URL. Later upgrades preserve that policy: they
+verify the custom origin, temporarily restore the generated URL for tagged
+candidate checks, cut over, and disable it again even when the upgrade exits
+early. This prevents the restriction from blocking its own guarded cutover.
 
 Create the Canvas API Developer Key for the stable URL. Fill these protected
 files without adding a trailing newline:
@@ -327,18 +329,22 @@ Merge any new keys from `cloudrun.env.example`, then replace only
 The command:
 
 1. validates the existing service and jobs;
-2. creates and verifies an on-demand backup of `SQL_INSTANCE`;
+2. creates an on-demand backup of `SQL_INSTANCE`, waits for the Cloud SQL
+   operation to finish, and requires the backup status to be `SUCCESSFUL`;
 3. records the previous traffic revision;
 4. updates and executes the migration job;
 5. updates the cleanup job;
 6. deploys the application image to a tagged revision with no traffic;
-7. verifies `/ready` and `/.well-known/jwks.json`;
-8. moves 100% of traffic to the verified revision; and
-9. verifies the stable service URL.
+7. when the generated URL was disabled, verifies the custom origin and
+   temporarily enables the generated URL for the tagged candidate;
+8. verifies `/ready` and `/.well-known/jwks.json`;
+9. moves 100% of traffic to the verified revision;
+10. verifies the custom origin and restores the prior generated-URL policy.
 
 If any candidate check fails, the explicit cutover does not run. The old
 application revision therefore keeps traffic, although completed forward
-migrations remain in the database.
+migrations remain in the database. A guarded exit attempts to restore a
+previously disabled generated URL before returning the failure.
 
 There is no unattended application-image updater. Review each release,
 attestation, migration notes, and backup before running the upgrade.
@@ -359,6 +365,9 @@ revision supports the migrated schema:
 For schema or data recovery, restore the verified Cloud SQL backup into a
 controlled target and follow the institution's recovery procedure. Do not
 automatically run down-migrations or overwrite the active database.
+
+Rollback verifies `TOOL_URL` when a custom origin is configured, so it remains
+usable when the generated Cloud Run URL is disabled.
 
 ## Post-deployment checks
 

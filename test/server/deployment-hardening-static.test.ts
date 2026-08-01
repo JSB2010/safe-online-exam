@@ -126,6 +126,8 @@ describe("deployment hardening artifacts", () => {
       // test fixtures, so keep this rule scoped to private-key filename forms.
       expect(patterns.has("*.pem"), `${path} must not blanket-ignore all PEM files`).toBe(false);
     }
+
+    expect(source("eslint.config.js")).toContain('".local/**"');
   });
 
   it("includes release consistency inputs in every build context", () => {

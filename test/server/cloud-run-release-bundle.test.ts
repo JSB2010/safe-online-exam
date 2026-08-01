@@ -329,6 +329,34 @@ exit 0
     expect(source("deploy/cloudrun.env.example")).toContain("DISABLE_DEFAULT_URL_AFTER_FINALIZE=false");
   });
 
+  it("fails candidate verification when either public probe fails", () => {
+    const directory = temporaryDirectory();
+    const fakeBin = join(directory, "bin");
+    mkdirSync(fakeBin);
+    writeFileSync(join(fakeBin, "curl"), '#!/usr/bin/env bash\n[[ "$*" != *"$CURL_FAIL_SUFFIX"* ]]\n', { mode: 0o755 });
+
+    for (const failedSuffix of ["/ready", "/.well-known/jwks.json"]) {
+      expect(() =>
+        execFileSync(
+          "bash",
+          [
+            "-c",
+            "source deploy/cloud-run-config.sh; PUBLIC_ACCESS=true; cloudrun_verify_url https://candidate.example.edu"
+          ],
+          {
+            cwd: ROOT,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+              CURL_FAIL_SUFFIX: failedSuffix
+            }
+          }
+        )
+      ).toThrow();
+    }
+  });
+
   it("uses branded defaults and guarded Cloud SQL profiles", () => {
     const template = source("deploy/cloudrun.env.example");
     const prepare = source("scripts/prepare-cloud-run.sh");
@@ -716,16 +744,37 @@ exit 0
     const migration = upgrade.indexOf('gcloud run jobs execute "$CLOUDRUN_MIGRATE_JOB"');
     const cleanupImage = upgrade.indexOf('gcloud run jobs update "$CLOUDRUN_CLEANUP_JOB"');
     const noTraffic = upgrade.indexOf("--no-traffic");
+    const restoreCandidateUrl = upgrade.indexOf('if [[ "$default_url_was_disabled" == "true" ]]', noTraffic);
     const cutover = upgrade.indexOf('cloudrun_cut_over_tag "$release_tag"');
+    const restoreUrlPolicy = upgrade.indexOf('if [[ "$default_url_should_be_disabled" == "true" ]]', cutover);
+    const rollback = source("scripts/rollback-cloud-run.sh");
+    const config = source("deploy/cloud-run-config.sh");
+    const upgradeUrlValidation = upgrade.indexOf("cloudrun_validate_url TOOL_URL");
+    const rollbackUrlValidation = rollback.indexOf("cloudrun_validate_url TOOL_URL");
+    const rollbackCutover = rollback.indexOf("gcloud run services update-traffic");
 
     expect(backup).toBeGreaterThan(0);
+    expect(upgradeUrlValidation).toBeGreaterThan(0);
+    expect(upgradeUrlValidation).toBeLessThan(backup);
     expect(migration).toBeGreaterThan(backup);
     expect(cleanupImage).toBeGreaterThan(migration);
     expect(noTraffic).toBeGreaterThan(cleanupImage);
-    expect(cutover).toBeGreaterThan(noTraffic);
+    expect(restoreCandidateUrl).toBeGreaterThan(noTraffic);
+    expect(cutover).toBeGreaterThan(restoreCandidateUrl);
+    expect(restoreUrlPolicy).toBeGreaterThan(cutover);
     expect(upgrade).toContain('--instance="$SQL_INSTANCE"');
+    expect(upgrade).toContain("run.googleapis.com/default-url-disabled");
+    expect(upgrade).toContain("--default-url");
+    expect(upgrade).toContain("--no-default-url");
+    expect(upgrade).toContain("trap cloudrun_restore_upgrade_default_url_on_exit EXIT");
+    expect(upgrade).toContain('display_url="${TOOL_URL%/}"');
     expect(upgrade).not.toContain('--instance="$SERVICE"');
     expect(upgrade).not.toContain(":latest");
-    expect(source("scripts/rollback-cloud-run.sh")).toContain("--confirm-schema-compatible");
+    expect(rollback).toContain("--confirm-schema-compatible");
+    expect(rollback).toContain('verification_url="${TOOL_URL%/}"');
+    expect(rollbackUrlValidation).toBeGreaterThan(0);
+    expect(rollbackUrlValidation).toBeLessThan(rollbackCutover);
+    expect(config).toContain('"$url/ready" >/dev/null || return 1');
+    expect(config).toContain('"$url/.well-known/jwks.json" >/dev/null || return 1');
   });
 });

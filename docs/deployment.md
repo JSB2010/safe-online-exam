@@ -127,7 +127,9 @@ When `TOOL_URL` is a Cloud Run domain mapping, run the bundle's explicit
 mapping and prints required DNS/Ready conditions, but it does not change DNS.
 Only set `DISABLE_DEFAULT_URL_AFTER_FINALIZE=true` after the custom origin has
 passed health, readiness, JWKS, and LTI checks; finalization verifies its
-candidate first, then disables the generated URL.
+candidate first, then disables the generated URL. Later upgrades preserve that
+policy by temporarily restoring the generated URL only for tagged candidate
+verification, then disabling it again after the custom origin passes.
 
 ### Cloud SQL Selection
 
@@ -220,16 +222,22 @@ environment, bootstrap, state, and client-identity records; merge new template
 keys instead of overwriting local configuration. The bundle’s `upgrade.sh`:
 
 1. validates the existing target;
-2. creates and verifies an on-demand Cloud SQL backup;
+2. creates an on-demand Cloud SQL backup, waits for its operation to finish,
+   and requires the resulting backup status to be `SUCCESSFUL`;
 3. runs the new migration job;
 4. updates cleanup;
 5. deploys a no-traffic candidate revision;
-6. verifies candidate readiness and JWKS; and
-7. cuts traffic over explicitly.
+6. temporarily enables a previously disabled generated URL so the tagged
+   candidate can be verified;
+7. verifies candidate readiness and JWKS;
+8. cuts traffic over explicitly; and
+9. verifies the custom origin and restores the prior generated-URL policy.
 
 If a candidate check fails, the previous revision retains traffic. Completed
 forward migrations still exist. Application rollback requires the explicit
 schema-compatibility confirmation in the bundle and never reverses migrations.
+Rollback verifies `TOOL_URL` when configured. Upgrade verifies that origin
+before temporarily enabling—and after re-disabling—the generated URL.
 
 For data recovery, restore a backup into a controlled target first. Do not
 overwrite the active database as the first diagnostic action.

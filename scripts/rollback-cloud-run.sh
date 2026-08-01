@@ -19,6 +19,9 @@ fi
 cloudrun_load_environment "$1"
 cloudrun_validate_base
 cloudrun_require_commands curl gcloud
+if [[ -n "$TOOL_URL" ]]; then
+  cloudrun_validate_url TOOL_URL "$TOOL_URL"
+fi
 
 rollback_state="$2"
 [[ -f "$rollback_state" && ! -L "$rollback_state" ]] ||
@@ -46,5 +49,8 @@ service_url="$(gcloud run services describe "$SERVICE" \
   --project="$PROJECT_ID" \
   --region="$REGION" \
   --format='value(status.url)')"
-cloudrun_verify_url "$service_url"
-printf 'Application traffic now targets %s.\nDatabase migrations were not reversed.\n' "$previous_revision"
+verification_url="$service_url"
+[[ -n "$TOOL_URL" ]] && verification_url="${TOOL_URL%/}"
+cloudrun_verify_url "$verification_url"
+printf 'Application traffic now targets %s at %s.\nDatabase migrations were not reversed.\n' \
+  "$previous_revision" "$verification_url"
