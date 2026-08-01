@@ -102,10 +102,10 @@ Use the code-signing requirement and bundle/application identity documented for 
 
 `scripts/install-seb-config-identity-login-keychain.sh` is an internal
 LaunchDaemon helper for the Jamf package fallback. It accepts no identity
-arguments and reads only the root-owned package staging location. Do not run it
-as a standalone MDM script or build a certificate-distribution workflow around
-Jamf script parameters, login-keychain passwords, or a P12 passphrase in a
-command argument.
+arguments and reads identity material only from the root-owned package staging
+location. Do not run it as a standalone MDM script or build a
+certificate-distribution workflow around Jamf script parameters,
+login-keychain passwords, or a P12 passphrase in a command argument.
 
 ### Any MDM: Staged-File Installer
 
