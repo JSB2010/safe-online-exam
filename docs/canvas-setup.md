@@ -191,6 +191,11 @@ The detector runs on Canvas quiz-taking pages. It launches the protected SEB flo
 ${TOOL_URL}/js/canvas-seb-detector.js
 ```
 
+For a Cloud Run release bundle, run `./canvas-theme-loader.sh cloudrun.env`
+after `prepare.sh`. It writes an upload-ready `canvas-theme-loader.js` containing
+the exact configured public origin; upload that file rather than manually
+transcribing the loader URL. The generated file contains no secret material.
+
 Create a small JavaScript loader, replacing `${TOOL_URL}` before upload:
 
 ```javascript

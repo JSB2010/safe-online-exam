@@ -191,18 +191,29 @@ for (const scriptPath of [
   "scripts/bootstrap-cloud-run-secrets.sh",
   "scripts/doctor-cloud-run.sh",
   "scripts/prepare-cloud-run.sh",
+  "scripts/render-canvas-theme-loader.sh",
+  "scripts/map-cloud-run-domain.sh",
   "scripts/install-cloud-run.sh",
   "scripts/finalize-cloud-run-lti.sh",
   "scripts/upgrade-cloud-run.sh",
   "scripts/rollback-cloud-run.sh",
   "scripts/backup-compose.sh",
   "scripts/upgrade-compose.sh",
+  "scripts/install-seb-config-identity-user-keychain.sh",
+  "scripts/install-seb-config-identity-login-keychain.sh",
+  "scripts/build-jamf-seb-identity-package.sh",
+  "scripts/generate-jamf-seb-identity-inline-script.mjs",
   "scripts/create-cloud-run-bundle.sh",
   "scripts/render-release-deployment-notes.sh"
 ]) {
   if ((statSync(resolve(ROOT, scriptPath)).mode & 0o111) === 0) {
     fail(`${scriptPath} must be executable`);
   }
+}
+
+const jamfDaemon = readText("deploy/jamf/org.safeonlineexam.seb-identity-installer.plist");
+if (!jamfDaemon.includes("org.safeonlineexam.seb-identity-installer")) {
+  fail("deploy/jamf must include the SEB identity installer LaunchDaemon manifest");
 }
 
 const changelog = readText("CHANGELOG.md");

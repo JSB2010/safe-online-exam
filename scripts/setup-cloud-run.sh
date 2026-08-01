@@ -167,6 +167,7 @@ cloudrun_validate_base
 doctor_command="$(cloudrun_phase_command doctor.sh doctor-cloud-run.sh)"
 bootstrap_command="$(cloudrun_phase_command bootstrap-secrets.sh bootstrap-cloud-run-secrets.sh)"
 prepare_command="$(cloudrun_phase_command prepare.sh prepare-cloud-run.sh)"
+theme_loader_command="$(cloudrun_phase_command canvas-theme-loader.sh render-canvas-theme-loader.sh)"
 install_command="$(cloudrun_phase_command install.sh install-cloud-run.sh)"
 finalize_command="$(cloudrun_phase_command finalize-lti.sh finalize-cloud-run-lti.sh)"
 
@@ -195,6 +196,7 @@ if [[ "$run_prepare" == "true" ]]; then
   fi
   [[ -z "$sql_profile" ]] || prepare_arguments+=(--cloud-sql-profile "$sql_profile")
   "$prepare_command" "${prepare_arguments[@]}"
+  "$theme_loader_command" "$environment_file"
 fi
 
 if [[ "$run_install" == "true" ]]; then

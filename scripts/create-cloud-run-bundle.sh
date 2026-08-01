@@ -44,6 +44,14 @@ cp scripts/setup-cloud-run.sh "$bundle_directory/setup.sh"
 cp scripts/bootstrap-cloud-run-secrets.sh "$bundle_directory/bootstrap-secrets.sh"
 cp scripts/doctor-cloud-run.sh "$bundle_directory/doctor.sh"
 cp scripts/prepare-cloud-run.sh "$bundle_directory/prepare.sh"
+cp scripts/render-canvas-theme-loader.sh "$bundle_directory/canvas-theme-loader.sh"
+cp scripts/map-cloud-run-domain.sh "$bundle_directory/map-domain.sh"
+cp scripts/install-seb-config-identity-user-keychain.sh "$bundle_directory/install-seb-config-identity-user-keychain.sh"
+cp scripts/install-seb-config-identity-login-keychain.sh "$bundle_directory/install-seb-config-identity-login-keychain.sh"
+cp scripts/build-jamf-seb-identity-package.sh "$bundle_directory/build-jamf-seb-identity-package.sh"
+cp scripts/generate-jamf-seb-identity-inline-script.mjs "$bundle_directory/generate-jamf-seb-identity-inline-script.mjs"
+cp deploy/jamf/org.safeonlineexam.seb-identity-installer.plist \
+  "$bundle_directory/org.safeonlineexam.seb-identity-installer.plist"
 cp scripts/install-cloud-run.sh "$bundle_directory/install.sh"
 cp scripts/finalize-cloud-run-lti.sh "$bundle_directory/finalize-lti.sh"
 cp scripts/upgrade-cloud-run.sh "$bundle_directory/upgrade.sh"
@@ -53,6 +61,12 @@ chmod 0755 \
   "$bundle_directory/bootstrap-secrets.sh" \
   "$bundle_directory/doctor.sh" \
   "$bundle_directory/prepare.sh" \
+  "$bundle_directory/canvas-theme-loader.sh" \
+  "$bundle_directory/map-domain.sh" \
+  "$bundle_directory/install-seb-config-identity-user-keychain.sh" \
+  "$bundle_directory/install-seb-config-identity-login-keychain.sh" \
+  "$bundle_directory/build-jamf-seb-identity-package.sh" \
+  "$bundle_directory/generate-jamf-seb-identity-inline-script.mjs" \
   "$bundle_directory/install.sh" \
   "$bundle_directory/finalize-lti.sh" \
   "$bundle_directory/upgrade.sh" \
@@ -62,6 +76,7 @@ chmod 0644 \
   "$bundle_directory/cloud-run-contract.json" \
   "$bundle_directory/cloud-run-config.sh" \
   "$bundle_directory/setup-common.sh" \
+  "$bundle_directory/org.safeonlineexam.seb-identity-installer.plist" \
   "$bundle_directory/README.md"
 
 sed -i.bak "s|^APP_VERSION=.*$|APP_VERSION=$version|" "$bundle_directory/cloudrun.env.example"

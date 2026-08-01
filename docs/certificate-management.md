@@ -100,7 +100,84 @@ Use the device-management platform’s certificate/profile mechanism, not a user
 
 Use the code-signing requirement and bundle/application identity documented for the supported SEB build. A mutable filesystem path alone is not sufficient application restriction.
 
-`scripts/install-seb-config-cert-login-keychain.sh` is intentionally non-operational for identities: it exits without accepting or importing secrets. Do not build a certificate-distribution workflow around command-line PKCS#12 import parameters or login-keychain passwords.
+`scripts/install-seb-config-cert-login-keychain.sh` is intentionally non-operational for identities: it exits without accepting or importing secrets. Do not build a certificate-distribution workflow around Jamf script parameters, login-keychain passwords, or a P12 passphrase in a command argument.
+
+### Any MDM: Staged-File Installer
+
+For an MDM-neutral fallback, releases include
+`install-seb-config-identity-user-keychain.sh`. In a source checkout, prefix
+the helper names below with `scripts/`. Use it only when the
+MDM can stage the P12 and its passphrase in root-owned, mode-0600 files, then
+run the script as root after the intended user has logged in:
+
+```bash
+sudo bash ./install-seb-config-identity-user-keychain.sh \
+  --p12 /root-only/path/seb-config-encryption.p12 \
+  --password-file /root-only/path/seb-config-encryption-password \
+  --fingerprint SHA256_HEX
+```
+
+The installer validates the P12 fingerprint and private-key match, validates
+the approved SEB bundle and Team ID, and performs `security import` in the
+active user's GUI security session. It streams the decrypted PEM from a
+root-only temporary directory and does not make a P12 file user-readable or
+pass a P12 passphrase to `security import`. Exit 75 means a user session,
+login keychain, SEB installation, or keychain interaction is not ready; retry
+after that prerequisite is available.
+
+Do not pass private material, passphrases, or login-keychain passwords as MDM
+parameters. For an MDM that cannot stage root-only files, use its native user
+certificate payload instead.
+
+### Jamf School Package Fallback
+
+If Jamf School cannot deliver a PKCS#12 payload to the required user keychain,
+use the signed package fallback instead of a Jamf script parameter. It is a
+compatibility path for managed, standard-user Macs, not equivalent to a
+hardware-backed per-device identity.
+
+The package keeps the P12 and its passphrase root-only, waits for a normal
+console user, and streams the transient root-only PEM to `security import` in
+that user's GUI security session. It marks the imported key non-extractable,
+trusts only the validated Safe Exam Browser binary, and removes the staged
+private artifacts after success. It never makes the P12 readable by the
+student account and never passes the P12 passphrase to `security import` with
+`-P`.
+
+Build it only on a secured administrator workstation, with the P12/passphrase
+files in restricted storage and a Developer ID Installer signing identity:
+
+```bash
+sudo bash ./build-jamf-seb-identity-package.sh \
+  --p12 /secure/path/seb-config-encryption.p12 \
+  --password-file /secure/path/seb-p12-password \
+  --output /secure/path/safe-online-exam-seb-identity.pkg \
+  --sign "Developer ID Installer: Organization (TEAMID)"
+```
+
+Upload the resulting package as an in-house macOS package, install Safe Exam
+Browser first, and scope the identity package to a test device group. The
+installer retries while no user is logged in or the login keychain is not yet
+available. Do not use this package on unmanaged devices or student-administered
+accounts: local administrators can always defeat this protection.
+
+If Jamf School policy requires a direct Bash script instead of an in-house
+package, generate a one-off script locally and upload that generated file only
+to the restricted Jamf School Scripts area:
+
+```bash
+node ./generate-jamf-seb-identity-inline-script.mjs \
+  /secure/path/seb-config-encryption.p12 \
+  /secure/path/seb-p12-password \
+  /secure/path/jamf-school-install-seb-identity.sh
+```
+
+The generated script embeds the P12 and passphrase, so it is a lower-assurance
+fallback: never commit it, attach it to a ticket, or give it to a student. Run
+it as root only after SEB is installed and the target student is logged in. It
+keeps private files root-only on disk and performs the keychain operation in
+the user's GUI security session; Jamf School role access to the script itself
+is still equivalent to access to the identity.
 
 An unmanaged or student-administered device cannot provide the same non-extractability assurance. If a lower-assurance activity permits such a device, use a separately scoped, short-lived identity and document the exception; never reuse the high-integrity assessment identity or hand a student the `.p12`/passphrase.
 

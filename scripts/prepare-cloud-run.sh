@@ -117,6 +117,7 @@ cloudrun_require_commands gcloud jq
   cloudrun_die "run bootstrap-secrets.sh before preparing Google Cloud"
 [[ -s "$BOOTSTRAP_DIRECTORY/database_password" ]] ||
   cloudrun_die "database password is missing from the bootstrap directory"
+cloudrun_require_single_line_secret DATABASE_PASSWORD "$BOOTSTRAP_DIRECTORY/database_password"
 
 active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
 [[ -n "$active_account" ]] || cloudrun_die "gcloud has no active authenticated account"
@@ -146,6 +147,7 @@ gcloud services enable \
   serviceusage.googleapis.com \
   --project="$PROJECT_ID" \
   --quiet
+cloudrun_wait_for_sql_admin_api
 
 if ! gcloud iam service-accounts describe "$CLOUDRUN_RUNTIME_SERVICE_ACCOUNT" \
   --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -221,11 +223,7 @@ EOF
     --quiet
 fi
 
-sql_description="$(
-  gcloud sql instances describe "$SQL_INSTANCE" \
-    --project="$PROJECT_ID" \
-    --format=json
-)" || cloudrun_die "Cloud SQL instance does not exist or is not accessible: $SQL_INSTANCE"
+sql_description="$(cloudrun_wait_for_sql_instance)"
 
 sql_region="$(jq -r '.region // empty' <<<"$sql_description")"
 sql_database_version="$(jq -r '.databaseVersion // empty' <<<"$sql_description")"
@@ -385,4 +383,7 @@ Before install.sh:
        $BOOTSTRAP_DIRECTORY
   3. Keep lti_client_id and lti_deployment_id as bootstrap-pending until Canvas
      creates the LTI registration; finalize-lti.sh replaces them afterward.
+  4. Generate and upload the Canvas Theme Desktop JavaScript loader before
+     testing protected assessments. In a release bundle run:
+       ./canvas-theme-loader.sh ${1:-cloudrun.env}
 EOF

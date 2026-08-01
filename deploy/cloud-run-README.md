@@ -109,6 +109,13 @@ cp cloudrun.env.example cloudrun.env
 chmod 600 cloudrun.env
 ```
 
+Do not extract a release bundle or keep `BOOTSTRAP_DIRECTORY`,
+`CLIENT_IDENTITY_DIRECTORY`, or `STATE_DIRECTORY` under `/tmp`, `/private/tmp`,
+or `TMPDIR`. `bootstrap-secrets.sh` rejects those locations because automatic
+cleanup can destroy the only copy of the SEB client identity and deployment
+records. Use a protected, durable operator directory or set those three paths
+to approved durable locations before bootstrap.
+
 Set `PROJECT_ID` first. `RESOURCE_NAME=safe-online-exam` keeps all newly
 provisioned resources consistently branded:
 
@@ -210,6 +217,7 @@ Run the installation phases in order:
 ```bash
 ./bootstrap-secrets.sh cloudrun.env
 ./prepare.sh cloudrun.env --create-sql
+./canvas-theme-loader.sh cloudrun.env
 ```
 
 `--create-sql` remains an explicit cost authorization. Without it, `prepare.sh`
@@ -223,8 +231,32 @@ instance, creates the database and user when absent, and reserves the stable
 Cloud Run URL. It verifies that the instance's exact tier and availability
 model match the selected profile, then requires the shared backup, PITR,
 storage, deletion-protection, and encrypted connector controls for every
-bundle-created profile. It writes the URL into the protected bootstrap
-directory.
+bundle-created profile. It waits for Cloud SQL Admin API propagation and for a
+new instance to become `RUNNABLE`; it does not blindly retry an ambiguous
+create operation. It writes the URL into the protected bootstrap directory.
+
+### Custom domain and generated Cloud Run URL
+
+When using a Cloud Run domain mapping, set `TOOL_URL` to the intended custom
+HTTPS hostname before `prepare.sh`. After prepare reserves the service, create
+or inspect the mapping explicitly:
+
+```bash
+./map-domain.sh cloudrun.env
+```
+
+The command prints the required DNS records and mapping conditions. Complete
+DNS/domain ownership and wait until the mapping is `Ready`, then verify the
+custom origin's health, readiness, JWKS, and LTI endpoints. The helper does not
+change external DNS or purchase a load balancer. Cloud Run domain mapping is a
+Preview feature; use an approved load balancer instead when that risk is not
+acceptable.
+
+Set `DISABLE_DEFAULT_URL_AFTER_FINALIZE=true` only after the custom origin has
+passed those checks. Finalization verifies its zero-traffic candidate using the
+generated URL, cuts over only after that succeeds, verifies the custom origin,
+and then disables the generated URL. This prevents an early restriction from
+blocking its own guarded cutover.
 
 Create the Canvas API Developer Key for the stable URL. Fill these protected
 files without adding a trailing newline:
@@ -245,6 +277,13 @@ The install creates secret containers and exact versions, grants secret access
 only to the runtime service account, deploys and executes migrations, creates
 the cleanup job, verifies a no-traffic application revision, cuts traffic over,
 creates the cleanup scheduler, and executes cleanup once.
+
+Upload the generated `canvas-theme-loader.js` to the active Canvas account or
+sub-account Theme Desktop JavaScript before testing a protected assessment. It
+loads the detector from the configured tool origin only on supported Classic
+Quiz and New Quiz routes. This Canvas theme step is separate from the LTI
+registration and cannot be safely inferred or changed by deployment
+credentials.
 
 Use the now-public `${TOOL_URL}/lti/config` document to create and install the
 Canvas LTI registration. Replace the two bootstrap values with the actual

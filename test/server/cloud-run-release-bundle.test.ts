@@ -136,6 +136,12 @@ describe("portable Cloud Run release bundle", () => {
       "bootstrap-secrets.sh",
       "doctor.sh",
       "prepare.sh",
+      "canvas-theme-loader.sh",
+      "map-domain.sh",
+      "install-seb-config-identity-user-keychain.sh",
+      "install-seb-config-identity-login-keychain.sh",
+      "build-jamf-seb-identity-package.sh",
+      "generate-jamf-seb-identity-inline-script.mjs",
       "install.sh",
       "finalize-lti.sh",
       "upgrade.sh",
@@ -145,6 +151,182 @@ describe("portable Cloud Run release bundle", () => {
     }
     expect(source("scripts/create-cloud-run-bundle.sh")).not.toContain("src/");
     expect(readFileSync(join(bundle, "setup-common.sh"), "utf8")).toContain("setup_prompt_secret");
+    expect(readFileSync(join(bundle, "canvas-theme-loader.sh"), "utf8")).toContain("canvas-seb-detector.js");
+    expect(readFileSync(join(bundle, "map-domain.sh"), "utf8")).toContain("domain-mappings");
+    expect(readFileSync(join(bundle, "build-jamf-seb-identity-package.sh"), "utf8")).toContain("SCRIPT_DIRECTORY");
+    expect(readFileSync(join(bundle, "org.safeonlineexam.seb-identity-installer.plist"), "utf8")).toContain(
+      "org.safeonlineexam.seb-identity-installer"
+    );
+  });
+
+  it("hardens first-install bootstrap, API readiness, candidate verification, and Canvas handoffs", () => {
+    const directory = temporaryDirectory();
+    const fakeBin = join(directory, "bin");
+    const randomSecret = join(directory, "random-secret");
+    const curlLog = join(directory, "curl.log");
+    const gcloudLog = join(directory, "gcloud.log");
+    const apiAttempts = join(directory, "api-attempts");
+    const environmentFile = join(directory, "cloudrun.env");
+    const themeOutput = join(directory, "canvas-theme-loader.js");
+
+    mkdirSync(fakeBin);
+    writeFileSync(join(fakeBin, "curl"), '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >>"$CURL_TEST_LOG"\n', {
+      mode: 0o755
+    });
+    writeFileSync(
+      join(fakeBin, "gcloud"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$GCLOUD_TEST_LOG"
+if [[ "$1" == "sql" && "$2" == "instances" && "$3" == "list" ]]; then
+  attempts=0
+  [[ -f "$API_ATTEMPTS" ]] && attempts="$(<"$API_ATTEMPTS")"
+  attempts=$((attempts + 1))
+  printf '%s' "$attempts" >"$API_ATTEMPTS"
+  ((attempts >= 3))
+  exit
+fi
+if [[ "$1" == "run" && "$2" == "services" && "$3" == "describe" ]]; then
+  printf '%s\\n' '{"metadata":{"annotations":{"run.googleapis.com/default-url-disabled":"true"}},"status":{"url":""}}'
+  exit
+fi
+exit 0
+`,
+      { mode: 0o755 }
+    );
+    writeFileSync(
+      environmentFile,
+      [
+        `APP_VERSION=${VERSION}`,
+        `APP_IMAGE=${IMAGE}`,
+        "PROJECT_ID=sample-project",
+        "REGION=us-central1",
+        "TOOL_URL=https://assessment.example.edu",
+        `STATE_DIRECTORY=${directory}`
+      ].join("\n"),
+      { mode: 0o600 }
+    );
+
+    execFileSync(
+      "bash",
+      ["-c", 'source deploy/cloud-run-config.sh; cloudrun_write_random_secret "$1"', "cloud-run-test", randomSecret],
+      { cwd: ROOT, encoding: "utf8" }
+    );
+    expect(readFileSync(randomSecret, "utf8")).toMatch(/^[A-Za-z0-9+/=]+$/u);
+
+    execFileSync(
+      "bash",
+      [
+        "-u",
+        "-c",
+        "source deploy/cloud-run-config.sh; PUBLIC_ACCESS=true; cloudrun_verify_url https://candidate.example.edu"
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, CURL_TEST_LOG: curlLog }
+      }
+    );
+    const curlCalls = readFileSync(curlLog, "utf8");
+    expect(curlCalls).toContain("https://candidate.example.edu/ready");
+    expect(curlCalls).toContain("https://candidate.example.edu/.well-known/jwks.json");
+
+    execFileSync(
+      "bash",
+      [
+        "-c",
+        [
+          "source deploy/cloud-run-config.sh",
+          "PROJECT_ID=sample-project",
+          "CLOUD_SQL_API_READY_TIMEOUT_SECONDS=5",
+          "CLOUD_SQL_RETRY_INTERVAL_SECONDS=1",
+          "cloudrun_wait_for_sql_admin_api"
+        ].join("\n")
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          API_ATTEMPTS: apiAttempts,
+          GCLOUD_TEST_LOG: gcloudLog
+        }
+      }
+    );
+    expect(readFileSync(apiAttempts, "utf8")).toBe("3");
+
+    execFileSync(
+      "bash",
+      [
+        "-u",
+        "-c",
+        [
+          "source deploy/cloud-run-config.sh",
+          "PROJECT_ID=sample-project",
+          "REGION=us-central1",
+          "SERVICE=safe-online-exam",
+          "TOOL_URL=https://assessment.example.edu",
+          "PUBLIC_ACCESS=true",
+          "DISABLE_DEFAULT_URL_AFTER_FINALIZE=true",
+          "cloudrun_disable_default_url_after_finalization"
+        ].join("\n")
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          CURL_TEST_LOG: curlLog,
+          GCLOUD_TEST_LOG: gcloudLog
+        }
+      }
+    );
+    expect(readFileSync(gcloudLog, "utf8")).not.toContain("run services update");
+
+    execFileSync("bash", ["scripts/render-canvas-theme-loader.sh", environmentFile, themeOutput], {
+      cwd: ROOT,
+      encoding: "utf8"
+    });
+    const themeLoader = readFileSync(themeOutput, "utf8");
+    expect(themeLoader).toContain('const detectorUrl = "https://assessment.example.edu/js/canvas-seb-detector.js";');
+    expect(themeLoader).toContain('data-canvas-seb-detector="true"');
+
+    expect(() =>
+      execFileSync(
+        "bash",
+        [
+          "-c",
+          "source deploy/cloud-run-config.sh; cloudrun_require_durable_local_directory CLIENT_IDENTITY_DIRECTORY /private/tmp/unsafe-identity"
+        ],
+        { cwd: ROOT, encoding: "utf8" }
+      )
+    ).toThrow();
+    expect(() =>
+      execFileSync(
+        "bash",
+        [
+          "-c",
+          "source deploy/cloud-run-config.sh; cloudrun_require_durable_local_directory CLIENT_IDENTITY_DIRECTORY /private/../private/tmp/unsafe-identity"
+        ],
+        { cwd: ROOT, encoding: "utf8" }
+      )
+    ).toThrow();
+
+    const config = source("deploy/cloud-run-config.sh");
+    const canonicalTemporaryPath = execFileSync(
+      "bash",
+      ["-c", "source deploy/cloud-run-config.sh; cloudrun_canonical_local_path /private/tmp/unsafe-identity"],
+      { cwd: ROOT, encoding: "utf8" }
+    ).trim();
+    expect(canonicalTemporaryPath).toBe("/private/tmp/unsafe-identity");
+    expect(config).toContain("cloudrun_canonical_local_path");
+    expect(config).toContain("cloudrun_wait_for_sql_instance");
+    expect(config).toContain("cloudrun_disable_default_url_after_finalization");
+    expect(config).not.toContain("local authorization=()");
+    expect(source("scripts/prepare-cloud-run.sh")).toContain("cloudrun_wait_for_sql_admin_api");
+    expect(source("scripts/finalize-cloud-run-lti.sh")).toContain("cloudrun_disable_default_url_after_finalization");
+    expect(source("deploy/cloudrun.env.example")).toContain("DISABLE_DEFAULT_URL_AFTER_FINALIZE=false");
   });
 
   it("uses branded defaults and guarded Cloud SQL profiles", () => {
@@ -167,6 +349,8 @@ describe("portable Cloud Run release bundle", () => {
     expect(prepare).toContain("--deletion-protection");
     expect(prepare).toContain("--connector-enforcement=REQUIRED");
     expect(prepare).toContain("--ssl-mode=ENCRYPTED_ONLY");
+    expect(prepare).toContain("cloudrun_wait_for_sql_admin_api");
+    expect(prepare).toContain("cloudrun_wait_for_sql_instance");
 
     // Existing maintained Cloud Build targets are a separate, stable contract.
     expect(source("cloudbuild-dev.yaml")).toContain('"canvas-seb-dev"');

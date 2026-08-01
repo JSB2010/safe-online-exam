@@ -45,12 +45,22 @@ cp scripts/setup-compose.sh "$bundle_directory/setup.sh"
 cp scripts/bootstrap-compose-secrets.sh "$bundle_directory/bootstrap-secrets.sh"
 cp scripts/backup-compose.sh "$bundle_directory/backup.sh"
 cp scripts/upgrade-compose.sh "$bundle_directory/upgrade.sh"
+cp scripts/install-seb-config-identity-user-keychain.sh "$bundle_directory/install-seb-config-identity-user-keychain.sh"
+cp scripts/install-seb-config-identity-login-keychain.sh "$bundle_directory/install-seb-config-identity-login-keychain.sh"
+cp scripts/build-jamf-seb-identity-package.sh "$bundle_directory/build-jamf-seb-identity-package.sh"
+cp scripts/generate-jamf-seb-identity-inline-script.mjs "$bundle_directory/generate-jamf-seb-identity-inline-script.mjs"
+cp deploy/jamf/org.safeonlineexam.seb-identity-installer.plist \
+  "$bundle_directory/org.safeonlineexam.seb-identity-installer.plist"
 cp deploy/compose-README.md "$bundle_directory/README.md"
 chmod 0755 \
   "$bundle_directory/setup.sh" \
   "$bundle_directory/bootstrap-secrets.sh" \
   "$bundle_directory/backup.sh" \
-  "$bundle_directory/upgrade.sh"
+  "$bundle_directory/upgrade.sh" \
+  "$bundle_directory/install-seb-config-identity-user-keychain.sh" \
+  "$bundle_directory/install-seb-config-identity-login-keychain.sh" \
+  "$bundle_directory/build-jamf-seb-identity-package.sh" \
+  "$bundle_directory/generate-jamf-seb-identity-inline-script.mjs"
 chmod 0644 \
   "$bundle_directory/compose.yaml" \
   "$bundle_directory/compose.secrets.yaml" \
@@ -58,6 +68,7 @@ chmod 0644 \
   "$bundle_directory/Caddyfile" \
   "$bundle_directory/.env.compose.secrets.example" \
   "$bundle_directory/setup-common.sh" \
+  "$bundle_directory/org.safeonlineexam.seb-identity-installer.plist" \
   "$bundle_directory/README.md"
 
 sed -i.bak "s|^APP_IMAGE=.*$|APP_IMAGE=$image|" "$bundle_directory/.env.compose.secrets.example"

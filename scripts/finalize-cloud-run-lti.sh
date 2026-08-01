@@ -65,17 +65,26 @@ gcloud run services update "$SERVICE" \
   --quiet
 deployed_revision="$(cloudrun_cut_over_tag "$release_tag")"
 
-service_url="$(gcloud run services describe "$SERVICE" \
-  --project="$PROJECT_ID" \
-  --region="$REGION" \
-  --format='value(status.url)')"
-cloudrun_verify_url "$service_url"
+if [[ "$DISABLE_DEFAULT_URL_AFTER_FINALIZE" == "true" ]]; then
+  cloudrun_disable_default_url_after_finalization
+  service_url="${TOOL_URL%/}"
+  default_url_note="The generated Cloud Run default URL is disabled; this custom origin was verified before and after that change."
+else
+  service_url="$(gcloud run services describe "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --format='value(status.url)')"
+  cloudrun_verify_url "$service_url"
+  default_url_note=""
+fi
 
 cat <<EOF
 Canvas LTI identifiers are pinned to their exact Secret Manager versions.
 
 Service:  $service_url
 Revision: $deployed_revision
+
+$default_url_note
 
 Keep $CLOUDRUN_SECRET_VERSION_STATE with the deployment records. It contains
 version numbers only, not secret values.

@@ -494,6 +494,57 @@ describe("deployment hardening artifacts", () => {
     expect(generator).toContain('-passout "file:$P12_PASSWORD_FILE"');
     expect(generator).not.toMatch(/SEB_CERT_P12_PASSWORD(?:=|:-)|-passout\s+"pass:/u);
   });
+
+  it("uses a root-only package fallback that imports through the console user's security session", () => {
+    const installer = source("scripts/install-seb-config-identity-login-keychain.sh");
+    const builder = source("scripts/build-jamf-seb-identity-package.sh");
+    const inlineGenerator = source("scripts/generate-jamf-seb-identity-inline-script.mjs");
+    const genericInstallerPath = join(ROOT, "scripts/install-seb-config-identity-user-keychain.sh");
+    const genericInstaller = readFileSync(genericInstallerPath, "utf8");
+
+    expect(installer).toContain("-x");
+    expect(installer).toContain('-T "$SEB_BINARY"');
+    expect(installer).toContain('-passin "file:$P12_PASSWORD_PATH"');
+    expect(installer).toContain("run_as_console_user()");
+    expect(installer).toContain('/bin/launchctl asuser "$USER_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$@"');
+    expect(installer).toContain("security import /dev/stdin");
+    expect(installer).toContain("/usr/bin/sed -n 's/^Identifier=//p'");
+    expect(installer).not.toContain("ACTUAL_CERT_SHA256^^");
+    expect(installer).not.toContain('security import "$P12_PATH"');
+    expect(installer).not.toContain('chown -R "$CONSOLE_USER"');
+    expect(installer).not.toMatch(/security import \/dev\/stdin[\s\S]{0,300}\s-P(?:\s|$)/u);
+    expect(installer).not.toMatch(/security import \/dev\/stdin[\s\S]{0,300}\s-A(?:\s|$)/u);
+    expect(inlineGenerator).toContain("security import /dev/stdin");
+    expect(inlineGenerator).toContain('/bin/launchctl asuser "$USER_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$@"');
+    expect(inlineGenerator).toContain("/usr/bin/sed -n 's/^Identifier=//p'");
+    expect(inlineGenerator).not.toContain("ACTUAL_CERT_SHA256^^");
+    expect(inlineGenerator).not.toContain('security import "$P12_PATH"');
+    expect(inlineGenerator).not.toMatch(/security import[\s\S]{0,300}\s-P(?:\s|$)/u);
+    expect(genericInstaller).toContain("--p12");
+    expect(genericInstaller).toContain("--password-file");
+    expect(genericInstaller).toContain("--fingerprint");
+    expect(genericInstaller).toContain("run_as_console_user()");
+    expect(genericInstaller).toContain("security import /dev/stdin");
+    expect(genericInstaller).toContain("Required file is not owned by root:wheel");
+    expect(genericInstaller).not.toContain("P12_BASE64");
+    expect(genericInstaller).not.toMatch(/security import[\s\S]{0,300}\s-P(?:\s|$)/u);
+    expect(statSync(genericInstallerPath).mode & 0o111).not.toBe(0);
+    expect(builder).not.toMatch(/\$\{?[456]\}?|P12_BASE64|LOGIN_KEYCHAIN_PASSWORD/u);
+    expect(builder).toContain("SCRIPT_DIRECTORY");
+    expect(builder).not.toContain("git rev-parse");
+    const composeBundle = source("scripts/create-release-bundle.sh");
+    const cloudRunBundle = source("scripts/create-cloud-run-bundle.sh");
+    for (const helper of [
+      "install-seb-config-identity-user-keychain.sh",
+      "install-seb-config-identity-login-keychain.sh",
+      "build-jamf-seb-identity-package.sh",
+      "generate-jamf-seb-identity-inline-script.mjs",
+      "org.safeonlineexam.seb-identity-installer.plist"
+    ]) {
+      expect(composeBundle, helper).toContain(helper);
+      expect(cloudRunBundle, helper).toContain(helper);
+    }
+  });
 });
 
 function sourceTree(directory: string): string[] {

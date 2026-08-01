@@ -70,6 +70,10 @@ cloudrun_load_environment() {
   : "${CLEANUP_SCHEDULE:=17 3 * * *}"
   : "${CLEANUP_TIME_ZONE:=Etc/UTC}"
   : "${PUBLIC_ACCESS:=true}"
+  : "${DISABLE_DEFAULT_URL_AFTER_FINALIZE:=false}"
+  : "${CLOUD_SQL_API_READY_TIMEOUT_SECONDS:=300}"
+  : "${CLOUD_SQL_INSTANCE_READY_TIMEOUT_SECONDS:=900}"
+  : "${CLOUD_SQL_RETRY_INTERVAL_SECONDS:=5}"
   : "${BOOTSTRAP_DIRECTORY:=.local/safe-online-exam-cloudrun-bootstrap}"
   : "${CLIENT_IDENTITY_DIRECTORY:=.local/safe-online-exam-client-identity}"
   : "${STATE_DIRECTORY:=.state}"
@@ -305,9 +309,16 @@ cloudrun_validate_base() {
     cloudrun_usage_error "MIN_INSTANCES cannot exceed MAX_INSTANCES"
 
   cloudrun_validate_boolean PUBLIC_ACCESS "$PUBLIC_ACCESS"
+  cloudrun_validate_boolean DISABLE_DEFAULT_URL_AFTER_FINALIZE "$DISABLE_DEFAULT_URL_AFTER_FINALIZE"
   cloudrun_validate_boolean LTI_DEPLOYMENT_ID_CHECKING_ENABLED "$LTI_DEPLOYMENT_ID_CHECKING_ENABLED"
   cloudrun_validate_boolean SEB_CONFIG_ENCRYPTION_ENABLED "$SEB_CONFIG_ENCRYPTION_ENABLED"
   cloudrun_validate_boolean ALLOW_EXISTING_DATABASE_USER "$ALLOW_EXISTING_DATABASE_USER"
+  [[ "$CLOUD_SQL_API_READY_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+    cloudrun_usage_error "CLOUD_SQL_API_READY_TIMEOUT_SECONDS must be a positive integer"
+  [[ "$CLOUD_SQL_INSTANCE_READY_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+    cloudrun_usage_error "CLOUD_SQL_INSTANCE_READY_TIMEOUT_SECONDS must be a positive integer"
+  [[ "$CLOUD_SQL_RETRY_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+    cloudrun_usage_error "CLOUD_SQL_RETRY_INTERVAL_SECONDS must be a positive integer"
   [[ -r "$CLOUDRUN_CONTRACT" ]] ||
     cloudrun_die "deployment contract is missing: $CLOUDRUN_CONTRACT"
 }
@@ -421,6 +432,103 @@ cloudrun_validate_complete() {
   cloudrun_validate_url LTI_AUTH_URL "$LTI_AUTH_URL"
 }
 
+cloudrun_write_random_secret() {
+  local output_path="$1"
+  local byte_count="${2:-48}"
+  local value
+  [[ "$byte_count" =~ ^[1-9][0-9]*$ ]] ||
+    cloudrun_die "random secret byte count must be a positive integer"
+
+  # Command substitution removes OpenSSL's terminal line feed. Writing with
+  # printf then keeps the Cloud SQL user password byte-for-byte identical to
+  # the Secret Manager value uploaded later from this file.
+  value="$(openssl rand -base64 "$byte_count")" ||
+    cloudrun_die "OpenSSL could not generate required secret material"
+  [[ "$value" =~ ^[A-Za-z0-9+/=]+$ ]] ||
+    cloudrun_die "OpenSSL generated invalid random secret material"
+  printf '%s' "$value" >"$output_path"
+}
+
+cloudrun_require_single_line_secret() {
+  local name="$1"
+  local file_path="$2"
+  [[ -f "$file_path" && ! -L "$file_path" && -s "$file_path" ]] ||
+    cloudrun_die "$name must be a non-empty regular secret file: $file_path"
+  if (( $(wc -l <"$file_path") != 0 )) || LC_ALL=C grep -q $'\r' "$file_path"; then
+    cloudrun_die "$name must not contain line breaks; use printf or a no-newline secret writer before retrying"
+  fi
+}
+
+cloudrun_canonical_local_path() {
+  local value="$1"
+  local absolute_path component candidate physical_path
+  local -a input_components=()
+  local -a normalized_components=()
+  local -a missing_components=()
+
+  if [[ "$value" == /* ]]; then
+    absolute_path="$value"
+  else
+    absolute_path="$(pwd -P)/$value"
+  fi
+
+  # Normalize dot segments before checking temporary roots. Resolve the nearest
+  # existing parent physically as well, so an existing symlink cannot disguise
+  # a temporary destination. The final directory itself need not exist yet.
+  IFS=/ read -r -a input_components <<<"${absolute_path#/}"
+  for component in "${input_components[@]}"; do
+    case "$component" in
+      '' | .) ;;
+      ..)
+        if (( ${#normalized_components[@]} > 0 )); then
+          unset "normalized_components[${#normalized_components[@]}-1]"
+        fi
+        ;;
+      *) normalized_components+=("$component") ;;
+    esac
+  done
+  local IFS=/
+  absolute_path="/${normalized_components[*]}"
+  [[ -n "$absolute_path" ]] || absolute_path=/
+
+  candidate="$absolute_path"
+  while [[ ! -d "$candidate" ]]; do
+    [[ "$candidate" != / ]] ||
+      cloudrun_die "could not resolve a directory parent for $value"
+    missing_components=("${candidate##*/}" "${missing_components[@]}")
+    candidate="${candidate%/*}"
+    [[ -n "$candidate" ]] || candidate=/
+  done
+  physical_path="$(cd "$candidate" && pwd -P)"
+  for component in "${missing_components[@]}"; do
+    if [[ "$physical_path" == / ]]; then
+      physical_path="/$component"
+    else
+      physical_path="$physical_path/$component"
+    fi
+  done
+  printf '%s\n' "$physical_path"
+}
+
+cloudrun_require_durable_local_directory() {
+  local name="$1"
+  local value="$2"
+  local absolute_path temporary_root
+  absolute_path="$(cloudrun_canonical_local_path "$value")"
+
+  case "$absolute_path" in
+    /tmp | /tmp/* | /private/tmp | /private/tmp/*)
+      cloudrun_die "$name resolves inside a temporary directory: $absolute_path. Set it to a protected durable location before bootstrap."
+      ;;
+  esac
+  temporary_root="${TMPDIR:-}"
+  temporary_root="${temporary_root%/}"
+  if [[ -n "$temporary_root" &&
+    ("$absolute_path" == "$temporary_root" || "$absolute_path" == "$temporary_root"/*) ]]; then
+    cloudrun_die "$name resolves inside TMPDIR: $absolute_path. Set it to a protected durable location before bootstrap."
+  fi
+}
+
 cloudrun_secret_specs() {
   jq -r '.secrets[] | [.environment, .suffix, .file, .versionKey] | @tsv' "$CLOUDRUN_CONTRACT"
 }
@@ -510,6 +618,7 @@ cloudrun_assert_bootstrap() {
     cloudrun_die "SEB configuration-encryption certificate is invalid or expires within one day"
   ! cmp -s "$BOOTSTRAP_DIRECTORY/session_secret" "$BOOTSTRAP_DIRECTORY/state_encryption_key" ||
     cloudrun_die "session and state-encryption secrets must be different"
+  cloudrun_require_single_line_secret DATABASE_PASSWORD "$BOOTSTRAP_DIRECTORY/database_password"
   canvas_domain="$(<"$BOOTSTRAP_DIRECTORY/canvas_domain")"
   tool_url="$(<"$BOOTSTRAP_DIRECTORY/tool_url")"
   cloudrun_validate_url CANVAS_DOMAIN "$canvas_domain"
@@ -544,18 +653,116 @@ cloudrun_tag_metadata() {
   ' <<<"$service_json" | tail -n 1
 }
 
+cloudrun_wait_for_sql_admin_api() {
+  local deadline=$((SECONDS + CLOUD_SQL_API_READY_TIMEOUT_SECONDS))
+  local attempts=0
+  printf 'Waiting for Cloud SQL Admin API activation' >&2
+  while ! gcloud sql instances list \
+    --project="$PROJECT_ID" \
+    --limit=1 \
+    --format='value(name)' >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      printf '\n' >&2
+      cloudrun_die "Cloud SQL Admin API did not become usable within ${CLOUD_SQL_API_READY_TIMEOUT_SECONDS}s; wait for Google Cloud API propagation and rerun prepare.sh"
+    fi
+    attempts=$((attempts + 1))
+    if ((attempts % 6 == 0)); then
+      printf '.' >&2
+    fi
+    sleep "$CLOUD_SQL_RETRY_INTERVAL_SECONDS"
+  done
+  printf ' ready.\n' >&2
+}
+
+cloudrun_wait_for_sql_instance() {
+  local deadline=$((SECONDS + CLOUD_SQL_INSTANCE_READY_TIMEOUT_SECONDS))
+  local description state attempts=0
+  printf 'Waiting for Cloud SQL instance %s to become RUNNABLE' "$SQL_INSTANCE" >&2
+  while true; do
+    if description="$(gcloud sql instances describe "$SQL_INSTANCE" \
+      --project="$PROJECT_ID" \
+      --format=json 2>/dev/null)"; then
+      state="$(jq -r '.state // empty' <<<"$description")"
+      if [[ "$state" == "RUNNABLE" ]]; then
+        printf ' ready.\n' >&2
+        printf '%s\n' "$description"
+        return
+      fi
+      if [[ "$state" == "FAILED" || "$state" == "SUSPENDED" ]]; then
+        printf '\n' >&2
+        cloudrun_die "Cloud SQL instance $SQL_INSTANCE entered terminal state $state; inspect the Cloud SQL operation before retrying"
+      fi
+    fi
+    if ((SECONDS >= deadline)); then
+      printf '\n' >&2
+      cloudrun_die "Cloud SQL instance $SQL_INSTANCE did not become RUNNABLE within ${CLOUD_SQL_INSTANCE_READY_TIMEOUT_SECONDS}s; inspect the existing instance and rerun prepare.sh"
+    fi
+    attempts=$((attempts + 1))
+    if ((attempts % 6 == 0)); then
+      printf '.' >&2
+    fi
+    sleep "$CLOUD_SQL_RETRY_INTERVAL_SECONDS"
+  done
+}
+
 cloudrun_verify_url() {
   local url="$1"
-  local authorization=()
-  if [[ "$PUBLIC_ACCESS" != "true" ]]; then
-    authorization=(-H "Authorization: Bearer $(gcloud auth print-identity-token)")
+  if [[ "$PUBLIC_ACCESS" == "true" ]]; then
+    curl --fail --silent --show-error --location \
+      --retry 8 --retry-delay 2 --retry-all-errors \
+      "$url/ready" >/dev/null
+    curl --fail --silent --show-error --location \
+      --retry 4 --retry-delay 2 --retry-all-errors \
+      "$url/.well-known/jwks.json" >/dev/null
+    return
   fi
+
+  local authorization="Authorization: Bearer $(gcloud auth print-identity-token)"
   curl --fail --silent --show-error --location \
     --retry 8 --retry-delay 2 --retry-all-errors \
-    "${authorization[@]}" "$url/ready" >/dev/null
+    -H "$authorization" "$url/ready" >/dev/null
   curl --fail --silent --show-error --location \
     --retry 4 --retry-delay 2 --retry-all-errors \
-    "${authorization[@]}" "$url/.well-known/jwks.json" >/dev/null
+    -H "$authorization" "$url/.well-known/jwks.json" >/dev/null
+}
+
+cloudrun_disable_default_url_after_finalization() {
+  local service_url service_json
+  [[ "$DISABLE_DEFAULT_URL_AFTER_FINALIZE" == "true" ]] || return
+  [[ -n "$TOOL_URL" ]] ||
+    cloudrun_die "DISABLE_DEFAULT_URL_AFTER_FINALIZE=true requires a configured custom TOOL_URL"
+  cloudrun_validate_url TOOL_URL "$TOOL_URL"
+
+  # Candidate verification must happen first. Verify the custom origin before
+  # and after removal so an incomplete domain mapping cannot strand Canvas.
+  cloudrun_verify_url "${TOOL_URL%/}"
+  service_json="$(gcloud run services describe "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --format=json)"
+  if jq -e '.metadata.annotations["run.googleapis.com/default-url-disabled"] == "true"' \
+    <<<"$service_json" >/dev/null; then
+    cloudrun_verify_url "${TOOL_URL%/}"
+    return
+  fi
+  service_url="$(jq -r '.status.url // empty' <<<"$service_json")"
+  cloudrun_validate_url CLOUD_RUN_SERVICE_URL "$service_url"
+  [[ "${TOOL_URL%/}" != "${service_url%/}" ]] ||
+    cloudrun_die "DISABLE_DEFAULT_URL_AFTER_FINALIZE=true requires TOOL_URL to differ from the generated Cloud Run URL"
+
+  gcloud run services update "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --no-default-url \
+    --quiet
+  service_json="$(gcloud run services describe "$SERVICE" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" \
+    --format=json)"
+  jq -e '.metadata.annotations["run.googleapis.com/default-url-disabled"] == "true"' \
+    <<<"$service_json" >/dev/null ||
+    cloudrun_die "Cloud Run did not confirm that its generated default URL is disabled"
+  cloudrun_verify_url "${TOOL_URL%/}"
 }
 
 cloudrun_cut_over_tag() {

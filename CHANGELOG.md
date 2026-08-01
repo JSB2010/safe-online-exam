@@ -5,6 +5,47 @@ release.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-29
+
+Safe Online Exam 1.0.2 is a backward-compatible deployment-hardening release.
+It adds no database migration and does not change Canvas LTI registration URLs,
+OAuth callback URLs, required Canvas scopes, or public SEB compatibility
+endpoints.
+
+### Cloud Run deployment reliability
+
+- Generate file-backed bootstrap secrets without terminal line endings and
+  reject password files containing carriage returns or newlines before Cloud
+  SQL or Secret Manager can receive mismatched values.
+- Wait explicitly for Cloud SQL Admin API propagation and for a requested
+  Cloud SQL instance to become `RUNNABLE`, with bounded, readable retries.
+- Make candidate URL verification safe under macOS Bash strict mode by issuing
+  public and private curl requests through explicit branches.
+- Reject temporary bootstrap, client-identity, and deployment-state locations
+  so installer state and the SEB P12 cannot be lost to an operating-system
+  cleanup policy.
+- Detect expired `gcloud` credentials during the preflight check rather than
+  failing later in provisioning.
+
+### Custom-domain and Canvas readiness
+
+- Add an opt-in Cloud Run domain-mapping helper that reports the DNS records
+  and readiness state without mutating external DNS.
+- Generate an exact Canvas Theme Desktop loader for the configured custom
+  origin, avoiding stale detector-script URLs in protected quizzes.
+- Permit disabling Cloud Run's generated default URL only after LTI
+  finalization has verified the configured custom origin; the operation is
+  idempotent and re-verifies the custom origin afterwards.
+
+### Documentation and verification
+
+- Document the first production setup's recoverable failures, operational
+  handoffs, and one-year Cloud SQL commitment limitation.
+- Cover the hardened bundle paths with release-bundle tests, including the
+  Cloud SQL propagation wait, newline-free secret generation, macOS public
+  verification, default-URL idempotence, Canvas loader rendering, and durable
+  state enforcement.
+
 ## [1.0.1] - 2026-07-27
 
 Safe Online Exam 1.0.1 is a backward-compatible security, deployment, and
@@ -162,6 +203,7 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.0

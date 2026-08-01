@@ -21,6 +21,9 @@ fi
 cloudrun_load_environment "${1:-cloudrun.env}"
 cloudrun_validate_base
 cloudrun_require_commands docker jq openssl
+cloudrun_require_durable_local_directory BOOTSTRAP_DIRECTORY "$BOOTSTRAP_DIRECTORY"
+cloudrun_require_durable_local_directory CLIENT_IDENTITY_DIRECTORY "$CLIENT_IDENTITY_DIRECTORY"
+cloudrun_require_durable_local_directory STATE_DIRECTORY "$STATE_DIRECTORY"
 
 if [[ -e "$BOOTSTRAP_DIRECTORY" || -e "$CLIENT_IDENTITY_DIRECTORY" ]]; then
   cloudrun_die "refusing to overwrite an existing bootstrap or client-identity directory"
@@ -35,9 +38,9 @@ printf '%s' "$CANVAS_API_CLIENT_ID" >"$BOOTSTRAP_DIRECTORY/canvas_api_client_id"
 printf '%s' "$TOOL_URL" >"$BOOTSTRAP_DIRECTORY/tool_url"
 printf '%s' "bootstrap-pending" >"$BOOTSTRAP_DIRECTORY/lti_client_id"
 printf '%s' "bootstrap-pending" >"$BOOTSTRAP_DIRECTORY/lti_deployment_id"
-openssl rand -base64 48 >"$BOOTSTRAP_DIRECTORY/database_password"
-openssl rand -base64 48 >"$BOOTSTRAP_DIRECTORY/session_secret"
-openssl rand -base64 48 >"$BOOTSTRAP_DIRECTORY/state_encryption_key"
+cloudrun_write_random_secret "$BOOTSTRAP_DIRECTORY/database_password"
+cloudrun_write_random_secret "$BOOTSTRAP_DIRECTORY/session_secret"
+cloudrun_write_random_secret "$BOOTSTRAP_DIRECTORY/state_encryption_key"
 docker run --rm --entrypoint /nodejs/bin/node "$APP_IMAGE" \
   /app/scripts/generate-lti-private-key.mjs "safe-online-exam-$APP_VERSION" \
   >"$BOOTSTRAP_DIRECTORY/lti_private_key"
@@ -50,7 +53,7 @@ openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
   -out "$BOOTSTRAP_DIRECTORY/seb-config-encryption.crt.pem"
 openssl x509 -in "$BOOTSTRAP_DIRECTORY/seb-config-encryption.crt.pem" \
   -outform der -out "$CLIENT_IDENTITY_DIRECTORY/seb-config-encryption.cer"
-openssl rand -base64 48 >"$CLIENT_IDENTITY_DIRECTORY/seb-p12-password"
+cloudrun_write_random_secret "$CLIENT_IDENTITY_DIRECTORY/seb-p12-password"
 openssl pkcs12 -export \
   -inkey "$CLIENT_IDENTITY_DIRECTORY/seb-config-encryption.key.pem" \
   -in "$BOOTSTRAP_DIRECTORY/seb-config-encryption.crt.pem" \

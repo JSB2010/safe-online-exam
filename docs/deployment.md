@@ -114,9 +114,20 @@ The installer:
 8. creates new numbered secret versions and cuts traffic to the finalized
    revision.
 
+Do not run a release bundle from `/tmp`, `/private/tmp`, or `TMPDIR`. The
+bootstrap command rejects local protected-state paths there so automatic cleanup
+cannot remove the only SEB client identity or deployment records.
+
 The matching SEB `.p12`, private key, and password stay in the protected client
 identity directory until they are moved to the institution’s MDM/vault. They
 must never be uploaded to Secret Manager or Cloud Run.
+
+When `TOOL_URL` is a Cloud Run domain mapping, run the bundle's explicit
+`./map-domain.sh cloudrun.env` command after prepare. It creates or reads the
+mapping and prints required DNS/Ready conditions, but it does not change DNS.
+Only set `DISABLE_DEFAULT_URL_AFTER_FINALIZE=true` after the custom origin has
+passed health, readiness, JWKS, and LTI checks; finalization verifies its
+candidate first, then disables the generated URL.
 
 ### Cloud SQL Selection
 

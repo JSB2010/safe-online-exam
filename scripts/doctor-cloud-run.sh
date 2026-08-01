@@ -21,6 +21,8 @@ cloudrun_require_commands gcloud docker jq openssl curl
 
 active_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
 [[ -n "$active_account" ]] || cloudrun_die "gcloud has no active authenticated account"
+gcloud auth print-access-token >/dev/null 2>&1 ||
+  cloudrun_die "the active gcloud account cannot obtain an access token; run gcloud auth login again"
 gcloud projects describe "$PROJECT_ID" --format='value(projectId)' >/dev/null ||
   cloudrun_die "Google Cloud project is missing or inaccessible: $PROJECT_ID"
 
