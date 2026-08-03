@@ -776,5 +776,6 @@ exit 0
     expect(rollbackUrlValidation).toBeLessThan(rollbackCutover);
     expect(config).toContain('"$url/ready" >/dev/null || return 1');
     expect(config).toContain('"$url/.well-known/jwks.json" >/dev/null || return 1');
+    expect(config).toMatch(/--to-revisions="\$revision=100" \\\n\s+--quiet >&2/);
   });
 });

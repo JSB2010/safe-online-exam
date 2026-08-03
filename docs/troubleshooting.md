@@ -58,6 +58,14 @@ old revision still has traffic and inspect the
 temporarily enables the generated URL for candidate checks and restores the
 disabled policy after cutover or failure.
 
+The v1.0.3 Cloud Run bundle can include the successful `gcloud` traffic summary
+in its final **Revision** display and `DEPLOYED_REVISION` rollback-record field.
+This is a reporting-only defect: rollback reads `PREVIOUS_REVISION`, and the
+traffic change itself is unaffected. Use `gcloud run services describe` to
+confirm the active revision, keep the rollback record protected, and use a
+newer bundle whose cutover helper keeps command output separate from the
+captured revision value.
+
 For Cloud Run, inspect the active service revision and migration/cleanup job
 executions. For Compose, inspect `docker compose ps`, the one-shot migration
 result, application logs, PostgreSQL health, disk space, and the named

@@ -5,6 +5,12 @@ release.
 
 ## [Unreleased]
 
+### Cloud Run upgrade reporting
+
+- Keep the `gcloud` traffic-update summary out of the captured deployment
+  revision so upgrade output and protected rollback metadata contain one clean
+  revision name.
+
 ## [1.0.3] - 2026-08-03
 
 Safe Online Exam 1.0.3 is a backward-compatible Canvas detector and Cloud Run

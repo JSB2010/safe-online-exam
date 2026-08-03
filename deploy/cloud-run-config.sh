@@ -779,7 +779,7 @@ cloudrun_cut_over_tag() {
     --project="$PROJECT_ID" \
     --region="$REGION" \
     --to-revisions="$revision=100" \
-    --quiet
+    --quiet >&2
   cloudrun_verify_url "$url"
   printf '%s\n' "$revision"
 }
