@@ -5,6 +5,55 @@ release.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-03
+
+Safe Online Exam 1.0.3 is a backward-compatible Canvas detector and Cloud Run
+upgrade-reliability release. It adds no database migration and does not change
+existing Canvas LTI registration URLs, OAuth callback URLs, required Canvas
+scopes, or established SEB compatibility endpoints. It adds one secret-free
+public requirement-status endpoint used by the Canvas detector.
+
+### Canvas detector accuracy
+
+- Verify the exact stored course and assessment setting before showing the
+  Safe Online Exam launch prompt, instead of treating every Canvas access-code
+  field as proof that the assessment is managed by Safe Online Exam.
+- Add `GET /api/seb/requirement/:courseId/:quizId` as a bounded, rate-limited
+  lookup that reports a requirement only when the assessment relationship and
+  enabled SEB configuration are complete and usable.
+- Fail safely when requirement verification is absent, malformed, mismatched,
+  disabled, rate limited, or unavailable, allowing ordinary password-protected
+  Canvas quizzes to continue without a false Safe Online Exam redirect.
+- Coalesce repeated detector and server checks with short bounded caches while
+  rechecking the current Canvas assessment context before prompting.
+
+### Cloud Run upgrade and rollback reliability
+
+- Wait for the on-demand Cloud SQL backup operation to finish and require a
+  `SUCCESSFUL` backup before migrations or application traffic changes.
+- Support installations whose generated Cloud Run URL is disabled: validate
+  the configured custom origin, temporarily enable the generated URL for the
+  tagged no-traffic candidate, verify readiness and JWKS, cut over explicitly,
+  then restore the disabled-URL policy.
+- Restore the generated-URL policy through guarded failure cleanup so an
+  interrupted or rejected candidate does not leave the installation in the
+  wrong exposure state.
+- Make readiness and JWKS probe failures propagate reliably, and verify the
+  configured custom origin after both upgrade and rollback.
+- Keep portable bundle examples tenant-neutral and exclude ignored local
+  operator state from lint discovery.
+
+### Dependency and release maintenance
+
+- Update `jose` to 6.2.5 and `lucide-react` to 1.27.0.
+- Update Playwright to 1.62.0, ESLint to 10.8.0,
+  `typescript-eslint` to 8.65.0, `@vitejs/plugin-react` to 6.0.5, and related
+  React and PostgreSQL type packages.
+- Refresh the transitive `minimatch`, `brace-expansion`, and PostCSS build
+  dependencies to their advisory-fixed releases.
+- Update the pinned GHCR login and GitHub artifact-attestation actions while
+  retaining immutable SHA pinning.
+
 ## [1.0.2] - 2026-08-01
 
 Safe Online Exam 1.0.2 is a backward-compatible instructor-usability and
@@ -214,7 +263,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.3
 [1.0.2]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.0
