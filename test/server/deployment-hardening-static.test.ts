@@ -221,7 +221,7 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
     expect(workflow).toContain("linux/amd64,linux/arm64");
     expect(workflow).toContain("sbom: true");
-    expect(workflow).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
+    expect(workflow).toContain("actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d");
     expect(workflow).toContain("org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0");
     expect(workflow).toContain("type=raw,value=latest");
     expect(workflow).not.toContain("scope: ${{ env.IMAGE_NAME }}@push");
