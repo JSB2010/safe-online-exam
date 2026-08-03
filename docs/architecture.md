@@ -129,6 +129,8 @@ On the Canvas assessment page, the detector gets the SEB Config Key hash and cur
 
 `POST /api/seb/access-code/:courseId/:quizId` consumes that proof token. It returns the access code, approved tools, and an exit grant with sensitive response headers. A proof is valid for two minutes and can be consumed once. The detector then fills only an unambiguous Canvas access-code prompt. It does not treat DOM content as authorization.
 
+In an ordinary browser, an access-code field is only a Canvas challenge signal. Before showing the SEB-required prompt, the detector calls `GET /api/seb/requirement/:courseId/:quizId`. The endpoint normalizes the assessment identifier and performs one exact `assessments` primary-key lookup; a short, bounded promise cache coalesces concurrent checks for the same assessment. It returns true only when the stored course/content relationship matches and the SEB configuration is enabled, required, and usable. An absent, mismatched, disabled, malformed, or unverifiable result does not produce a launch prompt.
+
 ### Completion and exit
 
 The detector waits for Canvas-authored completion evidence. Classic Quiz completion requires a successful final submission and the matching Canvas result structure; New Quiz completion requires the authoritative result UI. On confirmed completion, the detector uses a settings-bound exit grant to display a quit link. Unbound manual/automatic quit paths intentionally return `410` rather than accepting a general-purpose quit request.
@@ -269,6 +271,7 @@ All routes below are under `/api/quizzes` and require the verified instructor/re
 | `POST /api/seb/access-proof/:courseId/:quizId`                                                    | Validate Config Key proof and mint the one-time access-code proof.                   |
 | `POST /api/seb/access-code/:courseId/:quizId`                                                     | Redeem a proof for the access code, approved tools, and exit grant.                  |
 | `GET /api/seb/access-code/:courseId/:quizId`                                                      | Explicit method guidance; redemption is POST-only.                                   |
+| `GET /api/seb/requirement/:courseId/:quizId`                                                      | Return the secret-free configured requirement used by the Canvas detector.           |
 | `GET /api/seb/tools/:courseId/:quizId`                                                            | Return the current approved tool view under the proof/session boundary.              |
 | `GET /seb/tool/youtube/:videoId`                                                                  | Render the server-owned, single-video YouTube player used by an approved video tool. |
 | `GET /seb/exit/session/:courseId/:quizId/:grant`                                                  | Render a validated post-submission exit page.                                        |

@@ -803,6 +803,14 @@ test("serves built app assets before API CORS restrictions", async ({ request })
 });
 
 test("keeps SEB config and proof endpoints defensive without seeded assessment data", async ({ request }) => {
+  const requirement = await request.get("/api/seb/requirement/course-1/23455", {
+    headers: { Origin: "https://canvas.example.test" }
+  });
+  expect(requirement.status()).toBe(200);
+  expect(requirement.headers()["cache-control"]).toBe("private, no-store, max-age=0");
+  expect(requirement.headers()["access-control-allow-origin"]).toBe("https://canvas.example.test");
+  await expect(requirement.json()).resolves.toEqual({ success: true, sebRequired: false });
+
   const config = await request.get("/seb/config/course-1/classicquiz_23455.seb");
   expect(config.status()).toBe(403);
   const configError = await config.text();

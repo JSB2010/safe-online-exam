@@ -63,9 +63,13 @@ interface SebLaunchContentView {
   canvasLaunchUrl?: string | null;
 }
 
+const SEB_REQUIREMENT_STATUS_CACHE_TTL_MS = 5_000;
+const SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES = 5_000;
+
 @Controller()
 export class SebController {
   private readonly configDownloadCache = new Map<string, { expiresAt: number; value: Promise<Buffer> }>();
+  private readonly requirementStatusCache = new Map<string, { expiresAt: number; value: Promise<boolean> }>();
   private setupCheckConfigCache?: Promise<Buffer>;
   constructor(
     private readonly config: AppConfig,
@@ -549,6 +553,40 @@ export class SebController {
     return {
       success: true,
       tools: this.examToolPayloads(setting.externalTools)
+    };
+  }
+
+  @Get("/api/seb/requirement/:courseId/:quizId")
+  async requirementStatus(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Param("quizId") quizId: string,
+    @Res({ passthrough: true }) response?: Response
+  ): Promise<Record<string, unknown>> {
+    response?.setHeader("cache-control", "private, no-store, max-age=0");
+    if (!/^[a-z0-9_-]{1,128}$/iu.test(courseId)) {
+      return { success: true, sebRequired: false };
+    }
+    const canonicalContentId = canonicalSebConfigContentId(quizId);
+    const parsed = parseNewQuizContentId(canonicalContentId);
+    if (!canonicalContentId || (parsed && parsed.courseId !== courseId)) {
+      return { success: true, sebRequired: false };
+    }
+    const cached = this.cachedSebRequirementStatus(courseId, canonicalContentId);
+    if (cached) {
+      return { success: true, sebRequired: await cached };
+    }
+    return {
+      success: true,
+      sebRequired: await this.cacheSebRequirementStatus(courseId, canonicalContentId, async () => {
+        if (
+          !consumePublicBudget(request, "seb-requirement", 12_000) ||
+          !(await this.distributedAdmission.consumeRequestIp(request, "seb-requirement-ip", 24_000))
+        ) {
+          return apiError(429, "Too many Safe Online Exam requirement checks", { error_code: "RATE_LIMITED" });
+        }
+        return this.isSebRequirementConfigured(courseId, canonicalContentId);
+      })
     };
   }
 
@@ -1245,6 +1283,79 @@ export class SebController {
         )
         .digest("base64url")
     };
+  }
+
+  private async isSebRequirementConfigured(courseId: string, contentId: string): Promise<boolean> {
+    const setting = await this.resolveSebSetting(courseId, contentId);
+    if (
+      !setting ||
+      setting.courseId !== courseId ||
+      !setting.sebRequired ||
+      !setting.enabled ||
+      !setting.accessCode ||
+      !this.effectiveQuitPassword(setting) ||
+      (setting.startPassword && !setting.configKeySalt)
+    ) {
+      return false;
+    }
+
+    const parsed = parseNewQuizContentId(contentId);
+    if (parsed) {
+      return (
+        parsed.courseId === courseId &&
+        "contentId" in setting &&
+        setting.contentId === contentId &&
+        setting.assignmentId === parsed.assignmentId &&
+        setting.contentType === "NEW_QUIZ"
+      );
+    }
+
+    const classicId = extractClassicQuizId(contentId);
+    return !!classicId && "quizId" in setting && setting.quizId === classicId;
+  }
+
+  private cachedSebRequirementStatus(courseId: string, contentId: string): Promise<boolean> | null {
+    const key = `${courseId}:${contentId}`;
+    const cached = this.requirementStatusCache.get(key);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      this.requirementStatusCache.delete(key);
+      return null;
+    }
+    return cached.value;
+  }
+
+  private cacheSebRequirementStatus(
+    courseId: string,
+    contentId: string,
+    load: () => Promise<boolean>
+  ): Promise<boolean> {
+    const key = `${courseId}:${contentId}`;
+    const now = Date.now();
+    for (const [cachedKey, cached] of this.requirementStatusCache) {
+      if (cached.expiresAt <= now) {
+        this.requirementStatusCache.delete(cachedKey);
+      }
+    }
+    while (this.requirementStatusCache.size >= SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.requirementStatusCache.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      this.requirementStatusCache.delete(oldestKey);
+    }
+
+    const value = load().catch((error: unknown) => {
+      const current = this.requirementStatusCache.get(key);
+      if (current?.value === value) {
+        this.requirementStatusCache.delete(key);
+      }
+      throw error;
+    });
+    this.requirementStatusCache.set(key, {
+      expiresAt: now + SEB_REQUIREMENT_STATUS_CACHE_TTL_MS,
+      value
+    });
+    return value;
   }
 
   private canvasCourseHomeUrl(courseId: string): string {

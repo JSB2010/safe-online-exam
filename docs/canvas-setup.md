@@ -185,7 +185,7 @@ Use a root-account-level installation for a broad rollout and for the school adm
 
 ## 4. Load the Detector Script Through the Canvas Theme
 
-The detector runs on Canvas quiz-taking pages. It launches the protected SEB flow, fills an access code only after Config Key proof, shows approved web tools, and detects Canvas-confirmed completion. The stable script URL is:
+The detector runs on Canvas quiz-taking pages. It treats a Canvas access-code field only as a challenge signal and verifies the exact course/assessment against the service before showing the protected SEB flow. It fills an access code only after Config Key proof, shows approved web tools, and detects Canvas-confirmed completion. The stable script URL is:
 
 ```text
 ${TOOL_URL}/js/canvas-seb-detector.js

@@ -25,6 +25,7 @@ describe("Safe Online Exam detector script", () => {
   it("renders the SEB launch prompt for Classic Quiz access-code pages in non-SEB browsers", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?user_id=7288",
+      sebRequired: true,
       body: `
         <nav><a aria-label="Safe Online Exam" href="/courses/11825/external_tools/44">Safe Online Exam</a></nav>
         <main>
@@ -37,8 +38,13 @@ describe("Safe Online Exam detector script", () => {
     });
 
     await context.runDetector();
+    await flushPromises();
 
     expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
+    expect(context.fetch).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/api/seb/requirement/11825/23455`,
+      expect.objectContaining({ credentials: "omit", method: "GET" })
+    );
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
 
     const directLaunchUrl = new URL(openSebLink!.href);
@@ -68,10 +74,66 @@ describe("Safe Online Exam detector script", () => {
     expect(context.historyBack).toHaveBeenCalledTimes(1);
   });
 
+  it("allows a normal Canvas Classic Quiz access code when the assessment is not configured for SEB", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take?user_id=7288",
+      sebRequired: false,
+      body: `
+        <main>
+          <h1 id="quiz_title">Normal Canvas Quiz</h1>
+          <form id="access_code_form">
+            <label>Access Code <input name="access_code" type="password" /></label>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/requirement/"))).toHaveLength(
+      1
+    );
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/access-proof/"))).toBe(false);
+
+    context.document.querySelector("main")?.appendChild(context.document.createElement("span"));
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/requirement/"))).toHaveLength(
+      1
+    );
+  });
+
+  it("does not show a false SEB prompt when the requirement check is unavailable", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      requirementFetchReject: true,
+      body: `
+        <main>
+          <h1 id="quiz_title">Canvas Quiz</h1>
+          <form id="access_code_form">
+            <label>Access Code <input name="access_code" type="password" /></label>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
+    expect(context.fetch.mock.calls.filter(([input]) => String(input).includes("/api/seb/requirement/"))).toHaveLength(
+      1
+    );
+  });
+
   it("keeps the SEB launch prompt active on access-code pages when debug logging is enabled", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?user_id=7288&debug=true",
       debugResponse: { enabled: true },
+      sebRequired: true,
       body: `
         <main>
           <h1 id="quiz_title">Midterm Quiz</h1>
@@ -83,6 +145,7 @@ describe("Safe Online Exam detector script", () => {
     });
 
     await context.runDetector();
+    await flushPromises();
     await vi.advanceTimersByTimeAsync(3_100);
 
     expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
@@ -95,6 +158,7 @@ describe("Safe Online Exam detector script", () => {
   it("lets students dismiss the New Quiz launch prompt to view previous attempts", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/assignments/991/taking/31299",
+      sebRequired: true,
       body: `
         <nav><a aria-label="Safe Online Exam" href="/courses/11825/external_tools/44">Safe Online Exam</a></nav>
         <main>
@@ -108,6 +172,7 @@ describe("Safe Online Exam detector script", () => {
     });
 
     await context.runDetector();
+    await flushPromises();
 
     expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
     expect(context.document.body.textContent).toContain("review previous attempts");
@@ -135,6 +200,7 @@ describe("Safe Online Exam detector script", () => {
     const context = createDetectorContext({
       path: "/courses/11825/assignments/437577/taking/31300",
       debugResponse: { enabled: true },
+      sebRequired: true,
       body: `
         <main>
           <button type="button">Skip To Quiz Content</button>
@@ -192,6 +258,37 @@ describe("Safe Online Exam detector script", () => {
     await vi.advanceTimersByTimeAsync(500);
 
     expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/requirement/"))).toBe(false);
+  });
+
+  it("allows a normal Canvas New Quiz access code when the assessment is not configured for SEB", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/assignments/437577/taking/31300",
+      sebRequired: false,
+      body: `<main><button type="button">Skip To Quiz Content</button></main>`
+    });
+
+    await context.runDetector();
+    context.document.querySelector("main")?.insertAdjacentHTML(
+      "beforeend",
+      `
+        <section>
+          <p>An access code is required to start</p>
+          <form>
+            <input name="access_code" type="password" />
+            <button type="submit">Submit</button>
+          </form>
+        </section>
+      `
+    );
+    await vi.advanceTimersByTimeAsync(400);
+    await flushPromises();
+
+    expect(context.document.getElementById("seb-launch-prompt")).toBeNull();
+    expect(context.fetch).toHaveBeenCalledWith(
+      `${APP_BASE_URL}/api/seb/requirement/11825/newquiz%3A11825%3A437577`,
+      expect.objectContaining({ credentials: "omit", method: "GET" })
+    );
   });
 
   it("proves SEB config key, retrieves the one-time access code, fills it, and submits the access-code form", async () => {
@@ -1933,6 +2030,8 @@ interface DetectorContextOptions {
   body: string;
   userAgent?: string;
   debugResponse?: FetchResponse;
+  sebRequired?: boolean;
+  requirementFetchReject?: boolean;
   fetchResponses?: Record<string, FetchResponse>;
   safeExamBrowser?: unknown;
   openWindow?: ReturnType<typeof vi.fn>;
@@ -1962,6 +2061,12 @@ function createDetectorContext(options: DetectorContextOptions) {
     const url = new URL(input);
     if (url.pathname === "/api/debug/canvas-detector-trace") {
       return jsonResponse({ enabled: true });
+    }
+    if (url.pathname.startsWith("/api/seb/requirement/")) {
+      if (options.requirementFetchReject) {
+        throw new Error("requirement service unavailable");
+      }
+      return jsonResponse({ success: true, sebRequired: options.sebRequired === true });
     }
     const response = options.fetchResponses?.[url.pathname];
     if (response) {
@@ -2072,6 +2177,7 @@ function jsonResponse(body: FetchResponse) {
 }
 
 async function flushPromises() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
 }

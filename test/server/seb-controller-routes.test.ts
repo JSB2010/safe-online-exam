@@ -90,6 +90,132 @@ describe("SebController route contracts", () => {
     });
   });
 
+  it("returns an authoritative Classic Quiz requirement using one exact assessment lookup", async () => {
+    const response = responseDouble();
+    const { controller, assessments, distributedAdmission } = controllerWith({
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS"
+        })
+      }
+    });
+
+    await expect(
+      Promise.all([
+        controller.requirementStatus(
+          requestDouble("/api/seb/requirement/course-1/23455"),
+          "course-1",
+          "23455",
+          response
+        ),
+        controller.requirementStatus(requestDouble("/api/seb/requirement/course-1/23455"), "course-1", "23455")
+      ])
+    ).resolves.toEqual([
+      { success: true, sebRequired: true },
+      { success: true, sebRequired: true }
+    ]);
+
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
+    expect(assessments.getSebSettingForQuiz).toHaveBeenCalledTimes(1);
+    expect(assessments.getSebSettingForQuiz).toHaveBeenCalledWith("classicquiz_23455");
+    expect(assessments.getContentSebSetting).not.toHaveBeenCalled();
+    expect(distributedAdmission.consumeRequestIp).toHaveBeenCalledTimes(1);
+    expect(distributedAdmission.consumeRequestIp).toHaveBeenCalledWith(expect.anything(), "seb-requirement-ip", 24_000);
+  });
+
+  it("returns an authoritative New Quiz requirement using its canonical assessment id", async () => {
+    const contentId = "newquiz:11825:437577";
+    const { controller, assessments } = controllerWith({
+      assessments: {
+        getContentSebSetting: vi.fn().mockResolvedValue({
+          contentId,
+          assignmentId: "437577",
+          contentType: "NEW_QUIZ",
+          courseId: "11825",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS"
+        })
+      }
+    });
+
+    await expect(
+      controller.requirementStatus(
+        requestDouble(`/api/seb/requirement/11825/${encodeURIComponent(contentId)}`),
+        "11825",
+        contentId
+      )
+    ).resolves.toEqual({ success: true, sebRequired: true });
+
+    expect(assessments.getContentSebSetting).toHaveBeenCalledTimes(1);
+    expect(assessments.getContentSebSetting).toHaveBeenCalledWith(contentId);
+    expect(assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
+  });
+
+  it("reports no requirement for absent, disabled, mismatched, or malformed assessment settings", async () => {
+    const absent = controllerWith();
+    await expect(absent.controller.requirementStatus(requestDouble(), "course-1", "23455")).resolves.toEqual({
+      success: true,
+      sebRequired: false
+    });
+
+    const disabled = controllerWith({
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: false,
+          accessCode: "ACCESS"
+        })
+      }
+    });
+    await expect(disabled.controller.requirementStatus(requestDouble(), "course-1", "23455")).resolves.toEqual({
+      success: true,
+      sebRequired: false
+    });
+
+    const mismatchedNewQuiz = controllerWith({
+      assessments: {
+        getContentSebSetting: vi.fn().mockResolvedValue({
+          contentId: "newquiz:11825:999999",
+          assignmentId: "999999",
+          contentType: "NEW_QUIZ",
+          courseId: "11825",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS"
+        })
+      }
+    });
+    await expect(
+      mismatchedNewQuiz.controller.requirementStatus(requestDouble(), "11825", "newquiz:11825:437577")
+    ).resolves.toEqual({ success: true, sebRequired: false });
+
+    const malformed = controllerWith();
+    await expect(
+      malformed.controller.requirementStatus(requestDouble(), "../../course", "not-a-quiz")
+    ).resolves.toEqual({ success: true, sebRequired: false });
+    expect(malformed.assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
+    expect(malformed.distributedAdmission.consumeRequestIp).not.toHaveBeenCalled();
+  });
+
+  it("rate limits public requirement checks before reading an assessment", async () => {
+    const { controller, assessments } = controllerWith({
+      distributedAdmission: { consumeRequestIp: vi.fn().mockResolvedValue(false) }
+    });
+
+    await expect(controller.requirementStatus(requestDouble(), "course-1", "23455")).rejects.toMatchObject({
+      status: 429
+    });
+    expect(assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
+    expect(assessments.getContentSebSetting).not.toHaveBeenCalled();
+  });
+
   it("opens YouTube through the server-owned player page and regular tools directly", async () => {
     const { controller } = controllerWith({
       assessments: {

@@ -205,6 +205,7 @@ Canvas and deployed clients depend on these stable public routes:
 - `GET /js/canvas-seb-detector.js`
 - `GET /js/canvas-seb-theme-loader.js`
 - `GET /api/seb/canvas-detector.js`
+- `GET /api/seb/requirement/:courseId/:quizId`
 - `GET /api/oauth2callback`
 - `GET /seb/config/:courseId/:contentId.seb`
 

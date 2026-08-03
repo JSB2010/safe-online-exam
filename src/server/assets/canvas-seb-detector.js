@@ -19,6 +19,7 @@
     const SAFE_ONLINE_EXAM_ICON_URL = `${SEB_DOWNLOAD_BASE_URL}/assets/safe-online-exam-icon.png`;
     const DETECTOR_TRACE_BATCH_SIZE = 15;
     const LATE_ACCESS_CODE_CHECK_DELAY_MS = 300;
+    const SEB_REQUIREMENT_CACHE_TTL_MS = 30 * 1000;
     const PENDING_REDIRECT_TTL_MS = 10 * 60 * 1000;
     const EXAM_SESSION_CAPABILITY_TTL_MS = 12 * 60 * 60 * 1000;
     const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
@@ -215,7 +216,8 @@
         detectorTraceTimer: null,
         examToolWindows: new Map(),
         examToolLaunchVersion: 0,
-        authorizedExamTools: new Map()
+        authorizedExamTools: new Map(),
+        sebRequirementChecks: new Map()
     };
 
     function initializeScript() {
@@ -868,6 +870,51 @@
         }
 
         return false;
+    }
+
+    async function isSebRequiredForAssessment(quizInfo) {
+        const key = quizInfo.courseId + ':' + quizInfo.quizId;
+        const now = Date.now();
+        const cached = state.sebRequirementChecks.get(key);
+        if (cached && cached.expiresAt > now) {
+            return cached.promise;
+        }
+
+        const promise = fetch(
+            `${SEB_DOWNLOAD_BASE_URL}/api/seb/requirement/${encodeURIComponent(quizInfo.courseId)}/${encodeURIComponent(quizInfo.quizId)}`,
+            {
+                method: 'GET',
+                credentials: 'omit',
+                headers: { 'Accept': 'application/json' }
+            }
+        ).then(async (response) => {
+            if (!response.ok) {
+                throw new Error('Requirement status returned HTTP ' + response.status);
+            }
+            const data = await response.json();
+            return data?.success === true && data.sebRequired === true;
+        }).catch((error) => {
+            debugLog('Could not verify Safe Online Exam requirement: ' + errorMessage(error), 'warn');
+            return false;
+        });
+
+        state.sebRequirementChecks.set(key, {
+            expiresAt: now + SEB_REQUIREMENT_CACHE_TTL_MS,
+            promise
+        });
+        return promise;
+    }
+
+    function isCurrentQuizContext(quizInfo) {
+        const current = extractQuizInfo();
+        return !!current && quizKey(current) === quizKey(quizInfo);
+    }
+
+    async function shouldShowSebLaunchPrompt(quizInfo) {
+        return await isSebRequiredForAssessment(quizInfo)
+            && isCurrentQuizContext(quizInfo)
+            && !isSafeBrowser()
+            && checkForAccessCodeRequirement();
     }
 
     function findAccessCodeField() {
@@ -3411,7 +3458,7 @@
         }
     }
 
-    function enforceSebRequirement() {
+    async function enforceSebRequirement() {
         debugLog('=== SEB DETECTOR STARTED ===');
         debugLog('Page URL: ' + debugSafeUrl(window.location.href));
         debugLog('User Agent: ' + navigator.userAgent.substring(0, 100) + '...');
@@ -3470,8 +3517,13 @@
 
         debugLog('Non-SEB browser detected, checking for access code requirement');
         if (hasAccessCodeRequirement) {
-            debugLog('Access code requirement detected, redirecting to SEB download');
-            redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+            debugLog('Access code requirement detected, verifying stored Safe Online Exam requirement');
+            if (await shouldShowSebLaunchPrompt(quizInfo)) {
+                debugLog('Stored Safe Online Exam requirement confirmed, showing browser launch prompt');
+                redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+            } else {
+                debugLog('No stored Safe Online Exam requirement confirmed, allowing normal Canvas access');
+            }
         } else if (debugOverrideAllowed) {
             debugLog('Debug URL override active; running non-SEB completion handlers for diagnostics', 'warn');
             setupExamToolsSidebar(quizInfo);
@@ -3505,17 +3557,21 @@
 
         state.lateAccessCodeCheckTimer = setTimeout(() => {
             state.lateAccessCodeCheckTimer = null;
-            handleLateAccessCodeChallenge();
+            void handleLateAccessCodeChallenge();
         }, LATE_ACCESS_CODE_CHECK_DELAY_MS);
     }
 
-    function handleLateAccessCodeChallenge() {
+    async function handleLateAccessCodeChallenge() {
         if (!isCanvasQuizPage()) {
             return;
         }
 
         const quizInfo = extractQuizInfo();
         if (!quizInfo) {
+            return;
+        }
+
+        if (!isStudentAssessmentAccessPage(quizInfo)) {
             return;
         }
 
@@ -3552,8 +3608,13 @@
         detectorTrace('late-access-code-requirement-detected', { quizInfo }, 'success');
 
         if (!sebDetected) {
-            debugLog('Redirecting late-rendered access code requirement to SEB download');
-            redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+            debugLog('Verifying stored Safe Online Exam requirement for late-rendered access code challenge');
+            if (await shouldShowSebLaunchPrompt(quizInfo)) {
+                debugLog('Stored Safe Online Exam requirement confirmed, showing browser launch prompt');
+                redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+            } else {
+                debugLog('No stored Safe Online Exam requirement confirmed, allowing normal Canvas access');
+            }
             return;
         }
 
@@ -3660,12 +3721,12 @@
         if (document.readyState === 'loading') {
             debugLog('DOM still loading, waiting for DOMContentLoaded');
             document.addEventListener('DOMContentLoaded', () => {
-                enforceSebRequirement();
+                void enforceSebRequirement();
                 setTimeout(maybeRedirectAfterSubmission, 300);
             }, { once: true });
         } else {
             debugLog('DOM already loaded, running immediately');
-            enforceSebRequirement();
+            void enforceSebRequirement();
             setTimeout(maybeRedirectAfterSubmission, 300);
         }
 
@@ -3789,7 +3850,7 @@
                     clearTimeout(state.spaRerunTimer);
                 }
                 state.spaRerunTimer = setTimeout(() => {
-                    enforceSebRequirement();
+                    void enforceSebRequirement();
                     setTimeout(maybeRedirectAfterSubmission, 200);
                 }, 1000);
             }

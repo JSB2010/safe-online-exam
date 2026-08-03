@@ -158,6 +158,7 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 2. Run the optional setup check. Test a missing/revoked scope path and confirm the recovery path requests a new Canvas connection.
 3. Open each enabled assessment. Confirm the ordinary browser presents the protected launch/download flow rather than an access-code value.
 4. Confirm the detector’s launch UI is available on the Canvas assessment route and approved tools are not exposed before a valid SEB proof.
+5. Configure a separate Classic Quiz and New Quiz with ordinary Canvas access codes but do not enable them in Safe Online Exam. Confirm both retain their normal Canvas access-code flow and never show the SEB-required prompt.
 
 ### Student In SEB
 
