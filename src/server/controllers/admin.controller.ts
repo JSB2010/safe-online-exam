@@ -21,9 +21,11 @@ import { toSebSettingView } from "../http/seb-response.js";
 import { AdminAuthorizationService } from "../services/admin-authorization.service.js";
 import {
   AssessmentAccessCodeConsistencyError,
+  AssessmentOperationLockLostError,
   AssessmentOperationInProgressError,
   AssessmentService,
   CourseMutationInProgressError,
+  CourseMutationOperationLockLostError,
   CourseResetAssessmentIdentityError,
   CourseResetCompensationError,
   CourseResetInProgressError,
@@ -485,6 +487,19 @@ export class AdminController {
           }
         );
       }
+      if (
+        error instanceof AssessmentOperationLockLostError ||
+        error instanceof CourseMutationOperationLockLostError ||
+        error instanceof CourseResetOperationLockLostError
+      ) {
+        return apiError(
+          409,
+          "The reset could not confirm operation-lock ownership through completion. It may have completed; refresh the course and verify Canvas assessment access codes before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
+          }
+        );
+      }
       if (error instanceof AssessmentOperationInProgressError || error instanceof CourseMutationInProgressError) {
         return apiError(
           409,
@@ -509,15 +524,6 @@ export class AdminController {
           "Canvas denied access to at least one assessment. Check the administrator Developer Key scopes and course permissions, then retry; course records were not deleted.",
           {
             error_code: "CANVAS_PERMISSION_DENIED"
-          }
-        );
-      }
-      if (error instanceof CourseResetOperationLockLostError) {
-        return apiError(
-          409,
-          "The reset could not confirm operation-lock ownership through completion. It may have completed; refresh the course and verify Canvas assessment access codes before retrying.",
-          {
-            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
           }
         );
       }

@@ -6,10 +6,14 @@ import { createInMemoryRepositories } from "../../src/server/data/in-memory-repo
 import { AdminAuthorizationService } from "../../src/server/services/admin-authorization.service.js";
 import {
   AssessmentAccessCodeConsistencyError,
+  AssessmentOperationLockLostError,
   AssessmentOperationInProgressError,
+  CourseMutationOperationLockLostError,
   CourseResetAssessmentIdentityError,
-  CourseResetCompensationError
+  CourseResetCompensationError,
+  CourseResetOperationLockLostError
 } from "../../src/server/services/assessment.service.js";
+import { CanvasApiRequestError } from "../../src/server/services/canvas-api.service.js";
 
 const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator";
 
@@ -146,6 +150,44 @@ describe("AdminController", () => {
       response: expect.objectContaining({
         error_code: "ADMIN_COURSE_RESET_ASSESSMENT_BUSY",
         message: expect.stringContaining("course records were not deleted")
+      })
+    });
+  });
+
+  it.each([
+    new AssessmentOperationLockLostError(),
+    new CourseMutationOperationLockLostError(),
+    new CourseResetOperationLockLostError()
+  ])("requires reset verification when any operation lease is lost", async (lockError) => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi.fn().mockRejectedValue(lockError);
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED",
+        message: expect.stringContaining("verify Canvas assessment access codes")
+      })
+    });
+  });
+
+  it("reports a bounded upstream failure when Canvas reset discovery fails", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new CanvasApiRequestError("Canvas unavailable", "42", "", 502));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 502,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_CANVAS_FAILED",
+        message: expect.stringContaining("Course records were not deleted")
       })
     });
   });

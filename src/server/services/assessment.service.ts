@@ -111,14 +111,27 @@ export class AssessmentService {
     }
     const syncedAt = new Date().toISOString();
     const existingRecords = await this.getAssessmentRecordsForCourse(courseId);
-    // Deny learner release while a discovery pass is in flight. This closes
-    // the window where an omitted cached assessment could otherwise remain
-    // usable until the successful response was persisted as a tombstone.
-    await Promise.all([
-      this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt),
-      this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt)
-    ]);
+    if (!options.requireCompleteDiscovery) {
+      // Deny learner release while a normal discovery pass is in flight. This
+      // closes the window where an omitted cached assessment could otherwise
+      // remain usable until the successful response was persisted as a tombstone.
+      await Promise.all([
+        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt),
+        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt)
+      ]);
+    }
     const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId, ...canvasGrantArgs(grantType));
+    let strictNewQuizzes: ContentItem[] | null = null;
+    if (options.requireCompleteDiscovery) {
+      // A reset must discover both assessment types before changing any cached
+      // verification state. Otherwise a failed second Canvas request could
+      // block learners from assessments even though the reset never started.
+      strictNewQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+      await Promise.all([
+        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt),
+        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt)
+      ]);
+    }
     const classicIds = new Set(classicQuizzes.map((quiz) => assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id)));
     const classicRecords = (
       await mapInBatches(classicQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (quiz) =>
@@ -132,14 +145,15 @@ export class AssessmentService {
     await this.markMissingCanvasAssessments(existingRecords, "CLASSIC_QUIZ", classicIds, syncedAt);
     let contentRecords: AssessmentRecord[];
     let newQuizzes: ContentItem[];
-    try {
-      newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
-    } catch (error) {
-      if (options.requireCompleteDiscovery) {
-        throw error;
+    if (strictNewQuizzes) {
+      newQuizzes = strictNewQuizzes;
+    } else {
+      try {
+        newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+      } catch {
+        contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
+        return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
       }
-      contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
-      return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
     }
     const newQuizIds = new Set(newQuizzes.map((item) => canonicalAssessmentId(item.id)));
     contentRecords = (
