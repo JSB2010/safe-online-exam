@@ -303,22 +303,24 @@ export class QuizController {
       return apiError(403, "Course mismatch");
     }
     await this.authorization.requireInstructorForAssessment(request, courseId, contentId, true);
-    const defaults = await this.courseSettings.getDefaults(courseId);
     const urlRules = Array.isArray(body.urlRules)
       ? normalizeUrlRules(body.urlRules)
       : legacyDomainsToUrlRules(body.customDomains);
     const ssoDomains = normalizeConcreteDomains(body.ssoDomains);
     const educationalToolDomains = normalizeConcreteDomains(body.educationalToolDomains);
     if (parsed) {
-      const setting = await this.assessments.getContentSebSetting(contentId);
-      if (!setting) {
-        return apiError(404, "Assessment not found");
-      }
-      const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
       const saved = await this.assessments.withAssessmentLock(
         contentId,
-        () =>
-          this.assessments.saveContentSebSetting(
+        async () => {
+          const [setting, defaults] = await Promise.all([
+            this.assessments.getContentSebSetting(contentId),
+            this.courseSettings.getDefaults(courseId)
+          ]);
+          if (!setting) {
+            return null;
+          }
+          const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
+          return this.assessments.saveContentSebSetting(
             applyCourseDefaultsToContentSetting(
               {
                 ...setting,
@@ -349,24 +351,34 @@ export class QuizController {
               },
               defaults
             )
-          ),
+          );
+        },
         courseId
       );
+      if (!saved) {
+        return apiError(404, "Assessment not found");
+      }
       return {
         success: true,
         setting: toSebSettingView(saved, this.config.value.seb.defaultQuitPassword)
       };
     }
-    const setting = body.quizId ? await this.assessments.getSebSettingForQuiz(body.quizId) : null;
-    if (!body.quizId || !setting) {
+    if (!body.quizId) {
       return apiError(404, "Assessment not found");
     }
     const quizId = body.quizId;
-    const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
     const saved = await this.assessments.withAssessmentLock(
       quizId,
-      () =>
-        this.assessments.saveQuizSebSetting(
+      async () => {
+        const [setting, defaults] = await Promise.all([
+          this.assessments.getSebSettingForQuiz(quizId),
+          this.courseSettings.getDefaults(courseId)
+        ]);
+        if (!setting) {
+          return null;
+        }
+        const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
+        return this.assessments.saveQuizSebSetting(
           applyCourseDefaultsToQuizSetting(
             {
               ...defaultQuizSebSetting(quizId, courseId),
@@ -401,9 +413,13 @@ export class QuizController {
             },
             defaults
           )
-        ),
+        );
+      },
       courseId
     );
+    if (!saved) {
+      return apiError(404, "Assessment not found");
+    }
     return {
       success: true,
       setting: toSebSettingView(saved, this.config.value.seb.defaultQuitPassword)
@@ -807,7 +823,10 @@ function courseToolCopyFailureCode(error: unknown): string {
       : null;
   if (response && typeof response === "object" && "error_code" in response) {
     const errorCode = (response as { error_code?: unknown }).error_code;
-    if (typeof errorCode === "string" && errorCode === "COURSE_TOOL_LIMIT") {
+    if (
+      typeof errorCode === "string" &&
+      ["COURSE_TOOL_LIMIT", "COURSE_RESET_IN_PROGRESS", "COURSE_UPDATE_IN_PROGRESS"].includes(errorCode)
+    ) {
       return errorCode;
     }
   }

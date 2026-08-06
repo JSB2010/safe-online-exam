@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuizController } from "../../src/server/controllers/quiz.controller.js";
 import { createActionToken } from "../../src/server/http/action-token.js";
 import { AssessmentAuthorizationService } from "../../src/server/services/assessment-authorization.service.js";
-import { CourseResetInProgressError } from "../../src/server/services/assessment.service.js";
+import {
+  CourseMutationInProgressError,
+  CourseResetInProgressError
+} from "../../src/server/services/assessment.service.js";
 import { defaultCourseSebDefaults } from "../../src/shared/models.js";
 
 const SESSION_SECRET = "test-session-secret";
@@ -302,6 +305,32 @@ describe("QuizController", () => {
       403
     );
     expect(courseSettings.copyInstructorToolToCourse).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves course reset and mutation conflicts for each tool-copy destination", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      externalTools: [copyableTool()]
+    });
+    canvasApi.getInstructorCourses.mockResolvedValue([
+      { id: "course-2", name: "Biology", courseCode: "BIO-2" },
+      { id: "course-3", name: "Chemistry", courseCode: "CHEM-3" }
+    ]);
+    courseSettings.copyInstructorToolToCourse
+      .mockRejectedValueOnce(new CourseResetInProgressError())
+      .mockRejectedValueOnce(new CourseMutationInProgressError());
+
+    await expect(
+      controller.copyCourseTool(mutationRequest(), COURSE_ID, "formula-sheet", {
+        courseIds: ["course-2", "course-3"]
+      })
+    ).resolves.toMatchObject({
+      success: false,
+      failed: [
+        { courseId: "course-2", errorCode: "COURSE_RESET_IN_PROGRESS" },
+        { courseId: "course-3", errorCode: "COURSE_UPDATE_IN_PROGRESS" }
+      ]
+    });
   });
 
   it("does not expose copying for a school-managed course tool", async () => {
@@ -623,36 +652,51 @@ describe("QuizController", () => {
   });
 
   it("saves a Classic Quiz structured policy and returns only secret-presence flags", async () => {
-    courseSettings.getDefaults.mockResolvedValue({
-      ...defaultCourseSebDefaults(COURSE_ID),
-      externalTools: [
-        {
-          id: "desmos-graphing",
-          label: "Desmos Graphing",
-          url: "https://www.desmos.com/calculator",
-          enabled: false
-        },
-        {
-          id: "desmos-scientific",
-          label: "Desmos Scientific",
-          url: "https://www.desmos.com/scientific",
-          enabled: false
-        }
-      ]
+    let lockActive = false;
+    assessments.withAssessmentLock.mockImplementation(async (_contentId, action) => {
+      lockActive = true;
+      try {
+        return await action();
+      } finally {
+        lockActive = false;
+      }
     });
-    assessments.getSebSettingForQuiz.mockResolvedValue({
-      quizId: "quiz-1",
-      courseId: COURSE_ID,
-      sebRequired: true,
-      enabled: true,
-      accessCode: "ACCESS-SECRET",
-      configKey: "CONFIG-SECRET",
-      quitPassword: "OLD-UNIQUE-QUIT",
-      startPassword: "OLD-UNIQUE-START",
-      ssoDomains: [],
-      educationalToolDomains: [],
-      customDomains: [],
-      externalTools: []
+    courseSettings.getDefaults.mockImplementation(async () => {
+      expect(lockActive).toBe(true);
+      return {
+        ...defaultCourseSebDefaults(COURSE_ID),
+        externalTools: [
+          {
+            id: "desmos-graphing",
+            label: "Desmos Graphing",
+            url: "https://www.desmos.com/calculator",
+            enabled: false
+          },
+          {
+            id: "desmos-scientific",
+            label: "Desmos Scientific",
+            url: "https://www.desmos.com/scientific",
+            enabled: false
+          }
+        ]
+      };
+    });
+    assessments.getSebSettingForQuiz.mockImplementation(async () => {
+      expect(lockActive).toBe(true);
+      return {
+        quizId: "quiz-1",
+        courseId: COURSE_ID,
+        sebRequired: true,
+        enabled: true,
+        accessCode: "ACCESS-SECRET",
+        configKey: "CONFIG-SECRET",
+        quitPassword: "OLD-UNIQUE-QUIT",
+        startPassword: "OLD-UNIQUE-START",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      };
     });
     assessments.saveQuizSebSetting.mockImplementation(async (setting) => setting);
 

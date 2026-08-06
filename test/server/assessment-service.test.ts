@@ -8,6 +8,7 @@ import {
   AssessmentOperationLockLostError,
   AssessmentService,
   CourseMutationInProgressError,
+  CourseResetAssessmentIdentityError,
   CourseResetInProgressError
 } from "../../src/server/services/assessment.service.js";
 import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
@@ -1371,6 +1372,10 @@ describe("AssessmentService", () => {
     expect(new CourseMutationInProgressError()).toMatchObject({
       status: 409,
       response: expect.objectContaining({ error_code: "COURSE_UPDATE_IN_PROGRESS" })
+    });
+    expect(new CourseResetAssessmentIdentityError()).toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE" })
     });
   });
 

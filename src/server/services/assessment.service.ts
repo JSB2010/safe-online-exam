@@ -171,7 +171,7 @@ export class AssessmentService {
                 } else {
                   const quizId = assessment.canvas.quizId || extractClassicQuizId(assessment.id);
                   if (!quizId) {
-                    throw new Error("Canvas quiz identifier is unavailable during course reset");
+                    throw new CourseResetAssessmentIdentityError();
                   }
                   await this.canvasApi.removeQuizAccessCode(
                     courseId,
@@ -1040,6 +1040,19 @@ export class CourseResetInProgressError extends ConflictException {
       message: "A Canvas administrator is resetting this course. Wait for the reset to finish, then try again."
     });
     this.name = "CourseResetInProgressError";
+  }
+}
+
+export class CourseResetAssessmentIdentityError extends ConflictException {
+  constructor() {
+    super({
+      success: false,
+      statusCode: 409,
+      error_code: "COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE",
+      message:
+        "Canvas did not provide an assessment identifier required for reset. Course records were not deleted; refresh the course and retry."
+    });
+    this.name = "CourseResetAssessmentIdentityError";
   }
 }
 

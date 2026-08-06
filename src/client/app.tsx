@@ -3266,7 +3266,7 @@ function PasswordRequirements({
     },
     { label: "At least 5 different letters or numbers", met: state.hasEnoughDistinctCharacters },
     { label: "No common words, sequences, or repeated patterns", met: state.avoidsPredictablePatterns },
-    { label: "No line breaks or control characters", met: state.hasNoControlCharacters },
+    { label: "No control or invisible formatting characters", met: state.hasNoControlCharacters },
     {
       label:
         hasSavedOtherPassword && !hasTypedOtherPassword

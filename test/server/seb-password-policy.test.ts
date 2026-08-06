@@ -61,7 +61,10 @@ describe("SEB password strength policy", () => {
       "strong-enough\nvalue",
       "cobalt\u0085lantern4829",
       "\u2028cobalt-lantern-4829",
-      "cobalt-lantern-4829\u2029"
+      "cobalt-lantern-4829\u2029",
+      "cobalt\u200elantern4829",
+      "cobalt\u200flantern4829",
+      "cobalt-lantern-4829\ufeff"
     ];
     for (const candidate of rejected) {
       expect(sebPasswordPolicyViolation(candidate), candidate).not.toBeNull();
@@ -75,16 +78,19 @@ describe("SEB password strength policy", () => {
       "Exit password must be no more than 128 characters."
     );
     expect(() => assertSebPassword("strong-enough\nvalue", "start")).toThrow(
-      "Start password cannot contain control characters or line breaks."
+      "Start password cannot contain control, invisible formatting, or line-separator characters."
     );
     expect(() => assertSebPassword("cobalt\u0085lantern4829", "start")).toThrow(
-      "Start password cannot contain control characters or line breaks."
+      "Start password cannot contain control, invisible formatting, or line-separator characters."
     );
     expect(() => assertSebPassword("\u2028cobalt-lantern-4829", "exit")).toThrow(
-      "Exit password cannot contain control characters or line breaks."
+      "Exit password cannot contain control, invisible formatting, or line-separator characters."
     );
     expect(() => assertSebPassword("cobalt-lantern-4829\u2029", "exit")).toThrow(
-      "Exit password cannot contain control characters or line breaks."
+      "Exit password cannot contain control, invisible formatting, or line-separator characters."
+    );
+    expect(() => assertSebPassword("cobalt\u200elantern4829", "exit")).toThrow(
+      "Exit password cannot contain control, invisible formatting, or line-separator characters."
     );
     expect(() => assertSebPassword("12345678", "exit")).toThrow("Letters-only and numbers-only passwords are allowed.");
   });
@@ -118,7 +124,7 @@ describe("SEB password strength policy", () => {
     });
     expect(resolveSebPasswordUpdate("existing-secret", "cobalt\u0085lantern4829")).not.toBe("existing-secret");
     expect(() => assertNewSebPassword("existing-secret", "cobalt\u0085lantern4829", "exit")).toThrow(
-      "Exit password cannot contain control characters or line breaks."
+      "Exit password cannot contain control, invisible formatting, or line-separator characters."
     );
   });
 

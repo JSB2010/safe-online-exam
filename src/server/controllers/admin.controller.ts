@@ -23,6 +23,7 @@ import {
   AssessmentOperationInProgressError,
   AssessmentService,
   CourseMutationInProgressError,
+  CourseResetAssessmentIdentityError,
   CourseResetInProgressError,
   CourseResetOperationLockLostError
 } from "../services/assessment.service.js";
@@ -443,6 +444,15 @@ export class AdminController {
         return apiError(409, "This course is already being reset. Wait for it to finish before trying again.", {
           error_code: "COURSE_RESET_IN_PROGRESS"
         });
+      }
+      if (error instanceof CourseResetAssessmentIdentityError) {
+        return apiError(
+          409,
+          "Canvas did not provide an assessment identifier required for reset. Course records were not deleted; refresh the course and retry.",
+          {
+            error_code: "ADMIN_COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE"
+          }
+        );
       }
       if (error instanceof AssessmentOperationInProgressError || error instanceof CourseMutationInProgressError) {
         return apiError(

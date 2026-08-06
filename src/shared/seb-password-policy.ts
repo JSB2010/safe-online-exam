@@ -129,7 +129,7 @@ export function sebPasswordPolicyViolation(value?: string | null): SebPasswordPo
 }
 
 function hasProhibitedPasswordCharacter(value: string): boolean {
-  return /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value);
+  return /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
 }
 
 export function sebPasswordPolicyMessage(
@@ -144,7 +144,7 @@ export function sebPasswordPolicyMessage(
     return `${label} password must be no more than ${SEB_PASSWORD_MAX_LENGTH} characters.`;
   }
   if (violation === "control-character") {
-    return `${label} password cannot contain control characters or line breaks.`;
+    return `${label} password cannot contain control, invisible formatting, or line-separator characters.`;
   }
   return `${label} password must use at least 5 different letters or numbers and avoid common words, sequences, or repeated patterns. Letters-only and numbers-only passwords are allowed.`;
 }
