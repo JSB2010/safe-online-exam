@@ -338,6 +338,75 @@ describe("AdminController", () => {
     });
   });
 
+  it("keeps an administrator SEB toggle and its connection counts in one course lease", async () => {
+    const disabledAssessment = assessmentRecord();
+    disabledAssessment.seb = {
+      ...disabledAssessment.seb,
+      required: false,
+      enabled: false,
+      accessCode: null
+    };
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
+      assessments: { classicquiz_501: disabledAssessment }
+    });
+    let lockActive = false;
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+      lockActive = true;
+      try {
+        return await action();
+      } finally {
+        lockActive = false;
+      }
+    });
+    const enableSebWithAccessCode = vi.fn(async () => {
+      expect(lockActive).toBe(true);
+      await repositories.assessments.update("classicquiz_501", (current) =>
+        current
+          ? {
+              ...current,
+              seb: { ...current.seb, required: true, enabled: true, accessCode: "NEW-CANVAS-CODE" }
+            }
+          : null
+      );
+      return {
+        quizId: "501",
+        courseId: "101",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "NEW-CANVAS-CODE",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      };
+    });
+    const originalConnectionUpdate = repositories.adminCourseConnections.update.bind(
+      repositories.adminCourseConnections
+    );
+    vi.spyOn(repositories.adminCourseConnections, "update").mockImplementation((id, updater) => {
+      expect(lockActive).toBe(true);
+      return originalConnectionUpdate(id, updater);
+    });
+    const controller = controllerDouble(repositories, canvasApiDouble(), {
+      withCourseWriteLock,
+      enableSebWithAccessCode
+    });
+
+    await expect(
+      controller.setSebRequirement({} as any, "101", "classicquiz_501", { required: true })
+    ).resolves.toMatchObject({ success: true, setting: { sebRequired: true } });
+
+    expect(withCourseWriteLock).toHaveBeenCalledOnce();
+    expect(enableSebWithAccessCode).toHaveBeenCalledWith("101", "501", "42", undefined, "account_admin", {
+      courseWriteLockHeld: true
+    });
+    await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
+      assessmentCount: 1,
+      enabledAssessmentCount: 1
+    });
+  });
+
   it("creates a school YouTube video preset with the bounded player definition", async () => {
     const controller = controllerDouble(createInMemoryRepositories(), canvasApiDouble());
 

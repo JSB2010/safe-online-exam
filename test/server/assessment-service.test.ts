@@ -11,6 +11,7 @@ import {
   ASSESSMENT_VERIFICATION_MAX_AGE_MS,
   AssessmentOperationInProgressError,
   AssessmentOperationLockLostError,
+  AssessmentNoLongerAvailableError,
   AssessmentAccessCodeConsistencyError,
   AssessmentService,
   CourseMutationInProgressError,
@@ -55,13 +56,16 @@ describe("AssessmentService", () => {
       getNewQuizAssignments: vi.fn().mockResolvedValue([])
     } as unknown as CanvasApiService;
     const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repos.value);
 
     await expect(service.enableSebWithAccessCode("course-1", "quiz-1", "user-1")).rejects.toMatchObject({
       response: expect.objectContaining({ error_code: "SEB_QUIT_PASSWORD_REQUIRED" }),
       status: 400
     });
     expect(canvas.setQuizAccessCode).not.toHaveBeenCalled();
-    await expect(repos.value.assessments.get("classicquiz_quiz-1")).resolves.toBeNull();
+    await expect(repos.value.assessments.get("classicquiz_quiz-1")).resolves.toMatchObject({
+      seb: { required: false, enabled: false, accessCode: null }
+    });
   });
 
   it("rejects access-code rotation for legacy passwordless assessments before changing Canvas", async () => {
@@ -127,6 +131,7 @@ describe("AssessmentService", () => {
       getNewQuizAssignments: vi.fn().mockResolvedValue([])
     } as unknown as CanvasApiService;
     const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repos.value);
 
     const enabled = await service.enableSebWithAccessCode("course-1", "quiz-1", "user-1");
 
@@ -143,6 +148,7 @@ describe("AssessmentService", () => {
       getNewQuizAssignments: vi.fn().mockResolvedValue([])
     } as unknown as CanvasApiService;
     const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repos.value);
 
     await expect(
       service.enableSebWithAccessCode("course-1", "quiz-1", "user-1", {
@@ -233,6 +239,8 @@ describe("AssessmentService", () => {
       getCanvasDomain: vi.fn().mockReturnValue("https://canvas.example.edu")
     } as unknown as CanvasApiService;
     const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repositories);
+    await seedDisabledNewQuizAssessment(repositories);
     const staleDefaults = {
       ...defaultCourseSebDefaults("course-1"),
       quitPassword: "stale-quit-passphrase",
@@ -894,6 +902,7 @@ describe("AssessmentService", () => {
       getNewQuizAssignments: vi.fn().mockResolvedValue([])
     } as unknown as CanvasApiService;
     const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repos.value);
 
     const enabled = await service.enableSebWithAccessCode("course-1", "quiz-1", "user-1");
     expect(enabled.sebRequired).toBe(true);
@@ -909,6 +918,32 @@ describe("AssessmentService", () => {
     expect(canvas.removeQuizAccessCode).toHaveBeenCalled();
   });
 
+  it("does not recreate Classic or New Quiz records deleted before enablement acquires its lease", async () => {
+    const repositories = createInMemoryRepositories();
+    const repos = { value: repositories } as RepositoryProvider;
+    const canvas = {
+      setQuizAccessCode: vi.fn().mockResolvedValue(true),
+      setNewQuizAccessCode: vi.fn().mockResolvedValue(true)
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repositories);
+    await seedDisabledNewQuizAssessment(repositories);
+    await repositories.assessments.delete("classicquiz_quiz-1");
+    await repositories.assessments.delete("newquiz:course-1:assignment-1");
+
+    await expect(service.enableSebWithAccessCode("course-1", "quiz-1", "user-1")).rejects.toBeInstanceOf(
+      AssessmentNoLongerAvailableError
+    );
+    await expect(
+      service.enableContentSebWithAccessCode("course-1", "newquiz:course-1:assignment-1", "assignment-1", "user-1")
+    ).rejects.toBeInstanceOf(AssessmentNoLongerAvailableError);
+
+    expect(canvas.setQuizAccessCode).not.toHaveBeenCalled();
+    expect(canvas.setNewQuizAccessCode).not.toHaveBeenCalled();
+    await expect(repositories.assessments.get("classicquiz_quiz-1")).resolves.toBeNull();
+    await expect(repositories.assessments.get("newquiz:course-1:assignment-1")).resolves.toBeNull();
+  });
+
   it("applies course defaults when SEB is enabled for a new Classic Quiz setting", async () => {
     delete process.env.SEB_QUIT_PASSWORD;
     delete process.env.DEFAULT_SEB_QUIT_PASSWORD;
@@ -919,6 +954,7 @@ describe("AssessmentService", () => {
       getNewQuizAssignments: vi.fn().mockResolvedValue([])
     } as unknown as CanvasApiService;
     const service = new AssessmentService(repos, canvas);
+    await seedDisabledClassicAssessment(repos.value);
 
     const enabled = await service.enableSebWithAccessCode("course-1", "quiz-1", "user-1", {
       id: "course-1",
@@ -1754,3 +1790,48 @@ describe("AssessmentService", () => {
     expect(second.configKey).toBeNull();
   });
 });
+
+async function seedDisabledClassicAssessment(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  courseId = "course-1",
+  quizId = "quiz-1"
+): Promise<void> {
+  await repositories.assessments.save(
+    `classicquiz_${quizId}`,
+    assessmentWithQuizSebSetting(null, {
+      quizId,
+      courseId,
+      sebRequired: false,
+      enabled: false,
+      accessCode: null,
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    })
+  );
+}
+
+async function seedDisabledNewQuizAssessment(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  courseId = "course-1",
+  assignmentId = "assignment-1"
+): Promise<void> {
+  const contentId = `newquiz:${courseId}:${assignmentId}`;
+  await repositories.assessments.save(
+    contentId,
+    assessmentWithContentSebSetting(null, {
+      contentId,
+      courseId,
+      assignmentId,
+      contentType: "NEW_QUIZ",
+      sebRequired: false,
+      enabled: false,
+      accessCode: null,
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    })
+  );
+}

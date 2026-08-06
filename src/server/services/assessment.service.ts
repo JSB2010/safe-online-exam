@@ -84,6 +84,10 @@ interface AccessCodeMutation<T extends AccessCodeSetting> {
   desired: T;
 }
 
+interface AccessCodeMutationOptions {
+  courseWriteLockHeld?: boolean;
+}
+
 @Injectable()
 export class AssessmentService {
   private readonly lockTtlMs = 30_000;
@@ -501,17 +505,21 @@ export class AssessmentService {
     quizId: string,
     userId: string,
     defaults?: CourseSebDefaults | null,
-    grantType: CanvasOAuthGrantType = "instructor"
+    grantType: CanvasOAuthGrantType = "instructor",
+    options: AccessCodeMutationOptions = {}
   ): Promise<QuizSebSetting> {
-    return this.withAssessmentLock(
+    return this.withAssessmentMutationLock(
       quizId,
+      courseId,
       async () => {
         const currentDefaults = await this.getCourseDefaultsForMutation(courseId, defaults);
         const accessCode = generateAccessCode();
         const existing = await this.getSebSettingForQuiz(quizId);
+        if (!existing || existing.courseId !== courseId) {
+          throw new AssessmentNoLongerAvailableError();
+        }
         const next = applyCourseDefaultsToQuizSetting(
           {
-            ...defaultQuizSebSetting(quizId, courseId),
             ...existing,
             id: quizId,
             quizId,
@@ -541,7 +549,7 @@ export class AssessmentService {
           desired: next
         });
       },
-      courseId
+      options
     );
   }
 
@@ -557,15 +565,19 @@ export class AssessmentService {
     courseId: string,
     quizId: string,
     userId: string,
-    grantType: CanvasOAuthGrantType = "instructor"
+    grantType: CanvasOAuthGrantType = "instructor",
+    options: AccessCodeMutationOptions = {}
   ): Promise<QuizSebSetting> {
-    return this.withAssessmentLock(
+    return this.withAssessmentMutationLock(
       quizId,
+      courseId,
       async () => {
         const existing = await this.getSebSettingForQuiz(quizId);
+        if (!existing || existing.courseId !== courseId) {
+          throw new AssessmentNoLongerAvailableError();
+        }
         this.assertPriorAccessCodeIsRecoverable(existing);
         const disabled: QuizSebSetting = {
-          ...defaultQuizSebSetting(quizId, courseId),
           ...existing,
           id: quizId,
           quizId,
@@ -585,7 +597,7 @@ export class AssessmentService {
           desired: disabled
         });
       },
-      courseId
+      options
     );
   }
 
@@ -595,18 +607,22 @@ export class AssessmentService {
     assignmentId: string,
     userId: string,
     defaults?: CourseSebDefaults | null,
-    grantType: CanvasOAuthGrantType = "instructor"
+    grantType: CanvasOAuthGrantType = "instructor",
+    options: AccessCodeMutationOptions = {}
   ): Promise<ContentSebSetting> {
-    return this.withAssessmentLock(
+    return this.withAssessmentMutationLock(
       contentId,
+      courseId,
       async () => {
         const currentDefaults = await this.getCourseDefaultsForMutation(courseId, defaults);
         const existing = await this.getContentSebSetting(contentId);
-        const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
+        if (!existing || existing.courseId !== courseId || existing.assignmentId !== assignmentId) {
+          throw new AssessmentNoLongerAvailableError();
+        }
         const accessCode = generateAccessCode();
         const next = applyCourseDefaultsToContentSetting(
           {
-            ...setting,
+            ...existing,
             sebRequired: true,
             enabled: true,
             accessCode,
@@ -632,7 +648,7 @@ export class AssessmentService {
           desired: next
         });
       },
-      courseId
+      options
     );
   }
 
@@ -641,16 +657,20 @@ export class AssessmentService {
     contentId: string,
     assignmentId: string,
     userId: string,
-    grantType: CanvasOAuthGrantType = "instructor"
+    grantType: CanvasOAuthGrantType = "instructor",
+    options: AccessCodeMutationOptions = {}
   ): Promise<ContentSebSetting> {
-    return this.withAssessmentLock(
+    return this.withAssessmentMutationLock(
       contentId,
+      courseId,
       async () => {
         const existing = await this.getContentSebSetting(contentId);
-        const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
+        if (!existing || existing.courseId !== courseId || existing.assignmentId !== assignmentId) {
+          throw new AssessmentNoLongerAvailableError();
+        }
         this.assertPriorAccessCodeIsRecoverable(existing);
         const disabled: ContentSebSetting = {
-          ...setting,
+          ...existing,
           sebRequired: false,
           enabled: false,
           accessCode: null,
@@ -666,7 +686,7 @@ export class AssessmentService {
           desired: disabled
         });
       },
-      courseId
+      options
     );
   }
 
@@ -825,6 +845,17 @@ export class AssessmentService {
         action
       );
     return courseId && !allowDuringCourseReset ? this.withCourseWriteLock(courseId, run) : run();
+  }
+
+  private withAssessmentMutationLock<T>(
+    contentId: string,
+    courseId: string,
+    action: () => Promise<T>,
+    options: AccessCodeMutationOptions
+  ): Promise<T> {
+    return options.courseWriteLockHeld
+      ? this.withAssessmentLock(contentId, action)
+      : this.withAssessmentLock(contentId, action, courseId);
   }
 
   private async getCourseDefaultsForMutation(
@@ -1135,6 +1166,18 @@ export class AssessmentOperationInProgressError extends ConflictException {
       message: "Another SEB update is already in progress for this assessment. Try again shortly."
     });
     this.name = "AssessmentOperationInProgressError";
+  }
+}
+
+export class AssessmentNoLongerAvailableError extends ConflictException {
+  constructor() {
+    super({
+      success: false,
+      statusCode: 409,
+      error_code: "ASSESSMENT_NO_LONGER_AVAILABLE",
+      message: "This assessment is no longer available. Refresh the course before making another change."
+    });
+    this.name = "AssessmentNoLongerAvailableError";
   }
 }
 

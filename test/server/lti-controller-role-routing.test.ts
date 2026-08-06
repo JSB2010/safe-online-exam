@@ -622,13 +622,15 @@ describe("LtiController role routing", () => {
       "instructor"
     );
 
-    request.header = (name: string) =>
+    const reloadRequest = emptySessionRequest();
+    reloadRequest.session = { ...request.session };
+    reloadRequest.header = (name: string) =>
       ({
         "sec-fetch-dest": "iframe",
         "sec-fetch-site": "same-origin"
       })[name.toLowerCase()];
     const reloadResponse = responseDouble();
-    await controller.launchGet(request, reloadResponse);
+    await controller.launchGet(reloadRequest, reloadResponse);
 
     expect(reloadResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
   });
@@ -658,8 +660,15 @@ describe("LtiController role routing", () => {
     expect(launchResponse.send).toHaveBeenCalledWith(expect.stringContaining('href="/lti/launch"'));
     expect(launchResponse.send).not.toHaveBeenCalledWith(expect.stringContaining("Invalid LTI Launch"));
 
+    const reloadRequest = emptySessionRequest();
+    reloadRequest.session = { ...request.session };
+    reloadRequest.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "same-origin"
+      })[name.toLowerCase()];
     const reloadResponse = responseDouble();
-    await controller.launchGet(request, reloadResponse);
+    await controller.launchGet(reloadRequest, reloadResponse);
 
     expect(reloadResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
   });

@@ -697,41 +697,50 @@ export class AdminController {
     }
     const required = (body as { required: boolean }).required;
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
-    const assessment = await this.requireAssessment(courseId, assessmentId);
-    const setting =
-      assessment.contentType === "NEW_QUIZ"
-        ? required
-          ? await this.assessments.enableContentSebWithAccessCode(
-              courseId,
-              assessment.id,
-              requiredAssignmentId(assessment),
-              principal.canvasUserId,
-              undefined,
-              "account_admin"
-            )
-          : await this.assessments.disableContentSebWithAccessCode(
-              courseId,
-              assessment.id,
-              requiredAssignmentId(assessment),
-              principal.canvasUserId,
-              "account_admin"
-            )
-        : required
-          ? await this.assessments.enableSebWithAccessCode(
-              courseId,
-              requiredQuizId(assessment),
-              principal.canvasUserId,
-              undefined,
-              "account_admin"
-            )
-          : await this.assessments.disableSebWithAccessCode(
-              courseId,
-              requiredQuizId(assessment),
-              principal.canvasUserId,
-              "account_admin"
-            );
-    await this.refreshConnectionCounts(principal, courseId);
-    return { success: true, setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword) };
+    return this.assessments.withCourseWriteLock(courseId, async () => {
+      const assessment = await this.requireAssessment(courseId, assessmentId);
+      const setting =
+        assessment.contentType === "NEW_QUIZ"
+          ? required
+            ? await this.assessments.enableContentSebWithAccessCode(
+                courseId,
+                assessment.id,
+                requiredAssignmentId(assessment),
+                principal.canvasUserId,
+                undefined,
+                "account_admin",
+                { courseWriteLockHeld: true }
+              )
+            : await this.assessments.disableContentSebWithAccessCode(
+                courseId,
+                assessment.id,
+                requiredAssignmentId(assessment),
+                principal.canvasUserId,
+                "account_admin",
+                { courseWriteLockHeld: true }
+              )
+          : required
+            ? await this.assessments.enableSebWithAccessCode(
+                courseId,
+                requiredQuizId(assessment),
+                principal.canvasUserId,
+                undefined,
+                "account_admin",
+                { courseWriteLockHeld: true }
+              )
+            : await this.assessments.disableSebWithAccessCode(
+                courseId,
+                requiredQuizId(assessment),
+                principal.canvasUserId,
+                "account_admin",
+                { courseWriteLockHeld: true }
+              );
+      const assessments = await this.repositories.value.assessments.find([
+        { field: "courseId", op: "==", value: courseId }
+      ]);
+      await this.updateConnectionCounts(principal, courseId, assessments);
+      return { success: true, setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword) };
+    });
   }
 
   private async requireAssessment(courseId: string, assessmentId: string): Promise<AssessmentRecord> {

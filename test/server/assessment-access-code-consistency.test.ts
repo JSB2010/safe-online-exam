@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { assessmentWithContentSebSetting, assessmentWithQuizSebSetting } from "../../src/shared/models.js";
 import type { AppConfig } from "../../src/server/config/app-config.js";
 import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import {
@@ -16,7 +17,7 @@ const OLD_CODE = "OLD-ACCESS-CODE";
 
 describe("AssessmentService access-code consistency", () => {
   it("removes a newly applied Classic code when the first persistence save fails", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
@@ -24,11 +25,13 @@ describe("AssessmentService access-code consistency", () => {
 
     expect(canvas.setQuizAccessCode).toHaveBeenCalledOnce();
     expect(canvas.removeQuizAccessCode).toHaveBeenCalledWith(COURSE_ID, QUIZ_ID, USER_ID);
-    await expect(repositories.assessments.get(`classicquiz_${QUIZ_ID}`)).resolves.toBeNull();
+    await expect(repositories.assessments.get(`classicquiz_${QUIZ_ID}`)).resolves.toMatchObject({
+      seb: { required: false, enabled: false, accessCode: null }
+    });
   });
 
   it("removes a newly applied New Quiz code when its first persistence save fails", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
 
@@ -38,11 +41,13 @@ describe("AssessmentService access-code consistency", () => {
 
     expect(canvas.setNewQuizAccessCode).toHaveBeenCalledOnce();
     expect(canvas.removeNewQuizAccessCode).toHaveBeenCalledWith(COURSE_ID, ASSIGNMENT_ID, USER_ID);
-    await expect(repositories.assessments.get(CONTENT_ID)).resolves.toBeNull();
+    await expect(repositories.assessments.get(CONTENT_ID)).resolves.toMatchObject({
+      seb: { required: false, enabled: false, accessCode: null }
+    });
   });
 
   it("restores the Classic code when disabling succeeds in Canvas but persistence fails", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     await service.saveQuizSebSetting(classicSetting());
     const persistenceError = new Error("Persistence unavailable");
     const updateSpy = vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
@@ -63,7 +68,7 @@ describe("AssessmentService access-code consistency", () => {
   });
 
   it("restores the New Quiz code when disabling succeeds in Canvas but persistence fails", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     await service.saveContentSebSetting(contentSetting());
     const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
@@ -82,7 +87,7 @@ describe("AssessmentService access-code consistency", () => {
   });
 
   it("compensates an ambiguous Classic disable timeout before leaving the record enabled", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     await service.saveQuizSebSetting(classicSetting());
     const timeout = canvasTimeout("remove Classic access code");
     canvas.removeQuizAccessCode.mockRejectedValueOnce(timeout);
@@ -100,7 +105,7 @@ describe("AssessmentService access-code consistency", () => {
   });
 
   it("restores the prior Classic code after an ambiguous regeneration timeout", async () => {
-    const { service, canvas } = fixture();
+    const { service, canvas } = await fixture();
     await service.saveQuizSebSetting(classicSetting());
     const timeout = canvasTimeout("rotate Classic access code");
     canvas.setQuizAccessCode.mockRejectedValueOnce(timeout).mockResolvedValueOnce(true);
@@ -113,7 +118,7 @@ describe("AssessmentService access-code consistency", () => {
   });
 
   it("restores the prior New Quiz code when regenerated-code persistence fails", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     await service.saveContentSebSetting(contentSetting());
     const persistenceError = new Error("Persistence unavailable");
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(persistenceError);
@@ -128,7 +133,7 @@ describe("AssessmentService access-code consistency", () => {
   });
 
   it("accepts an ambiguously reported persistence write only after reading back the desired code", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     const originalUpdate = repositories.assessments.update.bind(repositories.assessments);
     vi.spyOn(repositories.assessments, "update").mockImplementationOnce(async (id, updater) => {
       await originalUpdate(id, updater);
@@ -143,19 +148,34 @@ describe("AssessmentService access-code consistency", () => {
   });
 
   it("raises an explicit consistency error when persistence fails and Canvas compensation also fails", async () => {
-    const { service, repositories, canvas } = fixture();
+    const { service, repositories, canvas } = await fixture();
     vi.spyOn(repositories.assessments, "update").mockRejectedValueOnce(new Error("Persistence unavailable"));
     canvas.removeQuizAccessCode.mockRejectedValueOnce(new Error("Canvas rollback unavailable"));
 
     await expect(service.enableSebWithAccessCode(COURSE_ID, QUIZ_ID, USER_ID)).rejects.toBeInstanceOf(
       AssessmentAccessCodeConsistencyError
     );
-    await expect(repositories.assessments.get(`classicquiz_${QUIZ_ID}`)).resolves.toBeNull();
+    await expect(repositories.assessments.get(`classicquiz_${QUIZ_ID}`)).resolves.toMatchObject({
+      seb: { required: false, enabled: false, accessCode: null }
+    });
   });
 });
 
-function fixture() {
+async function fixture() {
   const repositories = createInMemoryRepositories();
+  await repositories.assessments.save(
+    `classicquiz_${QUIZ_ID}`,
+    assessmentWithQuizSebSetting(null, { ...classicSetting(), sebRequired: false, enabled: false, accessCode: null })
+  );
+  await repositories.assessments.save(
+    CONTENT_ID,
+    assessmentWithContentSebSetting(null, {
+      ...contentSetting(),
+      sebRequired: false,
+      enabled: false,
+      accessCode: null
+    })
+  );
   const canvas = {
     getCanvasDomain: vi.fn(() => "https://canvas.example.edu"),
     setQuizAccessCode: vi.fn().mockResolvedValue(true),
