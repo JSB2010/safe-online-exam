@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Optional } from "@nestjs/common";
+import { randomBytes } from "node:crypto";
+import { BadRequestException, ConflictException, Injectable, Optional } from "@nestjs/common";
 import type {
   AdminToolPresetRecord,
   AssessmentRecord,
@@ -27,7 +28,13 @@ import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import { AssessmentService } from "./assessment.service.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
-import { assertDistinctSebPasswords, assertNewSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
+import {
+  assertDistinctSebPasswords,
+  assertNewSebPassword,
+  resolveSebPasswordUpdate,
+  sebPasswordPolicyViolation,
+  sebPasswordsMatch
+} from "./seb-password-policy.js";
 import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtectedSetting } from "./seb-quit-password.js";
 
 @Injectable()
@@ -63,6 +70,19 @@ export class CourseSettingsService {
     options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
   ): Promise<CourseSebDefaults> {
     return this.withCourseWriteLock(courseId, () => this.saveDefaultsUnlocked(courseId, defaults, options));
+  }
+
+  async rotateQuitPassword(courseId: string): Promise<string> {
+    return this.withCourseWriteLock(courseId, async () => {
+      const existingRecord = await this.repositories.value.courses.get(courseId);
+      if (!existingRecord) {
+        throw new CourseSettingsNoLongerAvailableError();
+      }
+      const existing = courseRecordToDefaults(existingRecord, courseId);
+      const password = generateCourseQuitPassword(existing.startPassword);
+      await this.saveDefaultsUnlocked(courseId, { quitPassword: password });
+      return password;
+    });
   }
 
   private async saveDefaultsUnlocked(
@@ -368,6 +388,28 @@ export class CourseSettingsService {
     );
     requireSebQuitPassword(setting, this.config.value.seb.defaultQuitPassword);
   }
+}
+
+export class CourseSettingsNoLongerAvailableError extends ConflictException {
+  constructor() {
+    super({
+      success: false,
+      statusCode: 409,
+      error_code: "COURSE_SETTINGS_NO_LONGER_AVAILABLE",
+      message: "This course setup is no longer available. Refresh the course before making another change."
+    });
+    this.name = "CourseSettingsNoLongerAvailableError";
+  }
+}
+
+function generateCourseQuitPassword(startPassword?: string | null): string {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const candidate = randomBytes(18).toString("base64url");
+    if (!sebPasswordPolicyViolation(candidate) && !sebPasswordsMatch(candidate, startPassword)) {
+      return candidate;
+    }
+  }
+  throw new Error("A secure exit password could not be generated");
 }
 
 function matchesResetTarget(

@@ -262,6 +262,27 @@ describe("AdminController", () => {
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
   });
 
+  it("rotates the course exit password through the leased course-settings operation", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const rotateQuitPassword = vi.fn().mockResolvedValue("generated-exit-passphrase");
+    const courseSettings = {
+      getDefaults: vi.fn().mockResolvedValue({}),
+      resetQuizToDefaults: vi.fn(),
+      rotateQuitPassword
+    };
+    const response = { setHeader: vi.fn() };
+    const controller = controllerDouble(repositories, canvasApiDouble(), {}, null, courseSettings);
+
+    await expect(controller.rotateCourseQuitPassword({} as any, response as any, "101")).resolves.toMatchObject({
+      success: true,
+      passwords: { exit: { value: "generated-exit-passphrase", source: "course" } }
+    });
+    expect(rotateQuitPassword).toHaveBeenCalledWith("101");
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
+  });
+
   it("tracks bulk preset rollout state and retries each course independently", async () => {
     const repositories = createInMemoryRepositories({
       adminCourseConnections: {
@@ -535,7 +556,8 @@ function controllerDouble(
   };
   const courseSettings = courseSettingsOverride || {
     getDefaults: vi.fn().mockResolvedValue({}),
-    resetQuizToDefaults: vi.fn()
+    resetQuizToDefaults: vi.fn(),
+    rotateQuitPassword: vi.fn()
   };
   const assessmentService = {
     getAssessmentRecord: (id: string) => repositories.assessments.get(id),

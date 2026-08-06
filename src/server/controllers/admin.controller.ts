@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type {
@@ -40,7 +40,6 @@ import {
 } from "../services/canvas-api.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
 import { canonicalSebConfigContentId } from "../services/seb-config-grant.service.js";
-import { sebPasswordPolicyViolation, sebPasswordsMatch } from "../services/seb-password-policy.js";
 import type { VerifiedAccountAdminPrincipal } from "../security/verified-lti-principal.js";
 
 const ADMIN_PAGE_SIZE = 25;
@@ -611,9 +610,7 @@ export class AdminController {
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
     setSecretResponseHeaders(response);
     void principal;
-    const defaults = await this.courseSettings.getDefaults(courseId);
-    const password = generateSebPassword(defaults.startPassword);
-    await this.courseSettings.saveDefaults(courseId, { ...defaults, quitPassword: password });
+    const password = await this.courseSettings.rotateQuitPassword(courseId);
     return {
       success: true,
       expiresInSeconds: 30,
@@ -1263,16 +1260,6 @@ function setSecretResponseHeaders(response: Response): void {
 
 function isNumericCanvasId(value: string): boolean {
   return /^\d+$/u.test(value);
-}
-
-function generateSebPassword(startPassword?: string | null): string {
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    const candidate = randomBytes(18).toString("base64url");
-    if (!sebPasswordPolicyViolation(candidate) && !sebPasswordsMatch(candidate, startPassword)) {
-      return candidate;
-    }
-  }
-  throw new Error("A secure exit password could not be generated");
 }
 
 function safeErrorDetail(error: unknown): string {

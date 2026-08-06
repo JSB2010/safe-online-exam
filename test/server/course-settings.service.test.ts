@@ -3,7 +3,10 @@ import { AppConfig } from "../../src/server/config/app-config.js";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
 import { AssessmentService, CourseResetInProgressError } from "../../src/server/services/assessment.service.js";
 import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
-import { CourseSettingsService } from "../../src/server/services/course-settings.service.js";
+import {
+  CourseSettingsNoLongerAvailableError,
+  CourseSettingsService
+} from "../../src/server/services/course-settings.service.js";
 import {
   assessmentToContentSebSetting,
   assessmentToQuizSebSetting,
@@ -67,6 +70,61 @@ describe("CourseSettingsService", () => {
     await expect(repositories.courses.get("course-1")).resolves.toBeNull();
     releaseDiscovery();
     await expect(reset).resolves.toMatchObject({ deletedCourseRecordCount: 0 });
+  });
+
+  it("does not recreate course settings when password rotation acquires its lease after reset deletion", async () => {
+    const repositories = createInMemoryRepositories();
+    const provider = { value: repositories } as RepositoryProvider;
+    await new CourseSettingsService(provider).saveDefaults(
+      "course-1",
+      {
+        setupCompleted: true,
+        startPassword: "course-start-passphrase",
+        quitPassword: "course-exit-passphrase",
+        urlRules: [{ id: "reference", match: "domain", value: "reference.example.edu" }],
+        externalTools: []
+      },
+      { propagate: false }
+    );
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+      await repositories.courses.delete("course-1");
+      return action();
+    });
+    const service = new CourseSettingsService(provider, new AppConfig(), {
+      withCourseWriteLock
+    } as unknown as AssessmentService);
+
+    await expect(service.rotateQuitPassword("course-1")).rejects.toBeInstanceOf(CourseSettingsNoLongerAvailableError);
+    expect(withCourseWriteLock).toHaveBeenCalledOnce();
+    await expect(repositories.courses.get("course-1")).resolves.toBeNull();
+  });
+
+  it("rotates an existing course exit password without replacing other course settings", async () => {
+    const repositories = createInMemoryRepositories();
+    const provider = { value: repositories } as RepositoryProvider;
+    const service = new CourseSettingsService(provider);
+    await service.saveDefaults(
+      "course-1",
+      {
+        setupCompleted: true,
+        startPassword: "course-start-passphrase",
+        quitPassword: "course-exit-passphrase",
+        urlRules: [{ id: "reference", match: "domain", value: "reference.example.edu" }],
+        externalTools: []
+      },
+      { propagate: false }
+    );
+
+    const password = await service.rotateQuitPassword("course-1");
+
+    expect(password).not.toBe("course-exit-passphrase");
+    expect(password).not.toBe("course-start-passphrase");
+    await expect(service.getDefaults("course-1")).resolves.toMatchObject({
+      setupCompleted: true,
+      startPassword: "course-start-passphrase",
+      quitPassword: password,
+      urlRules: [{ id: "reference", match: "domain", value: "reference.example.edu" }]
+    });
   });
 
   it("starts new courses without hardcoded tools so the school or instructor can choose the catalog", async () => {
@@ -310,7 +368,7 @@ describe("CourseSettingsService", () => {
     ).resolves.toMatchObject({ quitPassword: null, startPassword: null });
   });
 
-  it("merges a delayed partial save against the course state loaded inside the write lease", async () => {
+  it("merges sequential partial saves against the latest persisted course state", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);
     await service.saveDefaults(
