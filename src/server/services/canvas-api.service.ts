@@ -25,6 +25,7 @@ interface CanvasQuizResponse {
   published?: boolean;
   unlock_at?: string | null;
   lock_at?: string | null;
+  access_code?: string | null;
 }
 
 interface CanvasAssignmentResponse {
@@ -42,6 +43,20 @@ interface CanvasAssignmentResponse {
   published?: boolean;
   unlock_at?: string | null;
   lock_at?: string | null;
+}
+
+interface CanvasNewQuizResponse {
+  title?: string;
+  instructions?: string | null;
+  description?: string | null;
+  canvas_launch_url?: string | null;
+  launch_url?: string | null;
+  resource_link_uuid?: string | null;
+  lookup_uuid?: string | null;
+  quiz_settings?: {
+    require_student_access_code?: boolean;
+    student_access_code?: string | null;
+  };
 }
 
 export interface CanvasAdminCourse {
@@ -240,6 +255,52 @@ export class CanvasApiService {
       hydrated.push(await this.hydrateNewQuiz(courseId, assignmentId, userId, fallback, grantType));
     }
     return hydrated;
+  }
+
+  async getQuizAccessCode(
+    courseId: string,
+    quizId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<string | null> {
+    const url = `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}`;
+    const quiz = await this.request<CanvasQuizResponse>(userId, url, {}, grantType);
+    if (!Object.hasOwn(quiz, "access_code")) {
+      throw new CanvasApiRequestError("Canvas did not return the current Classic Quiz access code.", userId, url, 502);
+    }
+    if (quiz.access_code === null || quiz.access_code === "") {
+      return null;
+    }
+    if (typeof quiz.access_code !== "string") {
+      throw new CanvasApiRequestError("Canvas returned an invalid Classic Quiz access code.", userId, url, 502);
+    }
+    return quiz.access_code;
+  }
+
+  async getNewQuizAccessCode(
+    courseId: string,
+    assignmentId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<string | null> {
+    const url = `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`;
+    const quiz = await this.request<CanvasNewQuizResponse>(userId, url, {}, grantType);
+    const settings = quiz.quiz_settings;
+    if (!settings || typeof settings.require_student_access_code !== "boolean") {
+      throw new CanvasApiRequestError(
+        "Canvas did not return the current New Quiz access-code state.",
+        userId,
+        url,
+        502
+      );
+    }
+    if (!settings.require_student_access_code) {
+      return null;
+    }
+    if (typeof settings.student_access_code !== "string" || !settings.student_access_code) {
+      throw new CanvasApiRequestError("Canvas did not return the required New Quiz access code.", userId, url, 502);
+    }
+    return settings.student_access_code;
   }
 
   async setQuizAccessCode(
@@ -869,7 +930,7 @@ export class CanvasApiService {
     grantType: CanvasOAuthGrantType
   ): Promise<ContentItem> {
     try {
-      const detail = await this.request<Record<string, any>>(
+      const detail = await this.request<CanvasNewQuizResponse>(
         userId,
         `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`,
         {},

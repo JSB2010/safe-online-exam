@@ -100,8 +100,12 @@ export class CourseSettingsService {
     return persisted;
   }
 
-  async pushAdminToolPreset(courseId: string, preset: AdminToolPresetRecord): Promise<CourseSebDefaults> {
-    return this.withCourseWriteLock(courseId, async () => {
+  async pushAdminToolPreset(
+    courseId: string,
+    preset: AdminToolPresetRecord,
+    options: { courseWriteLockHeld?: boolean } = {}
+  ): Promise<CourseSebDefaults> {
+    const action = async () => {
       const existing = await this.getDefaults(courseId);
       const tool = adminManagedTool(preset);
       const current = existing.externalTools.find((entry) => entry.adminPresetId === preset.id);
@@ -122,11 +126,16 @@ export class CourseSettingsService {
         { ...existing, externalTools: nextTools, externalToolsInitialized: true },
         { propagate: true, allowAdminToolChanges: true }
       );
-    });
+    };
+    return options.courseWriteLockHeld ? action() : this.withCourseWriteLock(courseId, action);
   }
 
-  async removeAdminToolPreset(courseId: string, presetId: string): Promise<CourseSebDefaults> {
-    return this.withCourseWriteLock(courseId, async () => {
+  async removeAdminToolPreset(
+    courseId: string,
+    presetId: string,
+    options: { courseWriteLockHeld?: boolean } = {}
+  ): Promise<CourseSebDefaults> {
+    const action = async () => {
       const existing = await this.getDefaults(courseId);
       return this.saveDefaultsUnlocked(
         courseId,
@@ -137,7 +146,8 @@ export class CourseSettingsService {
         },
         { propagate: true, allowAdminToolChanges: true }
       );
-    });
+    };
+    return options.courseWriteLockHeld ? action() : this.withCourseWriteLock(courseId, action);
   }
 
   /**

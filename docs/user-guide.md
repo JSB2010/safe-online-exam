@@ -67,17 +67,19 @@ From a connected course, a root administrator can:
 
 To rebuild an entire course from a clean Safe Online Exam setup, choose the
 course reset action and enter the exact Canvas course ID. The reset first
-removes access codes from every current Classic Quiz and New Quiz in Canvas.
+records the current access-code state of every Classic Quiz and New Quiz in
+Canvas, then removes every current code.
 Only after all Canvas changes succeed does it delete the local course policy,
 assessment settings, outstanding course grants, and school-tool assignments for
 that course. It preserves the Canvas OAuth grant and administrator course
 connection. The next instructor launch opens guided setup again. School tools
 must be assigned again if the rebuilt course should use them. If Canvas rejects
-or cannot confirm any assessment change, Safe Online Exam restores access codes
-already removed or possibly changed during that attempt and keeps the local
-assessment settings available for recovery and retry. If Canvas cannot confirm
-a restoration, the dashboard requires manual verification of every assessment
-before another reset.
+or cannot confirm any assessment change, Safe Online Exam restores the exact
+pre-reset Canvas access-code state for every assessment already removed or
+possibly changed during that attempt and keeps the local assessment settings
+available for recovery and retry. If Canvas cannot confirm a restoration, the
+dashboard requires manual verification of every assessment before another
+reset.
 
 Use reveal and recovery actions only through the embedded dashboard. Sensitive
 responses are short-lived and sent with no-store headers. Do not copy them

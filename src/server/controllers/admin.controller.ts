@@ -193,12 +193,15 @@ export class AdminController {
           results.push({ courseId, success: false, error: "Course is outside this root account" });
           continue;
         }
-        const refreshed = await this.assessments.refreshCourseContent(
-          courseId,
-          principal.canvasUserId,
-          "account_admin"
-        );
-        const connection = await this.saveCourseConnection(principal, canvasCourse, refreshed.assessments);
+        const connection = await this.assessments.withCourseWriteLock(courseId, async () => {
+          const refreshed = await this.assessments.refreshCourseContent(
+            courseId,
+            principal.canvasUserId,
+            "account_admin",
+            { courseWriteLockHeld: true }
+          );
+          return this.saveCourseConnection(principal, canvasCourse, refreshed.assessments);
+        });
         results.push({ courseId, success: true, course: adminCourseListView(connection) });
       } catch (error) {
         results.push({ courseId, success: false, error: safeErrorDetail(error) });
@@ -265,18 +268,21 @@ export class AdminController {
       { field: "rootAccountId", op: "==", value: principal.rootAccountId },
       { field: "presetId", op: "==", value: presetId }
     ]);
-    await this.repositories.value.adminToolPresetAssignments.saveMany(
+    await Promise.all(
       assignments
         .filter((assignment) => assignment.desiredAssigned)
-        .map((assignment) => ({
-          id: assignment.id,
-          value: {
-            ...assignment,
-            status: "pending" as const,
-            error: null,
-            updatedByUserId: principal.canvasUserId
-          }
-        }))
+        .map((assignment) =>
+          this.repositories.value.adminToolPresetAssignments.update(assignment.id, (current) =>
+            current
+              ? {
+                  ...current,
+                  status: "pending" as const,
+                  error: null,
+                  updatedByUserId: principal.canvasUserId
+                }
+              : null
+          )
+        )
     );
     return { success: true, preset: await this.adminToolPresetView(saved) };
   }
@@ -402,8 +408,13 @@ export class AdminController {
   @Post("/courses/:courseId/refresh")
   async refreshCourse(@Req() request: Request, @Param("courseId") courseId: string): Promise<Record<string, unknown>> {
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
-    const result = await this.assessments.refreshCourseContent(courseId, principal.canvasUserId, "account_admin");
-    await this.updateConnectionCounts(principal, courseId, result.assessments);
+    const result = await this.assessments.withCourseWriteLock(courseId, async () => {
+      const refreshed = await this.assessments.refreshCourseContent(courseId, principal.canvasUserId, "account_admin", {
+        courseWriteLockHeld: true
+      });
+      await this.updateConnectionCounts(principal, courseId, refreshed.assessments);
+      return refreshed;
+    });
     return {
       success: true,
       assessmentCount: result.assessments.length,
@@ -830,10 +841,12 @@ export class AdminController {
   }
 
   private async refreshConnectionCounts(principal: VerifiedAccountAdminPrincipal, courseId: string): Promise<void> {
-    const assessments = await this.repositories.value.assessments.find([
-      { field: "courseId", op: "==", value: courseId }
-    ]);
-    await this.updateConnectionCounts(principal, courseId, assessments);
+    await this.assessments.withCourseWriteLock(courseId, async () => {
+      const assessments = await this.repositories.value.assessments.find([
+        { field: "courseId", op: "==", value: courseId }
+      ]);
+      await this.updateConnectionCounts(principal, courseId, assessments);
+    });
   }
 
   private async requireCourseConnection(
@@ -855,20 +868,22 @@ export class AdminController {
     courseId: string,
     desiredAssigned: boolean
   ): Promise<AdminToolPresetAssignmentRecord> {
-    await this.requireCourseConnection(principal, courseId);
-    const id = `${presetId}:${courseId}`;
-    const current = await this.repositories.value.adminToolPresetAssignments.get(id);
-    return this.repositories.value.adminToolPresetAssignments.save(id, {
-      id,
-      rootAccountId: principal.rootAccountId,
-      presetId,
-      courseId,
-      desiredAssigned,
-      status: "pending",
-      error: null,
-      appliedPresetUpdatedAt: current?.appliedPresetUpdatedAt || null,
-      updatedByUserId: principal.canvasUserId,
-      createdAt: current?.createdAt || null
+    return this.assessments.withCourseWriteLock(courseId, async () => {
+      await this.requireCourseConnection(principal, courseId);
+      const id = `${presetId}:${courseId}`;
+      const current = await this.repositories.value.adminToolPresetAssignments.get(id);
+      return this.repositories.value.adminToolPresetAssignments.save(id, {
+        id,
+        rootAccountId: principal.rootAccountId,
+        presetId,
+        courseId,
+        desiredAssigned,
+        status: "pending",
+        error: null,
+        appliedPresetUpdatedAt: current?.appliedPresetUpdatedAt || null,
+        updatedByUserId: principal.canvasUserId,
+        createdAt: current?.createdAt || null
+      });
     });
   }
 
@@ -894,26 +909,42 @@ export class AdminController {
           return null;
         }
         try {
-          await this.authorization.requireAdminForCourse(request, assignment.courseId, true);
-          if (assignment.desiredAssigned) {
-            await this.courseSettings.pushAdminToolPreset(assignment.courseId, preset);
-          } else {
-            await this.courseSettings.removeAdminToolPreset(assignment.courseId, preset.id);
-          }
-          await this.repositories.value.adminToolPresetAssignments.save(assignment.id, {
-            ...assignment,
-            status: "applied",
-            error: null,
-            appliedPresetUpdatedAt: preset.updatedAt || new Date().toISOString()
+          return await this.assessments.withCourseWriteLock(assignment.courseId, async () => {
+            const current = await this.repositories.value.adminToolPresetAssignments.get(assignment.id);
+            if (!current || (current.status !== "pending" && !(retryFailed && current.status === "failed"))) {
+              return null;
+            }
+            try {
+              await this.authorization.requireAdminForCourse(request, current.courseId, true);
+              if (current.desiredAssigned) {
+                await this.courseSettings.pushAdminToolPreset(current.courseId, preset, {
+                  courseWriteLockHeld: true
+                });
+              } else {
+                await this.courseSettings.removeAdminToolPreset(current.courseId, preset.id, {
+                  courseWriteLockHeld: true
+                });
+              }
+              await this.repositories.value.adminToolPresetAssignments.update(current.id, (latest) =>
+                latest
+                  ? {
+                      ...latest,
+                      status: "applied",
+                      error: null,
+                      appliedPresetUpdatedAt: preset.updatedAt || new Date().toISOString()
+                    }
+                  : null
+              );
+              return true;
+            } catch (error) {
+              await this.repositories.value.adminToolPresetAssignments.update(current.id, (latest) =>
+                latest ? { ...latest, status: "failed", error: safeErrorDetail(error) } : null
+              );
+              return false;
+            }
           });
-          return true;
-        } catch (error) {
-          await this.repositories.value.adminToolPresetAssignments.save(assignment.id, {
-            ...assignment,
-            status: "failed",
-            error: safeErrorDetail(error)
-          });
-          return false;
+        } catch {
+          return null;
         } finally {
           await this.repositories.value.operationLocks.release(lockId, ownerId);
         }

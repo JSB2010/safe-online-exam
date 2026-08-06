@@ -97,7 +97,9 @@ describe("AdminController", () => {
       connectedCount: 1,
       results: [{ courseId: "101", success: true }]
     });
-    expect(assessments.refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin");
+    expect(assessments.refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin", {
+      courseWriteLockHeld: true
+    });
     await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
       rootAccountId: "7",
       courseId: "101",
@@ -258,6 +260,84 @@ describe("AdminController", () => {
     });
   });
 
+  it("does not recreate a preset assignment deleted before its course lease is acquired", async () => {
+    const presetId = "00000000-0000-4000-8000-000000000001";
+    const assignmentId = `${presetId}:101`;
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
+      adminToolPresetAssignments: {
+        [assignmentId]: {
+          id: assignmentId,
+          rootAccountId: "7",
+          presetId,
+          courseId: "101",
+          desiredAssigned: true,
+          status: "pending",
+          updatedByUserId: "42"
+        }
+      }
+    });
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+      await repositories.adminToolPresetAssignments.delete(assignmentId);
+      return action();
+    });
+    const courseSettings = {
+      getDefaults: vi.fn().mockResolvedValue({}),
+      resetQuizToDefaults: vi.fn(),
+      pushAdminToolPreset: vi.fn(),
+      removeAdminToolPreset: vi.fn()
+    };
+    const controller = controllerDouble(repositories, canvasApiDouble(), { withCourseWriteLock }, null, courseSettings);
+    const preset = {
+      id: presetId,
+      rootAccountId: "7",
+      name: "School Desmos",
+      tool: { id: "desmos", label: "Desmos", url: "https://www.desmos.com/calculator", enabled: false },
+      createdByUserId: "42",
+      updatedByUserId: "42"
+    };
+
+    await expect(
+      (controller as any).reconcilePresetAssignments({} as any, adminPrincipal(), preset, false, 1)
+    ).resolves.toEqual({ processed: 0, applied: 0, failed: 0, pending: 0 });
+    expect(courseSettings.pushAdminToolPreset).not.toHaveBeenCalled();
+    await expect(repositories.adminToolPresetAssignments.get(assignmentId)).resolves.toBeNull();
+  });
+
+  it("updates administrator connection counts inside the refresh course lease", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    let lockActive = false;
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+      lockActive = true;
+      try {
+        return await action();
+      } finally {
+        lockActive = false;
+      }
+    });
+    const originalUpdate = repositories.adminCourseConnections.update.bind(repositories.adminCourseConnections);
+    vi.spyOn(repositories.adminCourseConnections, "update").mockImplementation((id, updater) => {
+      expect(lockActive).toBe(true);
+      return originalUpdate(id, updater);
+    });
+    const refreshCourseContent = vi.fn().mockResolvedValue({ assessments: [assessmentRecord()] });
+    const controller = controllerDouble(repositories, canvasApiDouble(), {
+      withCourseWriteLock,
+      refreshCourseContent
+    });
+
+    await expect(controller.refreshCourse({} as any, "101")).resolves.toMatchObject({ assessmentCount: 1 });
+    expect(refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin", {
+      courseWriteLockHeld: true
+    });
+    await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
+      assessmentCount: 1,
+      enabledAssessmentCount: 1
+    });
+  });
+
   it("creates a school YouTube video preset with the bounded player definition", async () => {
     const controller = controllerDouble(createInMemoryRepositories(), canvasApiDouble());
 
@@ -349,6 +429,7 @@ function controllerDouble(
   const assessmentService = {
     getAssessmentRecord: (id: string) => repositories.assessments.get(id),
     refreshCourseContent: vi.fn().mockResolvedValue({ assessments: [] }),
+    withCourseWriteLock: vi.fn(async (_courseId: string, action: () => Promise<unknown>) => action()),
     ...assessments
   };
   return new AdminController(

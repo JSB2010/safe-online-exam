@@ -164,9 +164,10 @@ export class AssessmentService {
             requireCompleteDiscovery: true,
             courseWriteLockHeld: true
           });
-          const mutations = discovered.assessments.map((assessment) =>
-            this.courseResetMutation(assessment, courseId, userId)
-          );
+          const mutations: CourseResetMutation[] = [];
+          for (const assessment of discovered.assessments) {
+            mutations.push(await this.courseResetMutation(assessment, courseId, userId));
+          }
           const attempted: CourseResetMutation[] = [];
           try {
             for (const mutation of mutations) {
@@ -219,11 +220,21 @@ export class AssessmentService {
     );
   }
 
-  private courseResetMutation(assessment: AssessmentRecord, courseId: string, userId: string): CourseResetMutation {
+  private async courseResetMutation(
+    assessment: AssessmentRecord,
+    courseId: string,
+    userId: string
+  ): Promise<CourseResetMutation> {
     const parsed = parseNewQuizContentId(assessment.id);
     if (parsed) {
       const prior = assessmentToContentSebSetting(assessment);
       this.assertPriorAccessCodeIsRecoverable(prior);
+      const canvasAccessCode = await this.canvasApi.getNewQuizAccessCode(
+        courseId,
+        parsed.assignmentId,
+        userId,
+        ...canvasGrantArgs("account_admin")
+      );
       return {
         assessment,
         disableCanvas: () =>
@@ -234,7 +245,20 @@ export class AssessmentService {
             ...canvasGrantArgs("account_admin")
           ),
         restoreCanvas: () =>
-          this.restoreNewQuizCanvasAccessCode(courseId, parsed.assignmentId, userId, prior, "account_admin")
+          canvasAccessCode
+            ? this.canvasApi.setNewQuizAccessCode(
+                courseId,
+                parsed.assignmentId,
+                canvasAccessCode,
+                userId,
+                ...canvasGrantArgs("account_admin")
+              )
+            : this.canvasApi.removeNewQuizAccessCode(
+                courseId,
+                parsed.assignmentId,
+                userId,
+                ...canvasGrantArgs("account_admin")
+              )
       };
     }
     const quizId = assessment.canvas.quizId || extractClassicQuizId(assessment.id);
@@ -243,11 +267,26 @@ export class AssessmentService {
       throw new CourseResetAssessmentIdentityError();
     }
     this.assertPriorAccessCodeIsRecoverable(prior);
+    const canvasAccessCode = await this.canvasApi.getQuizAccessCode(
+      courseId,
+      quizId,
+      userId,
+      ...canvasGrantArgs("account_admin")
+    );
     return {
       assessment,
       disableCanvas: () =>
         this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin")),
-      restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, prior, "account_admin")
+      restoreCanvas: () =>
+        canvasAccessCode
+          ? this.canvasApi.setQuizAccessCode(
+              courseId,
+              quizId,
+              canvasAccessCode,
+              userId,
+              ...canvasGrantArgs("account_admin")
+            )
+          : this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin"))
     };
   }
 
