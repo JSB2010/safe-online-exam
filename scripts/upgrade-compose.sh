@@ -54,6 +54,33 @@ else
     exit 64
   }
 fi
+[[ "${OAUTH_TOKEN_ENCRYPTION_MODE:-}" == "compat" || "${OAUTH_TOKEN_ENCRYPTION_MODE:-}" == "enforce" ]] || {
+  echo "OAUTH_TOKEN_ENCRYPTION_MODE must be set explicitly to compat or enforce" >&2
+  exit 64
+}
+
+compose=(docker compose --env-file "$environment_file" -f compose.yaml -f compose.secrets.yaml)
+if [[ "$caddy_mode" == "--caddy" ]]; then
+  compose+=(-f compose.caddy.yaml --profile caddy)
+fi
+
+current_app_container="$("${compose[@]}" ps -q app)"
+current_oauth_mode=""
+if [[ -n "$current_app_container" ]]; then
+  while IFS= read -r environment_entry; do
+    case "$environment_entry" in
+      OAUTH_TOKEN_ENCRYPTION_MODE=*) current_oauth_mode="${environment_entry#*=}" ;;
+    esac
+  done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$current_app_container")
+fi
+if [[ -z "$current_oauth_mode" && "$OAUTH_TOKEN_ENCRYPTION_MODE" != "compat" ]]; then
+  echo "the current Compose application has not completed a compat-mode deployment; set OAUTH_TOKEN_ENCRYPTION_MODE=compat for the first upgrade" >&2
+  exit 64
+fi
+if [[ -n "$current_oauth_mode" && "$current_oauth_mode" != "compat" && "$current_oauth_mode" != "enforce" ]]; then
+  echo "the current Compose application reports an invalid OAuth token encryption mode" >&2
+  exit 1
+fi
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -x "$script_directory/backup.sh" ]]; then
@@ -62,11 +89,6 @@ else
   backup_command="$script_directory/backup-compose.sh"
 fi
 backup_path="$("$backup_command" "$environment_file" "${BACKUP_DIRECTORY:-backups}")"
-
-compose=(docker compose --env-file "$environment_file" -f compose.yaml -f compose.secrets.yaml)
-if [[ "$caddy_mode" == "--caddy" ]]; then
-  compose+=(-f compose.caddy.yaml --profile caddy)
-fi
 
 "${compose[@]}" config --quiet
 if [[ "$local_smoke_image" != "true" ]]; then

@@ -187,7 +187,7 @@ fi
 [[ -s "$secrets_directory/canvas_api_client_secret" ]] ||
   setup_usage_error "provide --canvas-api-client-secret-file in unattended mode"
 
-for secret_file in database_password lti_private_key session_secret state_encryption_key seb-config-encryption.crt.pem; do
+for secret_file in database_password lti_private_key session_secret state_encryption_key oauth_token_encryption_keyring seb-config-encryption.crt.pem; do
   [[ -f "$secrets_directory/$secret_file" && ! -L "$secrets_directory/$secret_file" &&
     -s "$secrets_directory/$secret_file" ]] ||
     setup_die "required runtime secret is missing or empty: $secrets_directory/$secret_file"

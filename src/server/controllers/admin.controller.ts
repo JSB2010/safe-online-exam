@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
+import { setSecretResponseHeaders } from "../http/response-headers.js";
 import type {
   AdminCourseConnectionRecord,
   AdminToolPresetRecord,
@@ -1276,13 +1277,6 @@ function requiredAssignmentId(assessment: AssessmentRecord): string {
     });
   }
   return value;
-}
-
-function setSecretResponseHeaders(response: Response): void {
-  response.setHeader("cache-control", "private, no-store, max-age=0");
-  response.setHeader("pragma", "no-cache");
-  response.setHeader("referrer-policy", "no-referrer");
-  response.setHeader("x-content-type-options", "nosniff");
 }
 
 function isNumericCanvasId(value: string): boolean {

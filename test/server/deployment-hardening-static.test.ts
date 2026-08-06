@@ -22,10 +22,20 @@ describe("deployment hardening artifacts", () => {
     expect(compose).toContain("/ready");
     const postgresService = compose.slice(compose.indexOf("  postgres:"), compose.indexOf("  migrate:"));
     expect(postgresService).not.toContain("ports:");
+    expect(dockerfile).toMatch(/^# syntax=docker\/dockerfile:1@sha256:[0-9a-f]{64}$/mu);
     expect(dockerfile).toMatch(/FROM --platform=\$BUILDPLATFORM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS base/u);
     expect(dockerfile).toMatch(/FROM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS production-deps/u);
     expect(dockerfile).toContain("npm ci --omit=dev");
-    expect(dockerfile).toContain("COPY --from=base /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm");
+    expect(dockerfile).toContain("npm ci --ignore-scripts");
+    expect(dockerfile).toContain("npm audit signatures");
+    expect(dockerfile.indexOf("npm ci --ignore-scripts")).toBeLessThan(dockerfile.indexOf("npm audit signatures"));
+    expect(dockerfile.indexOf("npm audit signatures")).toBeLessThan(dockerfile.indexOf("npm run install:trusted"));
+    expect(dockerfile).toContain("npm run install:trusted");
+    expect(dockerfile.match(/corepack enable npm --install-directory \/opt\/corepack-shims/gu)).toHaveLength(2);
+    expect(dockerfile.match(/npm --version \| grep -Fx "11\.19\.0"/gu)).toHaveLength(2);
+    expect(dockerfile).not.toContain("npm install -g npm@");
+    expect(dockerfile).toContain("RUN --network=none npm run typecheck");
+    expect(dockerfile).toContain("RUN --network=none npm run build");
     expect(dockerfile).toMatch(/distroless\/nodejs24-debian13:nonroot@sha256:[0-9a-f]{64}/u);
     expect(dockerfile).not.toMatch(/apt-get[\s\S]{0,100}postgres/iu);
   });
@@ -40,11 +50,77 @@ describe("deployment hardening artifacts", () => {
     expect(override).toContain("CANVAS_API_CLIENT_SECRET_FILE: /run/secrets/canvas_api_client_secret");
     expect(override).toContain("SESSION_SECRET_FILE: /run/secrets/session_secret");
     expect(override).toContain("STATE_ENCRYPTION_KEY_FILE: /run/secrets/state_encryption_key");
+    expect(override).toContain("OAUTH_TOKEN_ENCRYPTION_KEYRING_FILE: /run/secrets/oauth_token_encryption_keyring");
     expect(override).toContain("secrets: *app-secrets");
     expect(override).not.toContain(":/run/secrets:ro");
-    expect(example).not.toMatch(
-      /^(DATABASE_PASSWORD|LTI_PRIVATE_KEY|CANVAS_API_CLIENT_SECRET|SESSION_SECRET|STATE_ENCRYPTION_KEY)=/mu
+    expect(source(".env.example")).toContain(
+      'OAUTH_TOKEN_ENCRYPTION_KEYRING={"local-v1":"replace-with-a-32-byte-base64url-key"}'
     );
+    expect(example).not.toMatch(
+      /^(DATABASE_PASSWORD|LTI_PRIVATE_KEY|CANVAS_API_CLIENT_SECRET|SESSION_SECRET|STATE_ENCRYPTION_KEY|OAUTH_TOKEN_ENCRYPTION_KEYRING)=/mu
+    );
+  });
+
+  it("blocks dependency lifecycle scripts except the exact reviewed rebuild path", () => {
+    const npmConfig = source(".npmrc");
+    const packageJson = source("package.json");
+    const verifier = source("scripts/verify-install-scripts.mjs");
+    const workflow = source(".github/workflows/ci.yml");
+
+    expect(npmConfig).toContain("ignore-scripts=true");
+    expect(npmConfig).toContain("strict-allow-scripts=true");
+    expect(npmConfig).toContain("allow-git=none");
+    expect(npmConfig).toContain("allow-remote=none");
+    expect(npmConfig).toContain("allow-file=none");
+    expect(npmConfig).toContain("allow-directory=none");
+    expect(npmConfig).not.toContain("min-release-age");
+    expect(packageJson).toMatch(/"packageManager": "npm@11\.19\.0\+sha512\.[0-9a-f]{128}"/u);
+    expect(npmConfig).not.toContain("strict-npmrc");
+    expect(packageJson).toContain(
+      '"install:trusted": "npm run verify:dependency-policy:offline && npm rebuild esbuild --ignore-scripts=false'
+    );
+    expect(packageJson).toContain('"fsevents": false');
+    expect(verifier).toContain("hasInstallScript !== true");
+    expect(verifier).toContain("REGISTRY_ORIGIN");
+    expect(verifier).toContain("SHA512_INTEGRITY");
+    expect(verifier).toContain("DEFAULT_MIN_RELEASE_AGE_DAYS = 3");
+    expect(verifier).toContain("verifyPublicationAges");
+    expect(verifier).toContain("metadata?.time?.[version]");
+    expect(workflow).toContain("npm ci --ignore-scripts");
+    expect(workflow.match(/corepack enable npm --install-directory/gu)).toHaveLength(3);
+    expect(workflow).not.toContain("npm install --global npm@");
+    expect(workflow).toContain("name: Dependency integrity");
+    expect(workflow).toContain("npm audit signatures");
+    expect(workflow).toContain("npm audit --omit=dev --audit-level=high");
+    const integrityJob = workflow.slice(workflow.indexOf("  dependency-integrity:"), workflow.indexOf("  compose:"));
+    expect(integrityJob.indexOf("npm ci --ignore-scripts")).toBeLessThan(integrityJob.indexOf("npm audit signatures"));
+    expect(integrityJob.indexOf("npm audit signatures")).toBeLessThan(integrityJob.indexOf("npm run install:trusted"));
+    expect(workflow.match(/needs: dependency-integrity/gu)).toHaveLength(3);
+    expect(() => source(".github/workflows/dependabot-automerge.yml")).toThrow();
+  });
+
+  it("keeps maintainer documentation aligned with dependency and OAuth policy", () => {
+    for (const path of ["README.md", "AGENTS.md", "CONTRIBUTING.md", "docs/testing.md"]) {
+      expect(source(path), path).toMatch(
+        /npm run verify:dependency-policy\s+npm ci --ignore-scripts\s+npm run install:trusted/u
+      );
+    }
+
+    const architecture = source("docs/architecture.md");
+    const configuration = source("docs/configuration.md");
+    expect(architecture).toContain("One durable per-user grant");
+    expect(configuration).toContain("One durable Canvas OAuth grant per user");
+    expect(`${architecture}\n${configuration}`).not.toMatch(/purpose-scoped Canvas OAuth/iu);
+
+    const ruleset = JSON.parse(source(".github/rulesets/protect-main.json"));
+    const pullRequestRule = ruleset.rules.find((rule: { type?: string }) => rule.type === "pull_request");
+    expect(pullRequestRule?.parameters).toMatchObject({
+      require_code_owner_review: false,
+      required_approving_review_count: 0
+    });
+    expect(source(".github/CODEOWNERS")).toContain("does not require a separate approval");
+    expect(source("docs/testing.md")).toContain("manually merge each Dependabot pull request");
+    expect(source("docs/releasing.md")).toContain("dependency-review, dependency-integrity");
   });
 
   it("ships an optional Caddy profile without exposing the application or database by default", () => {
@@ -92,6 +168,8 @@ describe("deployment hardening artifacts", () => {
       "--local-smoke-image is reserved for the isolated Compose smoke test"
     );
     expect(source("scripts/upgrade-compose.sh")).toContain("^ghcr\\.io/jsb2010/safe-online-exam@sha256:[0-9a-f]{64}$");
+    expect(source("scripts/upgrade-compose.sh")).toContain("docker inspect --format");
+    expect(source("scripts/upgrade-compose.sh")).toContain("has not completed a compat-mode deployment");
     expect(source("scripts/compose-smoke.sh")).not.toContain("node scripts/generate-lti-private-key.mjs compose-smoke");
   });
 
@@ -159,8 +237,10 @@ describe("deployment hardening artifacts", () => {
     expect(helper).toContain("sha256:[0-9a-f]{64}");
     expect(helper).toContain('"--image=${repository}@${digest}"');
 
-    for (const path of ["cloudbuild-dev.yaml", "cloudbuild-prod.yaml", "cloudbuild-school.yaml"]) {
+    for (const path of ["cloudbuild-dev.yaml", "cloudbuild-school.yaml"]) {
       const config = source(path);
+      expect(config, path).toContain("_OAUTH_TOKEN_ENCRYPTION_MODE: REPLACE_WITH_COMPAT_OR_ENFORCE");
+      expect(config, path).toContain('entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"');
       expect(config, path).toContain('entrypoint: "/workspace/scripts/push-image-capture-digest.sh"');
       expect(config, path).toContain('entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"');
       expect(config, path).toContain(":$BUILD_ID");
@@ -169,12 +249,31 @@ describe("deployment hardening artifacts", () => {
       expect(config, path).toContain("APP_DEBUG_ENABLED=false");
       expect(config, path).toContain('      - "service"');
     }
+
+    const production = source("cloudbuild-prod.yaml");
+    const releaseVerifier = source("scripts/verify-github-release-attestation.sh");
+    expect(production).toContain("_IMAGE_DIGEST: sha256:REPLACE_WITH_RELEASE_DIGEST");
+    expect(production).toContain("_OAUTH_TOKEN_ENCRYPTION_MODE: REPLACE_WITH_COMPAT_OR_ENFORCE");
+    expect(source("AGENTS.md")).toContain(
+      "_GITHUB_ATTESTATION_TOKEN_SECRET_VERSION=SECRET_VERSION,_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=KEYRING_VERSION,_OAUTH_TOKEN_ENCRYPTION_MODE=compat"
+    );
+    expect(production).toContain('entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"');
+    expect(production).toContain('entrypoint: "/workspace/scripts/write-image-digest.sh"');
+    expect(production).toContain('entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"');
+    expect(production).toContain('entrypoint: "/workspace/scripts/verify-github-release-attestation.sh"');
+    expect(production).toContain('entrypoint: "/workspace/scripts/create-binary-authorization-attestation.sh"');
+    expect(production.match(/--binary-authorization=default/gu)).toHaveLength(3);
+    expect(production).toContain("availableSecrets:");
+    expect(production).not.toContain("docker build");
+    expect(production).not.toContain("npm ");
+    expect(releaseVerifier).toContain("releases/tags/$release_tag");
+    expect(releaseVerifier).toContain('"$immutable" == "true"');
   });
 
   it("can manually promote only a released Safe Online Exam GHCR digest", () => {
     const helper = source("scripts/deploy-cloud-run-digest.sh");
     const writer = source("scripts/write-image-digest.sh");
-    const promotion = source("cloudbuild-release-promote.yaml");
+    const promotion = source("cloudbuild-prod.yaml");
 
     expect(helper).toContain('"ghcr.io/jsb2010/safe-online-exam"');
     expect(writer).toContain("invalid image digest");
@@ -182,7 +281,13 @@ describe("deployment hardening artifacts", () => {
     expect(promotion).toContain("_IMAGE_REPOSITORY: ghcr.io/jsb2010/safe-online-exam");
     expect(promotion).toContain("_IMAGE_DIGEST: sha256:REPLACE_WITH_RELEASE_DIGEST");
     expect(promotion).toContain('entrypoint: "/workspace/scripts/write-image-digest.sh"');
+    expect(promotion).toContain('entrypoint: "/workspace/scripts/verify-github-release-attestation.sh"');
+    expect(promotion).toContain('      - "JSB2010/safe-online-exam"');
+    expect(promotion).toContain('      - "JSB2010/safe-online-exam/.github/workflows/publish-release-image.yml"');
+    expect(promotion).not.toContain("JSB2010/SEB-CanvasLTI");
+    expect(promotion).toContain('entrypoint: "/workspace/scripts/create-binary-authorization-attestation.sh"');
     expect(promotion.match(/entrypoint: "\/workspace\/scripts\/deploy-cloud-run-digest\.sh"/gu)).toHaveLength(3);
+    expect(promotion.match(/--binary-authorization=default/gu)).toHaveLength(3);
     expect(promotion).toContain("-migrate");
     expect(promotion).toContain("-cleanup");
     expect(promotion).toContain('"--wait"');
@@ -213,6 +318,7 @@ describe("deployment hardening artifacts", () => {
     expect(requiredChecks).toContain("Application verification");
     expect(requiredChecks).toContain("PostgreSQL integration");
     expect(requiredChecks).toContain("Production Compose smoke");
+    expect(requiredChecks).toContain("Dependency integrity");
     expect(requiredChecks).toContain("Analyze (javascript-typescript)");
     expect(requiredChecks).toContain("Analyze (actions)");
     expect(workflow).toContain("gh release create");
@@ -292,6 +398,7 @@ describe("deployment hardening artifacts", () => {
       "PostgreSQL integration",
       "Production Compose smoke",
       "Dependency review",
+      "Dependency integrity",
       "CodeQL"
     ]);
     expect(setup).toContain("allow_auto_merge: true");
@@ -334,13 +441,37 @@ describe("deployment hardening artifacts", () => {
     }
   });
 
+  it("supplements Dependabot with weekly hidden-pin and published-image maintenance", () => {
+    const workflow = source(".github/workflows/supply-chain-maintenance.yml");
+    const monitor = source("scripts/check-supply-chain-pins.mjs");
+
+    expect(workflow).toContain('cron: "30 14 * * 1"');
+    expect(workflow).toContain("npm audit signatures");
+    expect(workflow).toContain("npm audit --omit=dev --audit-level=high");
+    expect(workflow).toContain("node scripts/check-supply-chain-pins.mjs");
+    expect(workflow).toContain("docker/setup-buildx-action@");
+    expect(workflow).toContain("issues: write");
+    expect(workflow.indexOf("issues: write")).toBeGreaterThan(workflow.indexOf("maintenance-issue:"));
+    expect(workflow).toContain("persist-credentials: false");
+    expect(workflow).toContain("ghcr.io/jsb2010/safe-online-exam:latest");
+    expect(workflow).toContain("ignore-unfixed: false");
+    expect(workflow).toContain("ignore-unfixed: true");
+    expect(monitor).toContain('"imagetools", "inspect"');
+    expect(monitor).toContain("npm outdated");
+    expect(monitor).toContain("Dockerfile frontend must be pinned");
+    expect(monitor).toContain("GitHub CLI verifier");
+  });
+
   it("keeps the pinned npm toolchain synchronized across local and container builds", () => {
     const packageJson = JSON.parse(source("package.json")) as { packageManager?: string };
     const dockerfile = source("Dockerfile");
-    const npmVersion = packageJson.packageManager?.match(/^npm@(.+)$/u)?.[1];
+    const releaseVerifier = source("scripts/verify-release.mjs");
+    const npmVersion = packageJson.packageManager?.match(/^npm@(\d+\.\d+\.\d+)\+sha512\.[0-9a-f]{128}$/u)?.[1];
 
     expect(npmVersion).toBeTruthy();
-    expect(dockerfile).toContain(`npm install -g npm@${npmVersion}`);
+    expect(dockerfile.match(new RegExp(`npm --version \\| grep -Fx "${npmVersion}"`, "gu"))).toHaveLength(2);
+    expect(releaseVerifier).toContain("matchAll");
+    expect(releaseVerifier).toContain("dockerfilePackageManagerVersions.length !== 2");
   });
 
   it("allows a school deployment to configure its own Canvas LTI platform endpoints", () => {
@@ -366,7 +497,7 @@ describe("deployment hardening artifacts", () => {
     expect(dockerfile.indexOf("FROM deps AS postgres-tests")).toBeLessThan(dockerfile.indexOf("FROM deps AS verify"));
     expect(dockerfile).toContain('CMD ["npm", "run", "test:postgres"]');
 
-    for (const path of ["cloudbuild-dev.yaml", "cloudbuild-prod.yaml", "cloudbuild-school.yaml"]) {
+    for (const path of ["cloudbuild-dev.yaml", "cloudbuild-school.yaml"]) {
       const config = source(path);
       expect(config, path).toContain('entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"');
       expect(config, path).toContain("--set-cloudsql-instances=");
@@ -382,10 +513,35 @@ describe("deployment hardening artifacts", () => {
       expect(config, path).toContain("--wait");
       expect(config, path).toContain("DOCKER_BUILDKIT=1");
       expect(config, path).toContain("BUILDKIT_INLINE_CACHE=1");
-      expect(config, path).toContain("gcr.io/google.com/cloudsdktool/google-cloud-cli:stable");
-      expect(config, path).not.toContain(":latest");
+      expect(config, path).toMatch(/gcr\.io\/google\.com\/cloudsdktool\/google-cloud-cli:stable@sha256:[0-9a-f]{64}/u);
+      expect(config, path).toMatch(/gcr\.io\/cloud-builders\/docker:latest@sha256:[0-9a-f]{64}/u);
+      expect(config, path).not.toMatch(/:latest(?!@sha256)/u);
       expect(config, path).not.toContain(["FIRE", "STORE"].join(""));
     }
+
+    const production = source("cloudbuild-prod.yaml");
+    expect(production).toContain("ghcr.io/jsb2010/safe-online-exam");
+    expect(production).toContain("-migrate");
+    expect(production).toContain("-cleanup");
+    expect(production).toContain("--wait");
+    expect(production).toMatch(/gcr\.io\/google\.com\/cloudsdktool\/google-cloud-cli:stable@sha256:[0-9a-f]{64}/u);
+    expect(production).not.toContain("cloud-build-postgres-integration.sh");
+    expect(production).not.toContain("cloud-builders/docker");
+  });
+
+  it("scans the exact staged release image before smoke and publication", () => {
+    const workflow = source(".github/workflows/publish-release-image.yml");
+    const reportScan = workflow.indexOf("name: Report every high or critical finding in the exact staged image");
+    const blockingScan = workflow.indexOf("name: Reject fixable high or critical findings in the exact staged image");
+    const smoke = workflow.indexOf("name: Smoke the exact staged image and Compose topology");
+
+    expect(workflow).toMatch(/aquasecurity\/trivy-action@[0-9a-f]{40}/u);
+    expect(workflow).toContain("severity: HIGH,CRITICAL");
+    expect(reportScan).toBeGreaterThan(0);
+    expect(reportScan).toBeLessThan(blockingScan);
+    expect(blockingScan).toBeLessThan(smoke);
+    expect(workflow.slice(reportScan, blockingScan)).toContain("ignore-unfixed: false");
+    expect(workflow.slice(blockingScan, smoke)).toContain("ignore-unfixed: true");
   });
 
   it("ships an interactive, dev-only Cloud SQL reset with migration and readiness recovery", () => {
@@ -411,9 +567,11 @@ describe("deployment hardening artifacts", () => {
     const prod = source("cloudbuild-prod.yaml");
     const deployment = source("docs/deployment.md");
     const configuration = source("docs/configuration.md");
+    const binaryAuthorization = source("scripts/configure-binary-authorization.sh");
 
     expect(dev).toContain("--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com");
-    expect(prod).toContain("--service-account=seb-canvas-prod@$PROJECT_ID.iam.gserviceaccount.com");
+    expect(prod).toContain("_SERVICE_ACCOUNT: seb-canvas-prod");
+    expect(prod).toContain("--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com");
     expect(dev).not.toContain("--allow-unauthenticated");
     expect(prod).not.toContain("--allow-unauthenticated");
     expect(dev).not.toContain("--service-account=seb-canvas@$PROJECT_ID");
@@ -423,10 +581,30 @@ describe("deployment hardening artifacts", () => {
     expect(configuration).toContain("DATABASE_HOST");
     expect(configuration).toContain("DATABASE_PASSWORD_FILE");
     expect(configuration).toContain("SEB_CONFIG_ENCRYPTION_CERT_PEM");
+    expect(binaryAuthorization).toContain('"$script_directory/../deploy/binary-authorization-policy.yaml"');
+    expect(binaryAuthorization).toContain('gcloud kms keys add-iam-policy-binding "$kms_key"');
+    expect(binaryAuthorization).toContain('gcloud container binauthz attestors add-iam-policy-binding "$attestor"');
+    expect(binaryAuthorization).not.toMatch(
+      /gcloud projects add-iam-policy-binding[^\n]+roles\/(?:cloudkms\.signerVerifier|binaryauthorization\.attestorsViewer)/u
+    );
+    expect(deployment).toContain("`defaultAdmissionRule` is project-wide");
+    expect(deployment).toContain("safe_online_exam_oauth_token_encryption_keyring");
     expect(deployment).not.toContain('--role="roles/artifactregistry.reader"');
     expect(deployment).not.toMatch(
       /gcloud projects add-iam-policy-binding "\$\{PROJECT_ID\}"[\s\S]{0,180}--role="roles\/secretmanager\.secretAccessor"/u
     );
+  });
+
+  it("requires explicit non-local encryption keys before rewriting OAuth tokens", () => {
+    const rewrite = source("src/server/data/encrypt-oauth-tokens.ts");
+    const explicitConfig = rewrite.indexOf("const config = explicitEncryptionConfig();");
+    const databaseConstruction = rewrite.indexOf("new PostgresDatabase(config)");
+
+    expect(rewrite).toContain("OAUTH_TOKEN_ENCRYPTION_KEYRING_FILE");
+    expect(rewrite).toContain("OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID are required for token rewriting");
+    expect(rewrite).toContain("The source-known local OAuth encryption key cannot be used for token rewriting");
+    expect(explicitConfig).toBeGreaterThan(0);
+    expect(explicitConfig).toBeLessThan(databaseConstruction);
   });
 
   it("carries the instance certificate-encryption setting through Cloud Run deployments", () => {
@@ -450,6 +628,18 @@ describe("deployment hardening artifacts", () => {
     expect(dev).toContain("dev_tool_url:${_TOOL_URL_SECRET_VERSION}");
     expect(dev).toContain("dev_lti_client_id:${_LTI_CLIENT_ID_SECRET_VERSION}");
     expect(dev).toContain("dev_lti_private_key:${_LTI_PRIVATE_KEY_SECRET_VERSION}");
+  });
+
+  it("pins the OAuth token keyring independently in every Cloud Build environment", () => {
+    for (const path of ["cloudbuild-dev.yaml", "cloudbuild-prod.yaml", "cloudbuild-school.yaml"]) {
+      const config = source(path);
+      expect(config, path).toContain('_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION: "1"');
+      expect(
+        config.match(/OAUTH_TOKEN_ENCRYPTION_KEYRING=[^,\n]+:\$\{_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION\}/gu),
+        path
+      ).toHaveLength(3);
+      expect(config, path).not.toMatch(/OAUTH_TOKEN_ENCRYPTION_KEYRING=[^,\n]+:\$\{_SECRET_VERSION\}/u);
+    }
   });
 
   it("documents portable PostgreSQL deployment and recovery operations", () => {

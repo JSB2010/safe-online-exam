@@ -66,7 +66,8 @@ automatically.
 
 The recommended managed path is the versioned Cloud Run bundle attached to a
 GitHub Release. Its scripts use plain `gcloud`, Docker, `gh`, `jq`, OpenSSL,
-and `curl`; they do not require an application-source checkout or Cloud Build.
+`cmp`, and `curl`; they do not require an application-source checkout or Cloud
+Build.
 
 Download the exact release:
 
@@ -158,7 +159,9 @@ use purchase.
 Use separate runtime, scheduler, and deployer identities. The runtime should
 have Cloud SQL Client access limited to the configured project and secret
 access limited to the exact secret resources it consumes. Do not grant
-project-wide Secret Manager access to the runtime.
+project-wide Secret Manager access to the runtime. The deployer must be able to
+access each exact pinned secret version so upgrades can compare it with the
+protected bootstrap value before deciding whether to create a new version.
 
 Canvas must reach the service without an interactive Google login. The bundle
 can grant public invocation only on the application service. If organization
@@ -221,12 +224,15 @@ Download and verify the next Cloud Run bundle. Preserve the protected
 environment, bootstrap, state, and client-identity records; merge new template
 keys instead of overwriting local configuration. The bundle’s `upgrade.sh`:
 
-1. validates the existing target;
+1. validates the complete current environment and bootstrap contract, creates
+   any newly required numbered Secret Manager versions, and grants the existing
+   runtime identity access;
 2. creates an on-demand Cloud SQL backup, waits for its operation to finish,
    and requires the resulting backup status to be `SUCCESSFUL`;
 3. runs the new migration job;
-4. updates cleanup;
-5. deploys a no-traffic candidate revision;
+4. updates cleanup and applies the current environment and secret bindings to
+   both jobs;
+5. deploys a no-traffic candidate revision with those same current bindings;
 6. temporarily enables a previously disabled generated URL so the tagged
    candidate can be verified;
 7. verifies candidate readiness and JWKS;
@@ -238,6 +244,34 @@ forward migrations still exist. Application rollback requires the explicit
 schema-compatibility confirmation in the bundle and never reverses migrations.
 Rollback verifies `TOOL_URL` when configured. Upgrade verifies that origin
 before temporarily enabling—and after re-disabling—the generated URL.
+
+For an existing installation that may contain plaintext OAuth tokens, first
+merge the new template keys, generate the protected bootstrap
+`oauth_token_encryption_keyring` file, and run the upgrade with
+`OAUTH_TOKEN_ENCRYPTION_MODE=compat`. The upgrade creates and binds the numbered
+Secret Manager version. That revision can read
+both formats while continuing rollback-compatible writes. Then set the mode to
+`enforce`, deploy the same image again, verify the service, and run:
+
+```bash
+./encrypt-oauth-tokens.sh cloudrun.env
+```
+
+The one-shot Cloud Run job rewrites legacy rows and rows encrypted under a
+retired key. Run it a second time and require `0` updates before removing an
+old key. A pre-encryption application revision is not a valid rollback target
+after encrypted writes begin.
+
+On every portable upgrade, the helper reads each exact enabled pinned version
+into a mode-`0600` temporary file under the protected state directory,
+byte-compares it with the corresponding bootstrap file, and removes the
+temporary file immediately. An unchanged value reuses its version; a changed
+value receives a new numbered version. If the deployer cannot access the
+pinned value for comparison, the upgrade stops before backup or deployment.
+
+`upgrade.sh` requires `OAUTH_TOKEN_ENCRYPTION_MODE` to be assigned explicitly
+in `cloudrun.env`; it never treats the default as approval to begin encrypted
+writes during an upgrade.
 
 For data recovery, restore a backup into a controlled target first. Do not
 overwrite the active database as the first diagnostic action.
@@ -253,7 +287,8 @@ services:
 | Production  | `canvas-seb-prod` | `canvas-seb-prod`  | `us-central1` | `seb-canvas-prod`       |
 
 These are maintained environment contracts, not recommended names for a new
-school installation. The Cloud Build configs:
+school installation. The development and parameterized school source-build
+configs:
 
 - build the image and reuse the previous cache image where valid;
 - run the Dockerfile’s typecheck, lint, format, coverage, build, production
@@ -265,11 +300,21 @@ school installation. The Cloud Build configs:
 - deploy the service with exact Secret Manager version pins.
 
 After the project, Artifact Registry, Cloud SQL, runtime identity, secrets,
-service URL, and Canvas registrations already exist:
+service URL, and Canvas registrations already exist, source-build only
+development or a deliberately named school environment:
+
+Development:
 
 ```bash
-gcloud builds submit --config=cloudbuild-dev.yaml
-gcloud builds submit --config=cloudbuild-prod.yaml
+gcloud builds submit --config=cloudbuild-dev.yaml \
+  --substitutions=_OAUTH_TOKEN_ENCRYPTION_MODE=compat
+```
+
+A named school environment:
+
+```bash
+gcloud builds submit --config=cloudbuild-school.yaml \
+  --substitutions=_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=KEYRING_VERSION,_OAUTH_TOKEN_ENCRYPTION_MODE=compat
 ```
 
 `cloudbuild-school.yaml` is the parameterized source-build variant for a new
@@ -278,10 +323,98 @@ submission. A self-hosted Canvas must override its actual LTI authorization
 and JWKS endpoints; `LTI_ISSUER` must match the signed claim and should not be
 inferred from the hostname.
 
-`cloudbuild-release-promote.yaml` promotes an already published public GHCR
-digest without rebuilding source. It deploys the digest to migrations first,
-waits, then updates cleanup and the service. Promotion remains an explicit
-operator action and should run against development before production.
+Those examples are the safe first pass for an existing deployment. After the
+compatibility revision is healthy, rerun the selected build with
+`_OAUTH_TOKEN_ENCRYPTION_MODE=enforce` and complete the token rewrite. A fresh
+deployment with no existing service may select `enforce` immediately. The
+shared rollout preflight rejects enforcement on an unstaged existing service.
+
+The school build never creates or rotates secrets. Before its first submission,
+use the protected Cloud Run bootstrap/install flow to create version `1` of
+every `${_SECRET_PREFIX}_*` secret it references. In the default school profile,
+that includes `safe_online_exam_oauth_token_encryption_keyring`, whose value must
+contain a unique 32-byte base64url `primary` key. Existing plaintext OAuth rows
+require the separately documented `compat` deployment and
+`encrypt-oauth-tokens.sh` rewrite; the migration job intentionally does not
+rewrite token data. Set `_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION`
+independently from the shared `_SECRET_VERSION`; the keyring may begin at
+version `1` even when established secrets use later versions.
+
+Production does not install or execute dependency code under its deploy
+identity. The authoritative `cloudbuild-prod.yaml` promotion configuration
+accepts only an already published public GHCR digest. The build independently
+downloads a fixed GitHub CLI release, verifies its hard-coded checksum,
+requires the matching GitHub Release to be published, stable, and immutable,
+verifies the GitHub artifact attestation against the exact repository,
+workflow, tag, and source commit, creates a KMS-backed Google Binary
+Authorization attestation for that digest, and requests the project's default
+Binary Authorization policy on the migration job, cleanup job, and service.
+The policy becomes blocking only after the separately documented enforcement
+step.
+
+Prepare these controls once before using the production promotion config:
+
+```bash
+bash scripts/configure-binary-authorization.sh prepare PROJECT_ID --apply
+```
+
+The command creates the `safe-online-exam-release` attestor, its Artifact
+Analysis note, a `global/safe-online-exam/release-attestor` asymmetric signing
+key, the empty `github_attestation_read_token` Secret Manager container, and
+the minimum Cloud Build grants required to verify and create attestations. It
+does not accept or print a token. Add a fine-grained, read-only GitHub token
+with metadata and attestation read access as a numbered secret version, then
+record that version in the promotion substitution. Do not give this token
+repository contents write, packages write, workflow, or administration access.
+
+The initial Google policy remains non-blocking. Run one promotion with the
+prepared attestor, confirm the GitHub and Google attestations and all three
+Cloud Run targets, then activate enforcement:
+
+```bash
+bash scripts/configure-binary-authorization.sh status PROJECT_ID
+bash scripts/configure-binary-authorization.sh enforce PROJECT_ID --apply
+```
+
+Enforcement imports `deploy/binary-authorization-policy.yaml` and updates only
+`canvas-seb-prod`, `canvas-seb-prod-migrate`, and
+`canvas-seb-prod-cleanup`. Do not run `enforce` before the successful attested
+test promotion: an unattested current image can be rejected. The imported
+`defaultAdmissionRule` is project-wide: Cloud Run is unaffected until a service
+or job opts in with `--binary-authorization=default`, while GKE clusters in the
+same project are evaluated immediately. Confirm the target project contains no
+GKE workloads before the first `enforce` run. Google documents
+the Cloud Run behavior in
+[Enable Binary Authorization for Cloud Run](https://docs.cloud.google.com/binary-authorization/docs/run/enabling-binauthz-cloud-run).
+
+After verifying the release checksum and immutable release state, an existing
+`canvas-seb-prod` installation must first submit the release in `compat` mode:
+
+```bash
+gcloud builds submit --config=cloudbuild-prod.yaml \
+  --substitutions=_IMAGE_DIGEST=sha256:RELEASE_DIGEST,_RELEASE_TAG=vX.Y.Z,_SOURCE_DIGEST=40_CHARACTER_GIT_SHA,_GITHUB_ATTESTATION_TOKEN_SECRET_VERSION=SECRET_VERSION,_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=KEYRING_VERSION,_OAUTH_TOKEN_ENCRYPTION_MODE=compat
+```
+
+The OAuth keyring version is deliberately independent from `_SECRET_VERSION`.
+Record the exact keyring version created for this environment; do not advance
+or roll back unrelated secrets merely to select it.
+
+After that revision is healthy, submit the same immutable release again with
+`_OAUTH_TOKEN_ENCRYPTION_MODE=enforce`, verify it, and run the OAuth-token
+rewrite documented above. The rollout preflight rejects `enforce` for an
+existing service whose current revision has not already reported `compat` or
+`enforce`. A fresh installation with no existing service may start directly in
+`enforce`, as may the new-school build profile.
+
+The promotion deploys the digest to migrations first, waits, then updates
+cleanup and the service. Promotion remains an explicit operator action and
+should run against development before production. Cloud Build builder images
+are digest-pinned; update those pins only through a reviewed dependency change.
+Binary Authorization is a second verification boundary, not a replacement for
+GitHub release review, vulnerability scanning, migration testing, or post-deploy
+health checks. Emergency breakglass must include an incident justification and
+must be followed by a normal attested deployment because Cloud Run clears the
+justification on the next update.
 
 Do not change the maintained `canvas-seb-*` service names casually. A new
 Cloud Run service has a new URL and therefore requires Canvas LTI and OAuth
@@ -398,6 +531,21 @@ The helper creates a PostgreSQL custom-format backup, validates it, pulls the
 exact pinned images, applies checked forward migrations, restarts the
 topology, and verifies readiness. Copy the backup to encrypted off-host
 storage.
+
+Existing installations use the same staged mode transition: upgrade once with
+`OAUTH_TOKEN_ENCRYPTION_MODE=compat`, then change it to `enforce`, recreate the
+application, and run the maintenance service:
+
+```bash
+docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml \
+  --profile maintenance run --rm encrypt-oauth-tokens
+```
+
+Run it again and require `0` updates before removing a retired key. Fresh
+installations start directly in `enforce` mode.
+The Compose upgrade helper inspects the current application container and
+rejects an `enforce` upgrade until a `compat` or `enforce` revision has already
+run.
 
 Application rollback does not undo database migrations. Restore an older image
 only after confirming it supports the current schema. Data rollback requires a

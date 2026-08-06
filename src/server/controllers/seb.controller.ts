@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Controller, Get, Head, Post, Param, Query, Req, Res, Body, Headers } from "@nestjs/common";
 import type { Request, Response } from "express";
+import { regenerateSession, saveSession } from "../http/session-lifecycle.js";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
 import {
   allowlistEntriesForExternalTools,
@@ -902,7 +903,7 @@ export class SebController {
         }
         await this.ltiState.claimState(state);
         clearLtiOidcBrowserTransactionCookie(response, transactionCookieName);
-        await regenerateSebSession(request);
+        await regenerateSession(request);
         request.session!.launchData = launchData;
         request.session!.verifiedLtiPrincipal = createVerifiedLtiPrincipal(launchData);
         request.session!.canvas_user_id = launchData.canvasUserId || launchData.userId;
@@ -1014,7 +1015,7 @@ export class SebController {
           contentId: canonicalContentId,
           issuedAt: Date.now()
         };
-        await saveSebSession(request);
+        await saveSession(request);
         const configPath = sebConfigPath(resolved.content.courseId, target.canonicalContentId, grant);
         response
           .setHeader("cache-control", "private, no-store")
@@ -1901,15 +1902,6 @@ function proofGenerationDigest(courseId: string, contentId: string, configKey: s
     .digest("base64url");
 }
 
-async function regenerateSebSession(request: Request): Promise<void> {
-  if (!request.session?.regenerate) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    request.session.regenerate((error) => (error ? reject(error) : resolve()));
-  });
-}
-
 function firstHeader(request: Request, names: string[]): string | undefined {
   for (const name of names) {
     const value = request.header(name);
@@ -2049,13 +2041,4 @@ function isDirectLtiLaunchReplay(request: Request, config: AppConfig, courseId: 
   } catch {
     return false;
   }
-}
-
-async function saveSebSession(request: Request): Promise<void> {
-  if (!request.session?.save) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    request.session!.save((error) => (error ? reject(error) : resolve()));
-  });
 }
