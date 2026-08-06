@@ -3,7 +3,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/server/data/migrations.js";
 import { createPostgresRepositories } from "../../src/server/data/postgres-repositories.js";
-import type { CourseRecord, OAuthToken } from "../../src/shared/models.js";
+import { RepositoryProvider } from "../../src/server/data/repositories.js";
+import { assessmentWithQuizSebSetting, type CourseRecord, type OAuthToken } from "../../src/shared/models.js";
 import { createPostgresTestDatabase, type PostgresTestDatabase } from "./helpers.js";
 
 let testDatabase: PostgresTestDatabase;
@@ -82,6 +83,69 @@ describe("PostgreSQL document repositories", () => {
       id: "session-1",
       data: { userId: "user-1" },
       expiresAt: expect.any(Date)
+    });
+  });
+
+  it("atomically resets course state while preserving OAuth and the admin connection", async () => {
+    const repositories = createPostgresRepositories(testDatabase.database);
+    const courseId = "reset-course-101";
+    const connectionId = `root-7:${courseId}`;
+    await repositories.courses.save(courseId, courseRecord(courseId, true));
+    await repositories.assessments.save(
+      "classicquiz_reset-501",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "reset-501",
+        courseId,
+        sebRequired: true,
+        enabled: true,
+        accessCode: "RESET-CODE",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        urlRules: [],
+        externalTools: []
+      })
+    );
+    await repositories.transientStates.save("reset-grant", {
+      kind: "seb-config-grant",
+      courseId,
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    await repositories.oauthTokens.save("reset-user", {
+      id: "reset-user",
+      userId: "reset-user",
+      accessToken: "preserved-oauth-token"
+    });
+    await repositories.adminCourseConnections.save(connectionId, {
+      id: connectionId,
+      rootAccountId: "root-7",
+      canvasOrigin: "https://canvas.example.edu",
+      courseId,
+      name: "Reset Biology",
+      accountId: "root-7",
+      teacherNames: [],
+      assessmentCount: 1,
+      enabledAssessmentCount: 1,
+      issueCount: 0,
+      connectedByUserId: "reset-user"
+    });
+    const provider = new RepositoryProvider({ profile: "production" } as any, testDatabase.database);
+
+    await expect(provider.resetCourseState(courseId, connectionId)).resolves.toEqual({
+      assessmentCount: 1,
+      transientStateCount: 1,
+      courseRecordCount: 1
+    });
+    await expect(repositories.courses.get(courseId)).resolves.toBeNull();
+    await expect(repositories.assessments.get("classicquiz_reset-501")).resolves.toBeNull();
+    await expect(repositories.transientStates.get("reset-grant")).resolves.toBeNull();
+    await expect(repositories.oauthTokens.get("reset-user")).resolves.toMatchObject({
+      accessToken: "preserved-oauth-token"
+    });
+    await expect(repositories.adminCourseConnections.get(connectionId)).resolves.toMatchObject({
+      assessmentCount: 0,
+      enabledAssessmentCount: 0,
+      issueCount: 0
     });
   });
 });

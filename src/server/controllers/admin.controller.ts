@@ -19,10 +19,16 @@ import { RepositoryProvider } from "../data/repositories.js";
 import { apiError } from "../http/api-error.js";
 import { toSebSettingView } from "../http/seb-response.js";
 import { AdminAuthorizationService } from "../services/admin-authorization.service.js";
-import { AssessmentService } from "../services/assessment.service.js";
+import {
+  AssessmentOperationInProgressError,
+  AssessmentService,
+  CourseResetInProgressError,
+  CourseResetOperationLockLostError
+} from "../services/assessment.service.js";
 import {
   CanvasApiService,
   type CanvasAdminCourse,
+  isCanvasApiAuthorizationError,
   isCanvasApiPermissionError,
   isCanvasApiRequestError
 } from "../services/canvas-api.service.js";
@@ -399,6 +405,91 @@ export class AdminController {
       assessmentCount: result.assessments.length,
       assessments: result.assessments.map(adminAssessmentView)
     };
+  }
+
+  @Post("/courses/:courseId/reset")
+  async resetCourse(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Body() body: unknown
+  ): Promise<Record<string, unknown>> {
+    const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
+    await this.requireCourseConnection(principal, courseId);
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      (body as { confirmation?: unknown }).confirmation !== courseId
+    ) {
+      return apiError(400, "Enter the Canvas course ID to confirm this reset", {
+        error_code: "ADMIN_COURSE_RESET_CONFIRMATION_REQUIRED"
+      });
+    }
+    try {
+      const result = await this.assessments.resetCourseForAdmin(
+        courseId,
+        principal.canvasUserId,
+        principal.rootAccountId
+      );
+      return {
+        success: true,
+        message:
+          "Canvas assessment access codes were removed and the local course setup was reset. Canvas authorization was preserved.",
+        ...result
+      };
+    } catch (error) {
+      if (error instanceof CourseResetInProgressError) {
+        return apiError(409, "This course is already being reset. Wait for it to finish before trying again.", {
+          error_code: "COURSE_RESET_IN_PROGRESS"
+        });
+      }
+      if (error instanceof AssessmentOperationInProgressError) {
+        return apiError(
+          409,
+          "An assessment update is already in progress. Wait for it to finish, refresh the course, and retry; course records were not deleted.",
+          {
+            error_code: "ADMIN_COURSE_RESET_ASSESSMENT_BUSY"
+          }
+        );
+      }
+      if (isCanvasApiAuthorizationError(error)) {
+        return apiError(
+          401,
+          "Canvas authorization expired before every assessment could be disabled. Reconnect Canvas and retry; course records were not deleted.",
+          {
+            error_code: "CANVAS_AUTHORIZATION_REQUIRED"
+          }
+        );
+      }
+      if (isCanvasApiPermissionError(error)) {
+        return apiError(
+          403,
+          "Canvas denied access to at least one assessment. Check the administrator Developer Key scopes and course permissions, then retry; course records were not deleted.",
+          {
+            error_code: "CANVAS_PERMISSION_DENIED"
+          }
+        );
+      }
+      if (error instanceof CourseResetOperationLockLostError) {
+        return apiError(
+          409,
+          "The reset could not confirm operation-lock ownership through completion. It may have completed; refresh the course and verify Canvas assessment access codes before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (isCanvasApiRequestError(error)) {
+        return apiError(
+          502,
+          "Canvas could not disable every assessment. Course records were not deleted; wait a moment, refresh the course, and retry the reset.",
+          {
+            error_code: "ADMIN_COURSE_RESET_CANVAS_FAILED"
+          }
+        );
+      }
+      throw error;
+    }
   }
 
   @Post("/courses/:courseId/passwords/reveal")

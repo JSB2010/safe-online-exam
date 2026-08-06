@@ -1397,6 +1397,89 @@ select[aria-invalid="true"] {
   gap: 10px;
 }
 
+.password-input-group {
+  display: grid;
+  gap: 8px;
+}
+
+.password-requirements {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  color: #475467;
+  background: #f8fafc;
+  border: 1px solid #dbe3ec;
+  border-radius: 9px;
+  animation: password-requirements-in 180ms ease-out both;
+}
+
+.password-requirements > strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.password-requirements ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.password-requirements li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  transition:
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.password-requirements li > span {
+  width: 17px;
+  height: 17px;
+  display: inline-grid;
+  place-items: center;
+  color: #ffffff;
+  background: #ffffff;
+  border: 1px solid #cfd6e4;
+  border-radius: 50%;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.password-requirements li.met {
+  color: #067647;
+}
+
+.password-requirements li.met > span {
+  background: #079455;
+  border-color: #079455;
+  transform: scale(1.04);
+}
+
+.password-requirements li.pending {
+  color: #667085;
+}
+
+@keyframes password-requirements-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .rule-list,
 .tool-list {
   min-width: 0;
@@ -1413,6 +1496,11 @@ select[aria-invalid="true"] {
 
 .rule-row {
   grid-template-columns: minmax(150px, 0.75fr) minmax(180px, 1.25fr) auto;
+}
+
+.rule-value-field {
+  display: grid;
+  gap: 5px;
 }
 
 .tool-row {
@@ -1939,6 +2027,15 @@ select[aria-invalid="true"] {
   .countdown-track span {
     animation: none;
     transform: scaleX(1);
+  }
+
+  .password-requirements {
+    animation: none;
+  }
+
+  .password-requirements li,
+  .password-requirements li > span {
+    transition: none;
   }
 }
 
@@ -2675,6 +2772,57 @@ select[aria-invalid="true"] {
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.admin-course-reset-dialog {
+  max-width: 650px;
+}
+
+.admin-course-reset-warning {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  color: #7a271a;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+}
+
+.admin-course-reset-warning > svg {
+  margin-top: 1px;
+}
+
+.admin-course-reset-warning p {
+  margin-top: 5px;
+  color: #9a3412;
+  font-size: 13px;
+}
+
+.admin-course-reset-warning ol {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding-left: 20px;
+  color: #7c2d12;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.admin-course-reset-preserved {
+  margin-top: 14px;
+  color: #475467;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.admin-course-reset-confirmation {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .admin-assessment-heading {
@@ -3796,5 +3944,9 @@ select[aria-invalid="true"] {
 
   .setup-wizard-welcome {
     grid-template-columns: 1fr;
+  }
+
+  .setup-wizard-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

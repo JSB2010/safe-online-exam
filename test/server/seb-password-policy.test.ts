@@ -4,6 +4,7 @@ import {
   assertNewSebPassword,
   assertDistinctSebPasswords,
   assertSebPassword,
+  evaluateSebPasswordRequirements,
   normalizeSebPassword,
   requireSebPasswordForConfiguration,
   requireDistinctSebPasswordsForConfiguration,
@@ -12,6 +13,29 @@ import {
 } from "../../src/server/services/seb-password-policy.js";
 
 describe("SEB password strength policy", () => {
+  it("exposes the same individual requirements for real-time client feedback", () => {
+    expect(evaluateSebPasswordRequirements("short")).toMatchObject({
+      hasAllowedLength: false,
+      hasNoControlCharacters: true,
+      hasEnoughDistinctCharacters: true,
+      avoidsPredictablePatterns: true,
+      valid: false
+    });
+    expect(evaluateSebPasswordRequirements("password1234")).toMatchObject({
+      hasAllowedLength: true,
+      hasEnoughDistinctCharacters: true,
+      avoidsPredictablePatterns: false,
+      valid: false
+    });
+    expect(evaluateSebPasswordRequirements("cobalt lantern 4829", "cobalt lantern 4829")).toMatchObject({
+      differsFromOtherPassword: false,
+      valid: false
+    });
+    expect(evaluateSebPasswordRequirements("cobalt lantern 4829", "different start 7301")).toMatchObject({
+      valid: true
+    });
+  });
+
   it("accepts memorable letters-only and numbers-only values as well as passphrases", () => {
     for (const candidate of [
       "T7!mQ2#vL9@pR4",

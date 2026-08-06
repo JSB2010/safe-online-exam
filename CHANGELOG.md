@@ -5,11 +5,45 @@ release.
 
 ## [Unreleased]
 
-### Cloud Run upgrade reporting
+## [1.0.4] - 2026-08-05
+
+Safe Online Exam 1.0.4 is a backward-compatible instructor-validation,
+administrator-recovery, and upgrade-reliability release. It adds no database
+migration and does not change existing Canvas LTI registration URLs, OAuth
+callback URLs, required Canvas scopes, or public SEB compatibility endpoints.
+
+### Instructor setup and settings validation
+
+- Show a live password-requirement checklist while instructors enter course or
+  assessment start and exit passwords, with clear completed states and gentle
+  transitions.
+- Use the same shared password-policy implementation in the browser and server
+  so instructors see the exact rules that the saved value must satisfy.
+- Validate each guided-setup step before advancing, including incomplete exam
+  tools, and validate course and assessment settings before sending a save.
+- Replace generic instructor request failures with actionable password, URL,
+  exam-tool, stale-setting, authorization, rate-limit, and connection guidance
+  while retaining bounded safe details from validation responses.
+- Keep the guided setup progress readable at mobile Canvas widths.
+
+### Administrator course reset
+
+- Add an administrator-only, exact-course-ID-confirmed reset for rebuilding a
+  connected course's Safe Online Exam setup without replacing or deleting any
+  Canvas OAuth grant.
+- Discover both Classic Quizzes and New Quizzes strictly, remove every current
+  Canvas access code first, and delete the local course, assessment, and
+  outstanding course-grant state only after every Canvas mutation succeeds.
+- Serialize resets and assessment mutations with course and assessment leases,
+  report partial/upstream failures precisely, retain the administrator course
+  connection, and show guided setup on the next instructor launch.
+
+### Deployment and dependencies
 
 - Keep the `gcloud` traffic-update summary out of the captured deployment
   revision so upgrade output and protected rollback metadata contain one clean
   revision name.
+- Update `undici` to 7.29.0 through the npm security dependency group.
 
 ## [1.0.3] - 2026-08-03
 
@@ -269,7 +303,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.4
 [1.0.3]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.3
 [1.0.2]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.1

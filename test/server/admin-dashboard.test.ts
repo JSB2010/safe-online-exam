@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AdminController } from "../../src/server/controllers/admin.controller.js";
 import { createInMemoryRepositories } from "../../src/server/data/in-memory-repositories.js";
 import { AdminAuthorizationService } from "../../src/server/services/admin-authorization.service.js";
+import { AssessmentOperationInProgressError } from "../../src/server/services/assessment.service.js";
 
 const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator";
 
@@ -96,6 +97,47 @@ describe("AdminController", () => {
       rootAccountId: "7",
       courseId: "101",
       name: "Biology"
+    });
+  });
+
+  it("requires exact confirmation and delegates the admin-only course reset without touching OAuth directly", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
+      oauthTokens: { "42": { id: "42", userId: "42", accessToken: "preserved-token" } }
+    });
+    const resetCourseForAdmin = vi.fn().mockResolvedValue({
+      disabledAssessmentCount: 2,
+      deletedAssessmentCount: 2,
+      deletedTransientStateCount: 1,
+      deletedCourseRecordCount: 1
+    });
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "wrong" })).rejects.toThrow(
+      "Enter the Canvas course ID"
+    );
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).resolves.toMatchObject({
+      success: true,
+      disabledAssessmentCount: 2,
+      deletedAssessmentCount: 2
+    });
+    expect(resetCourseForAdmin).toHaveBeenCalledWith("101", "42", "7");
+    await expect(repositories.oauthTokens.get("42")).resolves.toMatchObject({ accessToken: "preserved-token" });
+  });
+
+  it("returns an actionable conflict when an assessment update blocks a course reset", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi.fn().mockRejectedValue(new AssessmentOperationInProgressError());
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_ASSESSMENT_BUSY",
+        message: expect.stringContaining("course records were not deleted")
+      })
     });
   });
 

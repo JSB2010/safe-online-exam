@@ -46,6 +46,17 @@ export interface CourseAssessmentContent {
   assessments: AssessmentRecord[];
 }
 
+export interface CourseResetResult {
+  disabledAssessmentCount: number;
+  deletedAssessmentCount: number;
+  deletedTransientStateCount: number;
+  deletedCourseRecordCount: number;
+}
+
+interface RefreshCourseContentOptions {
+  requireCompleteDiscovery?: boolean;
+}
+
 export const ASSESSMENT_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const ASSESSMENT_SYNC_WRITE_BATCH_SIZE = 50;
@@ -77,7 +88,8 @@ export class AssessmentService {
   async refreshCourseContent(
     courseId: string,
     userId: string,
-    grantType: CanvasOAuthGrantType = "instructor"
+    grantType: CanvasOAuthGrantType = "instructor",
+    options: RefreshCourseContentOptions = {}
   ): Promise<CourseAssessmentContent> {
     const syncedAt = new Date().toISOString();
     const existingRecords = await this.getAssessmentRecordsForCourse(courseId);
@@ -104,7 +116,10 @@ export class AssessmentService {
     let newQuizzes: ContentItem[];
     try {
       newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
-    } catch {
+    } catch (error) {
+      if (options.requireCompleteDiscovery) {
+        throw error;
+      }
       contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
       return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
     }
@@ -124,6 +139,59 @@ export class AssessmentService {
     return (await this.repositories.value.assessments.find([{ field: "courseId", op: "==", value: courseId }])).sort(
       compareAssessmentRecords
     );
+  }
+
+  async resetCourseForAdmin(courseId: string, userId: string, rootAccountId: string): Promise<CourseResetResult> {
+    return this.withCourseResetLock(courseId, async () => {
+      const discovered = await this.refreshCourseContent(courseId, userId, "account_admin", {
+        requireCompleteDiscovery: true
+      });
+      for (const assessment of discovered.assessments) {
+        await this.withAssessmentLock(
+          assessment.id,
+          async () => {
+            const parsed = parseNewQuizContentId(assessment.id);
+            if (parsed) {
+              await this.canvasApi.removeNewQuizAccessCode(
+                courseId,
+                parsed.assignmentId,
+                userId,
+                ...canvasGrantArgs("account_admin")
+              );
+            } else {
+              const quizId = assessment.canvas.quizId || extractClassicQuizId(assessment.id);
+              if (!quizId) {
+                throw new Error("Canvas quiz identifier is unavailable during course reset");
+              }
+              await this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin"));
+            }
+            await this.repositories.value.assessments.update(assessment.id, (current) =>
+              current && current.courseId === courseId
+                ? {
+                    ...current,
+                    seb: {
+                      ...current.seb,
+                      required: false,
+                      enabled: false,
+                      accessCode: null,
+                      configKey: null
+                    }
+                  }
+                : null
+            );
+          },
+          courseId,
+          true
+        );
+      }
+      const deleted = await this.repositories.resetCourseState(courseId, `${rootAccountId}:${courseId}`);
+      return {
+        disabledAssessmentCount: discovered.assessments.length,
+        deletedAssessmentCount: deleted.assessmentCount,
+        deletedTransientStateCount: deleted.transientStateCount,
+        deletedCourseRecordCount: deleted.courseRecordCount
+      };
+    });
   }
 
   async getAssessmentRecord(id: string): Promise<AssessmentRecord | null> {
@@ -320,41 +388,45 @@ export class AssessmentService {
     defaults?: CourseSebDefaults | null,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<QuizSebSetting> {
-    return this.withAssessmentLock(quizId, async () => {
-      const accessCode = generateAccessCode();
-      const existing = await this.getSebSettingForQuiz(quizId);
-      const next = applyCourseDefaultsToQuizSetting(
-        {
-          ...defaultQuizSebSetting(quizId, courseId),
-          ...existing,
-          id: quizId,
-          quizId,
-          courseId,
-          sebRequired: true,
-          enabled: true,
-          accessCode,
-          configKey: null,
-          ssoDomains: existing?.ssoDomains || [],
-          educationalToolDomains: existing?.educationalToolDomains || [],
-          customDomains: existing?.customDomains || [],
-          urlRules: normalizeUrlRules(existing?.urlRules),
-          externalTools: normalizeExternalTools(existing?.externalTools),
-          externalToolIds: normalizeExternalToolIds(existing?.externalToolIds)
-        },
-        defaults
-      );
-      this.assertAssessmentCanRunSeb(next);
-      this.assertPriorAccessCodeIsRecoverable(existing);
-      return this.commitAccessCodeMutation({
-        applyCanvas: () =>
-          this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
-        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
-        persist: () => this.saveQuizSebSetting(next),
-        readCurrent: () => this.getSebSettingForQuiz(quizId),
-        prior: existing,
-        desired: next
-      });
-    });
+    return this.withAssessmentLock(
+      quizId,
+      async () => {
+        const accessCode = generateAccessCode();
+        const existing = await this.getSebSettingForQuiz(quizId);
+        const next = applyCourseDefaultsToQuizSetting(
+          {
+            ...defaultQuizSebSetting(quizId, courseId),
+            ...existing,
+            id: quizId,
+            quizId,
+            courseId,
+            sebRequired: true,
+            enabled: true,
+            accessCode,
+            configKey: null,
+            ssoDomains: existing?.ssoDomains || [],
+            educationalToolDomains: existing?.educationalToolDomains || [],
+            customDomains: existing?.customDomains || [],
+            urlRules: normalizeUrlRules(existing?.urlRules),
+            externalTools: normalizeExternalTools(existing?.externalTools),
+            externalToolIds: normalizeExternalToolIds(existing?.externalToolIds)
+          },
+          defaults
+        );
+        this.assertAssessmentCanRunSeb(next);
+        this.assertPriorAccessCodeIsRecoverable(existing);
+        return this.commitAccessCodeMutation({
+          applyCanvas: () =>
+            this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
+          restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
+          persist: () => this.saveQuizSebSetting(next),
+          readCurrent: () => this.getSebSettingForQuiz(quizId),
+          prior: existing,
+          desired: next
+        });
+      },
+      courseId
+    );
   }
 
   assertAssessmentCanRunSeb(setting: SebQuitProtectedSetting & { startPassword?: string | null }): void {
@@ -371,29 +443,34 @@ export class AssessmentService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<QuizSebSetting> {
-    return this.withAssessmentLock(quizId, async () => {
-      const existing = await this.getSebSettingForQuiz(quizId);
-      this.assertPriorAccessCodeIsRecoverable(existing);
-      const disabled: QuizSebSetting = {
-        ...defaultQuizSebSetting(quizId, courseId),
-        ...existing,
-        id: quizId,
-        quizId,
-        courseId,
-        sebRequired: false,
-        enabled: false,
-        accessCode: null,
-        configKey: null
-      };
-      return this.commitAccessCodeMutation({
-        applyCanvas: () => this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs(grantType)),
-        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
-        persist: () => this.saveQuizSebSetting(disabled),
-        readCurrent: () => this.getSebSettingForQuiz(quizId),
-        prior: existing,
-        desired: disabled
-      });
-    });
+    return this.withAssessmentLock(
+      quizId,
+      async () => {
+        const existing = await this.getSebSettingForQuiz(quizId);
+        this.assertPriorAccessCodeIsRecoverable(existing);
+        const disabled: QuizSebSetting = {
+          ...defaultQuizSebSetting(quizId, courseId),
+          ...existing,
+          id: quizId,
+          quizId,
+          courseId,
+          sebRequired: false,
+          enabled: false,
+          accessCode: null,
+          configKey: null
+        };
+        return this.commitAccessCodeMutation({
+          applyCanvas: () =>
+            this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs(grantType)),
+          restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
+          persist: () => this.saveQuizSebSetting(disabled),
+          readCurrent: () => this.getSebSettingForQuiz(quizId),
+          prior: existing,
+          desired: disabled
+        });
+      },
+      courseId
+    );
   }
 
   async enableContentSebWithAccessCode(
@@ -404,38 +481,42 @@ export class AssessmentService {
     defaults?: CourseSebDefaults | null,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<ContentSebSetting> {
-    return this.withAssessmentLock(contentId, async () => {
-      const existing = await this.getContentSebSetting(contentId);
-      const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
-      const accessCode = generateAccessCode();
-      const next = applyCourseDefaultsToContentSetting(
-        {
-          ...setting,
-          sebRequired: true,
-          enabled: true,
-          accessCode,
-          configKey: null
-        },
-        defaults
-      );
-      this.assertAssessmentCanRunSeb(next);
-      this.assertPriorAccessCodeIsRecoverable(existing);
-      return this.commitAccessCodeMutation({
-        applyCanvas: () =>
-          this.canvasApi.setNewQuizAccessCode(
-            courseId,
-            assignmentId,
+    return this.withAssessmentLock(
+      contentId,
+      async () => {
+        const existing = await this.getContentSebSetting(contentId);
+        const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
+        const accessCode = generateAccessCode();
+        const next = applyCourseDefaultsToContentSetting(
+          {
+            ...setting,
+            sebRequired: true,
+            enabled: true,
             accessCode,
-            userId,
-            ...canvasGrantArgs(grantType)
-          ),
-        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
-        persist: () => this.saveContentSebSetting(next),
-        readCurrent: () => this.getContentSebSetting(contentId),
-        prior: existing,
-        desired: next
-      });
-    });
+            configKey: null
+          },
+          defaults
+        );
+        this.assertAssessmentCanRunSeb(next);
+        this.assertPriorAccessCodeIsRecoverable(existing);
+        return this.commitAccessCodeMutation({
+          applyCanvas: () =>
+            this.canvasApi.setNewQuizAccessCode(
+              courseId,
+              assignmentId,
+              accessCode,
+              userId,
+              ...canvasGrantArgs(grantType)
+            ),
+          restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
+          persist: () => this.saveContentSebSetting(next),
+          readCurrent: () => this.getContentSebSetting(contentId),
+          prior: existing,
+          desired: next
+        });
+      },
+      courseId
+    );
   }
 
   async disableContentSebWithAccessCode(
@@ -445,27 +526,31 @@ export class AssessmentService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<ContentSebSetting> {
-    return this.withAssessmentLock(contentId, async () => {
-      const existing = await this.getContentSebSetting(contentId);
-      const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
-      this.assertPriorAccessCodeIsRecoverable(existing);
-      const disabled: ContentSebSetting = {
-        ...setting,
-        sebRequired: false,
-        enabled: false,
-        accessCode: null,
-        configKey: null
-      };
-      return this.commitAccessCodeMutation({
-        applyCanvas: () =>
-          this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId, ...canvasGrantArgs(grantType)),
-        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
-        persist: () => this.saveContentSebSetting(disabled),
-        readCurrent: () => this.getContentSebSetting(contentId),
-        prior: existing,
-        desired: disabled
-      });
-    });
+    return this.withAssessmentLock(
+      contentId,
+      async () => {
+        const existing = await this.getContentSebSetting(contentId);
+        const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
+        this.assertPriorAccessCodeIsRecoverable(existing);
+        const disabled: ContentSebSetting = {
+          ...setting,
+          sebRequired: false,
+          enabled: false,
+          accessCode: null,
+          configKey: null
+        };
+        return this.commitAccessCodeMutation({
+          applyCanvas: () =>
+            this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId, ...canvasGrantArgs(grantType)),
+          restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
+          persist: () => this.saveContentSebSetting(disabled),
+          readCurrent: () => this.getContentSebSetting(contentId),
+          prior: existing,
+          desired: disabled
+        });
+      },
+      courseId
+    );
   }
 
   async regenerateQuizAccessCode(
@@ -474,25 +559,29 @@ export class AssessmentService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<QuizSebSetting | null> {
-    return this.withAssessmentLock(quizId, async () => {
-      const existing = await this.getSebSettingForQuiz(quizId);
-      if (!existing?.sebRequired) {
-        return null;
-      }
-      this.assertPriorAccessCodeIsRecoverable(existing);
-      const accessCode = generateAccessCode();
-      const next = { ...existing, accessCode, configKey: null };
-      this.assertAssessmentCanRunSeb(next);
-      return this.commitAccessCodeMutation({
-        applyCanvas: () =>
-          this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
-        restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
-        persist: () => this.saveQuizSebSetting(next),
-        readCurrent: () => this.getSebSettingForQuiz(quizId),
-        prior: existing,
-        desired: next
-      });
-    });
+    return this.withAssessmentLock(
+      quizId,
+      async () => {
+        const existing = await this.getSebSettingForQuiz(quizId);
+        if (!existing?.sebRequired) {
+          return null;
+        }
+        this.assertPriorAccessCodeIsRecoverable(existing);
+        const accessCode = generateAccessCode();
+        const next = { ...existing, accessCode, configKey: null };
+        this.assertAssessmentCanRunSeb(next);
+        return this.commitAccessCodeMutation({
+          applyCanvas: () =>
+            this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
+          restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
+          persist: () => this.saveQuizSebSetting(next),
+          readCurrent: () => this.getSebSettingForQuiz(quizId),
+          prior: existing,
+          desired: next
+        });
+      },
+      courseId
+    );
   }
 
   async regenerateContentAccessCode(
@@ -502,31 +591,35 @@ export class AssessmentService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<ContentSebSetting | null> {
-    return this.withAssessmentLock(contentId, async () => {
-      const existing = await this.getContentSebSetting(contentId);
-      if (!existing?.sebRequired) {
-        return null;
-      }
-      this.assertPriorAccessCodeIsRecoverable(existing);
-      const accessCode = generateAccessCode();
-      const next = { ...existing, accessCode, configKey: null };
-      this.assertAssessmentCanRunSeb(next);
-      return this.commitAccessCodeMutation({
-        applyCanvas: () =>
-          this.canvasApi.setNewQuizAccessCode(
-            courseId,
-            assignmentId,
-            accessCode,
-            userId,
-            ...canvasGrantArgs(grantType)
-          ),
-        restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
-        persist: () => this.saveContentSebSetting(next),
-        readCurrent: () => this.getContentSebSetting(contentId),
-        prior: existing,
-        desired: next
-      });
-    });
+    return this.withAssessmentLock(
+      contentId,
+      async () => {
+        const existing = await this.getContentSebSetting(contentId);
+        if (!existing?.sebRequired) {
+          return null;
+        }
+        this.assertPriorAccessCodeIsRecoverable(existing);
+        const accessCode = generateAccessCode();
+        const next = { ...existing, accessCode, configKey: null };
+        this.assertAssessmentCanRunSeb(next);
+        return this.commitAccessCodeMutation({
+          applyCanvas: () =>
+            this.canvasApi.setNewQuizAccessCode(
+              courseId,
+              assignmentId,
+              accessCode,
+              userId,
+              ...canvasGrantArgs(grantType)
+            ),
+          restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
+          persist: () => this.saveContentSebSetting(next),
+          readCurrent: () => this.getContentSebSetting(contentId),
+          prior: existing,
+          desired: next
+        });
+      },
+      courseId
+    );
   }
 
   async saveQuizConfigKeyIfUnchanged(setting: QuizSebSetting, configKey: string): Promise<QuizSebSetting | null> {
@@ -600,15 +693,53 @@ export class AssessmentService {
     return saved ? assessmentToContentSebSetting(saved) : null;
   }
 
-  async withAssessmentLock<T>(contentId: string, action: () => Promise<T>): Promise<T> {
-    const ownerId = randomUUID();
+  async withAssessmentLock<T>(
+    contentId: string,
+    action: () => Promise<T>,
+    courseId?: string,
+    allowDuringCourseReset = false
+  ): Promise<T> {
     const lockId = `assessment:${canonicalAssessmentId(contentId)}`;
+    return this.withOperationLock(
+      lockId,
+      () => new AssessmentOperationInProgressError(),
+      (cause) => new AssessmentOperationLockLostError(cause),
+      async () => {
+        if (courseId && !allowDuringCourseReset && (await this.courseResetInProgress(courseId))) {
+          throw new CourseResetInProgressError();
+        }
+        return action();
+      }
+    );
+  }
+
+  private withCourseResetLock<T>(courseId: string, action: () => Promise<T>): Promise<T> {
+    return this.withOperationLock(
+      courseResetLockId(courseId),
+      () => new CourseResetInProgressError(),
+      (cause) => new CourseResetOperationLockLostError(cause),
+      action
+    );
+  }
+
+  private async courseResetInProgress(courseId: string): Promise<boolean> {
+    const lock = await this.repositories.value.operationLocks.get(courseResetLockId(courseId));
+    return !!lock && new Date(lock.expiresAt).getTime() > Date.now();
+  }
+
+  private async withOperationLock<T>(
+    lockId: string,
+    unavailableError: () => Error,
+    lostError: (cause?: unknown) => Error,
+    action: () => Promise<T>
+  ): Promise<T> {
+    const ownerId = randomUUID();
     const operationLocks = this.repositories.value.operationLocks;
     const acquired = await operationLocks.acquire(lockId, ownerId, this.lockTtlMs);
     if (!acquired) {
-      throw new Error("Another SEB update is already in progress for this assessment. Try again shortly.");
+      throw unavailableError();
     }
-    let renewalFailure: AssessmentOperationLockLostError | null = null;
+    let renewalFailure: Error | null = null;
     let renewalInFlight: Promise<void> | null = null;
     const renewalTimer = setInterval(
       () => {
@@ -619,11 +750,11 @@ export class AssessmentService {
           .renew(lockId, ownerId, this.lockTtlMs)
           .then((renewed) => {
             if (!renewed) {
-              renewalFailure = new AssessmentOperationLockLostError();
+              renewalFailure = lostError();
             }
           })
           .catch((error: unknown) => {
-            renewalFailure = new AssessmentOperationLockLostError(error);
+            renewalFailure = lostError(error);
           })
           .finally(() => {
             renewalInFlight = null;
@@ -644,10 +775,10 @@ export class AssessmentService {
       try {
         stillOwned = await operationLocks.renew(lockId, ownerId, this.lockTtlMs);
       } catch (error) {
-        throw new AssessmentOperationLockLostError(error);
+        throw lostError(error);
       }
       if (!stillOwned) {
-        throw new AssessmentOperationLockLostError();
+        throw lostError();
       }
       return result;
     } finally {
@@ -856,6 +987,30 @@ export class AssessmentOperationLockLostError extends Error {
   }
 }
 
+export class AssessmentOperationInProgressError extends Error {
+  constructor() {
+    super("Another SEB update is already in progress for this assessment. Try again shortly.");
+    this.name = "AssessmentOperationInProgressError";
+  }
+}
+
+export class CourseResetInProgressError extends Error {
+  constructor() {
+    super("A course reset is already in progress");
+    this.name = "CourseResetInProgressError";
+  }
+}
+
+export class CourseResetOperationLockLostError extends Error {
+  constructor(cause?: unknown) {
+    super(
+      "The course reset lock was lost before completion could be confirmed. The reset may have completed; refresh the course and verify Canvas assessment access codes before retrying.",
+      cause === undefined ? undefined : { cause }
+    );
+    this.name = "CourseResetOperationLockLostError";
+  }
+}
+
 export function generateAccessCode(length = 16): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let value = "";
@@ -869,6 +1024,10 @@ function compareAssessmentRecords(left: AssessmentRecord, right: AssessmentRecor
   return (
     String(left.canvas.title || "").localeCompare(String(right.canvas.title || "")) || left.id.localeCompare(right.id)
   );
+}
+
+function courseResetLockId(courseId: string): string {
+  return `course-reset:${courseId}`;
 }
 
 function isCanvasAssessmentCurrentlyAvailable(record: AssessmentRecord): boolean {

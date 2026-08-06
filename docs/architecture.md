@@ -101,7 +101,9 @@ The `assessments` table stores Canvas discovery data, availability verification,
 
 Instructor discovery refreshes Classic and New Quiz data from Canvas. A learner can use an assessment only when its cached Canvas verification is current, explicitly verified, published, and within its global unlock/lock window. The verification window is 24 hours. Missing records are retained for instructor reconciliation but fail closed for learners; a failed refresh marks the cached discovery stale.
 
-Assessment updates use short-lived PostgreSQL operation locks while Canvas and database state are changed. Atomic compare-and-delete/insert operations prevent overlapping workers from owning the same lease and help keep Canvas access codes aligned with persisted SEB settings.
+Assessment updates use short-lived PostgreSQL operation locks while Canvas and database state are changed. Administrator course resets take a course-level lease and then the same per-assessment leases, so ordinary assessment mutations cannot overlap a reset. Atomic compare-and-delete/insert operations prevent overlapping workers from owning the same lease and help keep Canvas access codes aligned with persisted SEB settings.
+
+An administrator course reset performs strict Classic Quiz and New Quiz discovery, removes each Canvas access code with the account-administrator grant, and only then deletes course-related transient state, assessments, and the course policy in one PostgreSQL transaction. The shared OAuth grant and root-account course connection are deliberately retained. A discovery or Canvas mutation failure leaves local course records in place for recovery and retry; a lost lease is reported as an indeterminate result that requires refresh and verification.
 
 ### Exam tools and URL policy
 
@@ -169,7 +171,7 @@ On Windows, the configuration requests the OS-session and SEB-service controls u
 | `admin_tool_preset_assignments` | Per-course desired state, rollout status, and retry information                                     | Durable until the preset is deleted.                          |
 | `sessions`                      | Express session payloads keyed by a hashed session ID                                               | Expired rows are removed by bounded cleanup.                  |
 | `transient_states`              | LTI replay claims, OAuth state, configuration grants, proofs, session-handoff records, rate budgets | Expired rows are removed by bounded cleanup.                  |
-| `operation_locks`               | Short assessment-update leases                                                                      | Expired rows are removed by bounded cleanup.                  |
+| `operation_locks`               | Short assessment-update and administrator course-reset leases                                       | Expired rows are removed by bounded cleanup.                  |
 
 PostgreSQL transactions and row locks implement atomic state claims, one-time token consumption, rate-budget increments, and operation-lock ownership. Claim/consume operations use conditional mutations so two app instances cannot both win. Cleanup selects bounded batches with `FOR UPDATE SKIP LOCKED`, allowing safe overlap without long table locks. This is why multiple app instances can share runtime state without sticky sessions.
 
@@ -221,6 +223,7 @@ All routes below are under `/api/admin`, require a verified root-account adminis
 | `GET /api/admin/terms`                                                            | Read active Canvas enrollment terms for the course picker.        |
 | `POST /api/admin/courses/connect`                                                 | Validate, connect, and initially synchronize selected courses.    |
 | `POST /api/admin/courses/:courseId/refresh`                                       | Refresh one course's Classic and New Quiz discovery.              |
+| `POST /api/admin/courses/:courseId/reset`                                         | Disable every Canvas assessment, then reset local course setup.   |
 | `POST /api/admin/courses/:courseId/passwords/reveal`                              | Controlled, no-store course password reveal.                      |
 | `POST /api/admin/courses/:courseId/quit-password/rotate`                          | Generate, apply, and briefly reveal a new course exit password.   |
 | `POST /api/admin/courses/:courseId/assessments/:assessmentId/passwords/reveal`    | Controlled, no-store assessment secret reveal.                    |

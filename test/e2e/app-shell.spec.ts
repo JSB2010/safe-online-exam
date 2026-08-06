@@ -642,6 +642,23 @@ test("renders the responsive root-account administrator workspace and controlled
       })
     });
   });
+  let courseResetRequested = false;
+  await page.route("**/api/admin/courses/101/reset", async (route) => {
+    courseResetRequested = true;
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().headers()["x-auth-token"]).toBe("test-admin-token");
+    expect(route.request().postDataJSON()).toEqual({ confirmation: "101" });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        disabledAssessmentCount: 2,
+        deletedAssessmentCount: 2,
+        deletedTransientStateCount: 0,
+        deletedCourseRecordCount: 1
+      })
+    });
+  });
 
   await page.goto("/admin-preview");
 
@@ -708,6 +725,135 @@ test("renders the responsive root-account administrator workspace and controlled
   await page.getByRole("button", { name: "Reveal passwords" }).click();
   await expect(page.getByText("test-start-password")).toBeVisible();
   await expect(page.getByText("TEST-CODE")).toBeVisible();
+  await page.getByRole("button", { name: "Reset course" }).click();
+  const resetDialog = page.getByRole("dialog", { name: "Reset Biology?" });
+  await expect(resetDialog).toBeVisible();
+  await expect(
+    resetDialog.getByText(/Canvas authorization and the administrator connection stay in place/u)
+  ).toBeVisible();
+  const resetButton = resetDialog.getByRole("button", { name: "Disable quizzes and reset course" });
+  await expect(resetButton).toBeDisabled();
+  await resetDialog.getByLabel(/Enter course ID/u).fill("101");
+  await resetButton.click();
+  await expect(resetDialog).toBeHidden();
+  expect(courseResetRequested).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test("validates instructor setup steps and updates password requirements in real time", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/instructor-password-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "teacher",
+          data: {
+            courseId: "course-1",
+            courseName: "Biology",
+            userId: "user-1",
+            authToken: "test-token",
+            showSetupWizard: true,
+            quizzes: [],
+            quizSebSettings: {},
+            courseDefaults: {
+              courseId: "course-1",
+              setupCompleted: false,
+              urlRules: [],
+              externalTools: [],
+              hasQuitPassword: false,
+              hasEffectiveQuitPassword: false,
+              hasStartPassword: false
+            },
+            onboarding: {
+              courseSecurityReady: false,
+              courseSetupComplete: false,
+              enabledAssessmentCount: 0
+            }
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  let saveCalls = 0;
+  await page.route("**/api/quizzes/course/course-1/defaults", async (route) => {
+    saveCalls += 1;
+    expect(route.request().headers()["x-auth-token"]).toBe("test-token");
+    if (saveCalls === 2) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: false,
+          message: "Course settings changed in another Canvas session. Refresh the course and review the latest values."
+        })
+      });
+      return;
+    }
+    const submitted = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        defaults: {
+          ...submitted,
+          courseId: "course-1",
+          setupCompleted: true,
+          hasQuitPassword: true,
+          hasEffectiveQuitPassword: true,
+          hasStartPassword: false
+        }
+      })
+    });
+  });
+
+  await page.goto("/instructor-password-preview");
+  const setupDialog = page.getByRole("dialog", { name: "Set up Safe Online Exam" });
+  await setupDialog.getByRole("button", { name: "Continue" }).click();
+  const exitPassword = setupDialog.locator("#course-exit-password");
+  await exitPassword.fill("short");
+  await expect(setupDialog.getByText("Password requirements")).toBeVisible();
+  await setupDialog.getByRole("button", { name: "Continue" }).click();
+  await expect(
+    setupDialog.locator("small.field-error").filter({ hasText: "Exit password must be at least 8 characters." })
+  ).toBeVisible();
+  await expect(setupDialog.getByText("Review the highlighted password requirements before continuing.")).toBeVisible();
+  await expect(setupDialog.getByRole("heading", { name: "Set your course exit password" })).toBeVisible();
+
+  await exitPassword.fill("cobalt lantern 4829");
+  await expect(setupDialog.locator(".password-requirements li").filter({ hasText: "8–128 characters" })).toHaveClass(
+    /met/u
+  );
+  await setupDialog.getByRole("button", { name: "Continue" }).click();
+  await setupDialog.getByRole("button", { name: "Add tool" }).click();
+  await setupDialog.getByRole("button", { name: "Continue" }).click();
+  await expect(setupDialog.getByText(/Review the exam tool settings before continuing/u)).toBeVisible();
+  await setupDialog.getByRole("button", { name: "Remove tool" }).click();
+  await setupDialog.getByRole("button", { name: "Continue" }).click();
+  await setupDialog.getByRole("button", { name: "Save and finish" }).click();
+  await expect(setupDialog).toBeHidden();
+  expect(saveCalls).toBe(1);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settingsDialog = page.getByRole("dialog", { name: "Safe Online Exam course policy" });
+  const replacementExitPassword = settingsDialog.locator("#course-exit-password");
+  await replacementExitPassword.fill("12345678");
+  await settingsDialog.getByRole("button", { name: "Save defaults" }).click();
+  await expect(settingsDialog.getByText(/avoid common words, sequences, or repeated patterns/u)).toBeVisible();
+  expect(saveCalls).toBe(1);
+
+  await replacementExitPassword.fill("another cobalt lantern 5930");
+  await settingsDialog.getByRole("button", { name: "Save defaults" }).click();
+  await expect(settingsDialog.getByText(/Course settings changed in another Canvas session/u)).toBeVisible();
+  expect(saveCalls).toBe(2);
+
+  await replacementExitPassword.fill("different meadow 7301");
+  await settingsDialog.getByRole("button", { name: "Save defaults" }).click();
+  await expect(settingsDialog).toBeHidden();
+  expect(saveCalls).toBe(3);
   expect(browserErrors).toEqual([]);
 });
 

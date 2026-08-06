@@ -26,6 +26,81 @@ export class RepositoryProvider implements OnModuleInit {
     return this.repositories;
   }
 
+  async resetCourseState(
+    courseId: string,
+    adminConnectionId: string
+  ): Promise<{ assessmentCount: number; transientStateCount: number; courseRecordCount: number }> {
+    if (usesInMemoryRepositories(this.config)) {
+      const [assessments, transientStates, courses] = await Promise.all([
+        this.value.assessments.find([{ field: "courseId", op: "==", value: courseId }]),
+        this.value.transientStates.find([{ field: "courseId", op: "==", value: courseId }]),
+        this.value.courses.find([{ field: "courseId", op: "==", value: courseId }])
+      ]);
+      await Promise.all([
+        ...assessments.map((assessment) => this.value.assessments.delete(assessment.id)),
+        ...transientStates.map((state) => this.value.transientStates.delete(String(state.id))),
+        ...courses.map((course) => this.value.courses.delete(String(course.id || course.courseId))),
+        this.value.courses.delete(courseId)
+      ]);
+      await this.value.adminCourseConnections.update(adminConnectionId, (connection) =>
+        connection
+          ? {
+              ...connection,
+              assessmentCount: 0,
+              enabledAssessmentCount: 0,
+              issueCount: 0,
+              lastRefreshedAt: new Date().toISOString()
+            }
+          : null
+      );
+      return {
+        assessmentCount: assessments.length,
+        transientStateCount: transientStates.length,
+        courseRecordCount: courses.length
+      };
+    }
+
+    return this.database.withTransaction(async (client) => {
+      const result = (await client.query(
+        `WITH removed_transient_states AS (
+           DELETE FROM transient_states WHERE course_id = $1 RETURNING id
+         ), removed_assessments AS (
+           DELETE FROM assessments WHERE course_id = $1 RETURNING id
+         ), removed_courses AS (
+           DELETE FROM courses WHERE id = $1 OR course_id = $1 RETURNING id
+         ), updated_connection AS (
+           UPDATE admin_course_connections
+           SET document = document || jsonb_build_object(
+                 'assessmentCount', 0,
+                 'enabledAssessmentCount', 0,
+                 'issueCount', 0,
+                 'lastRefreshedAt', $3::text
+               ),
+               updated_at = $3::timestamptz
+           WHERE id = $2
+           RETURNING id
+         )
+         SELECT
+           (SELECT count(*)::int FROM removed_assessments) AS assessment_count,
+           (SELECT count(*)::int FROM removed_transient_states) AS transient_state_count,
+           (SELECT count(*)::int FROM removed_courses) AS course_record_count`,
+        [courseId, adminConnectionId, new Date().toISOString()]
+      )) as {
+        rows?: Array<{
+          assessment_count?: number | string;
+          transient_state_count?: number | string;
+          course_record_count?: number | string;
+        }>;
+      };
+      const row = result.rows?.[0];
+      return {
+        assessmentCount: Number(row?.assessment_count || 0),
+        transientStateCount: Number(row?.transient_state_count || 0),
+        courseRecordCount: Number(row?.course_record_count || 0)
+      };
+    });
+  }
+
   async assertReady(): Promise<void> {
     void this.value;
     if (usesInMemoryRepositories(this.config)) {
