@@ -51,12 +51,18 @@ describe("SEB config downloads", () => {
   it("uses a fresh Canvas session URL only while creating a connected student's SEB config", async () => {
     await withConfig(async () => {
       const sebConfig = new SebConfigurationService(new AppConfig());
-      vi.spyOn(sebConfig, "prepareSebConfigurationDownload").mockImplementation((plaintext) => plaintext);
+      const prepareDownload = vi
+        .spyOn(sebConfig, "prepareSebConfigurationDownload")
+        .mockImplementation((plaintext) => plaintext);
       const canvasApi = {
         hasAccessToken: vi.fn().mockResolvedValue(true),
         getSessionToken: vi.fn().mockResolvedValue("https://canvas.example.edu/login/session_token?opaque=secret")
       };
-      const sessionHandoff = { registerConfig: vi.fn().mockResolvedValue(undefined) };
+      const handoffDocumentIds = ["a".repeat(64)];
+      const sessionHandoff = {
+        registerConfig: vi.fn().mockResolvedValue(handoffDocumentIds),
+        revokeConfigs: vi.fn().mockResolvedValue(undefined)
+      };
       const controller = new SebController(
         new AppConfig(),
         {} as any,
@@ -111,7 +117,7 @@ describe("SEB config downloads", () => {
         "7288",
         true
       );
-      const parsed = plist.parse(generated.toString("utf8")) as Record<string, unknown>;
+      const parsed = plist.parse(generated.buffer.toString("utf8")) as Record<string, unknown>;
 
       expect(canvasApi.getSessionToken).toHaveBeenCalledWith("7288", `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
       expect(parsed.startURL).toBe("https://canvas.example.edu/login/session_token?opaque=secret");
@@ -123,6 +129,22 @@ describe("SEB config downloads", () => {
         expect.stringMatching(/^[a-f0-9]{64}$/u),
         `${CANVAS_URL}/courses/11825/quizzes/23455/take`
       );
+      expect(generated.handoffDocumentIds).toEqual(handoffDocumentIds);
+      expect(sessionHandoff.revokeConfigs).not.toHaveBeenCalled();
+
+      prepareDownload.mockImplementationOnce(() => {
+        throw new Error("Unable to wrap configuration");
+      });
+      await expect(
+        (controller as any).generateConfigForGrant(
+          "11825",
+          "classicquiz_23455",
+          { setting, settingsFingerprint: "settings-fingerprint" },
+          "7288",
+          true
+        )
+      ).rejects.toThrow("Unable to wrap configuration");
+      expect(sessionHandoff.revokeConfigs).toHaveBeenCalledWith(handoffDocumentIds);
     });
   });
 

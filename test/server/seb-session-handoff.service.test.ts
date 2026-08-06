@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebSessionHandoffService } from "../../src/server/services/seb-session-handoff.service.js";
@@ -41,20 +41,58 @@ describe("SebSessionHandoffService", () => {
     ).resolves.toBe(configKeyValue);
   });
 
-  it("revokes registered handoff configs when course state changes during generation", async () => {
+  it("revokes only the requested handoff configs when course state changes during generation", async () => {
     const repositories = createInMemoryRepositories();
     const configKey = new SebConfigKeyService();
     const service = new SebSessionHandoffService({ value: repositories } as RepositoryProvider, configKey);
-    const configKeyValue = "d".repeat(64);
+    const firstConfigKey = "d".repeat(64);
+    const secondConfigKey = "e".repeat(64);
     const returnTo = "https://canvas.example.edu/courses/1/quizzes/2/take";
-    const hash = configKey.hashForUrl(returnTo, configKeyValue);
-    await service.registerConfig("course-1", "classicquiz_2", "settings-1", configKeyValue, returnTo);
+    const firstHash = configKey.hashForUrl(returnTo, firstConfigKey);
+    const secondHash = configKey.hashForUrl(returnTo, secondConfigKey);
+    const firstDocumentIds = await service.registerConfig(
+      "course-1",
+      "classicquiz_2",
+      "settings-1",
+      firstConfigKey,
+      returnTo
+    );
+    await service.registerConfig("course-1", "classicquiz_2", "settings-1", secondConfigKey, returnTo);
 
-    await service.revokeConfigs("course-1", "classicquiz_2", "settings-1");
+    await service.revokeConfigs(firstDocumentIds);
 
     await expect(
-      service.resolveConfigKey("course-1", "classicquiz_2", "settings-1", hash, returnTo)
+      service.resolveConfigKey("course-1", "classicquiz_2", "settings-1", firstHash, returnTo)
     ).resolves.toBeNull();
+    await expect(
+      service.resolveConfigKey("course-1", "classicquiz_2", "settings-1", secondHash, returnTo)
+    ).resolves.toBe(secondConfigKey);
+  });
+
+  it("removes partial registrations when one handoff document cannot be claimed", async () => {
+    const repositories = createInMemoryRepositories();
+    const configKey = new SebConfigKeyService();
+    const service = new SebSessionHandoffService({ value: repositories } as RepositoryProvider, configKey);
+    const originalClaim = repositories.transientStates.claim.bind(repositories.transientStates);
+    let claimCount = 0;
+    vi.spyOn(repositories.transientStates, "claim").mockImplementation(async (id, value) => {
+      claimCount += 1;
+      return claimCount === 2 ? false : originalClaim(id, value);
+    });
+
+    await expect(
+      service.registerConfig(
+        "course-1",
+        "classicquiz_2",
+        "settings-1",
+        "f".repeat(64),
+        "https://canvas.example.edu/courses/1/quizzes/2/take?attempt=1"
+      )
+    ).rejects.toThrow("Unable to register SEB session handoff configuration");
+
+    await expect(
+      repositories.transientStates.find([{ field: "courseId", op: "==", value: "course-1" }])
+    ).resolves.toEqual([]);
   });
 
   it("accepts a New Quiz attempt URL reached after Canvas leaves the registered assignment route", async () => {

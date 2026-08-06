@@ -263,25 +263,15 @@ export class SebController {
         response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
         return;
       }
-      let generated: Buffer;
-      try {
-        generated = await this.generateConfigForGrant(
-          courseId,
-          canonicalContentId,
-          target,
-          consumedGrant.canvasUserId,
-          consumedGrant.requiresSessionHandoff
-        );
-      } catch (error) {
-        if (consumedGrant.requiresSessionHandoff) {
-          await this.sessionHandoff?.revokeConfigs(courseId, canonicalContentId, target.settingsFingerprint);
-        }
-        throw error;
-      }
+      const generated = await this.generateConfigForGrant(
+        courseId,
+        canonicalContentId,
+        target,
+        consumedGrant.canvasUserId,
+        consumedGrant.requiresSessionHandoff
+      );
       const current = await this.finalizeCourseScopedGrant(courseId, target, async () => {
-        if (consumedGrant.requiresSessionHandoff) {
-          await this.sessionHandoff?.revokeConfigs(courseId, canonicalContentId, target.settingsFingerprint);
-        }
+        await this.sessionHandoff?.revokeConfigs(generated.handoffDocumentIds);
       });
       if (!current) {
         response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
@@ -302,7 +292,7 @@ export class SebController {
         .setHeader("cache-control", "private, no-store")
         .setHeader("referrer-policy", "no-referrer")
         .setHeader("content-transfer-encoding", "binary")
-        .send(generated);
+        .send(generated.buffer);
     } catch (error) {
       if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
         response
@@ -1124,9 +1114,9 @@ export class SebController {
     target: { setting: QuizSebSetting | ContentSebSetting; settingsFingerprint: string },
     canvasUserId: string,
     requiresSessionHandoff: boolean
-  ): Promise<Buffer> {
+  ): Promise<{ buffer: Buffer; handoffDocumentIds: string[] }> {
     if (!requiresSessionHandoff) {
-      return this.generateConfig(courseId, contentId);
+      return { buffer: await this.generateConfig(courseId, contentId), handoffDocumentIds: [] };
     }
     if (!this.canvasApi || !this.sessionHandoff) {
       throw new Error("Canvas session handoff services are unavailable");
@@ -1135,16 +1125,24 @@ export class SebController {
     const sessionUrl = await this.canvasApi.getSessionToken(canvasUserId, returnTo);
     const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, sessionUrl);
     const dynamicConfigKey = this.configKey.computeConfigKey(plain);
-    await this.sessionHandoff.registerConfig(
+    const handoffDocumentIds = await this.sessionHandoff.registerConfig(
       courseId,
       contentId,
       target.settingsFingerprint,
       dynamicConfigKey,
       returnTo
     );
-    return this.sebConfig.prepareSebConfigurationDownload(plain, {
-      startPassword: target.setting.startPassword
-    });
+    try {
+      return {
+        buffer: this.sebConfig.prepareSebConfigurationDownload(plain, {
+          startPassword: target.setting.startPassword
+        }),
+        handoffDocumentIds
+      };
+    } catch (error) {
+      await this.sessionHandoff.revokeConfigs(handoffDocumentIds);
+      throw error;
+    }
   }
 
   private configGrantActionToken(request: Request, principal: VerifiedLtiPrincipal): string {
