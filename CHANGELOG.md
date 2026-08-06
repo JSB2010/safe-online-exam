@@ -35,8 +35,10 @@ callback URLs, required Canvas scopes, or public SEB compatibility endpoints.
   Canvas access code first, and delete the local course, assessment, and
   outstanding course-grant state only after every Canvas mutation succeeds.
 - Serialize resets and assessment mutations with course and assessment leases,
-  report partial/upstream failures precisely, retain the administrator course
-  connection, and show guided setup on the next instructor launch.
+  restore completed Canvas and local assessment changes when a later reset step
+  fails, report indeterminate rollback failures precisely, retain the
+  administrator course connection, and show guided setup on the next instructor
+  launch.
 
 ### Deployment and dependencies
 

@@ -58,6 +58,12 @@ interface RefreshCourseContentOptions {
   courseWriteLockHeld?: boolean;
 }
 
+interface CourseResetMutation {
+  assessment: AssessmentRecord;
+  disableCanvas: () => Promise<unknown>;
+  restoreCanvas: () => Promise<unknown>;
+}
+
 export const ASSESSMENT_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const ASSESSMENT_SYNC_WRITE_BATCH_SIZE = 50;
@@ -156,60 +162,102 @@ export class AssessmentService {
             requireCompleteDiscovery: true,
             courseWriteLockHeld: true
           });
-          for (const assessment of discovered.assessments) {
-            await this.withAssessmentLock(
-              assessment.id,
-              async () => {
-                const parsed = parseNewQuizContentId(assessment.id);
-                if (parsed) {
-                  await this.canvasApi.removeNewQuizAccessCode(
-                    courseId,
-                    parsed.assignmentId,
-                    userId,
-                    ...canvasGrantArgs("account_admin")
-                  );
-                } else {
-                  const quizId = assessment.canvas.quizId || extractClassicQuizId(assessment.id);
-                  if (!quizId) {
-                    throw new CourseResetAssessmentIdentityError();
-                  }
-                  await this.canvasApi.removeQuizAccessCode(
-                    courseId,
-                    quizId,
-                    userId,
-                    ...canvasGrantArgs("account_admin")
-                  );
-                }
-                await this.repositories.value.assessments.update(assessment.id, (current) =>
-                  current && current.courseId === courseId
-                    ? {
-                        ...current,
-                        seb: {
-                          ...current.seb,
-                          required: false,
-                          enabled: false,
-                          accessCode: null,
-                          configKey: null
+          const mutations = discovered.assessments.map((assessment) =>
+            this.courseResetMutation(assessment, courseId, userId)
+          );
+          const attempted: CourseResetMutation[] = [];
+          try {
+            for (const mutation of mutations) {
+              await this.withAssessmentLock(
+                mutation.assessment.id,
+                async () => {
+                  await mutation.disableCanvas();
+                  attempted.push(mutation);
+                  await this.repositories.value.assessments.update(mutation.assessment.id, (current) =>
+                    current && current.courseId === courseId
+                      ? {
+                          ...current,
+                          seb: {
+                            ...current.seb,
+                            required: false,
+                            enabled: false,
+                            accessCode: null,
+                            configKey: null
+                          }
                         }
-                      }
-                    : null
-                );
-              },
-              courseId,
-              true
-            );
+                      : null
+                  );
+                },
+                courseId,
+                true
+              );
+            }
+            const deleted = await this.repositories.resetCourseState(courseId, `${rootAccountId}:${courseId}`);
+            return {
+              disabledAssessmentCount: discovered.assessments.length,
+              deletedAssessmentCount: deleted.assessmentCount,
+              deletedTransientStateCount: deleted.transientStateCount,
+              deletedCourseRecordCount: deleted.courseRecordCount
+            };
+          } catch (error) {
+            await this.rollbackCourseReset(attempted, error);
+            throw error;
           }
-          const deleted = await this.repositories.resetCourseState(courseId, `${rootAccountId}:${courseId}`);
-          return {
-            disabledAssessmentCount: discovered.assessments.length,
-            deletedAssessmentCount: deleted.assessmentCount,
-            deletedTransientStateCount: deleted.transientStateCount,
-            deletedCourseRecordCount: deleted.courseRecordCount
-          };
         },
         true
       )
     );
+  }
+
+  private courseResetMutation(assessment: AssessmentRecord, courseId: string, userId: string): CourseResetMutation {
+    const parsed = parseNewQuizContentId(assessment.id);
+    if (parsed) {
+      const prior = assessmentToContentSebSetting(assessment);
+      this.assertPriorAccessCodeIsRecoverable(prior);
+      return {
+        assessment,
+        disableCanvas: () =>
+          this.canvasApi.removeNewQuizAccessCode(
+            courseId,
+            parsed.assignmentId,
+            userId,
+            ...canvasGrantArgs("account_admin")
+          ),
+        restoreCanvas: () =>
+          this.restoreNewQuizCanvasAccessCode(courseId, parsed.assignmentId, userId, prior, "account_admin")
+      };
+    }
+    const quizId = assessment.canvas.quizId || extractClassicQuizId(assessment.id);
+    const prior = assessmentToQuizSebSetting(assessment);
+    if (!quizId || !prior) {
+      throw new CourseResetAssessmentIdentityError();
+    }
+    this.assertPriorAccessCodeIsRecoverable(prior);
+    return {
+      assessment,
+      disableCanvas: () =>
+        this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin")),
+      restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, prior, "account_admin")
+    };
+  }
+
+  private async rollbackCourseReset(mutations: CourseResetMutation[], cause: unknown): Promise<void> {
+    const compensationErrors: unknown[] = [];
+    for (const mutation of mutations.slice().reverse()) {
+      try {
+        await mutation.restoreCanvas();
+      } catch (error) {
+        compensationErrors.push(error);
+      }
+      try {
+        await this.repositories.value.assessments.save(mutation.assessment.id, mutation.assessment);
+      } catch (error) {
+        compensationErrors.push(error);
+      }
+    }
+    if (compensationErrors.length) {
+      throw new CourseResetCompensationError(cause, compensationErrors);
+    }
   }
 
   async getAssessmentRecord(id: string): Promise<AssessmentRecord | null> {
@@ -1053,6 +1101,19 @@ export class CourseResetAssessmentIdentityError extends ConflictException {
         "Canvas did not provide an assessment identifier required for reset. Course records were not deleted; refresh the course and retry."
     });
     this.name = "CourseResetAssessmentIdentityError";
+  }
+}
+
+export class CourseResetCompensationError extends Error {
+  constructor(
+    cause: unknown,
+    readonly compensationErrors: readonly unknown[]
+  ) {
+    super(
+      "One or more Canvas assessment access codes could not be restored after the course reset stopped. Manual verification is required.",
+      { cause }
+    );
+    this.name = "CourseResetCompensationError";
   }
 }
 

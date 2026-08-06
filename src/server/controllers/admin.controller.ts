@@ -20,10 +20,12 @@ import { apiError } from "../http/api-error.js";
 import { toSebSettingView } from "../http/seb-response.js";
 import { AdminAuthorizationService } from "../services/admin-authorization.service.js";
 import {
+  AssessmentAccessCodeConsistencyError,
   AssessmentOperationInProgressError,
   AssessmentService,
   CourseMutationInProgressError,
   CourseResetAssessmentIdentityError,
+  CourseResetCompensationError,
   CourseResetInProgressError,
   CourseResetOperationLockLostError
 } from "../services/assessment.service.js";
@@ -451,6 +453,24 @@ export class AdminController {
           "Canvas did not provide an assessment identifier required for reset. Course records were not deleted; refresh the course and retry.",
           {
             error_code: "ADMIN_COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE"
+          }
+        );
+      }
+      if (error instanceof CourseResetCompensationError) {
+        return apiError(
+          409,
+          "The reset stopped, but one or more prior Canvas access codes could not be restored. Refresh the course and verify every assessment before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_ROLLBACK_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (error instanceof AssessmentAccessCodeConsistencyError) {
+        return apiError(
+          409,
+          "A saved enabled assessment has no recoverable Canvas access code. Course records were not deleted; verify the assessment and reconcile its access code before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
           }
         );
       }

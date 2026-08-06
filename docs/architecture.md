@@ -103,7 +103,7 @@ Instructor discovery refreshes Classic and New Quiz data from Canvas. A learner 
 
 Assessment updates use short-lived PostgreSQL operation locks while Canvas and database state are changed. Administrator course resets take a course-level lease and then the same per-assessment leases, so ordinary assessment mutations cannot overlap a reset. Atomic compare-and-delete/insert operations prevent overlapping workers from owning the same lease and help keep Canvas access codes aligned with persisted SEB settings.
 
-An administrator course reset performs strict Classic Quiz and New Quiz discovery, removes each Canvas access code with the account-administrator grant, and only then deletes course-related transient state, assessments, and the course policy in one PostgreSQL transaction. The shared OAuth grant and root-account course connection are deliberately retained. A discovery or Canvas mutation failure leaves local course records in place for recovery and retry; a lost lease is reported as an indeterminate result that requires refresh and verification.
+An administrator course reset performs strict Classic Quiz and New Quiz discovery, removes each Canvas access code with the account-administrator grant, and only then deletes course-related transient state, assessments, and the course policy in one PostgreSQL transaction. The shared OAuth grant and root-account course connection are deliberately retained. If a later Canvas mutation or the database transaction fails, the service restores every earlier access code and its prior local assessment record in reverse order. A failed compensation or lost lease is reported as an indeterminate result that requires refresh and verification.
 
 ### Exam tools and URL policy
 

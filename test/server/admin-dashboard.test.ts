@@ -5,8 +5,10 @@ import { AdminController } from "../../src/server/controllers/admin.controller.j
 import { createInMemoryRepositories } from "../../src/server/data/in-memory-repositories.js";
 import { AdminAuthorizationService } from "../../src/server/services/admin-authorization.service.js";
 import {
+  AssessmentAccessCodeConsistencyError,
   AssessmentOperationInProgressError,
-  CourseResetAssessmentIdentityError
+  CourseResetAssessmentIdentityError,
+  CourseResetCompensationError
 } from "../../src/server/services/assessment.service.js";
 
 const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator";
@@ -155,6 +157,42 @@ describe("AdminController", () => {
       status: 409,
       response: expect.objectContaining({
         error_code: "ADMIN_COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE",
+        message: expect.stringContaining("Course records were not deleted")
+      })
+    });
+  });
+
+  it("requires manual verification when a stopped reset cannot restore every Canvas access code", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new CourseResetCompensationError(new Error("reset failed"), [new Error("rollback failed")]));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_ROLLBACK_VERIFY_REQUIRED",
+        message: expect.stringContaining("verify every assessment")
+      })
+    });
+  });
+
+  it("requires reconciliation before reset when an enabled assessment has no stored access code", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new AssessmentAccessCodeConsistencyError("missing access code"));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED",
         message: expect.stringContaining("Course records were not deleted")
       })
     });
