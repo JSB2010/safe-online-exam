@@ -29,17 +29,24 @@ export class RepositoryProvider implements OnModuleInit {
   async resetCourseState(
     courseId: string,
     adminConnectionId: string
-  ): Promise<{ assessmentCount: number; transientStateCount: number; courseRecordCount: number }> {
+  ): Promise<{
+    assessmentCount: number;
+    transientStateCount: number;
+    courseRecordCount: number;
+    presetAssignmentCount: number;
+  }> {
     if (usesInMemoryRepositories(this.config)) {
-      const [assessments, transientStates, courses] = await Promise.all([
+      const [assessments, transientStates, courses, presetAssignments] = await Promise.all([
         this.value.assessments.find([{ field: "courseId", op: "==", value: courseId }]),
         this.value.transientStates.find([{ field: "courseId", op: "==", value: courseId }]),
-        this.value.courses.find([{ field: "courseId", op: "==", value: courseId }])
+        this.value.courses.find([{ field: "courseId", op: "==", value: courseId }]),
+        this.value.adminToolPresetAssignments.find([{ field: "courseId", op: "==", value: courseId }])
       ]);
       await Promise.all([
         ...assessments.map((assessment) => this.value.assessments.delete(assessment.id)),
         ...transientStates.map((state) => this.value.transientStates.delete(String(state.id))),
         ...courses.map((course) => this.value.courses.delete(String(course.id || course.courseId))),
+        ...presetAssignments.map((assignment) => this.value.adminToolPresetAssignments.delete(assignment.id)),
         this.value.courses.delete(courseId)
       ]);
       await this.value.adminCourseConnections.update(adminConnectionId, (connection) =>
@@ -56,7 +63,8 @@ export class RepositoryProvider implements OnModuleInit {
       return {
         assessmentCount: assessments.length,
         transientStateCount: transientStates.length,
-        courseRecordCount: courses.length
+        courseRecordCount: courses.length,
+        presetAssignmentCount: presetAssignments.length
       };
     }
 
@@ -68,6 +76,8 @@ export class RepositoryProvider implements OnModuleInit {
            DELETE FROM assessments WHERE course_id = $1 RETURNING id
          ), removed_courses AS (
            DELETE FROM courses WHERE id = $1 OR course_id = $1 RETURNING id
+         ), removed_preset_assignments AS (
+           DELETE FROM admin_tool_preset_assignments WHERE course_id = $1 RETURNING id
          ), updated_connection AS (
            UPDATE admin_course_connections
            SET document = document || jsonb_build_object(
@@ -83,20 +93,23 @@ export class RepositoryProvider implements OnModuleInit {
          SELECT
            (SELECT count(*)::int FROM removed_assessments) AS assessment_count,
            (SELECT count(*)::int FROM removed_transient_states) AS transient_state_count,
-           (SELECT count(*)::int FROM removed_courses) AS course_record_count`,
+           (SELECT count(*)::int FROM removed_courses) AS course_record_count,
+           (SELECT count(*)::int FROM removed_preset_assignments) AS preset_assignment_count`,
         [courseId, adminConnectionId, new Date().toISOString()]
       )) as {
         rows?: Array<{
           assessment_count?: number | string;
           transient_state_count?: number | string;
           course_record_count?: number | string;
+          preset_assignment_count?: number | string;
         }>;
       };
       const row = result.rows?.[0];
       return {
         assessmentCount: Number(row?.assessment_count || 0),
         transientStateCount: Number(row?.transient_state_count || 0),
-        courseRecordCount: Number(row?.course_record_count || 0)
+        courseRecordCount: Number(row?.course_record_count || 0),
+        presetAssignmentCount: Number(row?.preset_assignment_count || 0)
       };
     });
   }

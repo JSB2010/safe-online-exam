@@ -71,8 +71,9 @@ export class CourseSettingsService {
     options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
   ): Promise<CourseSebDefaults> {
     const existing = await this.repositories.value.courses.get(courseId);
-    const existingDefaults = courseRecordToDefaults(existing, courseId);
+    const existingDefaults = existing ? courseRecordToDefaults(existing, courseId) : defaultCourseSebDefaults(courseId);
     const resolvedDefaults = {
+      ...existingDefaults,
       ...defaults,
       quitPassword: resolveSebPasswordUpdate(existingDefaults.quitPassword, defaults.quitPassword),
       startPassword: resolveSebPasswordUpdate(existingDefaults.startPassword, defaults.startPassword),

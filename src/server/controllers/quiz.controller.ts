@@ -1,12 +1,12 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { ExternalToolConfig, StructuredSebConfigRequest } from "../../shared/models.js";
+import type { CourseSebDefaults, ExternalToolConfig, StructuredSebConfigRequest } from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
   defaultQuizSebSetting,
   legacyDomainsToUrlRules,
-  normalizeCourseSebDefaults,
+  normalizeCourseExternalTools,
   normalizeConcreteDomains,
   normalizeExternalToolAccessRules,
   normalizeExternalToolIds,
@@ -89,20 +89,16 @@ export class QuizController {
   ): Promise<Record<string, unknown>> {
     this.authorization.requireInstructorForCourse(request, courseId, true);
     assertSafePolicyInput(body);
-    const existing = await this.courseSettings.getDefaults(courseId);
     const hasToolCatalog = Array.isArray(body.externalTools);
-    const defaults = await this.courseSettings.saveDefaults(
+    const defaults = await this.courseSettings.saveDefaults(courseId, {
       courseId,
-      normalizeCourseSebDefaults({
-        courseId,
-        quitPassword: secretUpdate(body, "quitPassword", existing.quitPassword),
-        startPassword: secretUpdate(body, "startPassword", existing.startPassword),
-        urlRules: Array.isArray(body.urlRules) ? (body.urlRules as any) : [],
-        externalTools: hasToolCatalog ? (body.externalTools as any) : existing.externalTools,
-        externalToolsInitialized: hasToolCatalog || existing.externalToolsInitialized === true,
-        setupCompleted: body.setupCompleted !== false
-      })
-    );
+      quitPassword: courseSecretUpdate(body, "quitPassword"),
+      startPassword: courseSecretUpdate(body, "startPassword"),
+      urlRules: Array.isArray(body.urlRules) ? normalizeUrlRules(body.urlRules as any) : undefined,
+      externalTools: hasToolCatalog ? normalizeCourseExternalTools(body.externalTools as any) : undefined,
+      externalToolsInitialized: hasToolCatalog ? true : undefined,
+      setupCompleted: body.setupCompleted !== false
+    });
     return {
       success: true,
       defaults: toCourseDefaultsView(defaults, this.config.value.seb.defaultQuitPassword)
@@ -249,12 +245,7 @@ export class QuizController {
     const required = !!body.required;
     try {
       if (required) {
-        const setting = await this.assessments.enableSebWithAccessCode(
-          courseId,
-          quizId,
-          userId,
-          await this.courseSettings.getDefaults(courseId)
-        );
+        const setting = await this.assessments.enableSebWithAccessCode(courseId, quizId, userId);
         return {
           success: true,
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
@@ -469,8 +460,7 @@ export class QuizController {
           courseId,
           quizId,
           parsed.assignmentId,
-          userId,
-          await this.courseSettings.getDefaults(courseId)
+          userId
         );
         return {
           success: true,
@@ -478,12 +468,7 @@ export class QuizController {
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
         };
       }
-      const setting = await this.assessments.enableSebWithAccessCode(
-        courseId,
-        quizId,
-        userId,
-        await this.courseSettings.getDefaults(courseId)
-      );
+      const setting = await this.assessments.enableSebWithAccessCode(courseId, quizId, userId);
       return {
         success: true,
         message: "Safe Online Exam enabled.",
@@ -664,6 +649,20 @@ function secretUpdate(
     return null;
   }
   return typeof value === "string" && value.trim() ? value : existing || null;
+}
+
+function courseSecretUpdate(
+  body: Record<string, unknown>,
+  key: "quitPassword" | "startPassword"
+): CourseSebDefaults["quitPassword"] | undefined {
+  if (!Object.hasOwn(body, key)) {
+    return undefined;
+  }
+  const value = body[key];
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function assertSafePolicyInput(body: Record<string, unknown>): void {

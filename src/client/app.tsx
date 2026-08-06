@@ -1275,7 +1275,10 @@ function AdminCourseResetDialog({
             <p>The reset completes in this order:</p>
             <ol>
               <li>Remove Safe Online Exam access codes from every current Classic Quiz and New Quiz in Canvas.</li>
-              <li>Delete the local course policy, assessment settings, and outstanding course access grants.</li>
+              <li>
+                Delete the local course policy, assessment settings, outstanding course access grants, and school tool
+                assignments.
+              </li>
               <li>Show the guided setup the next time an instructor opens this course.</li>
             </ol>
           </div>

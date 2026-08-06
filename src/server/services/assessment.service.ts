@@ -22,6 +22,7 @@ import {
   assessmentWithQuizSebSetting,
   canonicalAssessmentId,
   contentItemToAssessmentRecord,
+  courseRecordToDefaults,
   defaultContentSebSetting,
   defaultQuizSebSetting,
   extractClassicQuizId,
@@ -51,6 +52,7 @@ export interface CourseResetResult {
   deletedAssessmentCount: number;
   deletedTransientStateCount: number;
   deletedCourseRecordCount: number;
+  deletedPresetAssignmentCount: number;
 }
 
 interface RefreshCourseContentOptions {
@@ -171,7 +173,14 @@ export class AssessmentService {
               await this.withAssessmentLock(
                 mutation.assessment.id,
                 async () => {
-                  await mutation.disableCanvas();
+                  try {
+                    await mutation.disableCanvas();
+                  } catch (error) {
+                    if (!isDefinitiveCanvasRejection(error)) {
+                      attempted.push(mutation);
+                    }
+                    throw error;
+                  }
                   attempted.push(mutation);
                   await this.repositories.value.assessments.update(mutation.assessment.id, (current) =>
                     current && current.courseId === courseId
@@ -197,7 +206,8 @@ export class AssessmentService {
               disabledAssessmentCount: discovered.assessments.length,
               deletedAssessmentCount: deleted.assessmentCount,
               deletedTransientStateCount: deleted.transientStateCount,
-              deletedCourseRecordCount: deleted.courseRecordCount
+              deletedCourseRecordCount: deleted.courseRecordCount,
+              deletedPresetAssignmentCount: deleted.presetAssignmentCount
             };
           } catch (error) {
             await this.rollbackCourseReset(attempted, error);
@@ -457,6 +467,7 @@ export class AssessmentService {
     return this.withAssessmentLock(
       quizId,
       async () => {
+        const currentDefaults = await this.getCourseDefaultsForMutation(courseId, defaults);
         const accessCode = generateAccessCode();
         const existing = await this.getSebSettingForQuiz(quizId);
         const next = applyCourseDefaultsToQuizSetting(
@@ -477,7 +488,7 @@ export class AssessmentService {
             externalTools: normalizeExternalTools(existing?.externalTools),
             externalToolIds: normalizeExternalToolIds(existing?.externalToolIds)
           },
-          defaults
+          currentDefaults
         );
         this.assertAssessmentCanRunSeb(next);
         this.assertPriorAccessCodeIsRecoverable(existing);
@@ -550,6 +561,7 @@ export class AssessmentService {
     return this.withAssessmentLock(
       contentId,
       async () => {
+        const currentDefaults = await this.getCourseDefaultsForMutation(courseId, defaults);
         const existing = await this.getContentSebSetting(contentId);
         const setting = existing || (await this.getOrCreateContentSebSetting(contentId, courseId, assignmentId));
         const accessCode = generateAccessCode();
@@ -561,7 +573,7 @@ export class AssessmentService {
             accessCode,
             configKey: null
           },
-          defaults
+          currentDefaults
         );
         this.assertAssessmentCanRunSeb(next);
         this.assertPriorAccessCodeIsRecoverable(existing);
@@ -774,6 +786,14 @@ export class AssessmentService {
         action
       );
     return courseId && !allowDuringCourseReset ? this.withCourseWriteLock(courseId, run) : run();
+  }
+
+  private async getCourseDefaultsForMutation(
+    courseId: string,
+    fallback?: CourseSebDefaults | null
+  ): Promise<CourseSebDefaults | null | undefined> {
+    const current = await this.repositories.value.courses.get(courseId);
+    return current ? courseRecordToDefaults(current, courseId) : fallback;
   }
 
   async withCourseWriteLock<T>(courseId: string, action: () => Promise<T>, allowDuringCourseReset = false): Promise<T> {

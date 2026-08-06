@@ -129,16 +129,29 @@ describe("PostgreSQL document repositories", () => {
       issueCount: 0,
       connectedByUserId: "reset-user"
     });
+    await repositories.adminToolPresetAssignments.save(`preset-1:${courseId}`, {
+      id: `preset-1:${courseId}`,
+      rootAccountId: "7",
+      presetId: "preset-1",
+      courseId,
+      desiredAssigned: true,
+      status: "applied",
+      error: null,
+      appliedPresetUpdatedAt: new Date().toISOString(),
+      updatedByUserId: "reset-user"
+    });
     const provider = new RepositoryProvider({ profile: "production" } as any, testDatabase.database);
 
     await expect(provider.resetCourseState(courseId, connectionId)).resolves.toEqual({
       assessmentCount: 1,
       transientStateCount: 1,
-      courseRecordCount: 1
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
     });
     await expect(repositories.courses.get(courseId)).resolves.toBeNull();
     await expect(repositories.assessments.get("classicquiz_reset-501")).resolves.toBeNull();
     await expect(repositories.transientStates.get("reset-grant")).resolves.toBeNull();
+    await expect(repositories.adminToolPresetAssignments.get(`preset-1:${courseId}`)).resolves.toBeNull();
     await expect(repositories.oauthTokens.get("reset-user")).resolves.toMatchObject({
       accessToken: "preserved-oauth-token"
     });

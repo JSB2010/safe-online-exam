@@ -92,8 +92,8 @@ describe("QuizController", () => {
       COURSE_ID,
       expect.objectContaining({
         courseId: COURSE_ID,
-        quitPassword: "exit-passphrase",
-        startPassword: "start-passphrase",
+        quitPassword: " exit-passphrase ",
+        startPassword: " start-passphrase ",
         setupCompleted: true,
         urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
         externalTools: expect.arrayContaining([
@@ -149,12 +149,12 @@ describe("QuizController", () => {
   });
 
   it("preserves write-only course secrets when the client omits masked fields", async () => {
-    courseSettings.getDefaults.mockResolvedValue({
+    const existing = {
       ...defaultCourseSebDefaults(COURSE_ID),
       quitPassword: "existing-quit",
       startPassword: "existing-start"
-    });
-    courseSettings.saveDefaults.mockImplementation(async (_courseId, defaults) => defaults);
+    };
+    courseSettings.saveDefaults.mockResolvedValue(existing);
 
     const result = await controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
       setupCompleted: true,
@@ -164,8 +164,9 @@ describe("QuizController", () => {
 
     expect(courseSettings.saveDefaults).toHaveBeenCalledWith(
       COURSE_ID,
-      expect.objectContaining({ quitPassword: "existing-quit", startPassword: "existing-start" })
+      expect.objectContaining({ quitPassword: undefined, startPassword: undefined })
     );
+    expect(courseSettings.getDefaults).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       defaults: { hasQuitPassword: true, hasStartPassword: true }
     });
@@ -433,8 +434,7 @@ describe("QuizController", () => {
       COURSE_ID,
       "newquiz:course-1:assignment-99",
       "assignment-99",
-      USER_ID,
-      expect.objectContaining({ courseId: COURSE_ID, startPassword: "course-start-secret" })
+      USER_ID
     );
   });
 

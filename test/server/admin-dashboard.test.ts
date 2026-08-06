@@ -114,7 +114,8 @@ describe("AdminController", () => {
       disabledAssessmentCount: 2,
       deletedAssessmentCount: 2,
       deletedTransientStateCount: 1,
-      deletedCourseRecordCount: 1
+      deletedCourseRecordCount: 1,
+      deletedPresetAssignmentCount: 1
     });
     const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
 
@@ -124,7 +125,8 @@ describe("AdminController", () => {
     await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).resolves.toMatchObject({
       success: true,
       disabledAssessmentCount: 2,
-      deletedAssessmentCount: 2
+      deletedAssessmentCount: 2,
+      deletedPresetAssignmentCount: 1
     });
     expect(resetCourseForAdmin).toHaveBeenCalledWith("101", "42", "7");
     await expect(repositories.oauthTokens.get("42")).resolves.toMatchObject({ accessToken: "preserved-token" });

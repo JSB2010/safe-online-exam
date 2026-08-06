@@ -642,12 +642,13 @@ test("renders the responsive root-account administrator workspace and controlled
       })
     });
   });
-  let courseResetRequested = false;
+  let courseResetRequest: { method: string; token?: string; body: unknown } | null = null;
   await page.route("**/api/admin/courses/101/reset", async (route) => {
-    courseResetRequested = true;
-    expect(route.request().method()).toBe("POST");
-    expect(route.request().headers()["x-auth-token"]).toBe("test-admin-token");
-    expect(route.request().postDataJSON()).toEqual({ confirmation: "101" });
+    courseResetRequest = {
+      method: route.request().method(),
+      token: route.request().headers()["x-auth-token"],
+      body: route.request().postDataJSON()
+    };
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -655,7 +656,8 @@ test("renders the responsive root-account administrator workspace and controlled
         disabledAssessmentCount: 2,
         deletedAssessmentCount: 2,
         deletedTransientStateCount: 0,
-        deletedCourseRecordCount: 1
+        deletedCourseRecordCount: 1,
+        deletedPresetAssignmentCount: 1
       })
     });
   });
@@ -731,12 +733,17 @@ test("renders the responsive root-account administrator workspace and controlled
   await expect(
     resetDialog.getByText(/Canvas authorization and the administrator connection stay in place/u)
   ).toBeVisible();
+  await expect(resetDialog.getByText(/school tool assignments/u)).toBeVisible();
   const resetButton = resetDialog.getByRole("button", { name: "Disable quizzes and reset course" });
   await expect(resetButton).toBeDisabled();
   await resetDialog.getByLabel(/Enter course ID/u).fill("101");
   await resetButton.click();
   await expect(resetDialog).toBeHidden();
-  expect(courseResetRequested).toBe(true);
+  expect(courseResetRequest).toEqual({
+    method: "POST",
+    token: "test-admin-token",
+    body: { confirmation: "101" }
+  });
   expect(browserErrors).toEqual([]);
 });
 

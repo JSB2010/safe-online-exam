@@ -54,7 +54,8 @@ describe("CourseSettingsService", () => {
       resetCourseState: vi.fn().mockResolvedValue({
         assessmentCount: 0,
         transientStateCount: 0,
-        courseRecordCount: 0
+        courseRecordCount: 0,
+        presetAssignmentCount: 0
       })
     } as unknown as RepositoryProvider;
     const assessments = new AssessmentService(provider, canvas);
@@ -307,6 +308,31 @@ describe("CourseSettingsService", () => {
         { propagate: false }
       )
     ).resolves.toMatchObject({ quitPassword: null, startPassword: null });
+  });
+
+  it("merges a delayed partial save against the course state loaded inside the write lease", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    await service.saveDefaults(
+      "course-1",
+      {
+        quitPassword: "original-quit-passphrase",
+        startPassword: "original-start-passphrase",
+        setupCompleted: true
+      },
+      { propagate: false }
+    );
+    const delayedUpdate = { quitPassword: "replacement-quit-passphrase", setupCompleted: true };
+
+    await service.saveDefaults(
+      "course-1",
+      { startPassword: "replacement-start-passphrase", setupCompleted: true },
+      { propagate: false }
+    );
+    await expect(service.saveDefaults("course-1", delayedUpdate, { propagate: false })).resolves.toMatchObject({
+      quitPassword: "replacement-quit-passphrase",
+      startPassword: "replacement-start-passphrase"
+    });
   });
 
   it("rejects newly supplied weak course start and exit passwords without persisting them", async () => {

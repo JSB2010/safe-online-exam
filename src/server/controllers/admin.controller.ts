@@ -687,7 +687,6 @@ export class AdminController {
     const required = (body as { required: boolean }).required;
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
     const assessment = await this.requireAssessment(courseId, assessmentId);
-    const defaults = await this.courseSettings.getDefaults(courseId);
     const setting =
       assessment.contentType === "NEW_QUIZ"
         ? required
@@ -696,7 +695,7 @@ export class AdminController {
               assessment.id,
               requiredAssignmentId(assessment),
               principal.canvasUserId,
-              defaults,
+              undefined,
               "account_admin"
             )
           : await this.assessments.disableContentSebWithAccessCode(
@@ -711,7 +710,7 @@ export class AdminController {
               courseId,
               requiredQuizId(assessment),
               principal.canvasUserId,
-              defaults,
+              undefined,
               "account_admin"
             )
           : await this.assessments.disableSebWithAccessCode(

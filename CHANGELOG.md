@@ -32,11 +32,13 @@ callback URLs, required Canvas scopes, or public SEB compatibility endpoints.
   connected course's Safe Online Exam setup without replacing or deleting any
   Canvas OAuth grant.
 - Discover both Classic Quizzes and New Quizzes strictly, remove every current
-  Canvas access code first, and delete the local course, assessment, and
-  outstanding course-grant state only after every Canvas mutation succeeds.
+  Canvas access code first, and delete the local course, assessment, outstanding
+  course-grant, and school-tool assignment state only after every Canvas
+  mutation succeeds.
 - Serialize resets and assessment mutations with course and assessment leases,
-  restore completed Canvas and local assessment changes when a later reset step
-  fails, report indeterminate rollback failures precisely, retain the
+  restore completed or ambiguously reported Canvas changes and prior local
+  assessment state when a reset step fails, report indeterminate rollback
+  failures precisely, retain the
   administrator course connection, and show guided setup on the next instructor
   launch.
 

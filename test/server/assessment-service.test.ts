@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assessmentWithContentSebSetting, assessmentWithQuizSebSetting } from "../../src/shared/models.js";
+import {
+  assessmentWithContentSebSetting,
+  assessmentWithQuizSebSetting,
+  courseDefaultsToRecord,
+  defaultCourseSebDefaults
+} from "../../src/shared/models.js";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
 import {
   ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS,
@@ -13,7 +18,11 @@ import {
   CourseResetCompensationError,
   CourseResetInProgressError
 } from "../../src/server/services/assessment.service.js";
-import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
+import {
+  CanvasApiPermissionError,
+  CanvasApiRequestError,
+  CanvasApiService
+} from "../../src/server/services/canvas-api.service.js";
 
 const originalServerQuitPassword = process.env.SEB_QUIT_PASSWORD;
 const originalLegacyServerQuitPassword = process.env.DEFAULT_SEB_QUIT_PASSWORD;
@@ -202,6 +211,53 @@ describe("AssessmentService", () => {
       quitPasswordOverride: true
     });
     expect(canvas.setQuizAccessCode).toHaveBeenCalledOnce();
+  });
+
+  it("loads current course defaults inside the enable lease for Classic and New Quizzes", async () => {
+    const repositories = createInMemoryRepositories();
+    await repositories.courses.save(
+      "course-1",
+      courseDefaultsToRecord("course-1", {
+        ...defaultCourseSebDefaults("course-1"),
+        quitPassword: "current-quit-passphrase",
+        startPassword: "current-start-passphrase",
+        setupCompleted: true
+      })
+    );
+    const repos = { value: repositories } as RepositoryProvider;
+    const canvas = {
+      setQuizAccessCode: vi.fn().mockResolvedValue(true),
+      setNewQuizAccessCode: vi.fn().mockResolvedValue(true),
+      getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([]),
+      getCanvasDomain: vi.fn().mockReturnValue("https://canvas.example.edu")
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService(repos, canvas);
+    const staleDefaults = {
+      ...defaultCourseSebDefaults("course-1"),
+      quitPassword: "stale-quit-passphrase",
+      startPassword: "stale-start-passphrase",
+      setupCompleted: true
+    };
+
+    await expect(service.enableSebWithAccessCode("course-1", "quiz-1", "user-1", staleDefaults)).resolves.toMatchObject(
+      {
+        quitPassword: "current-quit-passphrase",
+        startPassword: "current-start-passphrase"
+      }
+    );
+    await expect(
+      service.enableContentSebWithAccessCode(
+        "course-1",
+        "newquiz:course-1:assignment-1",
+        "assignment-1",
+        "user-1",
+        staleDefaults
+      )
+    ).resolves.toMatchObject({
+      quitPassword: "current-quit-passphrase",
+      startPassword: "current-start-passphrase"
+    });
   });
 
   it("treats blank write-only assessment password updates as no change", async () => {
@@ -1234,7 +1290,7 @@ describe("AssessmentService", () => {
     const events: string[] = [];
     const resetCourseState = vi.fn().mockImplementation(async () => {
       events.push("delete-local-state");
-      return { assessmentCount: 2, transientStateCount: 1, courseRecordCount: 1 };
+      return { assessmentCount: 2, transientStateCount: 1, courseRecordCount: 1, presetAssignmentCount: 1 };
     });
     const provider = { value: repositories, resetCourseState } as unknown as RepositoryProvider;
     const canvas = {
@@ -1266,7 +1322,8 @@ describe("AssessmentService", () => {
 
     await expect(service.resetCourseForAdmin("101", "42", "7")).resolves.toMatchObject({
       disabledAssessmentCount: 2,
-      deletedAssessmentCount: 2
+      deletedAssessmentCount: 2,
+      deletedPresetAssignmentCount: 1
     });
     expect(events).toEqual(["disable-classic", "disable-new", "delete-local-state"]);
     expect(canvas.removeQuizAccessCode).toHaveBeenCalledWith("101", "501", "42", "account_admin");
@@ -1274,7 +1331,7 @@ describe("AssessmentService", () => {
     expect(resetCourseState).toHaveBeenCalledWith("101", "7:101");
   });
 
-  it("keeps local course records when Canvas cannot disable every assessment", async () => {
+  it("restores every possibly changed Canvas code when a later disable response is lost", async () => {
     const repositories = createInMemoryRepositories();
     await repositories.assessments.save(
       "classicquiz_501",
@@ -1331,16 +1388,18 @@ describe("AssessmentService", () => {
         }
       ]),
       removeQuizAccessCode: vi.fn().mockResolvedValue(undefined),
-      removeNewQuizAccessCode: vi.fn().mockRejectedValueOnce(new Error("Canvas unavailable")),
+      removeNewQuizAccessCode: vi
+        .fn()
+        .mockRejectedValueOnce(new CanvasApiRequestError("Canvas response was lost", "42", "", 504)),
       setQuizAccessCode: vi.fn().mockResolvedValue(undefined),
       setNewQuizAccessCode: vi.fn().mockResolvedValue(undefined)
     } as unknown as CanvasApiService;
     const service = new AssessmentService(provider, canvas);
 
-    await expect(service.resetCourseForAdmin("101", "42", "7")).rejects.toThrow("Canvas unavailable");
+    await expect(service.resetCourseForAdmin("101", "42", "7")).rejects.toThrow("Canvas response was lost");
     expect(resetCourseState).not.toHaveBeenCalled();
     expect(canvas.setQuizAccessCode).toHaveBeenCalledWith("101", "501", "OLD-CLASSIC-CODE", "42", "account_admin");
-    expect(canvas.setNewQuizAccessCode).not.toHaveBeenCalled();
+    expect(canvas.setNewQuizAccessCode).toHaveBeenCalledWith("101", "601", "OLD-NEW-CODE", "42", "account_admin");
     await expect(repositories.assessments.get("classicquiz_501")).resolves.toMatchObject({
       seb: { required: true, enabled: true, accessCode: "OLD-CLASSIC-CODE" }
     });
@@ -1387,6 +1446,48 @@ describe("AssessmentService", () => {
     );
     expect(canvas.removeQuizAccessCode).not.toHaveBeenCalled();
     expect(provider.resetCourseState).not.toHaveBeenCalled();
+  });
+
+  it("does not compensate a definitive Canvas reset rejection", async () => {
+    const repositories = createInMemoryRepositories();
+    await repositories.assessments.save(
+      "classicquiz_501",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "501",
+        courseId: "101",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "OLD-CLASSIC-CODE",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      })
+    );
+    const rejection = new CanvasApiPermissionError("Canvas denied access", "42", "", 403);
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([
+        {
+          id: "501",
+          canvasQuizId: "501",
+          courseId: "101",
+          title: "Algebra quiz",
+          contentType: "CLASSIC_QUIZ",
+          published: true
+        }
+      ]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([]),
+      removeQuizAccessCode: vi.fn().mockRejectedValue(rejection),
+      setQuizAccessCode: vi.fn()
+    } as unknown as CanvasApiService;
+    const provider = { value: repositories, resetCourseState: vi.fn() } as unknown as RepositoryProvider;
+    const service = new AssessmentService(provider, canvas);
+
+    await expect(service.resetCourseForAdmin("101", "42", "7")).rejects.toBe(rejection);
+    expect(canvas.setQuizAccessCode).not.toHaveBeenCalled();
+    await expect(repositories.assessments.get("classicquiz_501")).resolves.toMatchObject({
+      seb: { required: true, enabled: true, accessCode: "OLD-CLASSIC-CODE" }
+    });
   });
 
   it("restores Canvas and local assessment state when final course deletion fails", async () => {
@@ -1514,7 +1615,8 @@ describe("AssessmentService", () => {
       resetCourseState: vi.fn().mockResolvedValue({
         assessmentCount: 0,
         transientStateCount: 0,
-        courseRecordCount: 0
+        courseRecordCount: 0,
+        presetAssignmentCount: 0
       })
     } as unknown as RepositoryProvider;
     const service = new AssessmentService(provider, canvas);
