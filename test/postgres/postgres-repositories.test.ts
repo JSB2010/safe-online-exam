@@ -89,7 +89,7 @@ describe("PostgreSQL document repositories", () => {
   it("atomically resets course state while preserving OAuth and the admin connection", async () => {
     const repositories = createPostgresRepositories(testDatabase.database);
     const courseId = "reset-course-101";
-    const connectionId = `root-7:${courseId}`;
+    const connectionId = `7:${courseId}`;
     await repositories.courses.save(courseId, courseRecord(courseId, true));
     await repositories.assessments.save(
       "classicquiz_reset-501",
@@ -118,11 +118,11 @@ describe("PostgreSQL document repositories", () => {
     });
     await repositories.adminCourseConnections.save(connectionId, {
       id: connectionId,
-      rootAccountId: "root-7",
+      rootAccountId: "7",
       canvasOrigin: "https://canvas.example.edu",
       courseId,
       name: "Reset Biology",
-      accountId: "root-7",
+      accountId: "7",
       teacherNames: [],
       assessmentCount: 1,
       enabledAssessmentCount: 1,
