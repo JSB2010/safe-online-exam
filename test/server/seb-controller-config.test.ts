@@ -16,6 +16,10 @@ const TEST_PUBLIC_KEY_PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).
   format: "pem"
 }) as string;
 
+async function isCourseResetInProgress(): Promise<boolean> {
+  return false;
+}
+
 describe("SEB config downloads", () => {
   it("accepts the Windows HEAD probe without consuming the configuration grant", async () => {
     const configGrants = {
@@ -58,6 +62,7 @@ describe("SEB config downloads", () => {
         {} as any,
         {} as any,
         {
+          isCourseResetInProgress,
           isAssessmentAvailableForLearner: async () => true,
           getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
           getSebSettingForQuiz: async () => ({
@@ -133,6 +138,7 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isCourseResetInProgress,
             isAssessmentAvailableForLearner: async () => true,
             getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
             getSebSettingForQuiz: async () => ({
@@ -189,6 +195,7 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isCourseResetInProgress,
             isAssessmentAvailableForLearner: async () => true,
             getAssessmentRecord: async () => assessmentRecord("newquiz:11825:991", "NEW_QUIZ"),
             getContentSebSetting: async () => ({
@@ -251,6 +258,7 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isCourseResetInProgress,
             isAssessmentAvailableForLearner: async () => true,
             getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
             getSebSettingForQuiz: async () => ({
@@ -312,6 +320,7 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isCourseResetInProgress,
             isAssessmentAvailableForLearner: async () => true,
             getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
             getSebSettingForQuiz: async () => ({
@@ -400,6 +409,7 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isCourseResetInProgress,
             isAssessmentAvailableForLearner: async () => true,
             getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
             getSebSettingForQuiz: async () => ({
@@ -529,6 +539,7 @@ describe("SEB config downloads", () => {
           {} as any,
           {} as any,
           {
+            isCourseResetInProgress,
             isAssessmentAvailableForLearner: async () => true,
             getSebSettingForQuiz: async () => setting,
             getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ"),
@@ -694,6 +705,7 @@ function classicController(sebConfig: SebConfigurationService, recordCourseId = 
     {} as any,
     {} as any,
     {
+      isCourseResetInProgress,
       isAssessmentAvailableForLearner: async () => true,
       getAssessmentRecord: async () => assessmentRecord("classicquiz_23455", "CLASSIC_QUIZ", recordCourseId),
       getSebSettingForQuiz: async () => ({

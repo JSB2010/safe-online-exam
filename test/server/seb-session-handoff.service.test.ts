@@ -41,6 +41,22 @@ describe("SebSessionHandoffService", () => {
     ).resolves.toBe(configKeyValue);
   });
 
+  it("revokes registered handoff configs when course state changes during generation", async () => {
+    const repositories = createInMemoryRepositories();
+    const configKey = new SebConfigKeyService();
+    const service = new SebSessionHandoffService({ value: repositories } as RepositoryProvider, configKey);
+    const configKeyValue = "d".repeat(64);
+    const returnTo = "https://canvas.example.edu/courses/1/quizzes/2/take";
+    const hash = configKey.hashForUrl(returnTo, configKeyValue);
+    await service.registerConfig("course-1", "classicquiz_2", "settings-1", configKeyValue, returnTo);
+
+    await service.revokeConfigs("course-1", "classicquiz_2", "settings-1");
+
+    await expect(
+      service.resolveConfigKey("course-1", "classicquiz_2", "settings-1", hash, returnTo)
+    ).resolves.toBeNull();
+  });
+
   it("accepts a New Quiz attempt URL reached after Canvas leaves the registered assignment route", async () => {
     const repositories = createInMemoryRepositories();
     const configKey = new SebConfigKeyService();

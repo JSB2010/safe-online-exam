@@ -407,7 +407,7 @@ describe("SebController route contracts", () => {
   });
 
   it("mints the one-time config grant only on a same-origin authenticated click", async () => {
-    const { controller, configGrants } = controllerWith({
+    const { controller, assessments, configGrants } = controllerWith({
       assessments: {
         getSebSettingForQuiz: vi.fn().mockResolvedValue({
           quizId: "23455",
@@ -441,6 +441,7 @@ describe("SebController route contracts", () => {
       expiresInSeconds: 120
     });
     expect(configGrants.mintGrant).toHaveBeenCalledTimes(1);
+    expect(assessments.isCourseResetInProgress).toHaveBeenCalledWith("course-1");
 
     await expect(
       controller.issueConfigGrant(
@@ -449,6 +450,114 @@ describe("SebController route contracts", () => {
         "classicquiz_23455"
       )
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("revokes a config grant when reset deletes the assessment during issuance", async () => {
+    const setting = {
+      quizId: "23455",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      urlRules: [],
+      externalTools: []
+    };
+    const { controller, configGrants } = controllerWith({
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValueOnce(setting).mockResolvedValue(null),
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" })
+      }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({ status: 404 });
+    expect(configGrants.mintGrant).toHaveBeenCalledOnce();
+    expect(configGrants.revokeGrant).toHaveBeenCalledWith("g".repeat(43));
+  });
+
+  it("revokes a config grant when a course reset starts during issuance", async () => {
+    const isCourseResetInProgress = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const { controller, configGrants } = controllerWith({
+      assessments: {
+        isCourseResetInProgress,
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS",
+          urlRules: [],
+          externalTools: []
+        }),
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" })
+      }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "COURSE_RESET_IN_PROGRESS" })
+    });
+    expect(configGrants.revokeGrant).toHaveBeenCalledWith("g".repeat(43));
+  });
+
+  it("revokes a config grant when post-issuance state verification fails", async () => {
+    const getSebSettingForQuiz = vi
+      .fn()
+      .mockResolvedValueOnce({
+        quizId: "23455",
+        courseId: "course-1",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "ACCESS",
+        urlRules: [],
+        externalTools: []
+      })
+      .mockRejectedValue(new Error("Database unavailable"));
+    const { controller, configGrants } = controllerWith({
+      assessments: {
+        getSebSettingForQuiz,
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" })
+      }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toThrow("Database unavailable");
+    expect(configGrants.revokeGrant).toHaveBeenCalledWith("g".repeat(43));
   });
 
   it("does not mint a student config grant without the mandatory Canvas session connection", async () => {
@@ -850,7 +959,7 @@ describe("SebController route contracts", () => {
       urlRules: [],
       externalTools: []
     };
-    const { controller, configGrants } = controllerWith({
+    const { controller, assessments, configGrants } = controllerWith({
       assessments: {
         getQuiz: vi.fn().mockResolvedValue({
           id: "23455",
@@ -883,6 +992,7 @@ describe("SebController route contracts", () => {
       "classicquiz_23455",
       expect.any(String)
     );
+    expect(assessments.isCourseResetInProgress).toHaveBeenCalledWith("course-1");
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store");
     expect(response.redirect).not.toHaveBeenCalled();
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-launching"'));
@@ -989,6 +1099,7 @@ function controllerWith(options: Record<string, any> = {}) {
   const proofService =
     options.proofService || new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
   const assessments = {
+    isCourseResetInProgress: vi.fn().mockResolvedValue(false),
     isAssessmentAvailableForLearner: vi.fn().mockResolvedValue(true),
     getSebSettingForQuiz: vi.fn().mockResolvedValue(null),
     getContentSebSetting: vi.fn().mockResolvedValue(null),
@@ -1009,6 +1120,7 @@ function controllerWith(options: Record<string, any> = {}) {
   const sebConfig = options.sebConfig || new SebConfigurationService(configDouble() as any);
   const configGrants = {
     mintGrant: vi.fn().mockResolvedValue("g".repeat(43)),
+    revokeGrant: vi.fn().mockResolvedValue(undefined),
     consumeGrant: vi.fn(),
     validateGrant: vi.fn().mockResolvedValue(false),
     getTokenTtlSeconds: vi.fn().mockReturnValue(120),

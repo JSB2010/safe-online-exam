@@ -881,7 +881,7 @@ export class AssessmentService {
   }
 
   async withCourseWriteLock<T>(courseId: string, action: () => Promise<T>, allowDuringCourseReset = false): Promise<T> {
-    if (!allowDuringCourseReset && (await this.courseResetInProgress(courseId))) {
+    if (!allowDuringCourseReset && (await this.isCourseResetInProgress(courseId))) {
       throw new CourseResetInProgressError();
     }
     return this.withOperationLock(
@@ -889,7 +889,7 @@ export class AssessmentService {
       () => new CourseMutationInProgressError(),
       (cause) => new CourseMutationOperationLockLostError(cause),
       async () => {
-        if (!allowDuringCourseReset && (await this.courseResetInProgress(courseId))) {
+        if (!allowDuringCourseReset && (await this.isCourseResetInProgress(courseId))) {
           throw new CourseResetInProgressError();
         }
         return action();
@@ -906,7 +906,7 @@ export class AssessmentService {
     );
   }
 
-  private async courseResetInProgress(courseId: string): Promise<boolean> {
+  async isCourseResetInProgress(courseId: string): Promise<boolean> {
     const lock = await this.repositories.value.operationLocks.get(courseResetLockId(courseId));
     return !!lock && new Date(lock.expiresAt).getTime() > Date.now();
   }

@@ -93,6 +93,12 @@ export class SebConfigGrantService {
     throw new Error("Unable to mint a unique SEB configuration grant");
   }
 
+  async revokeGrant(token: string): Promise<void> {
+    if (/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      await this.repositories.value.transientStates.delete(grantDocumentId(token));
+    }
+  }
+
   async consumeGrant(
     token: string | undefined | null,
     courseId: string,

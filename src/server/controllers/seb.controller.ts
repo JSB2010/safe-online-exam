@@ -31,7 +31,7 @@ import {
   clearLtiOidcBrowserTransactionCookie,
   matchingLtiOidcBrowserTransactionCookie
 } from "../security/lti-oidc-browser-binding.js";
-import { AssessmentService } from "../services/assessment.service.js";
+import { AssessmentService, CourseResetInProgressError } from "../services/assessment.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
 import { SebAccessProofService } from "../services/seb-access-proof.service.js";
@@ -61,6 +61,12 @@ interface SebLaunchContentView {
   title: string;
   htmlUrl?: string | null;
   canvasLaunchUrl?: string | null;
+}
+
+interface SebConfigGrantTarget {
+  canonicalContentId: string;
+  setting: QuizSebSetting | ContentSebSetting;
+  settingsFingerprint: string;
 }
 
 const SEB_REQUIREMENT_STATUS_CACHE_TTL_MS = 5_000;
@@ -149,11 +155,11 @@ export class SebController {
         });
       }
     }
-    const target = await this.resolveConfigGrantTarget(courseId, contentId);
-    if (!target) {
-      return apiError(404, "Safe Online Exam configuration is unavailable");
-    }
     try {
+      const target = await this.resolveCurrentConfigGrantTarget(courseId, contentId);
+      if (!target) {
+        return apiError(404, "Safe Online Exam configuration is unavailable");
+      }
       const grant = await this.configGrants.mintGrant(
         request,
         principal,
@@ -161,6 +167,9 @@ export class SebController {
         target.canonicalContentId,
         target.settingsFingerprint
       );
+      if (!(await this.finalizeCourseScopedGrant(courseId, target, () => this.configGrants.revokeGrant(grant)))) {
+        return apiError(404, "Safe Online Exam configuration is unavailable");
+      }
       const configPath = sebConfigPath(courseId, target.canonicalContentId, grant);
       return {
         success: true,
@@ -249,18 +258,35 @@ export class SebController {
       return;
     }
     try {
-      const target = await this.resolveConfigGrantTarget(courseId, canonicalContentId);
+      const target = await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId);
       if (!target || !sameSebConfigSettingsFingerprint(consumedGrant.settingsFingerprint, target.settingsFingerprint)) {
         response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
         return;
       }
-      const generated = await this.generateConfigForGrant(
-        courseId,
-        canonicalContentId,
-        target,
-        consumedGrant.canvasUserId,
-        consumedGrant.requiresSessionHandoff
-      );
+      let generated: Buffer;
+      try {
+        generated = await this.generateConfigForGrant(
+          courseId,
+          canonicalContentId,
+          target,
+          consumedGrant.canvasUserId,
+          consumedGrant.requiresSessionHandoff
+        );
+      } catch (error) {
+        if (consumedGrant.requiresSessionHandoff) {
+          await this.sessionHandoff?.revokeConfigs(courseId, canonicalContentId, target.settingsFingerprint);
+        }
+        throw error;
+      }
+      const current = await this.finalizeCourseScopedGrant(courseId, target, async () => {
+        if (consumedGrant.requiresSessionHandoff) {
+          await this.sessionHandoff?.revokeConfigs(courseId, canonicalContentId, target.settingsFingerprint);
+        }
+      });
+      if (!current) {
+        response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
+        return;
+      }
       // Certificate validity may change while a configuration is in the short
       // single-flight cache. Recheck it before serving encrypted output.
       this.sebConfig.assertConfigurationDownloadReady();
@@ -609,72 +635,7 @@ export class SebController {
     ) {
       return apiError(429, "Too many Safe Online Exam proof requests", { error_code: "RATE_LIMITED" });
     }
-    const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
-    const target = canonicalContentId ? await this.resolveConfigGrantTarget(courseId, canonicalContentId) : null;
-    const setting = target?.setting || null;
-    if (
-      !target ||
-      !setting ||
-      !setting.sebRequired ||
-      !setting.enabled ||
-      !setting.accessCode ||
-      !this.effectiveQuitPassword(setting) ||
-      (setting.startPassword && !setting.configKeySalt) ||
-      !canonicalContentId
-    ) {
-      return apiError(404, "No Safe Online Exam setting found for this quiz");
-    }
-    const expectedConfigKey = await this.currentConfigKey(courseId, normalizedContentId, setting);
-    const validBodyUrl = !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, normalizedContentId);
-    const staticValid =
-      (validBodyUrl && this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey)) ||
-      this.configKey.validateConfigKeyHash(request, expectedConfigKey);
-    const handoffConfigKey =
-      validBodyUrl && this.sessionHandoff
-        ? await this.sessionHandoff.resolveConfigKey(
-            courseId,
-            canonicalContentId,
-            target.settingsFingerprint,
-            body?.configKeyHash,
-            body?.url
-          )
-        : null;
-    const configKey = staticValid ? expectedConfigKey : handoffConfigKey;
-    const valid = !!configKey;
-    if (!valid) {
-      console.warn(
-        "SEB access proof rejected",
-        JSON.stringify({
-          courseId,
-          quizId: normalizedContentId,
-          hasBodyProof: !!body?.configKeyHash,
-          hasHeaderProof: !!firstHeader(request, [
-            "x-safeexambrowser-configkeyhash",
-            "x-seb-config-key-hash",
-            "x-config-key-hash",
-            "x-safeexambrowser-requesthash"
-          ]),
-          canvasUrl: !!body?.url && isConfiguredCanvasUrl(this.config, body.url),
-          quizUrl: validBodyUrl,
-          sebUserAgent: /SafeExamBrowser|SEB\/|SEB;/iu.test(request.header("user-agent") || "")
-        })
-      );
-      return apiError(
-        403,
-        "This Safe Online Exam configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh configuration from Canvas and reopen the quiz.",
-        { error_code: "INVALID_SEB_CONFIG_PROOF" }
-      );
-    }
-    return {
-      success: true,
-      proofToken: await this.proofService.mintProof(
-        courseId,
-        normalizedContentId,
-        proofGenerationDigest(courseId, normalizedContentId, configKey, setting.accessCode),
-        target.settingsFingerprint
-      ),
-      expiresInSeconds: this.proofService.getTokenTtlSeconds()
-    };
+    return this.createAccessProofForCurrentCourseState(request, courseId, normalizedContentId, body);
   }
 
   @Post("/api/seb/access-code/:courseId/:quizId")
@@ -696,42 +657,7 @@ export class SebController {
     ) {
       return apiError(429, "Too many Safe Online Exam access-code requests", { error_code: "RATE_LIMITED" });
     }
-    const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
-    const target = canonicalContentId ? await this.resolveConfigGrantTarget(courseId, canonicalContentId) : null;
-    const setting = target?.setting || null;
-    if (
-      !target ||
-      !setting ||
-      setting.courseId !== courseId ||
-      !this.effectiveQuitPassword(setting) ||
-      (setting.startPassword && !setting.configKeySalt) ||
-      !canonicalContentId
-    ) {
-      return apiError(404, "No Safe Online Exam setting found for this quiz");
-    }
-    if (!setting.sebRequired || !setting.enabled) {
-      return { success: false, message: "Safe Online Exam is not required for this quiz" };
-    }
-    if (!setting.accessCode) {
-      return { success: false, message: "No access code configured for this quiz" };
-    }
-    const digest = await this.proofService.consumeProof(
-      proofToken,
-      courseId,
-      normalizedContentId,
-      target.settingsFingerprint
-    );
-    if (!digest) {
-      return apiError(403, "Invalid or expired Safe Online Exam access proof");
-    }
-    const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, digest);
-    return {
-      success: true,
-      accessCode: setting.accessCode,
-      exitGrant,
-      exitGrantExpiresInSeconds: this.proofService.getExitGrantTtlSeconds(),
-      tools: this.examToolPayloads(setting.externalTools)
-    };
+    return this.releaseAccessCodeForCurrentCourseState(courseId, normalizedContentId, proofToken);
   }
 
   /**
@@ -1063,15 +989,18 @@ export class SebController {
       return;
     }
     if (directLaunch) {
-      const target = await this.resolveConfigGrantTarget(resolved.content.courseId, resolvedCanonicalContentId);
-      if (!target) {
-        response
-          .status(404)
-          .setHeader("cache-control", "no-store")
-          .send("Safe Online Exam configuration is unavailable");
-        return;
-      }
       try {
+        const target = await this.resolveCurrentConfigGrantTarget(
+          resolved.content.courseId,
+          resolvedCanonicalContentId
+        );
+        if (!target) {
+          response
+            .status(404)
+            .setHeader("cache-control", "no-store")
+            .send("Safe Online Exam configuration is unavailable");
+          return;
+        }
         const grant = await this.configGrants.mintGrant(
           request,
           principal,
@@ -1079,6 +1008,17 @@ export class SebController {
           target.canonicalContentId,
           target.settingsFingerprint
         );
+        if (
+          !(await this.finalizeCourseScopedGrant(resolved.content.courseId, target, () =>
+            this.configGrants.revokeGrant(grant)
+          ))
+        ) {
+          response
+            .status(404)
+            .setHeader("cache-control", "no-store")
+            .send("Safe Online Exam configuration is unavailable");
+          return;
+        }
         request.session!.completedSebLaunch = {
           courseId: resolved.content.courseId,
           contentId: canonicalContentId,
@@ -1245,14 +1185,173 @@ export class SebController {
       );
   }
 
-  private async resolveConfigGrantTarget(
+  private async createAccessProofForCurrentCourseState(
+    request: Request,
+    courseId: string,
+    normalizedContentId: string,
+    body?: { configKeyHash?: string; url?: string }
+  ): Promise<Record<string, unknown>> {
+    const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
+    const target = canonicalContentId ? await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId) : null;
+    const setting = target?.setting || null;
+    if (
+      !target ||
+      !setting ||
+      !setting.sebRequired ||
+      !setting.enabled ||
+      !setting.accessCode ||
+      !this.effectiveQuitPassword(setting) ||
+      (setting.startPassword && !setting.configKeySalt) ||
+      !canonicalContentId
+    ) {
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
+    }
+    const expectedConfigKey = await this.currentConfigKey(courseId, normalizedContentId, setting);
+    const validBodyUrl = !!body?.url && isExpectedQuizUrl(this.config, body.url, courseId, normalizedContentId);
+    const staticValid =
+      (validBodyUrl && this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey)) ||
+      this.configKey.validateConfigKeyHash(request, expectedConfigKey);
+    const handoffConfigKey =
+      validBodyUrl && this.sessionHandoff
+        ? await this.sessionHandoff.resolveConfigKey(
+            courseId,
+            canonicalContentId,
+            target.settingsFingerprint,
+            body?.configKeyHash,
+            body?.url
+          )
+        : null;
+    const configKey = staticValid ? expectedConfigKey : handoffConfigKey;
+    if (!configKey) {
+      console.warn(
+        "SEB access proof rejected",
+        JSON.stringify({
+          courseId,
+          quizId: normalizedContentId,
+          hasBodyProof: !!body?.configKeyHash,
+          hasHeaderProof: !!firstHeader(request, [
+            "x-safeexambrowser-configkeyhash",
+            "x-seb-config-key-hash",
+            "x-config-key-hash",
+            "x-safeexambrowser-requesthash"
+          ]),
+          canvasUrl: !!body?.url && isConfiguredCanvasUrl(this.config, body.url),
+          quizUrl: validBodyUrl,
+          sebUserAgent: /SafeExamBrowser|SEB\/|SEB;/iu.test(request.header("user-agent") || "")
+        })
+      );
+      return apiError(
+        403,
+        "This Safe Online Exam configuration could not be verified. It may be stale, incorrect, or modified. Download a fresh configuration from Canvas and reopen the quiz.",
+        { error_code: "INVALID_SEB_CONFIG_PROOF" }
+      );
+    }
+    const proofToken = await this.proofService.mintProof(
+      courseId,
+      normalizedContentId,
+      proofGenerationDigest(courseId, normalizedContentId, configKey, setting.accessCode),
+      target.settingsFingerprint
+    );
+    if (!(await this.finalizeCourseScopedGrant(courseId, target, () => this.proofService.revokeProof(proofToken)))) {
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
+    }
+    return {
+      success: true,
+      proofToken,
+      expiresInSeconds: this.proofService.getTokenTtlSeconds()
+    };
+  }
+
+  private async releaseAccessCodeForCurrentCourseState(
+    courseId: string,
+    normalizedContentId: string,
+    proofToken: string
+  ): Promise<Record<string, unknown>> {
+    const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
+    const target = canonicalContentId ? await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId) : null;
+    const setting = target?.setting || null;
+    if (
+      !target ||
+      !setting ||
+      setting.courseId !== courseId ||
+      !this.effectiveQuitPassword(setting) ||
+      (setting.startPassword && !setting.configKeySalt) ||
+      !canonicalContentId
+    ) {
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
+    }
+    if (!setting.sebRequired || !setting.enabled) {
+      return { success: false, message: "Safe Online Exam is not required for this quiz" };
+    }
+    if (!setting.accessCode) {
+      return { success: false, message: "No access code configured for this quiz" };
+    }
+    const digest = await this.proofService.consumeProof(
+      proofToken,
+      courseId,
+      normalizedContentId,
+      target.settingsFingerprint
+    );
+    if (!digest) {
+      return apiError(403, "Invalid or expired Safe Online Exam access proof");
+    }
+    const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, digest);
+    if (!(await this.finalizeCourseScopedGrant(courseId, target, () => this.proofService.revokeExitGrant(exitGrant)))) {
+      return apiError(404, "No Safe Online Exam setting found for this quiz");
+    }
+    return {
+      success: true,
+      accessCode: setting.accessCode,
+      exitGrant,
+      exitGrantExpiresInSeconds: this.proofService.getExitGrantTtlSeconds(),
+      tools: this.examToolPayloads(setting.externalTools)
+    };
+  }
+
+  private async resolveCurrentConfigGrantTarget(
     courseId: string,
     contentId: string
-  ): Promise<{
-    canonicalContentId: string;
-    setting: QuizSebSetting | ContentSebSetting;
-    settingsFingerprint: string;
-  } | null> {
+  ): Promise<SebConfigGrantTarget | null> {
+    if (await this.assessments.isCourseResetInProgress(courseId)) {
+      throw new CourseResetInProgressError();
+    }
+    const target = await this.resolveConfigGrantTarget(courseId, contentId);
+    if (await this.assessments.isCourseResetInProgress(courseId)) {
+      throw new CourseResetInProgressError();
+    }
+    return target;
+  }
+
+  private async finalizeCourseScopedGrant(
+    courseId: string,
+    target: SebConfigGrantTarget,
+    revoke: () => Promise<void>
+  ): Promise<SebConfigGrantTarget | null> {
+    let resetInProgress: boolean;
+    let current: SebConfigGrantTarget | null;
+    try {
+      resetInProgress = await this.assessments.isCourseResetInProgress(courseId);
+      current = resetInProgress ? null : await this.resolveConfigGrantTarget(courseId, target.canonicalContentId);
+      resetInProgress = resetInProgress || (await this.assessments.isCourseResetInProgress(courseId));
+    } catch (error) {
+      await revoke();
+      throw error;
+    }
+    if (
+      resetInProgress ||
+      !current ||
+      !sameSebConfigSettingsFingerprint(current.settingsFingerprint, target.settingsFingerprint)
+    ) {
+      await revoke();
+      if (resetInProgress) {
+        throw new CourseResetInProgressError();
+      }
+      return null;
+    }
+    return current;
+  }
+
+  private async resolveConfigGrantTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
     const canonicalContentId = canonicalSebConfigContentId(contentId);
     if (!canonicalContentId) {
       return null;

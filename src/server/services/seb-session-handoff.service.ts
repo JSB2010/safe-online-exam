@@ -56,6 +56,23 @@ export class SebSessionHandoffService {
     );
   }
 
+  async revokeConfigs(courseId: string, contentId: string, settingsFingerprint: string): Promise<void> {
+    const candidates = await this.repositories.value.transientStates.find([
+      { field: "courseId", op: "==", value: courseId },
+      { field: "contentId", op: "==", value: contentId }
+    ]);
+    await Promise.all(
+      candidates
+        .filter(
+          (record) =>
+            typeof record.id === "string" &&
+            record.kind === "seb-session-handoff-config" &&
+            record.settingsFingerprint === settingsFingerprint
+        )
+        .map((record) => this.repositories.value.transientStates.delete(String(record.id)))
+    );
+  }
+
   async resolveConfigKey(
     courseId: string,
     contentId: string,

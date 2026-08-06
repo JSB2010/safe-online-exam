@@ -96,6 +96,71 @@ describe("SEB access proof validation", () => {
     });
   });
 
+  it("revokes an access proof when reset removes the assessment during issuance", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const storedConfigKey = classicConfigKey();
+      const { controller, proofService, resolvedSetting } = controllerWithSetting({
+        quizId: "23455",
+        courseId: "11825",
+        configKey: storedConfigKey
+      });
+      const originalMintProof = proofService.mintProof.bind(proofService);
+      const mintProof = vi
+        .spyOn(proofService, "mintProof")
+        .mockImplementation(async (courseId, contentId, generationDigest, settingsFingerprint) => {
+          const token = await originalMintProof(courseId, contentId, generationDigest, settingsFingerprint);
+          resolvedSetting.sebRequired = false;
+          return token;
+        });
+      const revokeProof = vi.spyOn(proofService, "revokeProof");
+      const url = `${CANVAS_URL}/courses/11825/quizzes/23455/take`;
+
+      await expectApiError(
+        controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+          configKeyHash: configKey.hashForUrl(url, storedConfigKey),
+          url
+        }),
+        404
+      );
+      expect(mintProof).toHaveBeenCalledOnce();
+      expect(revokeProof).toHaveBeenCalledWith(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u));
+    });
+  });
+
+  it("revokes an exit grant when reset removes the assessment during access-code release", async () => {
+    await withConfig(async () => {
+      const configKey = new SebConfigKeyService();
+      const storedConfigKey = classicConfigKey();
+      const { controller, proofService, resolvedSetting } = controllerWithSetting({
+        quizId: "23455",
+        courseId: "11825",
+        configKey: storedConfigKey
+      });
+      const url = `${CANVAS_URL}/courses/11825/quizzes/23455/take`;
+      const proof = await controller.createAccessProof(requestWithHeaders(), "11825", "23455", {
+        configKeyHash: configKey.hashForUrl(url, storedConfigKey),
+        url
+      });
+      const originalMintExitGrant = proofService.mintExitGrant.bind(proofService);
+      const mintExitGrant = vi
+        .spyOn(proofService, "mintExitGrant")
+        .mockImplementation(async (courseId, contentId, generationDigest) => {
+          const token = await originalMintExitGrant(courseId, contentId, generationDigest);
+          resolvedSetting.sebRequired = false;
+          return token;
+        });
+      const revokeExitGrant = vi.spyOn(proofService, "revokeExitGrant");
+
+      await expectApiError(
+        controller.accessCode("11825", "23455", proof.proofToken as string, requestWithHeaders()),
+        404
+      );
+      expect(mintExitGrant).toHaveBeenCalledOnce();
+      expect(revokeExitGrant).toHaveBeenCalledWith(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u));
+    });
+  });
+
   it("releases only selected tools after proof and binds proof to their exact URL rules", async () => {
     await withConfig(async () => {
       const configKey = new SebConfigKeyService();
@@ -368,6 +433,7 @@ function controllerWithSetting(
     {} as any,
     {} as any,
     {
+      isCourseResetInProgress: async () => false,
       isAssessmentAvailableForLearner: async () => true,
       getSebSettingForQuiz: async () => resolvedSetting,
       getContentSebSetting: async () => resolvedSetting,
