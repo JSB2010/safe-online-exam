@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuizController } from "../../src/server/controllers/quiz.controller.js";
 import { createActionToken } from "../../src/server/http/action-token.js";
 import { AssessmentAuthorizationService } from "../../src/server/services/assessment-authorization.service.js";
+import { CourseResetInProgressError } from "../../src/server/services/assessment.service.js";
 import { defaultCourseSebDefaults } from "../../src/shared/models.js";
 
 const SESSION_SECRET = "test-session-secret";
@@ -39,6 +40,7 @@ describe("QuizController", () => {
       getAssessmentRecord: vi.fn(async (id: string) => assessmentById(id)),
       validateSebConfiguration: vi.fn()
     };
+    assessments.withAssessmentLock = vi.fn(async (_contentId, action) => action());
     courseSettings = {
       getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults(COURSE_ID)),
       saveDefaults: vi.fn(),
@@ -417,6 +419,17 @@ describe("QuizController", () => {
     expect(assessments.enableContentSebWithAccessCode).toHaveBeenCalledOnce();
   });
 
+  it("returns a structured conflict while an administrator resets the course", async () => {
+    assessments.enableContentSebWithAccessCode.mockRejectedValue(new CourseResetInProgressError());
+
+    await expect(
+      controller.enable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99")
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "COURSE_RESET_IN_PROGRESS" })
+    });
+  });
+
   it("does not mutate a New Quiz when its stored Canvas identity does not match the route", async () => {
     assessments.getAssessmentRecord.mockResolvedValue(
       newQuizAssessment({ canvas: { ...newQuizAssessment().canvas, assignmentId: "assignment-elsewhere" } })
@@ -697,6 +710,7 @@ describe("QuizController", () => {
         ])
       })
     );
+    expect(assessments.withAssessmentLock).toHaveBeenCalledWith("quiz-1", expect.any(Function), COURSE_ID);
   });
 
   it("rejects attempts to replace the course catalog from a quiz request", async () => {

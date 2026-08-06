@@ -7,6 +7,7 @@ import {
   AssessmentOperationInProgressError,
   AssessmentOperationLockLostError,
   AssessmentService,
+  CourseMutationInProgressError,
   CourseResetInProgressError
 } from "../../src/server/services/assessment.service.js";
 import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
@@ -1360,6 +1361,46 @@ describe("AssessmentService", () => {
     );
     releaseDiscovery();
     await expect(reset).resolves.toMatchObject({ disabledAssessmentCount: 0 });
+  });
+
+  it("returns structured conflicts for course reset and mutation contention", () => {
+    expect(new CourseResetInProgressError()).toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "COURSE_RESET_IN_PROGRESS" })
+    });
+    expect(new CourseMutationInProgressError()).toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "COURSE_UPDATE_IN_PROGRESS" })
+    });
+  });
+
+  it("does not let a course reset delete state while a refresh is writing the course", async () => {
+    const repositories = createInMemoryRepositories();
+    let releaseDiscovery!: () => void;
+    let markDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((resolve) => {
+      markDiscoveryStarted = resolve;
+    });
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockImplementation(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseDiscovery = () => resolve([]);
+            markDiscoveryStarted();
+          })
+      ),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const resetCourseState = vi.fn();
+    const provider = { value: repositories, resetCourseState } as unknown as RepositoryProvider;
+    const service = new AssessmentService(provider, canvas);
+    const refresh = service.refreshCourseContent("101", "42");
+    await discoveryStarted;
+
+    await expect(service.resetCourseForAdmin("101", "42", "7")).rejects.toBeInstanceOf(CourseMutationInProgressError);
+    expect(resetCourseState).not.toHaveBeenCalled();
+    releaseDiscovery();
+    await expect(refresh).resolves.toMatchObject({ assessments: [] });
   });
 
   it("rotates Config Key salt when the exam start password changes", async () => {

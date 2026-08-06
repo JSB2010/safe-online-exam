@@ -22,6 +22,7 @@ import { AdminAuthorizationService } from "../services/admin-authorization.servi
 import {
   AssessmentOperationInProgressError,
   AssessmentService,
+  CourseMutationInProgressError,
   CourseResetInProgressError,
   CourseResetOperationLockLostError
 } from "../services/assessment.service.js";
@@ -443,7 +444,7 @@ export class AdminController {
           error_code: "COURSE_RESET_IN_PROGRESS"
         });
       }
-      if (error instanceof AssessmentOperationInProgressError) {
+      if (error instanceof AssessmentOperationInProgressError || error instanceof CourseMutationInProgressError) {
         return apiError(
           409,
           "An assessment update is already in progress. Wait for it to finish, refresh the course, and retry; course records were not deleted.",

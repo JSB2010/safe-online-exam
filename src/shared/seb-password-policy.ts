@@ -55,7 +55,11 @@ const COMMON_SEQUENCES = [
 ] as const;
 
 export function normalizeSebPassword(value?: string | null): string | null {
-  const normalized = value?.normalize("NFC").trim();
+  const input = value?.normalize("NFC");
+  if (!input || hasProhibitedPasswordCharacter(input)) {
+    return null;
+  }
+  const normalized = input.trim();
   return normalized ? normalized : null;
 }
 
@@ -63,12 +67,10 @@ export function evaluateSebPasswordRequirements(
   value?: string | null,
   otherPassword?: string | null
 ): SebPasswordRequirementState {
-  const password = normalizeSebPassword(value) || "";
+  const input = value?.normalize("NFC") || "";
+  const hasNoControlCharacters = !hasProhibitedPasswordCharacter(input);
+  const password = hasNoControlCharacters ? input.trim() : "";
   const length = Array.from(password).length;
-  const hasNoControlCharacters = !Array.from(password).some((character) => {
-    const codePoint = character.codePointAt(0);
-    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
-  });
   const compact = password
     .normalize("NFKC")
     .toLowerCase()
@@ -101,6 +103,10 @@ export function evaluateSebPasswordRequirements(
 }
 
 export function sebPasswordPolicyViolation(value?: string | null): SebPasswordPolicyViolation | null {
+  const input = value?.normalize("NFC");
+  if (input && hasProhibitedPasswordCharacter(input)) {
+    return "control-character";
+  }
   const password = normalizeSebPassword(value);
   if (!password) {
     return "too-short";
@@ -120,6 +126,10 @@ export function sebPasswordPolicyViolation(value?: string | null): SebPasswordPo
     return "predictable";
   }
   return null;
+}
+
+function hasProhibitedPasswordCharacter(value: string): boolean {
+  return /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value);
 }
 
 export function sebPasswordPolicyMessage(

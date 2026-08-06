@@ -2472,7 +2472,7 @@ function InstructorSetupWizard({
 
   useEffect(() => {
     setError("");
-  }, [draft, startPasswordEnabled, step]);
+  }, [draft, startPasswordEnabled]);
 
   const validateStep = (candidate: InstructorSetupStep): boolean => {
     if (candidate === "security") {
@@ -2496,6 +2496,7 @@ function InstructorSetupWizard({
 
   const advance = () => {
     if (!nextStep || !validateStep(step)) return;
+    setError("");
     setStep(nextStep);
   };
 
@@ -2582,7 +2583,14 @@ function InstructorSetupWizard({
         <ol className="setup-wizard-progress" aria-label="Course setup progress">
           {steps.map((candidate, index) => (
             <li className={clsx(index === stepIndex && "active", index < stepIndex && "complete")} key={candidate.id}>
-              <button type="button" disabled={index > stepIndex} onClick={() => setStep(candidate.id)}>
+              <button
+                type="button"
+                disabled={index > stepIndex}
+                onClick={() => {
+                  setError("");
+                  setStep(candidate.id);
+                }}
+              >
                 <span>{index < stepIndex ? <Check size={14} /> : index + 1}</span>
                 {candidate.label}
               </button>
@@ -2638,7 +2646,14 @@ function InstructorSetupWizard({
             </button>
           )}
           {previousStep && (
-            <button className="button secondary" type="button" onClick={() => setStep(previousStep)}>
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => {
+                setError("");
+                setStep(previousStep);
+              }}
+            >
               <ArrowLeft size={16} /> Back
             </button>
           )}
@@ -3284,13 +3299,16 @@ function passwordValidationMessage(
     otherPassword?: string | null;
   } = {}
 ): string | null {
+  const violation = sebPasswordPolicyViolation(value);
   const normalized = normalizeSebPassword(value);
+  if (violation === "control-character") {
+    return sebPasswordPolicyMessage(purpose, violation);
+  }
   if (!normalized) {
     return options.required
       ? `Enter a ${purpose === "exit" ? "course exit" : "start"} password before continuing.`
       : null;
   }
-  const violation = sebPasswordPolicyViolation(normalized);
   if (violation) {
     return sebPasswordPolicyMessage(purpose, violation);
   }
@@ -5886,6 +5904,11 @@ function safeErrorMessage(
       return "This exam tool is no longer saved in the course. Refresh the settings and try again.";
     case "COURSE_RESET_IN_PROGRESS":
       return "A Canvas administrator is resetting this course. Wait for the reset to finish, then reopen Safe Online Exam from Canvas.";
+    case "COURSE_UPDATE_IN_PROGRESS":
+    case "ASSESSMENT_UPDATE_IN_PROGRESS":
+      return detail || "Another course update is still in progress. Wait a moment, refresh the course, and try again.";
+    case "COURSE_UPDATE_VERIFY_REQUIRED":
+      return detail || "The course update could not be confirmed. Refresh the course and verify its current settings.";
     case "ADMIN_COURSE_RESET_CONFIRMATION_REQUIRED":
       return "Enter the Canvas course ID exactly as shown before starting the reset.";
     case "ADMIN_COURSE_RESET_CANVAS_FAILED":

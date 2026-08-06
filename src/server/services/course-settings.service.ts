@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import type {
   AdminToolPresetRecord,
   AssessmentRecord,
@@ -25,6 +25,7 @@ import {
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
+import { AssessmentService } from "./assessment.service.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 import { assertDistinctSebPasswords, assertNewSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
 import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtectedSetting } from "./seb-quit-password.js";
@@ -33,8 +34,13 @@ import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtected
 export class CourseSettingsService {
   constructor(
     private readonly repositories: RepositoryProvider,
-    private readonly config: AppConfig = new AppConfig()
+    private readonly config: AppConfig = new AppConfig(),
+    @Optional() private readonly assessments?: AssessmentService
   ) {}
+
+  private withCourseWriteLock<T>(courseId: string, action: () => Promise<T>): Promise<T> {
+    return this.assessments ? this.assessments.withCourseWriteLock(courseId, action) : action();
+  }
 
   async getDefaults(courseId: string): Promise<CourseSebDefaults> {
     const existing = await this.repositories.value.courses.get(courseId);
@@ -43,13 +49,23 @@ export class CourseSettingsService {
 
   /** Creates the persisted catalog for a newly launched instructor course. */
   async ensureDefaults(courseId: string): Promise<CourseSebDefaults> {
-    const saved = await this.repositories.value.courses.update(courseId, (existing) => {
-      return existing || courseDefaultsToRecord(courseId, defaultCourseSebDefaults(courseId));
+    return this.withCourseWriteLock(courseId, async () => {
+      const saved = await this.repositories.value.courses.update(courseId, (existing) => {
+        return existing || courseDefaultsToRecord(courseId, defaultCourseSebDefaults(courseId));
+      });
+      return courseRecordToDefaults(saved, courseId);
     });
-    return courseRecordToDefaults(saved, courseId);
   }
 
   async saveDefaults(
+    courseId: string,
+    defaults: Partial<CourseSebDefaults>,
+    options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
+  ): Promise<CourseSebDefaults> {
+    return this.withCourseWriteLock(courseId, () => this.saveDefaultsUnlocked(courseId, defaults, options));
+  }
+
+  private async saveDefaultsUnlocked(
     courseId: string,
     defaults: Partial<CourseSebDefaults>,
     options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
@@ -84,39 +100,43 @@ export class CourseSettingsService {
   }
 
   async pushAdminToolPreset(courseId: string, preset: AdminToolPresetRecord): Promise<CourseSebDefaults> {
-    const existing = await this.getDefaults(courseId);
-    const tool = adminManagedTool(preset);
-    const current = existing.externalTools.find((entry) => entry.adminPresetId === preset.id);
-    if (!current && existing.externalTools.length >= 16) {
-      throw new BadRequestException({
-        success: false,
-        statusCode: 400,
-        error_code: "COURSE_TOOL_LIMIT",
-        message: "This course already has the maximum of 16 exam tools. Remove one before assigning another preset."
-      });
-    }
-    const nextTools = [
-      { ...tool, enabled: current?.enabled === true },
-      ...existing.externalTools.filter((entry) => entry.adminPresetId !== preset.id)
-    ];
-    return this.saveDefaults(
-      courseId,
-      { ...existing, externalTools: nextTools, externalToolsInitialized: true },
-      { propagate: true, allowAdminToolChanges: true }
-    );
+    return this.withCourseWriteLock(courseId, async () => {
+      const existing = await this.getDefaults(courseId);
+      const tool = adminManagedTool(preset);
+      const current = existing.externalTools.find((entry) => entry.adminPresetId === preset.id);
+      if (!current && existing.externalTools.length >= 16) {
+        throw new BadRequestException({
+          success: false,
+          statusCode: 400,
+          error_code: "COURSE_TOOL_LIMIT",
+          message: "This course already has the maximum of 16 exam tools. Remove one before assigning another preset."
+        });
+      }
+      const nextTools = [
+        { ...tool, enabled: current?.enabled === true },
+        ...existing.externalTools.filter((entry) => entry.adminPresetId !== preset.id)
+      ];
+      return this.saveDefaultsUnlocked(
+        courseId,
+        { ...existing, externalTools: nextTools, externalToolsInitialized: true },
+        { propagate: true, allowAdminToolChanges: true }
+      );
+    });
   }
 
   async removeAdminToolPreset(courseId: string, presetId: string): Promise<CourseSebDefaults> {
-    const existing = await this.getDefaults(courseId);
-    return this.saveDefaults(
-      courseId,
-      {
-        ...existing,
-        externalTools: existing.externalTools.filter((entry) => entry.adminPresetId !== presetId),
-        externalToolsInitialized: true
-      },
-      { propagate: true, allowAdminToolChanges: true }
-    );
+    return this.withCourseWriteLock(courseId, async () => {
+      const existing = await this.getDefaults(courseId);
+      return this.saveDefaultsUnlocked(
+        courseId,
+        {
+          ...existing,
+          externalTools: existing.externalTools.filter((entry) => entry.adminPresetId !== presetId),
+          externalToolsInitialized: true
+        },
+        { propagate: true, allowAdminToolChanges: true }
+      );
+    });
   }
 
   /**
@@ -128,63 +148,88 @@ export class CourseSettingsService {
     targetCourseId: string,
     sourceTool: ExternalToolConfig
   ): Promise<{ status: "copied" | "already_present"; toolId: string }> {
-    const [normalizedSource] = normalizeCourseExternalTools([sourceTool]);
-    if (!normalizedSource || normalizedSource.managedByAdmin === true || normalizedSource.adminPresetId) {
-      throw new BadRequestException({
-        success: false,
-        statusCode: 400,
-        error_code: "COURSE_TOOL_COPY_NOT_ALLOWED",
-        message: "School-managed exam tools cannot be copied as instructor-owned tools."
-      });
-    }
+    return this.withCourseWriteLock(targetCourseId, async () => {
+      const [normalizedSource] = normalizeCourseExternalTools([sourceTool]);
+      if (!normalizedSource || normalizedSource.managedByAdmin === true || normalizedSource.adminPresetId) {
+        throw new BadRequestException({
+          success: false,
+          statusCode: 400,
+          error_code: "COURSE_TOOL_COPY_NOT_ALLOWED",
+          message: "School-managed exam tools cannot be copied as instructor-owned tools."
+        });
+      }
 
-    const existing = await this.getDefaults(targetCourseId);
-    const existingTools = normalizeCourseExternalTools(existing.externalTools);
-    const matchingTool = existingTools.find((tool) => sameInstructorToolConfiguration(tool, normalizedSource));
-    if (matchingTool) {
-      return { status: "already_present", toolId: matchingTool.id };
-    }
-    if (existingTools.length >= 16) {
-      throw new BadRequestException({
-        success: false,
-        statusCode: 400,
-        error_code: "COURSE_TOOL_LIMIT",
-        message: "This course already has the maximum of 16 exam tools. Remove one before copying another tool."
-      });
-    }
+      const existing = await this.getDefaults(targetCourseId);
+      const existingTools = normalizeCourseExternalTools(existing.externalTools);
+      const matchingTool = existingTools.find((tool) => sameInstructorToolConfiguration(tool, normalizedSource));
+      if (matchingTool) {
+        return { status: "already_present", toolId: matchingTool.id };
+      }
+      if (existingTools.length >= 16) {
+        throw new BadRequestException({
+          success: false,
+          statusCode: 400,
+          error_code: "COURSE_TOOL_LIMIT",
+          message: "This course already has the maximum of 16 exam tools. Remove one before copying another tool."
+        });
+      }
 
-    const copiedTool = {
-      ...normalizedSource,
-      id: availableCopiedToolId(normalizedSource.id, existingTools),
-      // An instructor can only copy an instructor-owned tool. Keep the target
-      // definition local even if old stored data contains stale admin fields.
-      managedByAdmin: false,
-      adminPresetId: null,
-      allowedRules: normalizedSource.allowedRules?.map((rule) => ({ ...rule })),
-      allowedDomains: normalizedSource.allowedDomains?.slice()
-    };
-    await this.saveDefaults(
-      targetCourseId,
-      {
-        ...existing,
-        externalTools: [...existingTools, copiedTool],
-        externalToolsInitialized: true
-      },
-      { propagate: true }
-    );
-    return { status: "copied", toolId: copiedTool.id };
+      const copiedTool = {
+        ...normalizedSource,
+        id: availableCopiedToolId(normalizedSource.id, existingTools),
+        // An instructor can only copy an instructor-owned tool. Keep the target
+        // definition local even if old stored data contains stale admin fields.
+        managedByAdmin: false,
+        adminPresetId: null,
+        allowedRules: normalizedSource.allowedRules?.map((rule) => ({ ...rule })),
+        allowedDomains: normalizedSource.allowedDomains?.slice()
+      };
+      await this.saveDefaultsUnlocked(
+        targetCourseId,
+        {
+          ...existing,
+          externalTools: [...existingTools, copiedTool],
+          externalToolsInitialized: true
+        },
+        { propagate: true }
+      );
+      return { status: "copied", toolId: copiedTool.id };
+    });
   }
 
   async resetQuizToDefaults(courseId: string, quizId: string): Promise<QuizSebSetting | ContentSebSetting | null> {
-    const defaults = await this.getDefaults(courseId);
-    const assessmentId = canonicalAssessmentId(quizId);
-    const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
-      if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
-        return null;
-      }
-      if (record.contentType !== "CLASSIC_QUIZ") {
-        const existing = assessmentToContentSebSetting(record);
-        const withDefaults = applyCourseDefaultsToContentSetting(
+    return this.withCourseWriteLock(courseId, async () => {
+      const defaults = await this.getDefaults(courseId);
+      const assessmentId = canonicalAssessmentId(quizId);
+      const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
+        if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
+          return null;
+        }
+        if (record.contentType !== "CLASSIC_QUIZ") {
+          const existing = assessmentToContentSebSetting(record);
+          const withDefaults = applyCourseDefaultsToContentSetting(
+            {
+              ...existing,
+              usesCourseDefaults: true,
+              externalToolIds: null,
+              quizOnlyExternalTools: [],
+              quitPasswordOverride: false,
+              startPasswordOverride: false
+            },
+            defaults
+          );
+          this.assertAssessmentCanRunSeb(withDefaults);
+          const next = {
+            ...normalizeSebStartPasswordState(existing, withDefaults),
+            configKey: null
+          };
+          return assessmentWithContentSebSetting(record, next);
+        }
+        const existing = assessmentToQuizSebSetting(record);
+        if (!existing) {
+          return null;
+        }
+        const withDefaults = applyCourseDefaultsToQuizSetting(
           {
             ...existing,
             usesCourseDefaults: true,
@@ -200,81 +245,62 @@ export class CourseSettingsService {
           ...normalizeSebStartPasswordState(existing, withDefaults),
           configKey: null
         };
-        return assessmentWithContentSebSetting(record, next);
-      }
-      const existing = assessmentToQuizSebSetting(record);
-      if (!existing) {
+        return assessmentWithQuizSebSetting(record, next);
+      });
+      if (!saved) {
         return null;
       }
-      const withDefaults = applyCourseDefaultsToQuizSetting(
-        {
-          ...existing,
-          usesCourseDefaults: true,
-          externalToolIds: null,
-          quizOnlyExternalTools: [],
-          quitPasswordOverride: false,
-          startPasswordOverride: false
-        },
-        defaults
-      );
-      this.assertAssessmentCanRunSeb(withDefaults);
-      const next = {
-        ...normalizeSebStartPasswordState(existing, withDefaults),
-        configKey: null
-      };
-      return assessmentWithQuizSebSetting(record, next);
+      if (saved.contentType !== "CLASSIC_QUIZ") {
+        return assessmentToContentSebSetting(saved);
+      }
+      return assessmentToQuizSebSetting(saved);
     });
-    if (!saved) {
-      return null;
-    }
-    if (saved.contentType !== "CLASSIC_QUIZ") {
-      return assessmentToContentSebSetting(saved);
-    }
-    return assessmentToQuizSebSetting(saved);
   }
 
   async resetQuizQuitPasswordToDefault(
     courseId: string,
     quizId: string
   ): Promise<QuizSebSetting | ContentSebSetting | null> {
-    const defaults = await this.getDefaults(courseId);
-    const assessmentId = canonicalAssessmentId(quizId);
-    const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
-      if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
-        return null;
-      }
-      if (record.contentType !== "CLASSIC_QUIZ") {
-        const existing = assessmentToContentSebSetting(record);
-        const next = applyCourseDefaultsToContentSetting(
+    return this.withCourseWriteLock(courseId, async () => {
+      const defaults = await this.getDefaults(courseId);
+      const assessmentId = canonicalAssessmentId(quizId);
+      const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
+        if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
+          return null;
+        }
+        if (record.contentType !== "CLASSIC_QUIZ") {
+          const existing = assessmentToContentSebSetting(record);
+          const next = applyCourseDefaultsToContentSetting(
+            { ...existing, quitPassword: null, quitPasswordOverride: false },
+            defaults
+          );
+          this.assertAssessmentCanRunSeb(next);
+          return assessmentWithContentSebSetting(record, {
+            ...normalizeSebStartPasswordState(existing, next),
+            configKey: null
+          });
+        }
+        const existing = assessmentToQuizSebSetting(record);
+        if (!existing) {
+          return null;
+        }
+        const next = applyCourseDefaultsToQuizSetting(
           { ...existing, quitPassword: null, quitPasswordOverride: false },
           defaults
         );
         this.assertAssessmentCanRunSeb(next);
-        return assessmentWithContentSebSetting(record, {
+        return assessmentWithQuizSebSetting(record, {
           ...normalizeSebStartPasswordState(existing, next),
           configKey: null
         });
-      }
-      const existing = assessmentToQuizSebSetting(record);
-      if (!existing) {
+      });
+      if (!saved) {
         return null;
       }
-      const next = applyCourseDefaultsToQuizSetting(
-        { ...existing, quitPassword: null, quitPasswordOverride: false },
-        defaults
-      );
-      this.assertAssessmentCanRunSeb(next);
-      return assessmentWithQuizSebSetting(record, {
-        ...normalizeSebStartPasswordState(existing, next),
-        configKey: null
-      });
+      return saved.contentType === "CLASSIC_QUIZ"
+        ? assessmentToQuizSebSetting(saved)
+        : assessmentToContentSebSetting(saved);
     });
-    if (!saved) {
-      return null;
-    }
-    return saved.contentType === "CLASSIC_QUIZ"
-      ? assessmentToQuizSebSetting(saved)
-      : assessmentToContentSebSetting(saved);
   }
 
   private async propagateDefaults(courseId: string, defaults: CourseSebDefaults): Promise<void> {

@@ -315,37 +315,42 @@ export class QuizController {
         return apiError(404, "Assessment not found");
       }
       const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
-      const saved = await this.assessments.saveContentSebSetting(
-        applyCourseDefaultsToContentSetting(
-          {
-            ...setting,
-            ssoDomains,
-            educationalToolDomains,
-            customDomains: urlRulesToAllowedEntries(urlRules),
-            urlRules,
-            externalTools: setting.externalTools,
-            quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
-            externalToolIds,
-            externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
-            quitPassword: secretUpdate(
-              body as unknown as Record<string, unknown>,
-              "quitPassword",
-              setting.quitPassword
-            ),
-            startPassword: secretUpdate(
-              body as unknown as Record<string, unknown>,
-              "startPassword",
-              setting.startPassword
-            ),
-            usesCourseDefaults: body.usesCourseDefaults === true,
-            quitPasswordOverride: body.quitPasswordOverride === true,
-            startPasswordOverride: body.startPasswordOverride === true,
-            // Saving policy must not bypass the Canvas access-code commit workflow.
-            sebRequired: setting.sebRequired,
-            enabled: setting.enabled
-          },
-          defaults
-        )
+      const saved = await this.assessments.withAssessmentLock(
+        contentId,
+        () =>
+          this.assessments.saveContentSebSetting(
+            applyCourseDefaultsToContentSetting(
+              {
+                ...setting,
+                ssoDomains,
+                educationalToolDomains,
+                customDomains: urlRulesToAllowedEntries(urlRules),
+                urlRules,
+                externalTools: setting.externalTools,
+                quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
+                externalToolIds,
+                externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
+                quitPassword: secretUpdate(
+                  body as unknown as Record<string, unknown>,
+                  "quitPassword",
+                  setting.quitPassword
+                ),
+                startPassword: secretUpdate(
+                  body as unknown as Record<string, unknown>,
+                  "startPassword",
+                  setting.startPassword
+                ),
+                usesCourseDefaults: body.usesCourseDefaults === true,
+                quitPasswordOverride: body.quitPasswordOverride === true,
+                startPasswordOverride: body.startPasswordOverride === true,
+                // Saving policy must not bypass the Canvas access-code commit workflow.
+                sebRequired: setting.sebRequired,
+                enabled: setting.enabled
+              },
+              defaults
+            )
+          ),
+        courseId
       );
       return {
         success: true,
@@ -356,38 +361,48 @@ export class QuizController {
     if (!body.quizId || !setting) {
       return apiError(404, "Assessment not found");
     }
+    const quizId = body.quizId;
     const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
-    const saved = await this.assessments.saveQuizSebSetting(
-      applyCourseDefaultsToQuizSetting(
-        {
-          ...defaultQuizSebSetting(body.quizId, courseId),
-          ...setting,
-          id: setting?.id || body.quizId,
-          quizId: body.quizId,
-          courseId: courseId || setting?.courseId || null,
-          ssoDomains,
-          educationalToolDomains,
-          customDomains: urlRulesToAllowedEntries(urlRules),
-          urlRules,
-          externalTools: setting.externalTools,
-          quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
-          externalToolIds,
-          externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
-          quitPassword: secretUpdate(body as unknown as Record<string, unknown>, "quitPassword", setting.quitPassword),
-          startPassword: secretUpdate(
-            body as unknown as Record<string, unknown>,
-            "startPassword",
-            setting.startPassword
-          ),
-          usesCourseDefaults: body.usesCourseDefaults === true,
-          quitPasswordOverride: body.quitPasswordOverride === true,
-          startPasswordOverride: body.startPasswordOverride === true,
-          // Saving policy must not bypass the Canvas access-code commit workflow.
-          sebRequired: setting.sebRequired,
-          enabled: setting.enabled
-        },
-        defaults
-      )
+    const saved = await this.assessments.withAssessmentLock(
+      quizId,
+      () =>
+        this.assessments.saveQuizSebSetting(
+          applyCourseDefaultsToQuizSetting(
+            {
+              ...defaultQuizSebSetting(quizId, courseId),
+              ...setting,
+              id: setting?.id || quizId,
+              quizId,
+              courseId: courseId || setting?.courseId || null,
+              ssoDomains,
+              educationalToolDomains,
+              customDomains: urlRulesToAllowedEntries(urlRules),
+              urlRules,
+              externalTools: setting.externalTools,
+              quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
+              externalToolIds,
+              externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
+              quitPassword: secretUpdate(
+                body as unknown as Record<string, unknown>,
+                "quitPassword",
+                setting.quitPassword
+              ),
+              startPassword: secretUpdate(
+                body as unknown as Record<string, unknown>,
+                "startPassword",
+                setting.startPassword
+              ),
+              usesCourseDefaults: body.usesCourseDefaults === true,
+              quitPasswordOverride: body.quitPasswordOverride === true,
+              startPasswordOverride: body.startPasswordOverride === true,
+              // Saving policy must not bypass the Canvas access-code commit workflow.
+              sebRequired: setting.sebRequired,
+              enabled: setting.enabled
+            },
+            defaults
+          )
+        ),
+      courseId
     );
     return {
       success: true,

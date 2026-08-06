@@ -58,7 +58,10 @@ describe("SEB password strength policy", () => {
       "abcdefghijkl",
       "ExamExamExam!",
       "aaaaaaaaaaab",
-      "strong-enough\nvalue"
+      "strong-enough\nvalue",
+      "cobalt\u0085lantern4829",
+      "\u2028cobalt-lantern-4829",
+      "cobalt-lantern-4829\u2029"
     ];
     for (const candidate of rejected) {
       expect(sebPasswordPolicyViolation(candidate), candidate).not.toBeNull();
@@ -73,6 +76,15 @@ describe("SEB password strength policy", () => {
     );
     expect(() => assertSebPassword("strong-enough\nvalue", "start")).toThrow(
       "Start password cannot contain control characters or line breaks."
+    );
+    expect(() => assertSebPassword("cobalt\u0085lantern4829", "start")).toThrow(
+      "Start password cannot contain control characters or line breaks."
+    );
+    expect(() => assertSebPassword("\u2028cobalt-lantern-4829", "exit")).toThrow(
+      "Exit password cannot contain control characters or line breaks."
+    );
+    expect(() => assertSebPassword("cobalt-lantern-4829\u2029", "exit")).toThrow(
+      "Exit password cannot contain control characters or line breaks."
     );
     expect(() => assertSebPassword("12345678", "exit")).toThrow("Letters-only and numbers-only passwords are allowed.");
   });
@@ -98,6 +110,15 @@ describe("SEB password strength policy", () => {
     expect(() => assertNewSebPassword("legacy-short", "legacy-short", "exit")).not.toThrow();
     expect(() => assertNewSebPassword("legacy-short", "password1234", "exit")).toThrowError(
       expect.objectContaining({ status: 400 })
+    );
+    expect(normalizeSebPassword("cobalt\u0085lantern4829")).toBeNull();
+    expect(evaluateSebPasswordRequirements("cobalt\u0085lantern4829")).toMatchObject({
+      hasNoControlCharacters: false,
+      valid: false
+    });
+    expect(resolveSebPasswordUpdate("existing-secret", "cobalt\u0085lantern4829")).not.toBe("existing-secret");
+    expect(() => assertNewSebPassword("existing-secret", "cobalt\u0085lantern4829", "exit")).toThrow(
+      "Exit password cannot contain control characters or line breaks."
     );
   });
 

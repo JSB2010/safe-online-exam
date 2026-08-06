@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AppConfig } from "../../src/server/config/app-config.js";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
+import { AssessmentService, CourseResetInProgressError } from "../../src/server/services/assessment.service.js";
+import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
 import { CourseSettingsService } from "../../src/server/services/course-settings.service.js";
 import {
   assessmentToContentSebSetting,
@@ -29,6 +32,42 @@ afterEach(() => {
 });
 
 describe("CourseSettingsService", () => {
+  it("does not recreate course defaults while an administrator reset is in progress", async () => {
+    const repositories = createInMemoryRepositories();
+    let releaseDiscovery!: () => void;
+    let markDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((resolve) => {
+      markDiscoveryStarted = resolve;
+    });
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockImplementation(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseDiscovery = () => resolve([]);
+            markDiscoveryStarted();
+          })
+      ),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const provider = {
+      value: repositories,
+      resetCourseState: vi.fn().mockResolvedValue({
+        assessmentCount: 0,
+        transientStateCount: 0,
+        courseRecordCount: 0
+      })
+    } as unknown as RepositoryProvider;
+    const assessments = new AssessmentService(provider, canvas);
+    const service = new CourseSettingsService(provider, new AppConfig(), assessments);
+    const reset = assessments.resetCourseForAdmin("course-1", "admin-1", "root-1");
+    await discoveryStarted;
+
+    await expect(service.ensureDefaults("course-1")).rejects.toBeInstanceOf(CourseResetInProgressError);
+    await expect(repositories.courses.get("course-1")).resolves.toBeNull();
+    releaseDiscovery();
+    await expect(reset).resolves.toMatchObject({ deletedCourseRecordCount: 0 });
+  });
+
   it("starts new courses without hardcoded tools so the school or instructor can choose the catalog", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);

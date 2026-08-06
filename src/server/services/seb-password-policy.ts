@@ -29,6 +29,12 @@ export function resolveSebPasswordUpdate(
   if (next === null) {
     return null;
   }
+  if (isBlankPasswordUpdate(next)) {
+    return normalizeSebPassword(existing);
+  }
+  if (sebPasswordPolicyViolation(next) === "control-character") {
+    return next?.normalize("NFC") || null;
+  }
   return normalizeSebPassword(next) || normalizeSebPassword(existing);
 }
 
@@ -37,6 +43,12 @@ export function assertNewSebPassword(
   next: string | null | undefined,
   purpose: SebPasswordPurpose
 ): void {
+  if (isBlankPasswordUpdate(next)) {
+    return;
+  }
+  if (sebPasswordPolicyViolation(next) === "control-character") {
+    assertSebPassword(next || "", purpose);
+  }
   const normalizedNext = normalizeSebPassword(next);
   if (!normalizedNext || normalizedNext === normalizeSebPassword(existing)) {
     return;
@@ -46,7 +58,7 @@ export function assertNewSebPassword(
 
 export function assertSebPassword(value: string, purpose: SebPasswordPurpose): string {
   const normalized = normalizeSebPassword(value);
-  const violation = sebPasswordPolicyViolation(normalized);
+  const violation = sebPasswordPolicyViolation(value);
   if (!normalized || violation) {
     throw new BadRequestException({
       success: false,
@@ -81,7 +93,7 @@ export function assertDistinctSebPasswords(startPassword?: string | null, quitPa
 
 export function requireSebPasswordForConfiguration(value: string, purpose: SebPasswordPurpose): string {
   const normalized = normalizeSebPassword(value);
-  const violation = sebPasswordPolicyViolation(normalized);
+  const violation = sebPasswordPolicyViolation(value);
   if (!normalized || violation) {
     throw new Error(sebPasswordPolicyMessage(purpose, violation || "too-short"));
   }
@@ -99,4 +111,8 @@ export function requireDistinctSebPasswordsForConfiguration(
 
 function passwordComparisonDigest(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
+}
+
+function isBlankPasswordUpdate(value: string | null | undefined): boolean {
+  return value == null || /^[ \t]*$/u.test(value);
 }
