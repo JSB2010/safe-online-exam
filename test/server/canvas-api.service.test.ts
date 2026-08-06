@@ -226,6 +226,23 @@ describe("CanvasApiService", () => {
     });
   });
 
+  it("maps empty and null reset snapshots to bounded Canvas response errors", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(jsonResponse(null));
+
+    await expect(service.getQuizAccessCode("course-7", "42", "user-1", "account_admin")).rejects.toMatchObject({
+      name: "CanvasApiRequestError",
+      status: 502,
+      message: expect.stringContaining("valid Classic Quiz response")
+    });
+    await expect(service.getNewQuizAccessCode("course-7", "99", "user-1", "account_admin")).rejects.toMatchObject({
+      name: "CanvasApiRequestError",
+      status: 502,
+      message: expect.stringContaining("valid New Quiz response")
+    });
+  });
+
   it("discovers and hydrates New Quiz assignments from Canvas", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(

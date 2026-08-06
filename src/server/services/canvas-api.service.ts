@@ -264,7 +264,11 @@ export class CanvasApiService {
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<string | null> {
     const url = `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}`;
-    const quiz = await this.request<CanvasQuizResponse>(userId, url, {}, grantType);
+    const response = await this.request<unknown>(userId, url, {}, grantType);
+    if (!isJsonObject(response)) {
+      throw new CanvasApiRequestError("Canvas did not return a valid Classic Quiz response.", userId, url, 502);
+    }
+    const quiz = response as unknown as CanvasQuizResponse;
     if (!Object.hasOwn(quiz, "access_code")) {
       throw new CanvasApiRequestError("Canvas did not return the current Classic Quiz access code.", userId, url, 502);
     }
@@ -284,7 +288,11 @@ export class CanvasApiService {
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<string | null> {
     const url = `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`;
-    const quiz = await this.request<CanvasNewQuizResponse>(userId, url, {}, grantType);
+    const response = await this.request<unknown>(userId, url, {}, grantType);
+    if (!isJsonObject(response)) {
+      throw new CanvasApiRequestError("Canvas did not return a valid New Quiz response.", userId, url, 502);
+    }
+    const quiz = response as CanvasNewQuizResponse;
     const settings = quiz.quiz_settings;
     if (!settings || typeof settings.require_student_access_code !== "boolean") {
       throw new CanvasApiRequestError(
@@ -1112,6 +1120,10 @@ function withCanvasPage(firstPageUrl: string, page: number): string {
   const url = new URL(firstPageUrl);
   url.searchParams.set("page", String(page));
   return url.toString();
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function isCanvasOAuthTokenResponse(value: unknown): value is CanvasOAuthTokenResponse {
