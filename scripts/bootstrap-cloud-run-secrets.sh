@@ -41,6 +41,8 @@ printf '%s' "bootstrap-pending" >"$BOOTSTRAP_DIRECTORY/lti_deployment_id"
 cloudrun_write_random_secret "$BOOTSTRAP_DIRECTORY/database_password"
 cloudrun_write_random_secret "$BOOTSTRAP_DIRECTORY/session_secret"
 cloudrun_write_random_secret "$BOOTSTRAP_DIRECTORY/state_encryption_key"
+oauth_token_key="$(openssl rand -base64 32 | tr '/+' '_-' | tr -d '=\n')"
+printf '{"primary":"%s"}\n' "$oauth_token_key" >"$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"
 docker run --rm --entrypoint /nodejs/bin/node "$APP_IMAGE" \
   /app/scripts/generate-lti-private-key.mjs "safe-online-exam-$APP_VERSION" \
   >"$BOOTSTRAP_DIRECTORY/lti_private_key"

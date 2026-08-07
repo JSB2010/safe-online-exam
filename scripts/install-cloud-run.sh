@@ -18,7 +18,7 @@ fi
 
 cloudrun_load_environment "${1:-cloudrun.env}"
 cloudrun_validate_complete
-cloudrun_require_commands curl gcloud jq openssl
+cloudrun_require_commands cmp curl gcloud jq openssl
 cloudrun_assert_bootstrap
 
 for bootstrap_lti_file in lti_client_id lti_deployment_id; do
@@ -28,44 +28,7 @@ done
 
 mkdir -p "$STATE_DIRECTORY"
 chmod 700 "$STATE_DIRECTORY"
-
-while IFS=$'\t' read -r _environment_name suffix file_name version_key; do
-  secret_name="${SECRET_PREFIX}_${suffix}"
-  if ! gcloud secrets describe "$secret_name" \
-    --project="$PROJECT_ID" >/dev/null 2>&1; then
-    gcloud secrets create "$secret_name" \
-      --project="$PROJECT_ID" \
-      --replication-policy=automatic \
-      --quiet
-  fi
-  gcloud secrets add-iam-policy-binding "$secret_name" \
-    --project="$PROJECT_ID" \
-    --member="serviceAccount:$CLOUDRUN_RUNTIME_SERVICE_ACCOUNT" \
-    --role=roles/secretmanager.secretAccessor \
-    --condition=None \
-    --quiet >/dev/null
-
-  existing_version=""
-  if [[ -f "$CLOUDRUN_SECRET_VERSION_STATE" ]]; then
-    existing_version="$(awk -F= -v key="$version_key" '$1 == key { value=$2 } END { print value }' "$CLOUDRUN_SECRET_VERSION_STATE")"
-  fi
-  if [[ "$existing_version" =~ ^[1-9][0-9]*$ ]] &&
-    [[ "$(gcloud secrets versions describe "$existing_version" \
-      --secret="$secret_name" \
-      --project="$PROJECT_ID" \
-      --format='value(state)' 2>/dev/null || true)" == "ENABLED" ]]; then
-    continue
-  fi
-
-  version_resource="$(gcloud secrets versions add "$secret_name" \
-    --project="$PROJECT_ID" \
-    --data-file="$BOOTSTRAP_DIRECTORY/$file_name" \
-    --format='value(name)')"
-  version="${version_resource##*/}"
-  [[ "$version" =~ ^[1-9][0-9]*$ ]] ||
-    cloudrun_die "Secret Manager did not return a numeric version for $secret_name"
-  cloudrun_set_secret_version "$version_key" "$version"
-done < <(cloudrun_secret_specs)
+cloudrun_ensure_secret_versions
 
 environment_csv="$(cloudrun_environment_csv)"
 secrets_csv="$(cloudrun_secrets_csv)"

@@ -102,6 +102,21 @@ backup to approved encrypted, off-host storage and exercise a restore drill.
 Application rollback does not reverse database migrations; confirm schema
 compatibility before restoring an older image.
 
+If the prior release may contain plaintext OAuth tokens, first add
+`secrets/oauth_token_encryption_keyring`, merge the active key ID and mode from
+the new template, and upgrade once with `OAUTH_TOKEN_ENCRYPTION_MODE=compat`.
+Then switch to `enforce`, recreate the application, and run:
+
+```bash
+docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml \
+  --profile maintenance run --rm encrypt-oauth-tokens
+```
+
+Run the command a second time and require zero updates before removing a
+retired key. Fresh installations start in `enforce` mode.
+`upgrade.sh` inspects the current application container and refuses an
+`enforce` upgrade until a `compat` or `enforce` revision has already run.
+
 ## Cleanup and acceptance
 
 Run the cleanup profile from a monitored systemd timer or cron job at least

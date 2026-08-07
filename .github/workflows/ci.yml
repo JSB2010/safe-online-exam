@@ -15,6 +15,7 @@ concurrency:
 jobs:
   verify:
     name: Application verification
+    needs: dependency-integrity
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -29,14 +30,24 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Authenticate the pinned npm CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-shims"
+          corepack enable npm --install-directory "$RUNNER_TEMP/corepack-shims"
+          printf '%s\n' "$RUNNER_TEMP/corepack-shims" >>"$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/corepack-shims/npm" --version)" = "11.19.0"
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
+      - name: Rebuild approved native dependencies
+        run: npm run install:trusted
 
       - name: Run application verification
         run: npm run verify
 
   postgres:
     name: PostgreSQL integration
+    needs: dependency-integrity
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -51,8 +62,17 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Authenticate the pinned npm CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-shims"
+          corepack enable npm --install-directory "$RUNNER_TEMP/corepack-shims"
+          printf '%s\n' "$RUNNER_TEMP/corepack-shims" >>"$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/corepack-shims/npm" --version)" = "11.19.0"
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
+      - name: Rebuild approved native dependencies
+        run: npm run install:trusted
 
       - name: Run PostgreSQL integration tests
         run: npm run verify:postgres
@@ -72,11 +92,50 @@ jobs:
           fail-on-scopes: runtime, development
           license-check: true
           vulnerability-check: true
-          show-openssf-scorecard: false
+          show-openssf-scorecard: true
           show-patched-versions: true
+
+  dependency-integrity:
+    name: Dependency integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Authenticate the pinned npm CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-shims"
+          corepack enable npm --install-directory "$RUNNER_TEMP/corepack-shims"
+          printf '%s\n' "$RUNNER_TEMP/corepack-shims" >>"$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/corepack-shims/npm" --version)" = "11.19.0"
+
+      - name: Verify dependency sources, integrity, versions, and lifecycle policy
+        run: npm run verify:dependency-policy
+
+      - name: Reject production vulnerability advisories
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Install without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify registry signatures and provenance before executing the approved rebuild
+        run: npm audit signatures
+
+      - name: Rebuild and exercise only the approved native dependency
+        run: npm run install:trusted
 
   compose:
     name: Production Compose smoke
+    needs: dependency-integrity
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

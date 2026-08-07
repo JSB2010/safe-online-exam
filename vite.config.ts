@@ -29,6 +29,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Several installer and supply-chain suites spawn native tools. Keep enough
+    // parallelism for fast CI without saturating constrained container hosts.
+    maxWorkers: 4,
     exclude: ["test/e2e/**", "node_modules/**", "dist/**", ".worktrees/**"],
     coverage: {
       provider: "v8",

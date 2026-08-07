@@ -57,43 +57,47 @@ Cloud Run connects to Cloud SQL with `DATABASE_HOST=/cloudsql/PROJECT:REGION:INS
 
 The migration ledger is `schema_migrations`. Application/runtime data uses nine tables:
 
-| Table                           | Contents                                                     |
-| ------------------------------- | ------------------------------------------------------------ |
-| `admin_course_connections`      | Root-scoped Canvas course metadata and summary counts.       |
-| `admin_tool_presets`            | School-managed tool definitions.                             |
-| `admin_tool_preset_assignments` | Durable per-course rollout state and failures.               |
-| `assessments`                   | Assessment discovery state and SEB settings.                 |
-| `courses`                       | Course defaults and exam-tool catalog.                       |
-| `canvas_oauth_tokens`           | Purpose-scoped Canvas OAuth tokens and student preference.   |
-| `sessions`                      | Express session records with expiry.                         |
-| `transient_states`              | One-time states, grants, proofs, handoffs, and rate budgets. |
-| `operation_locks`               | Short assessment-update leases.                              |
+| Table                           | Contents                                                        |
+| ------------------------------- | --------------------------------------------------------------- |
+| `admin_course_connections`      | Root-scoped Canvas course metadata and summary counts.          |
+| `admin_tool_presets`            | School-managed tool definitions.                                |
+| `admin_tool_preset_assignments` | Durable per-course rollout state and failures.                  |
+| `assessments`                   | Assessment discovery state and SEB settings.                    |
+| `courses`                       | Course defaults and exam-tool catalog.                          |
+| `canvas_oauth_tokens`           | One durable Canvas OAuth grant per user and student preference. |
+| `sessions`                      | Express session records with expiry.                            |
+| `transient_states`              | One-time states, grants, proofs, handoffs, and rate budgets.    |
+| `operation_locks`               | Short assessment-update leases.                                 |
 
 Run `npm run db:migrate` before a new application revision. Run `npm run db:cleanup` on a schedule to remove expired rows in bounded batches. Readiness returns failure when PostgreSQL is unavailable or the checked-in migrations have not all been applied.
 
 ## Required Application Values
 
-| Variable                             | Purpose                                                 | Hardened requirement                                                                                                  |
-| ------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                           | Node runtime mode.                                      | `production` for the deployed image.                                                                                  |
-| `APP_ENV`                            | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                                                                   |
-| `PORT`                               | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                                                                          |
-| `TOOL_URL`                           | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                                                                    |
-| `CANVAS_DOMAIN`                      | Connected Canvas origin.                                | HTTPS origin only.                                                                                                    |
-| `LTI_CLIENT_ID`                      | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                                                                             |
-| `LTI_PRIVATE_KEY`                    | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                                                                     |
-| `LTI_DEPLOYMENT_ID_CHECKING_ENABLED` | Enforce the configured deployment-ID allowlist.         | Defaults to `true`. Set `false` only for a controlled self-service course-install rollout.                            |
-| `LTI_DEPLOYMENT_ID`                  | Installed External App deployment ID.                   | Required when checking is enabled; comma/newline allowlist supported.                                                 |
-| `CANVAS_API_CLIENT_ID`               | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                                                                               |
-| `CANVAS_API_CLIENT_SECRET`           | Canvas API OAuth secret.                                | Required secret.                                                                                                      |
-| `SESSION_SECRET`                     | Express session signing secret.                         | At least 32 characters and different from state encryption.                                                           |
-| `STATE_ENCRYPTION_KEY`               | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.                                                            |
-| `SEB_CONFIG_ENCRYPTION_CERT_PEM`     | Public X.509 certificate used to encrypt `.seb` output. | Required when certificate encryption is enabled; valid end-entity RSA certificate whose Key Usage permits encryption. |
+| Variable                               | Purpose                                                 | Hardened requirement                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                             | Node runtime mode.                                      | `production` for the deployed image.                                                                                  |
+| `APP_ENV`                              | Application profile.                                    | `dev` for isolated non-prod; `prod` for production.                                                                   |
+| `PORT`                                 | HTTP port.                                              | Defaults to `8080`; platforms may inject it.                                                                          |
+| `TOOL_URL`                             | Public origin of this deployment.                       | HTTPS origin only, with no path/query/credentials.                                                                    |
+| `CANVAS_DOMAIN`                        | Connected Canvas origin.                                | HTTPS origin only.                                                                                                    |
+| `LTI_CLIENT_ID`                        | Canvas LTI 1.3 Developer Key client ID.                 | Required.                                                                                                             |
+| `LTI_PRIVATE_KEY`                      | RSA private JWK used for tool signing.                  | RSA 2048+ bits, exponent 65537, RS256-compatible.                                                                     |
+| `LTI_DEPLOYMENT_ID_CHECKING_ENABLED`   | Enforce the configured deployment-ID allowlist.         | Defaults to `true`. Set `false` only for a controlled self-service course-install rollout.                            |
+| `LTI_DEPLOYMENT_ID`                    | Installed External App deployment ID.                   | Required when checking is enabled; comma/newline allowlist supported.                                                 |
+| `CANVAS_API_CLIENT_ID`                 | Canvas API OAuth Developer Key client ID.               | Required and distinct from the LTI key.                                                                               |
+| `CANVAS_API_CLIENT_SECRET`             | Canvas API OAuth secret.                                | Required secret.                                                                                                      |
+| `SESSION_SECRET`                       | Express session signing secret.                         | At least 32 characters and different from state encryption.                                                           |
+| `STATE_ENCRYPTION_KEY`                 | AES-GCM material for opaque LTI/OAuth state.            | At least 32 characters and different from session signing.                                                            |
+| `OAUTH_TOKEN_ENCRYPTION_KEYRING`       | JSON key-ID map for stored Canvas OAuth tokens.         | Required secret; every value is a 32-byte base64url AES key.                                                          |
+| `OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID` | Key ID used for new token writes.                       | Required and must exist in the keyring.                                                                               |
+| `OAUTH_TOKEN_ENCRYPTION_MODE`          | OAuth-token persistence rollout mode.                   | `enforce` for encrypted writes; `compat` is temporary rollback preparation only.                                      |
+| `SEB_CONFIG_ENCRYPTION_CERT_PEM`       | Public X.509 certificate used to encrypt `.seb` output. | Required when certificate encryption is enabled; valid end-entity RSA certificate whose Key Usage permits encryption. |
 
 `SEB_CONFIG_ENCRYPTION_CERT_PATH` is the public-certificate file alternative. The matching private key is never a server input; it remains on managed SEB clients. Neither certificate input is required when certificate encryption is disabled.
 
 `LTI_PRIVATE_KEY`, `CANVAS_API_CLIENT_SECRET`, `DATABASE_PASSWORD`,
-`SESSION_SECRET`, `STATE_ENCRYPTION_KEY`, and `SEB_QUIT_PASSWORD` also have the
+`SESSION_SECRET`, `STATE_ENCRYPTION_KEY`, `OAUTH_TOKEN_ENCRYPTION_KEYRING`, and
+`SEB_QUIT_PASSWORD` also have the
 file alternatives listed below. Use only one form for each value.
 
 ## Deployment-ID Policy
@@ -109,11 +113,12 @@ The following secret values accept a mutually exclusive `_FILE` alternative:
 - `CANVAS_API_CLIENT_SECRET_FILE`
 - `SESSION_SECRET_FILE`
 - `STATE_ENCRYPTION_KEY_FILE`
+- `OAUTH_TOKEN_ENCRYPTION_KEYRING_FILE`
 - `SEB_QUIT_PASSWORD_FILE`
 
 Files are read once during configuration startup. The app rejects a direct value and its `_FILE` alternative being set together and reports unreadable paths without echoing secret contents. Required-value validation rejects a missing or empty result. Docker/Kubernetes secret mounts work without provider-specific SDKs.
 
-The checked-in `compose.secrets.yaml` override clears direct secret variables and supplies these file paths to the app, migration, and cleanup processes. It also gives the PostgreSQL image the same database password through its native `POSTGRES_PASSWORD_FILE` input. Start it with `.env.compose.secrets.example`. On a Linux host, keep the containing directory mode `0700`; Compose mounts only the named files into each service, and container-readable source files can be mode `0644` within that protected directory.
+The checked-in `compose.secrets.yaml` override clears direct secret variables and supplies these file paths to the app, migration, cleanup, and OAuth-token rewrite processes. It also gives the PostgreSQL image the same database password through its native `POSTGRES_PASSWORD_FILE` input. Start it with `.env.compose.secrets.example`. On a Linux host, keep the containing directory mode `0700`; Compose mounts only the named files into each service, and container-readable source files can be mode `0644` within that protected directory.
 
 ## Canvas And LTI Endpoints
 
@@ -157,5 +162,12 @@ Certificate encryption is the default because it restricts a configuration to de
 ## Secret Rotation
 
 Rotate one secret at a time and create a new immutable secret version. Update the runtime to the numbered version, deploy, smoke test, then disable the old version. Rotating `SESSION_SECRET` invalidates sessions; rotating `STATE_ENCRYPTION_KEY` invalidates outstanding opaque state; rotating LTI signing material requires Canvas/JWKS coordination; rotating the SEB certificate requires distributing the matching new private identity and issuing fresh configurations.
+
+For OAuth-token encryption, add a new random key under a new ID while retaining
+the old key, change `OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID`, deploy, and run
+`npm run db:encrypt-oauth-tokens:built`. Remove the old key only after the
+rewrite reports every stored record scanned and a second run reports zero
+updates. The command reports counts only and fails closed if any row cannot be
+decrypted.
 
 For Cloud Run, the checked-in builds deliberately use numbered Secret Manager versions and never `latest`. The exact dev, prod, and parameterized secret names and bootstrap order are documented in [Deployment](deployment.md).
