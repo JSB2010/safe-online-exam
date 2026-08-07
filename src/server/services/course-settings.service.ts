@@ -26,7 +26,7 @@ import {
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
-import { AssessmentService } from "./assessment.service.js";
+import { AssessmentService, type OperationLease } from "./assessment.service.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 import {
   assertDistinctSebPasswords,
@@ -37,6 +37,10 @@ import {
 } from "./seb-password-policy.js";
 import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtectedSetting } from "./seb-quit-password.js";
 
+type CourseWriteLockOptions =
+  | { courseWriteLockHeld?: false; operationLease?: never }
+  | { courseWriteLockHeld: true; operationLease: OperationLease };
+
 @Injectable()
 export class CourseSettingsService {
   constructor(
@@ -45,7 +49,10 @@ export class CourseSettingsService {
     @Optional() private readonly assessments?: AssessmentService
   ) {}
 
-  private withCourseWriteLock<T>(courseId: string, action: () => Promise<T>): Promise<T> {
+  private withCourseWriteLock<T>(
+    courseId: string,
+    action: (operationLease?: OperationLease) => Promise<T>
+  ): Promise<T> {
     return this.assessments ? this.assessments.withCourseWriteLock(courseId, action) : action();
   }
 
@@ -56,7 +63,8 @@ export class CourseSettingsService {
 
   /** Creates the persisted catalog for a newly launched instructor course. */
   async ensureDefaults(courseId: string): Promise<CourseSebDefaults> {
-    return this.withCourseWriteLock(courseId, async () => {
+    return this.withCourseWriteLock(courseId, async (operationLease) => {
+      operationLease?.assertActive();
       const saved = await this.repositories.value.courses.update(courseId, (existing) => {
         return existing || courseDefaultsToRecord(courseId, defaultCourseSebDefaults(courseId));
       });
@@ -69,18 +77,21 @@ export class CourseSettingsService {
     defaults: Partial<CourseSebDefaults>,
     options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
   ): Promise<CourseSebDefaults> {
-    return this.withCourseWriteLock(courseId, () => this.saveDefaultsUnlocked(courseId, defaults, options));
+    return this.withCourseWriteLock(courseId, (operationLease) =>
+      this.saveDefaultsUnlocked(courseId, defaults, options, operationLease)
+    );
   }
 
   async rotateQuitPassword(courseId: string): Promise<string> {
-    return this.withCourseWriteLock(courseId, async () => {
+    return this.withCourseWriteLock(courseId, async (operationLease) => {
       const existingRecord = await this.repositories.value.courses.get(courseId);
       if (!existingRecord) {
         throw new CourseSettingsNoLongerAvailableError();
       }
       const existing = courseRecordToDefaults(existingRecord, courseId);
       const password = generateCourseQuitPassword(existing.startPassword);
-      await this.saveDefaultsUnlocked(courseId, { quitPassword: password });
+      operationLease?.assertActive();
+      await this.saveDefaultsUnlocked(courseId, { quitPassword: password }, {}, operationLease);
       return password;
     });
   }
@@ -88,7 +99,8 @@ export class CourseSettingsService {
   private async saveDefaultsUnlocked(
     courseId: string,
     defaults: Partial<CourseSebDefaults>,
-    options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {}
+    options: { propagate?: boolean; allowAdminToolChanges?: boolean } = {},
+    operationLease?: OperationLease
   ): Promise<CourseSebDefaults> {
     const existing = await this.repositories.value.courses.get(courseId);
     const existingDefaults = existing ? courseRecordToDefaults(existing, courseId) : defaultCourseSebDefaults(courseId);
@@ -112,10 +124,12 @@ export class CourseSettingsService {
     if (options.propagate !== false) {
       await this.assertDefaultsPreserveQuitProtection(courseId, normalized);
     }
+    operationLease?.assertActive();
     const saved = await this.repositories.value.courses.save(courseId, nextRecord);
     const persisted = courseRecordToDefaults(saved, courseId);
     if (options.propagate !== false) {
-      await this.propagateDefaults(courseId, persisted);
+      operationLease?.assertActive();
+      await this.propagateDefaults(courseId, persisted, operationLease);
     }
     return persisted;
   }
@@ -123,9 +137,9 @@ export class CourseSettingsService {
   async pushAdminToolPreset(
     courseId: string,
     preset: AdminToolPresetRecord,
-    options: { courseWriteLockHeld?: boolean } = {}
+    options: CourseWriteLockOptions = {}
   ): Promise<CourseSebDefaults> {
-    const action = async () => {
+    const action = async (operationLease?: OperationLease) => {
       const existing = await this.getDefaults(courseId);
       const tool = adminManagedTool(preset);
       const current = existing.externalTools.find((entry) => entry.adminPresetId === preset.id);
@@ -144,18 +158,19 @@ export class CourseSettingsService {
       return this.saveDefaultsUnlocked(
         courseId,
         { ...existing, externalTools: nextTools, externalToolsInitialized: true },
-        { propagate: true, allowAdminToolChanges: true }
+        { propagate: true, allowAdminToolChanges: true },
+        operationLease
       );
     };
-    return options.courseWriteLockHeld ? action() : this.withCourseWriteLock(courseId, action);
+    return options.courseWriteLockHeld ? action(options.operationLease) : this.withCourseWriteLock(courseId, action);
   }
 
   async removeAdminToolPreset(
     courseId: string,
     presetId: string,
-    options: { courseWriteLockHeld?: boolean } = {}
+    options: CourseWriteLockOptions = {}
   ): Promise<CourseSebDefaults> {
-    const action = async () => {
+    const action = async (operationLease?: OperationLease) => {
       const existing = await this.getDefaults(courseId);
       return this.saveDefaultsUnlocked(
         courseId,
@@ -164,10 +179,11 @@ export class CourseSettingsService {
           externalTools: existing.externalTools.filter((entry) => entry.adminPresetId !== presetId),
           externalToolsInitialized: true
         },
-        { propagate: true, allowAdminToolChanges: true }
+        { propagate: true, allowAdminToolChanges: true },
+        operationLease
       );
     };
-    return options.courseWriteLockHeld ? action() : this.withCourseWriteLock(courseId, action);
+    return options.courseWriteLockHeld ? action(options.operationLease) : this.withCourseWriteLock(courseId, action);
   }
 
   /**
@@ -179,7 +195,7 @@ export class CourseSettingsService {
     targetCourseId: string,
     sourceTool: ExternalToolConfig
   ): Promise<{ status: "copied" | "already_present"; toolId: string }> {
-    return this.withCourseWriteLock(targetCourseId, async () => {
+    return this.withCourseWriteLock(targetCourseId, async (operationLease) => {
       const [normalizedSource] = normalizeCourseExternalTools([sourceTool]);
       if (!normalizedSource || normalizedSource.managedByAdmin === true || normalizedSource.adminPresetId) {
         throw new BadRequestException({
@@ -222,16 +238,18 @@ export class CourseSettingsService {
           externalTools: [...existingTools, copiedTool],
           externalToolsInitialized: true
         },
-        { propagate: true }
+        { propagate: true },
+        operationLease
       );
       return { status: "copied", toolId: copiedTool.id };
     });
   }
 
   async resetQuizToDefaults(courseId: string, quizId: string): Promise<QuizSebSetting | ContentSebSetting | null> {
-    return this.withCourseWriteLock(courseId, async () => {
+    return this.withCourseWriteLock(courseId, async (operationLease) => {
       const defaults = await this.getDefaults(courseId);
       const assessmentId = canonicalAssessmentId(quizId);
+      operationLease?.assertActive();
       const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
         if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
           return null;
@@ -292,9 +310,10 @@ export class CourseSettingsService {
     courseId: string,
     quizId: string
   ): Promise<QuizSebSetting | ContentSebSetting | null> {
-    return this.withCourseWriteLock(courseId, async () => {
+    return this.withCourseWriteLock(courseId, async (operationLease) => {
       const defaults = await this.getDefaults(courseId);
       const assessmentId = canonicalAssessmentId(quizId);
+      operationLease?.assertActive();
       const saved = await this.repositories.value.assessments.update(assessmentId, (record) => {
         if (!record || !matchesResetTarget(record, courseId, quizId, assessmentId)) {
           return null;
@@ -334,10 +353,15 @@ export class CourseSettingsService {
     });
   }
 
-  private async propagateDefaults(courseId: string, defaults: CourseSebDefaults): Promise<void> {
+  private async propagateDefaults(
+    courseId: string,
+    defaults: CourseSebDefaults,
+    operationLease?: OperationLease
+  ): Promise<void> {
     const records = await this.repositories.value.assessments.find([{ field: "courseId", op: "==", value: courseId }]);
     await Promise.all(
       records.map((record) => {
+        operationLease?.assertActive();
         return this.repositories.value.assessments.update(record.id, (current) => {
           const latest = current || record;
           if (latest.contentType !== "CLASSIC_QUIZ") {

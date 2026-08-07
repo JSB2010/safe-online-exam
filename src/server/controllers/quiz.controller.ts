@@ -302,7 +302,7 @@ export class QuizController {
     if (parsed) {
       const saved = await this.assessments.withAssessmentLock(
         contentId,
-        async () => {
+        async (operationLease) => {
           const [setting, defaults] = await Promise.all([
             this.assessments.getContentSebSetting(contentId),
             this.courseSettings.getDefaults(courseId)
@@ -310,6 +310,7 @@ export class QuizController {
           if (!setting) {
             return null;
           }
+          operationLease.assertActive();
           const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
           return this.assessments.saveContentSebSetting(
             applyCourseDefaultsToContentSetting(
@@ -360,7 +361,7 @@ export class QuizController {
     const quizId = body.quizId;
     const saved = await this.assessments.withAssessmentLock(
       quizId,
-      async () => {
+      async (operationLease) => {
         const [setting, defaults] = await Promise.all([
           this.assessments.getSebSettingForQuiz(quizId),
           this.courseSettings.getDefaults(courseId)
@@ -368,6 +369,7 @@ export class QuizController {
         if (!setting) {
           return null;
         }
+        operationLease.assertActive();
         const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
         return this.assessments.saveQuizSebSetting(
           applyCourseDefaultsToQuizSetting(

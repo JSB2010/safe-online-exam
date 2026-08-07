@@ -1313,6 +1313,96 @@ describe("AssessmentService", () => {
     );
   });
 
+  it("stops later mutations as soon as background lease renewal is lost", async () => {
+    vi.useFakeTimers();
+    try {
+      const repositories = createInMemoryRepositories();
+      vi.spyOn(repositories.operationLocks, "renew").mockResolvedValue(false);
+      const service = new AssessmentService(
+        { value: repositories } as RepositoryProvider,
+        {
+          getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+          getNewQuizAssignments: vi.fn().mockResolvedValue([])
+        } as unknown as CanvasApiService
+      );
+      let resumeAction!: () => void;
+      let markStarted!: () => void;
+      let mutationRan = false;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const result = service.withAssessmentLock("quiz-1", async (operationLease) => {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          resumeAction = resolve;
+        });
+        operationLease.assertActive();
+        mutationRan = true;
+        return "unsafe-success";
+      });
+      const rejected = expect(result).rejects.toBeInstanceOf(AssessmentOperationLockLostError);
+      await started;
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      resumeAction();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await rejected;
+      expect(mutationRan).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops later mutations when a renewal remains unresolved past the lease deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const repositories = createInMemoryRepositories();
+      let finishRenewal!: (renewed: boolean) => void;
+      vi.spyOn(repositories.operationLocks, "renew").mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finishRenewal = resolve;
+          })
+      );
+      const service = new AssessmentService(
+        { value: repositories } as RepositoryProvider,
+        {
+          getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+          getNewQuizAssignments: vi.fn().mockResolvedValue([])
+        } as unknown as CanvasApiService
+      );
+      let resumeAction!: () => void;
+      let markStarted!: () => void;
+      let mutationRan = false;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const result = service.withAssessmentLock("quiz-1", async (operationLease) => {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          resumeAction = resolve;
+        });
+        operationLease.assertActive();
+        mutationRan = true;
+        return "unsafe-success";
+      });
+      const rejected = expect(result).rejects.toBeInstanceOf(AssessmentOperationLockLostError);
+      await started;
+
+      await vi.advanceTimersByTimeAsync(30_001);
+      resumeAction();
+      await vi.advanceTimersByTimeAsync(0);
+      finishRenewal(false);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await rejected;
+      expect(mutationRan).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not release a replacement owner's lock after a background renewal loses ownership", async () => {
     vi.useFakeTimers();
     try {

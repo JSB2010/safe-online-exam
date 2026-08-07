@@ -103,7 +103,8 @@ describe("AdminController", () => {
       results: [{ courseId: "101", success: true }]
     });
     expect(assessments.refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin", {
-      courseWriteLockHeld: true
+      courseWriteLockHeld: true,
+      operationLease: expect.objectContaining({ assertActive: expect.any(Function) })
     });
     await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
       rootAccountId: "7",
@@ -359,9 +360,9 @@ describe("AdminController", () => {
         }
       }
     });
-    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) => {
       await repositories.adminToolPresetAssignments.delete(assignmentId);
-      return action();
+      return action(operationLeaseDouble());
     });
     const courseSettings = {
       getDefaults: vi.fn().mockResolvedValue({}),
@@ -391,10 +392,11 @@ describe("AdminController", () => {
       adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
     });
     let lockActive = false;
-    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+    const operationLease = operationLeaseDouble();
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) => {
       lockActive = true;
       try {
-        return await action();
+        return await action(operationLease);
       } finally {
         lockActive = false;
       }
@@ -412,7 +414,8 @@ describe("AdminController", () => {
 
     await expect(controller.refreshCourse({} as any, "101")).resolves.toMatchObject({ assessmentCount: 1 });
     expect(refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin", {
-      courseWriteLockHeld: true
+      courseWriteLockHeld: true,
+      operationLease
     });
     await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
       assessmentCount: 1,
@@ -433,10 +436,11 @@ describe("AdminController", () => {
       assessments: { classicquiz_501: disabledAssessment }
     });
     let lockActive = false;
-    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+    const operationLease = operationLeaseDouble();
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) => {
       lockActive = true;
       try {
-        return await action();
+        return await action(operationLease);
       } finally {
         lockActive = false;
       }
@@ -481,7 +485,8 @@ describe("AdminController", () => {
 
     expect(withCourseWriteLock).toHaveBeenCalledOnce();
     expect(enableSebWithAccessCode).toHaveBeenCalledWith("101", "501", "42", undefined, "account_admin", {
-      courseWriteLockHeld: true
+      courseWriteLockHeld: true,
+      operationLease
     });
     await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
       assessmentCount: 1,
@@ -581,7 +586,9 @@ function controllerDouble(
   const assessmentService = {
     getAssessmentRecord: (id: string) => repositories.assessments.get(id),
     refreshCourseContent: vi.fn().mockResolvedValue({ assessments: [] }),
-    withCourseWriteLock: vi.fn(async (_courseId: string, action: () => Promise<unknown>) => action()),
+    withCourseWriteLock: vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) =>
+      action(operationLeaseDouble())
+    ),
     ...assessments
   };
   return new AdminController(
@@ -601,6 +608,10 @@ function canvasApiDouble() {
     getAdminCourse: vi.fn().mockResolvedValue(canvasCourse()),
     getAdminPermissions: vi.fn().mockResolvedValue({ manage_course_content_edit: true })
   };
+}
+
+function operationLeaseDouble() {
+  return { assertActive: vi.fn() };
 }
 
 function canvasCourse() {

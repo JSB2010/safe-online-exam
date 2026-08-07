@@ -55,10 +55,13 @@ export interface CourseResetResult {
   deletedPresetAssignmentCount: number;
 }
 
-interface RefreshCourseContentOptions {
+type CourseWriteLockOptions =
+  | { courseWriteLockHeld?: false; operationLease?: never }
+  | { courseWriteLockHeld: true; operationLease: OperationLease };
+
+type RefreshCourseContentOptions = CourseWriteLockOptions & {
   requireCompleteDiscovery?: boolean;
-  courseWriteLockHeld?: boolean;
-}
+};
 
 interface CourseResetMutation {
   assessment: AssessmentRecord;
@@ -76,6 +79,7 @@ type AccessCodeSetting = Pick<
 >;
 
 interface AccessCodeMutation<T extends AccessCodeSetting> {
+  assertActive: () => void;
   applyCanvas: () => Promise<unknown>;
   restoreCanvas: () => Promise<unknown>;
   persist: () => Promise<T>;
@@ -84,8 +88,10 @@ interface AccessCodeMutation<T extends AccessCodeSetting> {
   desired: T;
 }
 
-interface AccessCodeMutationOptions {
-  courseWriteLockHeld?: boolean;
+type AccessCodeMutationOptions = CourseWriteLockOptions;
+
+export interface OperationLease {
+  assertActive(): void;
 }
 
 @Injectable()
@@ -105,10 +111,16 @@ export class AssessmentService {
     options: RefreshCourseContentOptions = {}
   ): Promise<CourseAssessmentContent> {
     if (!options.courseWriteLockHeld) {
-      return this.withCourseWriteLock(courseId, () =>
-        this.refreshCourseContent(courseId, userId, grantType, { ...options, courseWriteLockHeld: true })
+      return this.withCourseWriteLock(courseId, (operationLease) =>
+        this.refreshCourseContent(courseId, userId, grantType, {
+          ...options,
+          courseWriteLockHeld: true,
+          operationLease
+        })
       );
     }
+    const operationLease = options.operationLease;
+    operationLease?.assertActive();
     const syncedAt = new Date().toISOString();
     const existingRecords = await this.getAssessmentRecordsForCourse(courseId);
     if (!options.requireCompleteDiscovery) {
@@ -116,33 +128,36 @@ export class AssessmentService {
       // closes the window where an omitted cached assessment could otherwise
       // remain usable until the successful response was persisted as a tombstone.
       await Promise.all([
-        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt),
-        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt)
+        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt, operationLease),
+        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt, operationLease)
       ]);
     }
     const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId, ...canvasGrantArgs(grantType));
+    operationLease?.assertActive();
     let strictNewQuizzes: ContentItem[] | null = null;
     if (options.requireCompleteDiscovery) {
       // A reset must discover both assessment types before changing any cached
       // verification state. Otherwise a failed second Canvas request could
       // block learners from assessments even though the reset never started.
       strictNewQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+      operationLease?.assertActive();
       await Promise.all([
-        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt),
-        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt)
+        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt, operationLease),
+        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt, operationLease)
       ]);
     }
     const classicIds = new Set(classicQuizzes.map((quiz) => assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id)));
     const classicRecords = (
-      await mapInBatches(classicQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (quiz) =>
-        this.repositories.value.assessments.update(
+      await mapInBatches(classicQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (quiz) => {
+        operationLease?.assertActive();
+        return this.repositories.value.assessments.update(
           assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id),
           (existing) =>
             this.mergeVerifiedCanvasRecord(quizToAssessmentRecord(quiz, existing, syncedAt), existing, syncedAt)
-        )
-      )
+        );
+      })
     ).filter((record): record is AssessmentRecord => !!record);
-    await this.markMissingCanvasAssessments(existingRecords, "CLASSIC_QUIZ", classicIds, syncedAt);
+    await this.markMissingCanvasAssessments(existingRecords, "CLASSIC_QUIZ", classicIds, syncedAt, operationLease);
     let contentRecords: AssessmentRecord[];
     let newQuizzes: ContentItem[];
     if (strictNewQuizzes) {
@@ -150,6 +165,7 @@ export class AssessmentService {
     } else {
       try {
         newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+        operationLease?.assertActive();
       } catch {
         contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
         return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
@@ -157,13 +173,14 @@ export class AssessmentService {
     }
     const newQuizIds = new Set(newQuizzes.map((item) => canonicalAssessmentId(item.id)));
     contentRecords = (
-      await mapInBatches(newQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (item) =>
-        this.repositories.value.assessments.update(item.id, (existing) =>
+      await mapInBatches(newQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (item) => {
+        operationLease?.assertActive();
+        return this.repositories.value.assessments.update(item.id, (existing) =>
           this.mergeVerifiedCanvasRecord(contentItemToAssessmentRecord(item, existing, syncedAt), existing, syncedAt)
-        )
-      )
+        );
+      })
     ).filter((record): record is AssessmentRecord => !!record);
-    await this.markMissingCanvasAssessments(existingRecords, "NEW_QUIZ", newQuizIds, syncedAt);
+    await this.markMissingCanvasAssessments(existingRecords, "NEW_QUIZ", newQuizIds, syncedAt, operationLease);
     return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
   }
 
@@ -174,17 +191,20 @@ export class AssessmentService {
   }
 
   async resetCourseForAdmin(courseId: string, userId: string, rootAccountId: string): Promise<CourseResetResult> {
-    return this.withCourseResetLock(courseId, () =>
+    return this.withCourseResetLock(courseId, (resetLease) =>
       this.withCourseWriteLock(
         courseId,
-        async () => {
+        async (courseWriteLease) => {
+          const resetOperationLease = combineOperationLeases(resetLease, courseWriteLease);
           const discovered = await this.refreshCourseContent(courseId, userId, "account_admin", {
             requireCompleteDiscovery: true,
-            courseWriteLockHeld: true
+            courseWriteLockHeld: true,
+            operationLease: resetOperationLease
           });
           const mutations: CourseResetMutation[] = [];
           for (const assessment of discovered.assessments) {
-            mutations.push(await this.courseResetMutation(assessment, courseId, userId));
+            resetOperationLease.assertActive();
+            mutations.push(await this.courseResetMutation(assessment, courseId, userId, resetOperationLease));
           }
           const attempted: CourseResetMutation[] = [];
           let resetOperationId: string | null = null;
@@ -192,7 +212,9 @@ export class AssessmentService {
             for (const mutation of mutations) {
               await this.withAssessmentLock(
                 mutation.assessment.id,
-                async () => {
+                async (assessmentLease) => {
+                  const mutationLease = combineOperationLeases(resetOperationLease, assessmentLease);
+                  mutationLease.assertActive();
                   try {
                     await mutation.disableCanvas();
                   } catch (error) {
@@ -202,6 +224,7 @@ export class AssessmentService {
                     throw error;
                   }
                   attempted.push(mutation);
+                  mutationLease.assertActive();
                   await this.repositories.value.assessments.update(mutation.assessment.id, (current) =>
                     current && current.courseId === courseId
                       ? {
@@ -221,6 +244,7 @@ export class AssessmentService {
                 true
               );
             }
+            resetOperationLease.assertActive();
             resetOperationId = randomUUID();
             const deleted = await this.repositories.resetCourseState(
               courseId,
@@ -268,7 +292,8 @@ export class AssessmentService {
   private async courseResetMutation(
     assessment: AssessmentRecord,
     courseId: string,
-    userId: string
+    userId: string,
+    operationLease: OperationLease
   ): Promise<CourseResetMutation> {
     const parsed = parseNewQuizContentId(assessment.id);
     if (parsed) {
@@ -280,6 +305,7 @@ export class AssessmentService {
         userId,
         ...canvasGrantArgs("account_admin")
       );
+      operationLease.assertActive();
       return {
         assessment,
         disableCanvas: () =>
@@ -318,6 +344,7 @@ export class AssessmentService {
       userId,
       ...canvasGrantArgs("account_admin")
     );
+    operationLease.assertActive();
     return {
       assessment,
       disableCanvas: () =>
@@ -552,7 +579,7 @@ export class AssessmentService {
     return this.withAssessmentMutationLock(
       quizId,
       courseId,
-      async () => {
+      async (operationLease) => {
         const currentDefaults = await this.getCourseDefaultsForMutation(courseId, defaults);
         const accessCode = generateAccessCode();
         const existing = await this.getSebSettingForQuiz(quizId);
@@ -581,6 +608,7 @@ export class AssessmentService {
         this.assertAssessmentCanRunSeb(next);
         this.assertPriorAccessCodeIsRecoverable(existing);
         return this.commitAccessCodeMutation({
+          assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
             this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
           restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
@@ -612,7 +640,7 @@ export class AssessmentService {
     return this.withAssessmentMutationLock(
       quizId,
       courseId,
-      async () => {
+      async (operationLease) => {
         const existing = await this.getSebSettingForQuiz(quizId);
         if (!existing || existing.courseId !== courseId) {
           throw new AssessmentNoLongerAvailableError();
@@ -629,6 +657,7 @@ export class AssessmentService {
           configKey: null
         };
         return this.commitAccessCodeMutation({
+          assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
             this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs(grantType)),
           restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
@@ -654,7 +683,7 @@ export class AssessmentService {
     return this.withAssessmentMutationLock(
       contentId,
       courseId,
-      async () => {
+      async (operationLease) => {
         const currentDefaults = await this.getCourseDefaultsForMutation(courseId, defaults);
         const existing = await this.getContentSebSetting(contentId);
         if (!existing || existing.courseId !== courseId || existing.assignmentId !== assignmentId) {
@@ -674,6 +703,7 @@ export class AssessmentService {
         this.assertAssessmentCanRunSeb(next);
         this.assertPriorAccessCodeIsRecoverable(existing);
         return this.commitAccessCodeMutation({
+          assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
             this.canvasApi.setNewQuizAccessCode(
               courseId,
@@ -704,7 +734,7 @@ export class AssessmentService {
     return this.withAssessmentMutationLock(
       contentId,
       courseId,
-      async () => {
+      async (operationLease) => {
         const existing = await this.getContentSebSetting(contentId);
         if (!existing || existing.courseId !== courseId || existing.assignmentId !== assignmentId) {
           throw new AssessmentNoLongerAvailableError();
@@ -718,6 +748,7 @@ export class AssessmentService {
           configKey: null
         };
         return this.commitAccessCodeMutation({
+          assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
             this.canvasApi.removeNewQuizAccessCode(courseId, assignmentId, userId, ...canvasGrantArgs(grantType)),
           restoreCanvas: () => this.restoreNewQuizCanvasAccessCode(courseId, assignmentId, userId, existing, grantType),
@@ -739,7 +770,7 @@ export class AssessmentService {
   ): Promise<QuizSebSetting | null> {
     return this.withAssessmentLock(
       quizId,
-      async () => {
+      async (operationLease) => {
         const existing = await this.getSebSettingForQuiz(quizId);
         if (!existing?.sebRequired) {
           return null;
@@ -749,6 +780,7 @@ export class AssessmentService {
         const next = { ...existing, accessCode, configKey: null };
         this.assertAssessmentCanRunSeb(next);
         return this.commitAccessCodeMutation({
+          assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
             this.canvasApi.setQuizAccessCode(courseId, quizId, accessCode, userId, ...canvasGrantArgs(grantType)),
           restoreCanvas: () => this.restoreClassicCanvasAccessCode(courseId, quizId, userId, existing, grantType),
@@ -771,7 +803,7 @@ export class AssessmentService {
   ): Promise<ContentSebSetting | null> {
     return this.withAssessmentLock(
       contentId,
-      async () => {
+      async (operationLease) => {
         const existing = await this.getContentSebSetting(contentId);
         if (!existing?.sebRequired) {
           return null;
@@ -781,6 +813,7 @@ export class AssessmentService {
         const next = { ...existing, accessCode, configKey: null };
         this.assertAssessmentCanRunSeb(next);
         return this.commitAccessCodeMutation({
+          assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
             this.canvasApi.setNewQuizAccessCode(
               courseId,
@@ -873,17 +906,18 @@ export class AssessmentService {
 
   async withAssessmentLock<T>(
     contentId: string,
-    action: () => Promise<T>,
+    action: (operationLease: OperationLease) => Promise<T>,
     courseId?: string,
     allowDuringCourseReset = false
   ): Promise<T> {
     const lockId = `assessment:${canonicalAssessmentId(contentId)}`;
-    const run = () =>
+    const run = (courseWriteLease?: OperationLease) =>
       this.withOperationLock(
         lockId,
         () => new AssessmentOperationInProgressError(),
         (cause) => new AssessmentOperationLockLostError(cause),
-        action
+        (assessmentLease) =>
+          action(courseWriteLease ? combineOperationLeases(courseWriteLease, assessmentLease) : assessmentLease)
       );
     return courseId && !allowDuringCourseReset ? this.withCourseWriteLock(courseId, run) : run();
   }
@@ -891,11 +925,13 @@ export class AssessmentService {
   private withAssessmentMutationLock<T>(
     contentId: string,
     courseId: string,
-    action: () => Promise<T>,
+    action: (operationLease: OperationLease) => Promise<T>,
     options: AccessCodeMutationOptions
   ): Promise<T> {
     return options.courseWriteLockHeld
-      ? this.withAssessmentLock(contentId, action)
+      ? this.withAssessmentLock(contentId, (assessmentLease) =>
+          action(combineOperationLeases(options.operationLease, assessmentLease))
+        )
       : this.withAssessmentLock(contentId, action, courseId);
   }
 
@@ -907,7 +943,11 @@ export class AssessmentService {
     return current ? courseRecordToDefaults(current, courseId) : fallback;
   }
 
-  async withCourseWriteLock<T>(courseId: string, action: () => Promise<T>, allowDuringCourseReset = false): Promise<T> {
+  async withCourseWriteLock<T>(
+    courseId: string,
+    action: (operationLease: OperationLease) => Promise<T>,
+    allowDuringCourseReset = false
+  ): Promise<T> {
     if (!allowDuringCourseReset && (await this.isCourseResetInProgress(courseId))) {
       throw new CourseResetInProgressError();
     }
@@ -915,16 +955,17 @@ export class AssessmentService {
       courseWriteLockId(courseId),
       () => new CourseMutationInProgressError(),
       (cause) => new CourseMutationOperationLockLostError(cause),
-      async () => {
+      async (operationLease) => {
         if (!allowDuringCourseReset && (await this.isCourseResetInProgress(courseId))) {
           throw new CourseResetInProgressError();
         }
-        return action();
+        operationLease.assertActive();
+        return action(operationLease);
       }
     );
   }
 
-  private withCourseResetLock<T>(courseId: string, action: () => Promise<T>): Promise<T> {
+  private withCourseResetLock<T>(courseId: string, action: (operationLease: OperationLease) => Promise<T>): Promise<T> {
     return this.withOperationLock(
       courseResetLockId(courseId),
       () => new CourseResetInProgressError(),
@@ -942,7 +983,7 @@ export class AssessmentService {
     lockId: string,
     unavailableError: () => Error,
     lostError: (cause?: unknown) => Error,
-    action: () => Promise<T>
+    action: (operationLease: OperationLease) => Promise<T>
   ): Promise<T> {
     const ownerId = randomUUID();
     const operationLocks = this.repositories.value.operationLocks;
@@ -951,6 +992,17 @@ export class AssessmentService {
       throw unavailableError();
     }
     let renewalFailure: Error | null = null;
+    let leaseExpiresAt = Date.now() + this.lockTtlMs;
+    const operationLease: OperationLease = {
+      assertActive: () => {
+        if (!renewalFailure && Date.now() >= leaseExpiresAt) {
+          renewalFailure = lostError();
+        }
+        if (renewalFailure) {
+          throw renewalFailure;
+        }
+      }
+    };
     let renewalInFlight: Promise<void> | null = null;
     const renewalTimer = setInterval(
       () => {
@@ -962,6 +1014,8 @@ export class AssessmentService {
           .then((renewed) => {
             if (!renewed) {
               renewalFailure = lostError();
+            } else {
+              leaseExpiresAt = Date.now() + this.lockTtlMs;
             }
           })
           .catch((error: unknown) => {
@@ -974,7 +1028,9 @@ export class AssessmentService {
       Math.max(1, Math.floor(this.lockTtlMs / 3))
     );
     try {
-      const result = await action();
+      operationLease.assertActive();
+      const result = await action(operationLease);
+      operationLease.assertActive();
       clearInterval(renewalTimer);
       if (renewalInFlight) {
         await renewalInFlight;
@@ -1029,6 +1085,7 @@ export class AssessmentService {
   }
 
   private async commitAccessCodeMutation<T extends AccessCodeSetting>(mutation: AccessCodeMutation<T>): Promise<T> {
+    mutation.assertActive();
     try {
       await mutation.applyCanvas();
     } catch (error) {
@@ -1040,6 +1097,7 @@ export class AssessmentService {
     }
 
     try {
+      mutation.assertActive();
       return await mutation.persist();
     } catch (error) {
       let current: T | null;
@@ -1121,12 +1179,16 @@ export class AssessmentService {
     existingRecords: AssessmentRecord[],
     contentType: "CLASSIC_QUIZ" | "NEW_QUIZ",
     presentIds: ReadonlySet<string>,
-    checkedAt: string
+    checkedAt: string,
+    operationLease?: OperationLease
   ): Promise<void> {
     await mapInBatches(
       existingRecords.filter((record) => record.contentType === contentType && !presentIds.has(record.id)),
       ASSESSMENT_SYNC_WRITE_BATCH_SIZE,
-      (record) => this.markCanvasVerification(record.id, contentType, "missing", checkedAt)
+      (record) => {
+        operationLease?.assertActive();
+        return this.markCanvasVerification(record.id, contentType, "missing", checkedAt);
+      }
     );
   }
 
@@ -1144,14 +1206,18 @@ export class AssessmentService {
   private async markCanvasDiscoveryStale(
     existingRecords: AssessmentRecord[],
     contentType: "CLASSIC_QUIZ" | "NEW_QUIZ",
-    checkedAt: string
+    checkedAt: string,
+    operationLease?: OperationLease
   ): Promise<void> {
     await mapInBatches(
       existingRecords.filter(
         (record) => record.contentType === contentType && record.canvasVerification?.status !== "missing"
       ),
       ASSESSMENT_SYNC_WRITE_BATCH_SIZE,
-      (record) => this.markCanvasVerification(record.id, contentType, "stale", checkedAt)
+      (record) => {
+        operationLease?.assertActive();
+        return this.markCanvasVerification(record.id, contentType, "stale", checkedAt);
+      }
     );
   }
 
@@ -1372,6 +1438,16 @@ function isFreshCanvasVerification(record: AssessmentRecord): boolean {
   }
   const age = Date.now() - checkedAt;
   return age <= ASSESSMENT_VERIFICATION_MAX_AGE_MS && age >= -ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS;
+}
+
+function combineOperationLeases(...leases: readonly OperationLease[]): OperationLease {
+  return {
+    assertActive() {
+      for (const lease of leases) {
+        lease.assertActive();
+      }
+    }
+  };
 }
 
 function hasNewerCanvasVerification(record: AssessmentRecord | null, candidateCheckedAt: string): boolean {

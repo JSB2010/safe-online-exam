@@ -43,7 +43,7 @@ describe("QuizController", () => {
       getAssessmentRecord: vi.fn(async (id: string) => assessmentById(id)),
       validateSebConfiguration: vi.fn()
     };
-    assessments.withAssessmentLock = vi.fn(async (_contentId, action) => action());
+    assessments.withAssessmentLock = vi.fn(async (_contentId, action) => action({ assertActive: vi.fn() }));
     courseSettings = {
       getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults(COURSE_ID)),
       saveDefaults: vi.fn(),
@@ -656,7 +656,7 @@ describe("QuizController", () => {
     assessments.withAssessmentLock.mockImplementation(async (_contentId, action) => {
       lockActive = true;
       try {
-        return await action();
+        return await action({ assertActive: vi.fn() });
       } finally {
         lockActive = false;
       }
