@@ -510,10 +510,6 @@ function assessmentAppRules(appBaseUrl: string, courseId: string, contentId: str
   ];
 }
 
-export function normalizeAllowedDomain(raw: string): string[] {
-  return normalizeAllowedEntry(raw).map((rule) => rule.expression);
-}
-
 function normalizeAllowedEntry(raw: string): UrlFilterRule[] {
   const value = raw.trim();
   if (!value || value.length > 2048 || isUnsafeBroadPattern(value)) {

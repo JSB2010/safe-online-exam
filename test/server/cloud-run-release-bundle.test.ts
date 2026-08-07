@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -130,7 +130,7 @@ describe("portable Cloud Run release bundle", () => {
 
     expect(readFileSync(join(bundle, "cloudrun.env.example"), "utf8")).toContain(`APP_IMAGE=${IMAGE}`);
     expect(readFileSync(join(bundle, "cloudrun.env.example"), "utf8")).toContain(`APP_VERSION=${VERSION}`);
-    expect(JSON.parse(readFileSync(join(bundle, "cloud-run-contract.json"), "utf8")).secrets).toHaveLength(11);
+    expect(JSON.parse(readFileSync(join(bundle, "cloud-run-contract.json"), "utf8")).secrets).toHaveLength(12);
     for (const script of [
       "setup.sh",
       "bootstrap-secrets.sh",
@@ -145,6 +145,7 @@ describe("portable Cloud Run release bundle", () => {
       "install.sh",
       "finalize-lti.sh",
       "upgrade.sh",
+      "encrypt-oauth-tokens.sh",
       "rollback.sh"
     ]) {
       expect(statSync(join(bundle, script)).mode & 0o111, script).not.toBe(0);
@@ -382,7 +383,7 @@ exit 0
 
     // Existing maintained Cloud Build targets are a separate, stable contract.
     expect(source("cloudbuild-dev.yaml")).toContain('"canvas-seb-dev"');
-    expect(source("cloudbuild-prod.yaml")).toContain('"canvas-seb-prod"');
+    expect(source("cloudbuild-prod.yaml")).toContain("_SERVICE: canvas-seb-prod");
     expect(source("cloudbuild-school.yaml")).toContain("_SERVICE: safe-online-exam");
     expect(source("cloudbuild-school.yaml")).toContain("_CLOUD_SQL_INSTANCE: safe-online-exam");
   });
@@ -494,6 +495,7 @@ exit 0
       "canvas_api_client_secret",
       "session_secret",
       "state_encryption_key",
+      "oauth_token_encryption_keyring",
       "seb-config-encryption.crt.pem",
       "seb_quit_password"
     ];
@@ -506,9 +508,13 @@ exit 0
     mkdirSync(fakeBin);
     writeFileSync(environmentFile, environmentTemplate, { mode: 0o600 });
     for (const secretFile of requiredSecretFiles) {
-      writeFileSync(join(secretsDirectory, secretFile), secretFile === "seb_quit_password" ? "" : "test-value", {
-        mode: 0o600
-      });
+      const value =
+        secretFile === "seb_quit_password"
+          ? ""
+          : secretFile === "oauth_token_encryption_keyring"
+            ? '{"primary":"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws"}'
+            : "test-value";
+      writeFileSync(join(secretsDirectory, secretFile), value, { mode: 0o600 });
     }
     writeFileSync(
       join(fakeBin, "docker"),
@@ -716,8 +722,111 @@ exit 0
     expect(rendered).toContain("SEB_CONFIG_ENCRYPTION_ENABLED=true");
     expect(rendered).toContain("LTI_ISSUER=https://canvas.instructure.com");
     expect(rendered).toContain("CANVAS_DOMAIN=sample_canvas_domain:1");
-    expect(rendered).toContain("DATABASE_PASSWORD=sample_database_password:11");
+    expect(rendered).toContain("DATABASE_PASSWORD=sample_database_password:12");
     expect(rendered).not.toContain(":latest");
+  });
+
+  it("creates a new numbered secret version only when protected bootstrap content changes", () => {
+    const directory = temporaryDirectory();
+    const bootstrapDirectory = join(directory, "bootstrap");
+    const stateDirectory = join(directory, "state");
+    const fakeBin = join(directory, "bin");
+    const contract = join(directory, "contract.json");
+    const stateFile = join(stateDirectory, "secret-versions.env");
+    const bootstrapFile = join(bootstrapDirectory, "value");
+    const remoteSecret = join(directory, "remote-secret");
+    const gcloudLog = join(directory, "gcloud.log");
+
+    mkdirSync(bootstrapDirectory);
+    mkdirSync(stateDirectory);
+    mkdirSync(fakeBin);
+    writeFileSync(
+      contract,
+      JSON.stringify({
+        secrets: [
+          {
+            environment: "TEST_SECRET",
+            suffix: "secret",
+            file: "value",
+            versionKey: "TEST_SECRET_VERSION"
+          }
+        ]
+      })
+    );
+    writeFileSync(bootstrapFile, "original-value", { mode: 0o600 });
+    writeFileSync(remoteSecret, "original-value", { mode: 0o600 });
+    writeFileSync(stateFile, "TEST_SECRET_VERSION=7\n", { mode: 0o600 });
+    writeFileSync(gcloudLog, "");
+    writeFileSync(
+      join(fakeBin, "gcloud"),
+      `#!/usr/bin/env bash
+set -eu
+if [[ "\${1:-}" == "secrets" && "\${2:-}" == "describe" ]]; then exit 0; fi
+if [[ "\${1:-}" == "secrets" && "\${2:-}" == "add-iam-policy-binding" ]]; then exit 0; fi
+if [[ "\${1:-}" == "secrets" && "\${2:-}" == "versions" && "\${3:-}" == "describe" ]]; then
+  printf '%s' 'ENABLED'
+  exit 0
+fi
+if [[ "\${1:-}" == "secrets" && "\${2:-}" == "versions" && "\${3:-}" == "access" ]]; then
+  output_file=""
+  for argument in "$@"; do
+    case "$argument" in --out-file=*) output_file="\${argument#*=}" ;; esac
+  done
+  cp "$GCLOUD_REMOTE_SECRET" "$output_file"
+  exit 0
+fi
+if [[ "\${1:-}" == "secrets" && "\${2:-}" == "versions" && "\${3:-}" == "add" ]]; then
+  printf '%s\n' 'versions add' >>"$GCLOUD_TEST_LOG"
+  printf '%s\n' 'projects/test-project/secrets/test_secret/versions/8'
+  exit 0
+fi
+exit 99
+`,
+      { mode: 0o755 }
+    );
+
+    const runEnsure = (): void => {
+      execFileSync(
+        "bash",
+        [
+          "-c",
+          [
+            "source deploy/cloud-run-config.sh",
+            'CLOUDRUN_CONTRACT="$1"',
+            'BOOTSTRAP_DIRECTORY="$2"',
+            'CLOUDRUN_SECRET_VERSION_STATE="$3"',
+            "PROJECT_ID=test-project",
+            "SECRET_PREFIX=test",
+            "CLOUDRUN_RUNTIME_SERVICE_ACCOUNT=test@test-project.iam.gserviceaccount.com",
+            "cloudrun_ensure_secret_versions"
+          ].join("; "),
+          "cloud-run-secret-version-test",
+          contract,
+          bootstrapDirectory,
+          stateFile
+        ],
+        {
+          cwd: ROOT,
+          env: {
+            ...process.env,
+            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            GCLOUD_REMOTE_SECRET: remoteSecret,
+            GCLOUD_TEST_LOG: gcloudLog
+          }
+        }
+      );
+    };
+
+    runEnsure();
+    expect(readFileSync(gcloudLog, "utf8")).toBe("");
+    expect(readFileSync(stateFile, "utf8")).toBe("TEST_SECRET_VERSION=7\n");
+
+    writeFileSync(bootstrapFile, "rotated-value", { mode: 0o600 });
+    runEnsure();
+
+    expect(readFileSync(gcloudLog, "utf8")).toBe("versions add\n");
+    expect(readFileSync(stateFile, "utf8")).toBe("TEST_SECRET_VERSION=8\n");
+    expect(readdirSync(stateDirectory)).toEqual(["secret-versions.env"]);
   });
 
   it("generates copyable deployment notes with strict provenance verification", () => {
@@ -738,11 +847,56 @@ exit 0
     expect(rendered).toContain("SQL_INSTANCE");
   });
 
+  it("requires an explicit OAuth encryption mode assignment for portable upgrades", () => {
+    const directory = temporaryDirectory();
+    const missingMode = join(directory, "missing-mode.env");
+    const emptyMode = join(directory, "empty-mode.env");
+    const explicitMode = join(directory, "explicit-mode.env");
+    const quotedMode = join(directory, "quoted-mode.env");
+    const command = [
+      "source deploy/cloud-run-config.sh",
+      'cloudrun_require_explicit_oauth_token_encryption_mode "$1"'
+    ].join("; ");
+
+    writeFileSync(missingMode, "APP_VERSION=1.0.4\n");
+    writeFileSync(emptyMode, "OAUTH_TOKEN_ENCRYPTION_MODE=\n");
+    writeFileSync(explicitMode, "export OAUTH_TOKEN_ENCRYPTION_MODE=compat\n");
+    writeFileSync(quotedMode, 'OAUTH_TOKEN_ENCRYPTION_MODE="enforce" # staged rollout\n');
+
+    expect(() =>
+      execFileSync("bash", ["-c", command, "cloud-run-explicit-mode-test", missingMode], {
+        cwd: ROOT,
+        stdio: "pipe"
+      })
+    ).toThrow();
+    expect(() =>
+      execFileSync("bash", ["-c", command, "cloud-run-explicit-mode-test", emptyMode], {
+        cwd: ROOT,
+        stdio: "pipe"
+      })
+    ).toThrow();
+    expect(() =>
+      execFileSync("bash", ["-c", command, "cloud-run-explicit-mode-test", explicitMode], {
+        cwd: ROOT,
+        stdio: "pipe"
+      })
+    ).not.toThrow();
+    expect(() =>
+      execFileSync("bash", ["-c", command, "cloud-run-explicit-mode-test", quotedMode], {
+        cwd: ROOT,
+        stdio: "pipe"
+      })
+    ).not.toThrow();
+  });
+
   it("keeps backup, migration, staged revision, and cutover ordering explicit", () => {
     const upgrade = source("scripts/upgrade-cloud-run.sh");
     const backup = upgrade.indexOf("gcloud sql backups create");
     const migration = upgrade.indexOf('gcloud run jobs execute "$CLOUDRUN_MIGRATE_JOB"');
     const cleanupImage = upgrade.indexOf('gcloud run jobs update "$CLOUDRUN_CLEANUP_JOB"');
+    const ensureSecrets = upgrade.indexOf("cloudrun_ensure_secret_versions");
+    const renderEnvironment = upgrade.indexOf('environment_csv="$(cloudrun_environment_csv)"');
+    const renderSecrets = upgrade.indexOf('secrets_csv="$(cloudrun_secrets_csv)"');
     const noTraffic = upgrade.indexOf("--no-traffic");
     const restoreCandidateUrl = upgrade.indexOf('if [[ "$default_url_was_disabled" == "true" ]]', noTraffic);
     const cutover = upgrade.indexOf('cloudrun_cut_over_tag "$release_tag"');
@@ -752,10 +906,18 @@ exit 0
     const upgradeUrlValidation = upgrade.indexOf("cloudrun_validate_url TOOL_URL");
     const rollbackUrlValidation = rollback.indexOf("cloudrun_validate_url TOOL_URL");
     const rollbackCutover = rollback.indexOf("gcloud run services update-traffic");
+    const requireExplicitMode = upgrade.indexOf("cloudrun_require_explicit_oauth_token_encryption_mode");
+    const loadEnvironment = upgrade.indexOf('cloudrun_load_environment "$environment_file"');
 
     expect(backup).toBeGreaterThan(0);
+    expect(requireExplicitMode).toBeGreaterThan(0);
+    expect(loadEnvironment).toBeGreaterThan(requireExplicitMode);
     expect(upgradeUrlValidation).toBeGreaterThan(0);
     expect(upgradeUrlValidation).toBeLessThan(backup);
+    expect(ensureSecrets).toBeGreaterThan(upgradeUrlValidation);
+    expect(renderEnvironment).toBeGreaterThan(ensureSecrets);
+    expect(renderSecrets).toBeGreaterThan(renderEnvironment);
+    expect(renderSecrets).toBeLessThan(backup);
     expect(migration).toBeGreaterThan(backup);
     expect(cleanupImage).toBeGreaterThan(migration);
     expect(noTraffic).toBeGreaterThan(cleanupImage);
@@ -767,6 +929,10 @@ exit 0
     expect(upgrade).toContain("--default-url");
     expect(upgrade).toContain("--no-default-url");
     expect(upgrade).toContain("trap cloudrun_restore_upgrade_default_url_on_exit EXIT");
+    expect(upgrade).toContain("cloudrun_validate_complete");
+    expect(upgrade).toContain("cloudrun_assert_bootstrap");
+    expect(upgrade.match(/--set-env-vars="\$environment_csv"/g)).toHaveLength(3);
+    expect(upgrade.match(/--set-secrets="\$secrets_csv"/g)).toHaveLength(3);
     expect(upgrade).toContain('display_url="${TOOL_URL%/}"');
     expect(upgrade).not.toContain('--instance="$SERVICE"');
     expect(upgrade).not.toContain(":latest");

@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { constantTimeStringEqual as constantTimeEquals } from "../security/constant-time.js";
 import type { AppConfig } from "../config/app-config.js";
 
 const ACTION_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
@@ -242,10 +243,4 @@ function parseSignedToken(token: string | undefined | null): [string, string] | 
     return null;
   }
   return [encodedPayload, signature];
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }

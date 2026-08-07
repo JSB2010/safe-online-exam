@@ -1,0 +1,180 @@
+name: Weekly supply-chain maintenance
+
+on:
+  schedule:
+    - cron: "30 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-maintenance-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Dependency and immutable-pin monitor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      status: ${{ steps.monitor.outputs.status }}
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Authenticate the pinned npm CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/corepack-shims"
+          corepack enable npm --install-directory "$RUNNER_TEMP/corepack-shims"
+          printf '%s\n' "$RUNNER_TEMP/corepack-shims" >>"$GITHUB_PATH"
+          test "$("$RUNNER_TEMP/corepack-shims/npm" --version)" = "11.19.0"
+
+      - name: Set up Docker Buildx for read-only registry inspection
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Run dependency, signature, advisory, and pin checks
+        id: monitor
+        shell: bash
+        run: |
+          set +e
+          node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md
+          pin_status=$?
+          if [[ ! -f supply-chain-report.md ]]; then
+            printf '# Weekly supply-chain maintenance\n\nThe immutable-pin monitor failed before it could render its report.\n' \
+              >supply-chain-report.md
+          fi
+
+          npm run verify:dependency-policy >dependency-policy.log 2>&1
+          policy_status=$?
+          if [[ "$policy_status" -eq 0 ]]; then
+            npm ci --ignore-scripts >>dependency-policy.log 2>&1
+            install_status=$?
+          else
+            install_status=1
+          fi
+          npm audit signatures >signatures.log 2>&1
+          signature_status=$?
+          npm audit --omit=dev --audit-level=high >advisories.log 2>&1
+          advisory_status=$?
+          set -e
+
+          monitor_result=clean
+          if [[ "$pin_status" -eq 2 ]]; then
+            monitor_result=drift
+          elif [[ "$pin_status" -ne 0 ]]; then
+            monitor_result=error
+          fi
+          if [[ "$policy_status" -ne 0 || "$install_status" -ne 0 || "$signature_status" -ne 0 || "$advisory_status" -ne 0 ]]; then
+            monitor_result=error
+          fi
+
+          {
+            echo
+            echo "## Integrity checks"
+            echo
+            printf -- '- Dependency policy: `%s`\n' "$([[ "$policy_status" -eq 0 ]] && echo passed || echo failed)"
+            printf -- '- Script-disabled install: `%s`\n' "$([[ "$install_status" -eq 0 ]] && echo passed || echo failed)"
+            printf -- '- Registry signatures and provenance: `%s`\n' "$([[ "$signature_status" -eq 0 ]] && echo passed || echo failed)"
+            printf -- '- Production advisory audit: `%s`\n' "$([[ "$advisory_status" -eq 0 ]] && echo passed || echo failed)"
+            echo
+            echo "Logs are retained in the workflow artifact and are not copied into the issue body."
+          } >>supply-chain-report.md
+
+          printf 'status=%s\n' "$monitor_result" >>"$GITHUB_OUTPUT"
+
+      - name: Upload the maintenance report and command logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-maintenance
+          path: |
+            supply-chain-report.md
+            dependency-policy.log
+            signatures.log
+            advisories.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail on monitor errors, but not ordinary update drift
+        if: steps.monitor.outputs.status == 'error'
+        run: exit 1
+
+  image-scan:
+    name: Published image vulnerability monitor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Report every high or critical finding
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.73.0
+          image-ref: ghcr.io/jsb2010/safe-online-exam:latest
+          format: table
+          exit-code: "0"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      - name: Reject fixable high or critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.73.0
+          image-ref: ghcr.io/jsb2010/safe-online-exam:latest
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+  maintenance-issue:
+    name: Maintain the supply-chain drift issue
+    needs: audit
+    if: always() && needs.audit.outputs.status != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download the read-only monitor report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: supply-chain-maintenance
+
+      - name: Open, update, or close the maintenance issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MONITOR_STATUS: ${{ needs.audit.outputs.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Weekly supply-chain maintenance"
+          issue_number="$(
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+              --search 'Weekly supply-chain maintenance in:title' --json number,title \
+              --jq 'map(select(.title == "Weekly supply-chain maintenance"))[0].number // empty'
+          )"
+
+          if [[ "$MONITOR_STATUS" == "clean" ]]; then
+            if [[ -n "$issue_number" ]]; then
+              gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" \
+                --body "The current weekly run found no actionable drift. Closing this maintenance issue."
+              gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --reason completed
+            fi
+            exit 0
+          fi
+
+          if [[ -n "$issue_number" ]]; then
+            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file supply-chain-report.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file supply-chain-report.md
+          fi
