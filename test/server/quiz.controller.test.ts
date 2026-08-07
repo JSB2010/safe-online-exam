@@ -7,6 +7,7 @@ import {
   CourseMutationInProgressError,
   CourseResetInProgressError
 } from "../../src/server/services/assessment.service.js";
+import { CourseSettingsNoLongerAvailableError } from "../../src/server/services/course-settings.service.js";
 import { defaultCourseSebDefaults } from "../../src/shared/models.js";
 
 const SESSION_SECRET = "test-session-secret";
@@ -46,6 +47,7 @@ describe("QuizController", () => {
     assessments.withAssessmentLock = vi.fn(async (_contentId, action) => action({ assertActive: vi.fn() }));
     courseSettings = {
       getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults(COURSE_ID)),
+      getCourseResetGeneration: vi.fn().mockResolvedValue(""),
       saveDefaults: vi.fn(),
       resetQuizToDefaults: vi.fn(),
       copyInstructorToolToCourse: vi.fn()
@@ -297,7 +299,8 @@ describe("QuizController", () => {
     });
     expect(courseSettings.copyInstructorToolToCourse).toHaveBeenCalledWith(
       "course-2",
-      expect.objectContaining({ id: "formula-sheet" })
+      expect.objectContaining({ id: "formula-sheet" }),
+      ""
     );
 
     canvasApi.getInstructorCourses.mockResolvedValue([]);
@@ -315,21 +318,24 @@ describe("QuizController", () => {
     });
     canvasApi.getInstructorCourses.mockResolvedValue([
       { id: "course-2", name: "Biology", courseCode: "BIO-2" },
-      { id: "course-3", name: "Chemistry", courseCode: "CHEM-3" }
+      { id: "course-3", name: "Chemistry", courseCode: "CHEM-3" },
+      { id: "course-4", name: "Physics", courseCode: "PHYS-4" }
     ]);
     courseSettings.copyInstructorToolToCourse
       .mockRejectedValueOnce(new CourseResetInProgressError())
-      .mockRejectedValueOnce(new CourseMutationInProgressError());
+      .mockRejectedValueOnce(new CourseMutationInProgressError())
+      .mockRejectedValueOnce(new CourseSettingsNoLongerAvailableError());
 
     await expect(
       controller.copyCourseTool(mutationRequest(), COURSE_ID, "formula-sheet", {
-        courseIds: ["course-2", "course-3"]
+        courseIds: ["course-2", "course-3", "course-4"]
       })
     ).resolves.toMatchObject({
       success: false,
       failed: [
         { courseId: "course-2", errorCode: "COURSE_RESET_IN_PROGRESS" },
-        { courseId: "course-3", errorCode: "COURSE_UPDATE_IN_PROGRESS" }
+        { courseId: "course-3", errorCode: "COURSE_UPDATE_IN_PROGRESS" },
+        { courseId: "course-4", errorCode: "COURSE_SETTINGS_NO_LONGER_AVAILABLE" }
       ]
     });
   });

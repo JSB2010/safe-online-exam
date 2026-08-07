@@ -1960,6 +1960,63 @@ describe("AssessmentService", () => {
     await expect(service.isAssessmentAvailableForLearner("101", "newquiz:101:601")).resolves.toBe(true);
   });
 
+  it("keeps strict reset discovery read-only after both Canvas inventories succeed", async () => {
+    const repositories = createInMemoryRepositories();
+    const checkedAt = new Date(Date.now() - 60_000).toISOString();
+    const record = assessmentWithQuizSebSetting(null, {
+      quizId: "501",
+      courseId: "101",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "CLASSIC-CODE",
+      ssoDomains: [],
+      educationalToolDomains: [],
+      customDomains: [],
+      externalTools: []
+    });
+    await repositories.assessments.save("classicquiz_501", {
+      ...record,
+      canvas: { ...record.canvas, title: "Cached title", published: true },
+      canvasVerification: { status: "verified", checkedAt, lastVerifiedAt: checkedAt }
+    });
+    const updateAssessment = vi.spyOn(repositories.assessments, "update");
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockResolvedValue([
+        {
+          id: "501",
+          canvasQuizId: "501",
+          courseId: "101",
+          title: "Live Canvas title",
+          contentType: "CLASSIC_QUIZ",
+          published: true
+        }
+      ]),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const service = new AssessmentService({ value: repositories } as RepositoryProvider, canvas);
+
+    await expect(
+      service.refreshCourseContent("101", "42", "account_admin", {
+        requireCompleteDiscovery: true,
+        courseWriteLockHeld: true,
+        operationLease: { assertActive: vi.fn() }
+      })
+    ).resolves.toMatchObject({
+      assessments: [
+        {
+          id: "classicquiz_501",
+          canvas: { title: "Live Canvas title" },
+          seb: { required: true, enabled: true, accessCode: "CLASSIC-CODE" }
+        }
+      ]
+    });
+    expect(updateAssessment).not.toHaveBeenCalled();
+    await expect(repositories.assessments.get("classicquiz_501")).resolves.toMatchObject({
+      canvas: { title: "Cached title" },
+      canvasVerification: { status: "verified", checkedAt, lastVerifiedAt: checkedAt }
+    });
+  });
+
   it("blocks new assessment mutations while a course reset holds its lock", async () => {
     const repositories = createInMemoryRepositories();
     let releaseDiscovery!: () => void;

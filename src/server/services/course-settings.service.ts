@@ -61,6 +61,21 @@ export class CourseSettingsService {
     return courseRecordToDefaults(existing, courseId);
   }
 
+  async getCourseResetGeneration(courseId: string): Promise<string> {
+    const connections = await this.repositories.value.adminCourseConnections.find([
+      { field: "courseId", op: "==", value: courseId }
+    ]);
+    return connections
+      .flatMap((connection) => {
+        const outcome = connection.lastResetOutcome;
+        return outcome?.version === 1 && outcome.courseId === courseId && outcome.operationId
+          ? [`${connection.id}:${outcome.operationId}`]
+          : [];
+      })
+      .sort()
+      .join("|");
+  }
+
   /** Creates the persisted catalog for a newly launched instructor course. */
   async ensureDefaults(courseId: string): Promise<CourseSebDefaults> {
     return this.withCourseWriteLock(courseId, async (operationLease) => {
@@ -193,7 +208,8 @@ export class CourseSettingsService {
    */
   async copyInstructorToolToCourse(
     targetCourseId: string,
-    sourceTool: ExternalToolConfig
+    sourceTool: ExternalToolConfig,
+    expectedResetGeneration: string
   ): Promise<{ status: "copied" | "already_present"; toolId: string }> {
     return this.withCourseWriteLock(targetCourseId, async (operationLease) => {
       const [normalizedSource] = normalizeCourseExternalTools([sourceTool]);
@@ -206,7 +222,18 @@ export class CourseSettingsService {
         });
       }
 
-      const existing = await this.getDefaults(targetCourseId);
+      const currentResetGeneration = await this.getCourseResetGeneration(targetCourseId);
+      if (currentResetGeneration !== expectedResetGeneration) {
+        throw new CourseSettingsNoLongerAvailableError();
+      }
+      const existingRecord = await this.repositories.value.courses.get(targetCourseId);
+      if (!existingRecord && currentResetGeneration) {
+        // A reset intentionally deletes the course record so that the next
+        // teacher launch starts setup. Do not let a copy request synthesize the
+        // deleted defaults before that launch recreates the course explicitly.
+        throw new CourseSettingsNoLongerAvailableError();
+      }
+      const existing = courseRecordToDefaults(existingRecord, targetCourseId);
       const existingTools = normalizeCourseExternalTools(existing.externalTools);
       const matchingTool = existingTools.find((tool) => sameInstructorToolConfiguration(tool, normalizedSource));
       if (matchingTool) {

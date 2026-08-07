@@ -186,11 +186,11 @@ describe("CourseSettingsService", () => {
       ]
     });
 
-    await expect(service.copyInstructorToolToCourse("target-course", sourceTool)).resolves.toEqual({
+    await expect(service.copyInstructorToolToCourse("target-course", sourceTool, "")).resolves.toEqual({
       status: "copied",
       toolId: "formula-sheet-copy"
     });
-    await expect(service.copyInstructorToolToCourse("target-course", sourceTool)).resolves.toEqual({
+    await expect(service.copyInstructorToolToCourse("target-course", sourceTool, "")).resolves.toEqual({
       status: "already_present",
       toolId: "formula-sheet-copy"
     });
@@ -212,18 +212,66 @@ describe("CourseSettingsService", () => {
     const service = new CourseSettingsService(repos);
 
     await expect(
-      service.copyInstructorToolToCourse("target-course", {
-        id: "school-tool",
-        label: "School tool",
-        url: "https://school.example.edu/tool",
-        enabled: true,
-        adminPresetId: "preset-1",
-        managedByAdmin: true
-      })
+      service.copyInstructorToolToCourse(
+        "target-course",
+        {
+          id: "school-tool",
+          label: "School tool",
+          url: "https://school.example.edu/tool",
+          enabled: true,
+          adminPresetId: "preset-1",
+          managedByAdmin: true
+        },
+        ""
+      )
     ).rejects.toMatchObject({
       response: expect.objectContaining({ error_code: "COURSE_TOOL_COPY_NOT_ALLOWED" }),
       status: 400
     });
+    await expect(repos.value.courses.get("target-course")).resolves.toBeNull();
+  });
+
+  it("fences a tool copy across reset completion and preserves fresh setup", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    const sourceTool = {
+      id: "formula-sheet",
+      label: "Formula sheet",
+      url: "https://reference.example.edu/formulas",
+      enabled: true
+    };
+    const generationBeforeCanvas = await service.getCourseResetGeneration("target-course");
+    await repos.value.adminCourseConnections.save("root-1:target-course", {
+      id: "root-1:target-course",
+      rootAccountId: "root-1",
+      canvasOrigin: "https://canvas.example.edu",
+      courseId: "target-course",
+      name: "Target course",
+      accountId: "root-1",
+      teacherNames: [],
+      assessmentCount: 0,
+      enabledAssessmentCount: 0,
+      issueCount: 0,
+      connectedByUserId: "admin-1",
+      lastResetOutcome: {
+        version: 1,
+        operationId: "reset-after-copy-started",
+        courseId: "target-course",
+        completedAt: new Date().toISOString(),
+        assessmentCount: 0,
+        transientStateCount: 0,
+        courseRecordCount: 1,
+        presetAssignmentCount: 0
+      }
+    });
+
+    await expect(
+      service.copyInstructorToolToCourse("target-course", sourceTool, generationBeforeCanvas)
+    ).rejects.toBeInstanceOf(CourseSettingsNoLongerAvailableError);
+    const currentGeneration = await service.getCourseResetGeneration("target-course");
+    await expect(
+      service.copyInstructorToolToCourse("target-course", sourceTool, currentGeneration)
+    ).rejects.toBeInstanceOf(CourseSettingsNoLongerAvailableError);
     await expect(repos.value.courses.get("target-course")).resolves.toBeNull();
   });
 

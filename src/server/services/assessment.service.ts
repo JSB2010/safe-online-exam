@@ -65,6 +65,7 @@ type RefreshCourseContentOptions = CourseWriteLockOptions & {
 
 interface CourseResetMutation {
   assessment: AssessmentRecord;
+  priorAssessment: AssessmentRecord | null;
   disableCanvas: () => Promise<unknown>;
   restoreCanvas: () => Promise<unknown>;
 }
@@ -123,29 +124,44 @@ export class AssessmentService {
     operationLease?.assertActive();
     const syncedAt = new Date().toISOString();
     const existingRecords = await this.getAssessmentRecordsForCourse(courseId);
-    if (!options.requireCompleteDiscovery) {
-      // Deny learner release while a normal discovery pass is in flight. This
-      // closes the window where an omitted cached assessment could otherwise
-      // remain usable until the successful response was persisted as a tombstone.
-      await Promise.all([
-        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt, operationLease),
-        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt, operationLease)
-      ]);
-    }
-    const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId, ...canvasGrantArgs(grantType));
-    operationLease?.assertActive();
-    let strictNewQuizzes: ContentItem[] | null = null;
     if (options.requireCompleteDiscovery) {
       // A reset must discover both assessment types before changing any cached
-      // verification state. Otherwise a failed second Canvas request could
-      // block learners from assessments even though the reset never started.
-      strictNewQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+      // state. Keep this preflight read-only because the reset deletes the
+      // records after disabling Canvas codes; a partial discovery write would
+      // otherwise damage learner verification when persistence or the lease
+      // fails before the destructive reset begins.
+      const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId, ...canvasGrantArgs(grantType));
       operationLease?.assertActive();
-      await Promise.all([
-        this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt, operationLease),
-        this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt, operationLease)
+      const newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+      operationLease?.assertActive();
+      const existingById = new Map(existingRecords.map((record) => [record.id, record]));
+      return this.toCourseAssessmentContent([
+        ...classicQuizzes.map((quiz) => {
+          const assessmentId = assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id);
+          const existing = existingById.get(assessmentId) || null;
+          return this.mergeVerifiedCanvasRecord(quizToAssessmentRecord(quiz, existing, syncedAt), existing, syncedAt);
+        }),
+        ...newQuizzes.map((item) => {
+          const assessmentId = canonicalAssessmentId(item.id);
+          const existing = existingById.get(assessmentId) || null;
+          return this.mergeVerifiedCanvasRecord(
+            contentItemToAssessmentRecord(item, existing, syncedAt),
+            existing,
+            syncedAt
+          );
+        })
       ]);
     }
+
+    // Deny learner release while a normal discovery pass is in flight. This
+    // closes the window where an omitted cached assessment could otherwise
+    // remain usable until the successful response was persisted as a tombstone.
+    await Promise.all([
+      this.markCanvasDiscoveryStale(existingRecords, "CLASSIC_QUIZ", syncedAt, operationLease),
+      this.markCanvasDiscoveryStale(existingRecords, "NEW_QUIZ", syncedAt, operationLease)
+    ]);
+    const classicQuizzes = await this.canvasApi.getQuizzesForCourse(courseId, userId, ...canvasGrantArgs(grantType));
+    operationLease?.assertActive();
     const classicIds = new Set(classicQuizzes.map((quiz) => assessmentIdForClassicQuiz(quiz.canvasQuizId || quiz.id)));
     const classicRecords = (
       await mapInBatches(classicQuizzes, ASSESSMENT_SYNC_WRITE_BATCH_SIZE, (quiz) => {
@@ -160,16 +176,12 @@ export class AssessmentService {
     await this.markMissingCanvasAssessments(existingRecords, "CLASSIC_QUIZ", classicIds, syncedAt, operationLease);
     let contentRecords: AssessmentRecord[];
     let newQuizzes: ContentItem[];
-    if (strictNewQuizzes) {
-      newQuizzes = strictNewQuizzes;
-    } else {
-      try {
-        newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
-        operationLease?.assertActive();
-      } catch {
-        contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
-        return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
-      }
+    try {
+      newQuizzes = await this.canvasApi.getNewQuizAssignments(courseId, userId, ...canvasGrantArgs(grantType));
+      operationLease?.assertActive();
+    } catch {
+      contentRecords = existingRecords.filter((record) => record.contentType === "NEW_QUIZ");
+      return this.toCourseAssessmentContent([...classicRecords, ...contentRecords]);
     }
     const newQuizIds = new Set(newQuizzes.map((item) => canonicalAssessmentId(item.id)));
     contentRecords = (
@@ -295,6 +307,8 @@ export class AssessmentService {
     userId: string,
     operationLease: OperationLease
   ): Promise<CourseResetMutation> {
+    const priorAssessment = await this.repositories.value.assessments.get(assessment.id);
+    operationLease.assertActive();
     const parsed = parseNewQuizContentId(assessment.id);
     if (parsed) {
       const prior = assessmentToContentSebSetting(assessment);
@@ -308,6 +322,7 @@ export class AssessmentService {
       operationLease.assertActive();
       return {
         assessment,
+        priorAssessment,
         disableCanvas: () =>
           this.canvasApi.removeNewQuizAccessCode(
             courseId,
@@ -347,6 +362,7 @@ export class AssessmentService {
     operationLease.assertActive();
     return {
       assessment,
+      priorAssessment,
       disableCanvas: () =>
         this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin")),
       restoreCanvas: () =>
@@ -371,7 +387,11 @@ export class AssessmentService {
         compensationErrors.push(error);
       }
       try {
-        await this.repositories.value.assessments.save(mutation.assessment.id, mutation.assessment);
+        if (mutation.priorAssessment) {
+          await this.repositories.value.assessments.save(mutation.assessment.id, mutation.priorAssessment);
+        } else {
+          await this.repositories.value.assessments.delete(mutation.assessment.id);
+        }
       } catch (error) {
         compensationErrors.push(error);
       }

@@ -138,7 +138,6 @@ export class QuizController {
     @Body() body: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireInstructorForCourse(request, courseId, true);
-    const sourceTool = await this.requireCopyableCourseTool(courseId, toolId);
     const targetCourseIds = copyTargetCourseIds(body);
     if (targetCourseIds.includes(courseId)) {
       return apiError(400, "Choose a different course to copy this exam tool.", {
@@ -146,6 +145,18 @@ export class QuizController {
       });
     }
     try {
+      // Snapshot each reset generation before either the source read or the
+      // live Canvas authorization call. A reset that completes while those
+      // awaits are in flight must fence the later target mutation.
+      const resetGenerations = new Map(
+        await Promise.all(
+          targetCourseIds.map(
+            async (targetCourseId) =>
+              [targetCourseId, await this.courseSettings.getCourseResetGeneration(targetCourseId)] as const
+          )
+        )
+      );
+      const sourceTool = await this.requireCopyableCourseTool(courseId, toolId);
       // Re-read the live Canvas list immediately before mutation. The picker is
       // only a convenience view; it is not an authorization grant.
       const availableCourses = await this.canvasApi.getInstructorCourses(principal.canvasUserId);
@@ -159,7 +170,11 @@ export class QuizController {
 
       const results = await mapWithConcurrency(targetCourses, COURSE_TOOL_COPY_CONCURRENCY, async (course) => {
         try {
-          const copied = await this.courseSettings.copyInstructorToolToCourse(course.id, sourceTool);
+          const copied = await this.courseSettings.copyInstructorToolToCourse(
+            course.id,
+            sourceTool,
+            resetGenerations.get(course.id) || ""
+          );
           return { ...courseToolCopyCourseView(course), status: copied.status };
         } catch (error) {
           return {
@@ -826,7 +841,12 @@ function courseToolCopyFailureCode(error: unknown): string {
     const errorCode = (response as { error_code?: unknown }).error_code;
     if (
       typeof errorCode === "string" &&
-      ["COURSE_TOOL_LIMIT", "COURSE_RESET_IN_PROGRESS", "COURSE_UPDATE_IN_PROGRESS"].includes(errorCode)
+      [
+        "COURSE_TOOL_LIMIT",
+        "COURSE_RESET_IN_PROGRESS",
+        "COURSE_UPDATE_IN_PROGRESS",
+        "COURSE_SETTINGS_NO_LONGER_AVAILABLE"
+      ].includes(errorCode)
     ) {
       return errorCode;
     }
