@@ -33,6 +33,8 @@ chmod 700 "$secrets_directory" "$identity_directory"
 openssl rand -base64 48 >"$secrets_directory/database_password"
 openssl rand -base64 48 >"$secrets_directory/session_secret"
 openssl rand -base64 48 >"$secrets_directory/state_encryption_key"
+oauth_token_key="$(openssl rand -base64 32 | tr '/+' '_-' | tr -d '=\n')"
+printf '{"primary":"%s"}\n' "$oauth_token_key" >"$secrets_directory/oauth_token_encryption_keyring"
 docker run --rm --entrypoint /nodejs/bin/node "$image" \
   /app/scripts/generate-lti-private-key.mjs "$key_id" >"$secrets_directory/lti_private_key"
 : >"$secrets_directory/seb_quit_password"

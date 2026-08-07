@@ -1,6 +1,7 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type { CourseSebDefaults, ExternalToolConfig, StructuredSebConfigRequest } from "../../shared/models.js";
+import { setSecretResponseHeaders } from "../http/response-headers.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
@@ -211,7 +212,7 @@ export class QuizController {
     @Param("courseId") courseId: string
   ): Promise<Record<string, unknown>> {
     this.authorization.requireInstructorForCourse(request, courseId, true);
-    setPasswordRevealHeaders(response);
+    setSecretResponseHeaders(response);
     const defaults = await this.courseSettings.getDefaults(courseId);
     return passwordRevealResponse(
       defaults.startPassword || null,
@@ -229,7 +230,7 @@ export class QuizController {
     @Param("quizId") quizId: string
   ): Promise<Record<string, unknown>> {
     const { assessment } = await this.authorization.requireInstructorForAssessment(request, courseId, quizId, true);
-    setPasswordRevealHeaders(response);
+    setSecretResponseHeaders(response);
     const startPassword = assessment.seb.startPassword || null;
     const quitPassword = assessment.seb.quitPassword || null;
     return passwordRevealResponse(
@@ -900,11 +901,4 @@ function passwordRevealResponse(
       exit: { value: quitSource === "managed" ? null : quitPassword, source: quitSource }
     }
   };
-}
-
-function setPasswordRevealHeaders(response: Response): void {
-  response.setHeader("cache-control", "private, no-store, max-age=0");
-  response.setHeader("pragma", "no-cache");
-  response.setHeader("referrer-policy", "no-referrer");
-  response.setHeader("x-content-type-options", "nosniff");
 }

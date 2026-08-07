@@ -1,31 +1,42 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS base
-
-RUN npm install -g npm@11.18.0
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS base
 
 WORKDIR /app
+
+# Corepack authenticates the npm archive against packageManager's committed
+# SHA-512 hash before the downloaded CLI executes.
+COPY package.json ./
+ENV PATH="/opt/corepack-shims:${PATH}"
+RUN mkdir -p /opt/corepack-shims \
+    && corepack enable npm --install-directory /opt/corepack-shims \
+    && npm --version | grep -Fx "11.19.0"
 
 FROM base AS deps
 
 COPY package*.json .npmrc ./
-RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
+COPY scripts/verify-install-scripts.mjs scripts/verify-esbuild.mjs ./scripts/
+RUN npm run verify:dependency-policy
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --ignore-scripts
+RUN npm audit signatures \
+    && npm audit --omit=dev --audit-level=high
+RUN npm run install:trusted
 
 FROM deps AS postgres-tests
 
 COPY . .
 CMD ["npm", "run", "test:postgres"]
 
-FROM node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS production-deps
-
-# npm is platform-independent JavaScript. Install the pinned CLI once on the
-# native build platform instead of repeating its network install through QEMU.
-COPY --from=base /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS production-deps
 
 WORKDIR /app
 
 COPY package*.json .npmrc ./
-RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
+ENV PATH="/opt/corepack-shims:${PATH}"
+RUN mkdir -p /opt/corepack-shims \
+    && corepack enable npm --install-directory /opt/corepack-shims \
+    && npm --version | grep -Fx "11.19.0"
+RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev --ignore-scripts
 
 FROM deps AS verify
 
@@ -37,13 +48,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN npm run typecheck
-RUN npm run lint
-RUN npm run format:check
-RUN npm run test:coverage
-RUN npm run build
+RUN --network=none npm run typecheck
+RUN --network=none npm run lint
+RUN --network=none npm run format:check
+RUN --network=none npm run test:coverage
+RUN --network=none npm run build
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:af85d11ce7ef10172855a6e3649e3e8125b1b9e3ca41849ec2918036f05cb212 AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:fbbdda866ea71aef98c4abece17e3d61fbf820cc2ef3961522caa2478716171a AS runtime
 
 STOPSIGNAL SIGTERM
 
