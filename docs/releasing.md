@@ -4,7 +4,7 @@ The tag-driven GitHub Actions workflow is the release authority. A maintainer
 prepares and merges the version on `main`, then pushes one annotated
 `vX.Y.Z` tag. The workflow performs every remaining action: it waits for the
 exact commit's required CI and CodeQL checks, creates a draft GitHub Release,
-builds, vulnerability-scans, and smokes the image, publishes attestations and checksum-protected
+builds and smokes the image, publishes attestations and checksum-protected
 Compose and Cloud Run bundles, promotes the final GHCR tags, and publishes the
 draft as an immutable release.
 
@@ -50,9 +50,9 @@ npm run release:check
 
 Run the normal verification appropriate to the change, commit the preparation,
 and merge it into `main`. The `Protect main` repository ruleset requires the
-application, PostgreSQL, Compose, dependency-review, dependency-integrity, and
-aggregate CodeQL checks. No approval is required for a solo-maintainer pull
-request, but the pull request and checks provide a durable release record.
+application, PostgreSQL, Compose, and CodeQL checks. No approval is required
+for a solo-maintainer pull request, but the pull request and checks provide a
+durable release record.
 
 Before tagging, confirm `git status` is clean and the intended release commit
 is reachable from `main`. Do not tag a local-only or pull-request-only commit.
@@ -110,12 +110,5 @@ assets.
 
 Cloud Run promotion is intentionally separate. Operators may use the
 downloaded Cloud Run bundle with plain `gcloud`, or maintainers may use the
-immutable release digest with the authoritative `cloudbuild-prod.yaml`, only after the
-public release succeeds. Maintainer promotion also requires the release tag,
-its full 40-character source commit, and the configured read-only GitHub
-attestation token secret version. It rejects a draft, prerelease, or mutable
-release and a digest whose GitHub attestation does not match all three values,
-creates a KMS-backed Binary Authorization
-attestation, and enables the default policy on the production migration job,
-cleanup job, and service. Complete the two-phase setup in
-`docs/deployment.md` before the first such promotion.
+immutable release digest with `cloudbuild-release-promote.yaml`, only after the
+public release succeeds.

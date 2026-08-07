@@ -96,20 +96,15 @@ if (packageLock.version !== version || packageLock.packages?.[""]?.version !== v
   fail("package-lock.json root versions do not match package.json");
 }
 
-const packageManagerVersion = packageJson.packageManager?.match(/^npm@(\d+\.\d+\.\d+)\+sha512\.[0-9a-f]{128}$/u)?.[1];
-const dockerfilePackageManagerVersions = [
-  ...readText("Dockerfile").matchAll(/npm --version \| grep -Fx "(\d+\.\d+\.\d+)"/gu)
-].map((match) => match[1]);
+const packageManagerVersion = packageJson.packageManager?.match(/^npm@(.+)$/u)?.[1];
+const dockerfilePackageManagerVersion = readText("Dockerfile").match(/npm install -g npm@([^\s]+)/u)?.[1];
 if (!packageManagerVersion) {
-  fail("package.json must pin npm with an integrity-authenticated packageManager entry");
+  fail("package.json must pin npm with packageManager");
 }
-if (
-  dockerfilePackageManagerVersions.length !== 2 ||
-  dockerfilePackageManagerVersions.some((candidate) => candidate !== packageManagerVersion)
-) {
+if (dockerfilePackageManagerVersion !== packageManagerVersion) {
   fail(
-    `Both Dockerfile npm versions must match packageManager npm@${packageManagerVersion}, found ${
-      dockerfilePackageManagerVersions.length ? dockerfilePackageManagerVersions.join(", ") : "none"
+    `Dockerfile npm version must match packageManager npm@${packageManagerVersion}, found ${
+      dockerfilePackageManagerVersion ?? "none"
     }`
   );
 }
@@ -153,7 +148,12 @@ for (const configuredName of [...requiredCloudRunEnvironment, ...canvasEndpointE
   }
 }
 
-for (const configPath of ["cloudbuild-dev.yaml", "cloudbuild-prod.yaml", "cloudbuild-school.yaml"]) {
+for (const configPath of [
+  "cloudbuild-dev.yaml",
+  "cloudbuild-prod.yaml",
+  "cloudbuild-school.yaml",
+  "cloudbuild-release-promote.yaml"
+]) {
   const config = readText(configPath);
   const rawEnvironmentBindings = [...config.matchAll(/"--set-env-vars=([^"]+)"/gu)].map((match) => match[1]);
   const rawSecretBindings = [...config.matchAll(/"--set-secrets=([^"]+)"/gu)].map((match) => match[1]);

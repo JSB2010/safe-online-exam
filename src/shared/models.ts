@@ -20,7 +20,8 @@ export const CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES = [
   "url:GET|/api/v1/accounts/:account_id/permissions",
   "url:GET|/api/v1/accounts/:account_id/courses",
   "url:GET|/api/v1/accounts/:account_id/terms",
-  "url:GET|/api/v1/courses/:id"
+  "url:GET|/api/v1/courses/:id",
+  "url:GET|/api/v1/courses/:course_id/quizzes/:id"
 ] as const;
 
 /**
@@ -318,6 +319,7 @@ export interface AdminCourseConnectionRecord {
   courseCode?: string | null;
   accountId: string;
   workflowState?: string | null;
+  concluded?: boolean | null;
   termId?: string | null;
   termName?: string | null;
   teacherNames: string[];
@@ -329,6 +331,15 @@ export interface AdminCourseConnectionRecord {
   lastRefreshedAt?: string | null;
   /** Durable receipt used to resolve an ambiguous reset transaction commit. */
   lastResetOutcome?: AdminCourseResetOutcome | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface AdminAccountSettingsRecord {
+  id: string;
+  rootAccountId: string;
+  operationalTermId?: string | null;
+  updatedByUserId: string;
   createdAt?: string | null;
   updatedAt?: string | null;
 }

@@ -29,14 +29,9 @@ Safe Online Exam requires Node.js 24 and the npm version pinned in
 `package.json`.
 
 ```bash
-npm run verify:dependency-policy
-npm ci --ignore-scripts
-npm run install:trusted
+npm ci
 npm run verify
 ```
-
-When dependency metadata changes, also run `npm run verify:supply-chain`
-before opening the pull request.
 
 Run the PostgreSQL and browser layers when the change can affect their
 boundaries:
@@ -71,9 +66,8 @@ deployment, operations, or test expectations change. Preserve unrelated
 worktree changes.
 
 Pull requests run application verification, PostgreSQL integration, production
-Compose smoke, dependency review, dependency integrity, and aggregate CodeQL
-analysis. A passing test suite does not authorize deployment or release
-publication.
+Compose smoke, dependency review, and repository security analysis. A passing
+test suite does not authorize deployment or release publication.
 
 ## Contributor Grant
 

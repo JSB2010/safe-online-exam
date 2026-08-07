@@ -50,10 +50,6 @@
             "integration_id": 15368
           },
           {
-            "context": "Dependency integrity",
-            "integration_id": 15368
-          },
-          {
             "context": "CodeQL",
             "integration_id": 57789
           }

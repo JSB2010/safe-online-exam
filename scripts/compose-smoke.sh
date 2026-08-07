@@ -48,7 +48,6 @@ printf '%s' "compose-api-secret" >"$secrets_directory/canvas_api_client_secret"
 printf '%s' "compose-database-password" >"$secrets_directory/database_password"
 printf '%s' "ssssssssssssssssssssssssssssssssssssssssssssssss" >"$secrets_directory/session_secret"
 printf '%s' "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk" >"$secrets_directory/state_encryption_key"
-printf '%s' '{"primary":"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws"}' >"$secrets_directory/oauth_token_encryption_keyring"
 : >"$secrets_directory/seb_quit_password"
 chmod 700 "$secrets_directory"
 chmod 644 "$secrets_directory"/*
@@ -76,8 +75,6 @@ DATABASE_SSL_MODE=disable
 DATABASE_POOL_MAX=5
 DATABASE_CONNECTION_TIMEOUT_MS=10000
 DATABASE_STATEMENT_TIMEOUT_MS=30000
-OAUTH_TOKEN_ENCRYPTION_MODE=enforce
-OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary
 SEB_CONFIG_ENCRYPTION_ENABLED=true
 APP_DEBUG_ENABLED=false
 APP_DETECTOR_DIAGNOSTICS_ENABLED=false

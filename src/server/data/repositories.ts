@@ -186,7 +186,7 @@ export function createRepositories(config: AppConfig, database: PostgresDatabase
     }
     return createInMemoryRepositories();
   }
-  return createPostgresRepositories(database, config.value.security.oauthTokenEncryption);
+  return createPostgresRepositories(database);
 }
 
 export function usesInMemoryRepositories(config: Pick<AppConfig, "profile">): boolean {

@@ -16,12 +16,9 @@ else
   source "$script_directory/../deploy/cloud-run-config.sh"
 fi
 
-environment_file="${1:-cloudrun.env}"
-cloudrun_require_explicit_oauth_token_encryption_mode "$environment_file"
-cloudrun_load_environment "$environment_file"
-cloudrun_validate_complete
-cloudrun_require_commands cmp curl gcloud jq openssl
-cloudrun_assert_bootstrap
+cloudrun_load_environment "${1:-cloudrun.env}"
+cloudrun_validate_base
+cloudrun_require_commands curl gcloud jq
 
 for job in "$CLOUDRUN_MIGRATE_JOB" "$CLOUDRUN_CLEANUP_JOB"; do
   gcloud run jobs describe "$job" \
@@ -103,9 +100,6 @@ cloudrun_restore_upgrade_default_url_on_exit() {
 
 mkdir -p "$STATE_DIRECTORY"
 chmod 700 "$STATE_DIRECTORY"
-cloudrun_ensure_secret_versions
-environment_csv="$(cloudrun_environment_csv)"
-secrets_csv="$(cloudrun_secrets_csv)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 rollback_state="$STATE_DIRECTORY/rollback-$APP_VERSION-$timestamp.env"
 previous_revision="$(jq -er '
@@ -154,8 +148,6 @@ gcloud run jobs update "$CLOUDRUN_MIGRATE_JOB" \
   --project="$PROJECT_ID" \
   --region="$REGION" \
   --image="$APP_IMAGE" \
-  --set-env-vars="$environment_csv" \
-  --set-secrets="$secrets_csv" \
   --quiet
 gcloud run jobs execute "$CLOUDRUN_MIGRATE_JOB" \
   --project="$PROJECT_ID" \
@@ -167,8 +159,6 @@ gcloud run jobs update "$CLOUDRUN_CLEANUP_JOB" \
   --project="$PROJECT_ID" \
   --region="$REGION" \
   --image="$APP_IMAGE" \
-  --set-env-vars="$environment_csv" \
-  --set-secrets="$secrets_csv" \
   --quiet
 
 release_tag="$(cloudrun_release_tag)"
@@ -176,8 +166,6 @@ gcloud run services update "$SERVICE" \
   --project="$PROJECT_ID" \
   --region="$REGION" \
   --image="$APP_IMAGE" \
-  --set-env-vars="$environment_csv" \
-  --set-secrets="$secrets_csv" \
   --no-traffic \
   --tag="$release_tag" \
   --quiet

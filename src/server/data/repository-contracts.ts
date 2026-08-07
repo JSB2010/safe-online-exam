@@ -1,4 +1,5 @@
 import type {
+  AdminAccountSettingsRecord,
   AdminCourseConnectionRecord,
   AdminToolPresetRecord,
   AdminToolPresetAssignmentRecord,
@@ -32,6 +33,8 @@ export interface CollectionStore<T extends Record<string, any>> {
 
 export interface AdminCourseConnectionListOptions {
   search?: string;
+  termId?: string;
+  includePast?: boolean;
   afterName?: string;
   afterCourseId?: string;
   limit: number;
@@ -46,7 +49,10 @@ export interface AdminCourseConnectionSummary {
 
 export interface AdminCourseConnectionStore extends CollectionStore<AdminCourseConnectionRecord> {
   listForRoot(rootAccountId: string, options: AdminCourseConnectionListOptions): Promise<AdminCourseConnectionRecord[]>;
-  summarizeForRoot(rootAccountId: string): Promise<AdminCourseConnectionSummary>;
+  summarizeForRoot(
+    rootAccountId: string,
+    options?: Pick<AdminCourseConnectionListOptions, "termId" | "includePast">
+  ): Promise<AdminCourseConnectionSummary>;
 }
 
 export interface SessionRecord extends Record<string, any> {
@@ -97,6 +103,7 @@ export interface OperationLockStore extends CollectionStore<OperationLockRecord>
 }
 
 export interface AppRepositories {
+  adminAccountSettings: CollectionStore<AdminAccountSettingsRecord>;
   adminCourseConnections: AdminCourseConnectionStore;
   adminToolPresetAssignments: CollectionStore<AdminToolPresetAssignmentRecord>;
   adminToolPresets: CollectionStore<AdminToolPresetRecord>;

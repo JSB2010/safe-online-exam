@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Body, Controller, Get, HttpCode, Logger, Post, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import { regenerateSession, saveSession } from "../http/session-lifecycle.js";
 import type { ContentItem, ContentSebSetting, LtiLaunchData, Quiz, QuizSebSetting } from "../../shared/models.js";
 import { isInstructor, isStudent, parseNewQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
@@ -910,6 +909,24 @@ function storeLaunchData(request: Request, launchData: LtiLaunchData): void {
     request.session!.canvas_course_id = launchData.courseId;
     request.session!.courseId = launchData.courseId;
   }
+}
+
+async function regenerateSession(request: Request): Promise<void> {
+  if (!request.session?.regenerate) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    request.session.regenerate((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function saveSession(request: Request): Promise<void> {
+  if (!request.session?.save) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    request.session!.save((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 function sebLaunchContentIdFromTargetLinkUri(targetLinkUri: string | null | undefined, toolUrl: string): string | null {

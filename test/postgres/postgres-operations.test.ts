@@ -30,6 +30,7 @@ describe("PostgreSQL schema operations", () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY table_name"
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual([
+      "admin_account_settings",
       "admin_course_connections",
       "admin_tool_preset_assignments",
       "admin_tool_presets",
@@ -48,6 +49,8 @@ describe("PostgreSQL schema operations", () => {
     expect(indexes.rows.map((row) => row.indexname)).toEqual(
       expect.arrayContaining([
         "admin_course_connections_root_name_idx",
+        "admin_course_connections_root_term_concluded_name_idx",
+        "admin_account_settings_root_account_id_idx",
         "admin_tool_preset_assignments_preset_status_idx",
         "admin_tool_presets_root_account_id_idx",
         "assessments_course_id_idx",
@@ -73,6 +76,11 @@ describe("PostgreSQL schema operations", () => {
     const repositories = createPostgresRepositories(testDatabase.database);
     await repositories.adminCourseConnections.save("7:101", adminCourseConnection("7", "101", "Biology", 3, 2));
     await repositories.adminCourseConnections.save("7:102", adminCourseConnection("7", "102", "Chemistry", 4, 1));
+    await repositories.adminCourseConnections.save("7:103", {
+      ...adminCourseConnection("7", "103", "Archived Physics", 6, 4),
+      termId: "21",
+      concluded: true
+    });
     await repositories.adminCourseConnections.save("9:201", adminCourseConnection("9", "201", "Biology II", 9, 9));
 
     await expect(repositories.adminCourseConnections.listForRoot("7", { search: "bio", limit: 25 })).resolves.toEqual([
@@ -84,12 +92,25 @@ describe("PostgreSQL schema operations", () => {
       enabledAssessmentCount: 3,
       issueCount: 0
     });
+    await expect(
+      repositories.adminCourseConnections.listForRoot("7", { termId: "22", limit: 25 })
+    ).resolves.toHaveLength(2);
+    await expect(
+      repositories.adminCourseConnections.listForRoot("7", { includePast: true, limit: 25 })
+    ).resolves.toHaveLength(3);
+    await repositories.adminAccountSettings.save("7", {
+      id: "7",
+      rootAccountId: "7",
+      operationalTermId: "22",
+      updatedByUserId: "42"
+    });
+    await expect(repositories.adminAccountSettings.get("7")).resolves.toMatchObject({ operationalTermId: "22" });
   });
 
   it("rolls back a failed migration without recording or retaining partial changes", async () => {
     const directory = copyMigrationDirectory();
     writeFileSync(
-      join(directory, "006_broken.sql"),
+      join(directory, "007_broken.sql"),
       "CREATE TABLE must_rollback (id integer);\nSELECT definitely_not_valid;\n",
       "utf8"
     );
@@ -100,7 +121,7 @@ describe("PostgreSQL schema operations", () => {
     );
     expect(table.rows[0]?.exists).toBe(false);
     const ledger = await testDatabase.database.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM schema_migrations WHERE version = 6"
+      "SELECT count(*)::text AS count FROM schema_migrations WHERE version = 7"
     );
     expect(ledger.rows[0]?.count).toBe("0");
     rmSync(directory, { recursive: true, force: true });
@@ -232,6 +253,7 @@ function adminCourseConnection(
     courseCode: `${name.slice(0, 3).toUpperCase()}-${courseId}`,
     accountId: rootAccountId,
     workflowState: "available",
+    concluded: false,
     termId: "22",
     termName: "Fall 2026",
     teacherNames: [],

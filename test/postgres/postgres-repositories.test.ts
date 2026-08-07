@@ -2,7 +2,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/server/data/migrations.js";
-import { createPostgresRepositories, PostgresOAuthTokenStore } from "../../src/server/data/postgres-repositories.js";
+import { createPostgresRepositories } from "../../src/server/data/postgres-repositories.js";
 import { RepositoryProvider } from "../../src/server/data/repositories.js";
 import { assessmentWithQuizSebSetting, type CourseRecord, type OAuthToken } from "../../src/shared/models.js";
 import { createPostgresTestDatabase, type PostgresTestDatabase } from "./helpers.js";
@@ -76,13 +76,6 @@ describe("PostgreSQL document repositories", () => {
     const token: OAuthToken = { id: "user-1", userId: "user-1", accessToken: "secret-token" };
     await repositories.oauthTokens.save("user-1", token);
     await expect(repositories.oauthTokens.get("user-1")).resolves.toMatchObject(token);
-    const persisted = await testDatabase.database.query<{ document: Record<string, unknown> }>(
-      "SELECT document FROM canvas_oauth_tokens WHERE id = $1",
-      ["user-1"]
-    );
-    expect(JSON.stringify(persisted.rows[0]?.document)).not.toContain("secret-token");
-    expect(persisted.rows[0]?.document).not.toHaveProperty("accessToken");
-    expect(persisted.rows[0]?.document).toHaveProperty("tokenEncryption.algorithm", "A256GCM");
 
     const expiry = new Date(Date.now() + 60_000);
     await repositories.sessions.save("session-1", { data: { userId: "user-1" }, expiresAt: expiry });
@@ -94,12 +87,7 @@ describe("PostgreSQL document repositories", () => {
   });
 
   it("atomically resets course state while preserving OAuth and the admin connection", async () => {
-    const oauthTokenEncryption = {
-      mode: "enforce" as const,
-      activeKeyId: "postgres-test-v1",
-      keyring: JSON.stringify({ "postgres-test-v1": Buffer.alloc(32, 19).toString("base64url") })
-    };
-    const repositories = createPostgresRepositories(testDatabase.database, oauthTokenEncryption);
+    const repositories = createPostgresRepositories(testDatabase.database);
     const courseId = "reset-course-101";
     const connectionId = `7:${courseId}`;
     await repositories.courses.save(courseId, courseRecord(courseId, true));
@@ -152,13 +140,7 @@ describe("PostgreSQL document repositories", () => {
       appliedPresetUpdatedAt: new Date().toISOString(),
       updatedByUserId: "reset-user"
     });
-    const provider = new RepositoryProvider(
-      {
-        profile: "prod",
-        value: { security: { oauthTokenEncryption } }
-      } as any,
-      testDatabase.database
-    );
+    const provider = new RepositoryProvider({ profile: "production" } as any, testDatabase.database);
     const operationId = "00000000-0000-4000-8000-000000000002";
 
     await expect(provider.resetCourseState(courseId, connectionId, operationId)).resolves.toMatchObject({
@@ -191,45 +173,6 @@ describe("PostgreSQL document repositories", () => {
       enabledAssessmentCount: 0,
       issueCount: 0,
       lastResetOutcome: expect.objectContaining({ operationId, courseId })
-    });
-  });
-
-  it("rewrites legacy plaintext OAuth tokens without exposing values in PostgreSQL", async () => {
-    await testDatabase.database.query(
-      `INSERT INTO canvas_oauth_tokens (id, user_id, document)
-       VALUES ($1, $2, $3::jsonb)`,
-      [
-        "legacy-user",
-        "legacy-user",
-        JSON.stringify({
-          id: "legacy-user",
-          userId: "legacy-user",
-          accessToken: "legacy-access-sentinel",
-          refreshToken: "legacy-refresh-sentinel"
-        })
-      ]
-    );
-    const settings = {
-      mode: "enforce" as const,
-      activeKeyId: "rewrite-v1",
-      keyring: JSON.stringify({
-        "rewrite-v1": Buffer.alloc(32, 23).toString("base64url"),
-        "postgres-test-v1": Buffer.alloc(32, 19).toString("base64url")
-      })
-    };
-    const store = new PostgresOAuthTokenStore(testDatabase.database, settings);
-
-    await expect(store.get("legacy-user")).resolves.toMatchObject({ accessToken: "legacy-access-sentinel" });
-    await expect(store.rewriteLegacyAndRotatedTokens(1)).resolves.toMatchObject({ rewritten: expect.any(Number) });
-    const persisted = await testDatabase.database.query<{ document: Record<string, unknown> }>(
-      "SELECT document FROM canvas_oauth_tokens WHERE id = $1",
-      ["legacy-user"]
-    );
-    expect(JSON.stringify(persisted.rows[0]?.document)).not.toContain("legacy-access-sentinel");
-    expect(JSON.stringify(persisted.rows[0]?.document)).not.toContain("legacy-refresh-sentinel");
-    await expect(store.get("legacy-user")).resolves.toMatchObject({
-      accessToken: "legacy-access-sentinel",
-      refreshToken: "legacy-refresh-sentinel"
     });
   });
 });

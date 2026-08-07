@@ -125,9 +125,10 @@ url:GET|/api/v1/accounts/:account_id/permissions
 url:GET|/api/v1/accounts/:account_id/courses
 url:GET|/api/v1/accounts/:account_id/terms
 url:GET|/api/v1/courses/:id
+url:GET|/api/v1/courses/:course_id/quizzes/:id
 ```
 
-The administrator authorization requests the complete application scope set—including `url:GET|/api/v1/login/session_token`—plus these administrator scopes. Course and term collection access powers the paginated active-course picker; it does not import or preload the root account's complete historical catalog. Individual course access supports connection, refresh, recovery, and assessment changes. PostgreSQL stores one OAuth grant per Canvas user. Administrator consent upgrades that grant in place, and later instructor or student reauthorization preserves the complete administrator scope profile. A multi-role administrator therefore authorizes once and uses the same refreshable grant in every Canvas context.
+The administrator authorization requests the complete application scope set—including `url:GET|/api/v1/login/session_token`—plus these administrator scopes. Course and term collection access powers the paginated active-course picker; it does not import or preload the root account's complete historical catalog. Individual course access supports connection, refresh, recovery, and assessment changes. Individual Classic Quiz access lets the administrator reset flow snapshot every current access code before it changes anything. PostgreSQL stores one OAuth grant per Canvas user. Administrator consent upgrades that grant in place, and later instructor or student reauthorization preserves the complete administrator scope profile. A multi-role administrator therefore authorizes once and uses the same refreshable grant in every Canvas context.
 
 Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have each affected administrator select **Reconnect Canvas** once. Administrator-only scope additions do not invalidate ordinary instructor or student connections. Scope changes apply only to newly issued tokens.
 
@@ -196,13 +197,31 @@ after `prepare.sh`. It writes an upload-ready `canvas-theme-loader.js` containin
 the exact configured public origin; upload that file rather than manually
 transcribing the loader URL. The generated file contains no secret material.
 
-Use the generated loader rather than maintaining a copied snippet. Its small
-bootstrap recognizes Classic Quiz `/take` and New Quiz assignment routes, asks
-the public requirement endpoint for the canonical assessment, and downloads
-the full detector only when the authoritative response is exactly
-`{ success: true, sebRequired: true }`. Failed, malformed, rate-limited, and
-ordinary-assignment checks do not load the full detector. The requirement
-check contains no credentials or secret material.
+Create a small JavaScript loader, replacing `${TOOL_URL}` before upload:
+
+```javascript
+(function () {
+  "use strict";
+
+  const detectorUrl = "${TOOL_URL}/js/canvas-seb-detector.js";
+  const assessmentPath = /^\/courses\/\d+\/(?:quizzes\/\d+\/take|assignments\/\d+)(?:\/|$)/;
+
+  if (!assessmentPath.test(window.location.pathname)) {
+    return;
+  }
+  if (document.querySelector('script[data-canvas-seb-detector="true"]')) {
+    return;
+  }
+
+  const script = document.createElement("script");
+  script.src = detectorUrl;
+  script.async = true;
+  script.dataset.canvasSebDetector = "true";
+  document.head.appendChild(script);
+})();
+```
+
+The pattern includes Classic Quiz `/take` pages and New Quiz assignment routes, including their Canvas-generated descendants. `script.src` must be a plain JavaScript URL string, not a Markdown link.
 
 From **Admin**, select the intended account, open **Themes**, edit or create the
 active theme, and upload the loader as its desktop JavaScript. Preview, save,
@@ -221,7 +240,7 @@ When the browser console shows that `422`, do **not** disable Canvas CSRF protec
 ${TOOL_URL}/js/canvas-seb-theme-loader.js
 ```
 
-The hosted loader keeps the same route and authoritative-requirement checks as the uploaded file. Canvas's Theme Editor does not provide a direct URL field, so set this value through your Canvas provisioning or administration path and preserve it on future theme saves. For a one-off root-account recovery, run this inside the Canvas web container after replacing the account ID and URL:
+The hosted loader keeps the same quiz-route scope as the uploaded file and loads the full detector only on Canvas Classic Quiz `/take` pages and New Quiz assignment routes. Canvas's Theme Editor does not provide a direct URL field, so set this value through your Canvas provisioning or administration path and preserve it on future theme saves. For a one-off root-account recovery, run this inside the Canvas web container after replacing the account ID and URL:
 
 ```bash
 bundle exec rails runner '

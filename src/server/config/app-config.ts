@@ -1,9 +1,4 @@
 import { Injectable } from "@nestjs/common";
-import {
-  oauthTokenEncryptionSettingsError,
-  type OAuthTokenEncryptionMode,
-  type OAuthTokenEncryptionSettings
-} from "../security/oauth-token-encryption.js";
 import { sebPasswordPolicyViolation } from "../services/seb-password-policy.js";
 import { resolveSecretValue } from "./secret-value.js";
 
@@ -12,20 +7,6 @@ export type DatabaseSslMode = "disable" | "require" | "verify-ca" | "verify-full
 
 const LOCAL_CANVAS_DOMAIN = "https://canvas.example.test";
 const DEFAULT_SEB_REQUIRED_DOMAINS = "";
-const LOCAL_OAUTH_TOKEN_KEY_ID = "local-dev-v1";
-const LOCAL_OAUTH_TOKEN_KEY = Buffer.from("seb-canvas-local-oauth-key-v1!!!", "utf8").toString("base64url");
-const LOCAL_OAUTH_TOKEN_KEYRING = JSON.stringify({
-  [LOCAL_OAUTH_TOKEN_KEY_ID]: LOCAL_OAUTH_TOKEN_KEY
-});
-
-export function usesSourceKnownLocalOAuthTokenKey(settings: OAuthTokenEncryptionSettings): boolean {
-  try {
-    const keyring = JSON.parse(settings.keyring) as Record<string, unknown>;
-    return Object.values(keyring).includes(LOCAL_OAUTH_TOKEN_KEY);
-  } catch {
-    return false;
-  }
-}
 
 export interface AppConfigSnapshot {
   profile: AppProfile;
@@ -63,11 +44,6 @@ export interface AppConfigSnapshot {
     stateEncryptionKey: string;
     debugEnabled: boolean;
     detectorDiagnosticsEnabled: boolean;
-    oauthTokenEncryption: {
-      mode: OAuthTokenEncryptionMode;
-      activeKeyId: string;
-      keyring: string;
-    };
   };
   seb: {
     defaultQuitPassword?: string;
@@ -204,20 +180,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
           profile === "prod" ? undefined : "seb-canvas-dev-state-key"
         ) || "",
       debugEnabled,
-      detectorDiagnosticsEnabled,
-      oauthTokenEncryption: {
-        mode: (firstPresent(env.OAUTH_TOKEN_ENCRYPTION_MODE, "enforce") || "enforce") as OAuthTokenEncryptionMode,
-        activeKeyId:
-          firstPresent(
-            env.OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID,
-            profile === "prod" ? "primary" : LOCAL_OAUTH_TOKEN_KEY_ID
-          ) || "",
-        keyring:
-          firstPresent(
-            resolveSecretValue("OAUTH_TOKEN_ENCRYPTION_KEYRING", env),
-            profile === "prod" ? undefined : LOCAL_OAUTH_TOKEN_KEYRING
-          ) || ""
-      }
+      detectorDiagnosticsEnabled
     },
     seb: {
       defaultQuitPassword: firstPresent(resolveSecretValue("SEB_QUIT_PASSWORD", env), env.DEFAULT_SEB_QUIT_PASSWORD),
@@ -246,20 +209,6 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
     env,
     ["TOOL_URL", "DEV_TOOL_URL", "PROD_TOOL_URL", "SERVICE_URL", "APP_BASE_URL"],
     "TOOL_URL",
-    runtimeLabel
-  );
-  requirePresent(
-    errors,
-    env,
-    ["OAUTH_TOKEN_ENCRYPTION_KEYRING", "OAUTH_TOKEN_ENCRYPTION_KEYRING_FILE"],
-    "OAUTH_TOKEN_ENCRYPTION_KEYRING",
-    runtimeLabel
-  );
-  requirePresent(
-    errors,
-    env,
-    ["OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID"],
-    "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID",
     runtimeLabel
   );
   requirePresent(
@@ -365,10 +314,6 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
   }
   if (snapshot.security.stateEncryptionKey.length < 32) {
     errors.push(`STATE_ENCRYPTION_KEY must contain at least 32 characters in ${runtimeLabel}`);
-  }
-  const oauthTokenEncryptionError = oauthTokenEncryptionSettingsError(snapshot.security.oauthTokenEncryption);
-  if (oauthTokenEncryptionError) {
-    errors.push(`${oauthTokenEncryptionError} in ${runtimeLabel}`);
   }
   if (
     snapshot.security.sessionSecret.length >= 32 &&

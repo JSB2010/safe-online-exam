@@ -55,41 +55,25 @@ export class StaticJsController {
 
 export function renderCanvasThemeLoader(baseUrl: string): string {
   const detectorUrl = `${baseUrl}/js/canvas-seb-detector.js`;
-  const requirementBaseUrl = `${baseUrl}/api/seb/requirement`;
   return `(function () {
   "use strict";
 
   const detectorUrl = ${JSON.stringify(detectorUrl)};
-  const requirementBaseUrl = ${JSON.stringify(requirementBaseUrl)};
-  const classicQuizPath = /^\\/courses\\/(\\d+)\\/quizzes\\/(\\d+)\\/take(?:\\/|$)/;
-  const assignmentPath = /^\\/courses\\/(\\d+)\\/assignments\\/(\\d+)(?:\\/|$)/;
+  const assessmentPath = /^\\/courses\\/\\d+\\/(?:quizzes\\/\\d+\\/take|assignments\\/\\d+)(?:\\/|$)/;
   const newQuizAuthoringPath = /^\\/courses\\/\\d+\\/assignments\\/\\d+\\/(?:build|settings|moderate|reports|exports)(?:\\/|$)/;
 
-  const classicMatch = window.location.pathname.match(classicQuizPath);
-  const assignmentMatch = window.location.pathname.match(assignmentPath);
-  if ((!classicMatch && !assignmentMatch) || newQuizAuthoringPath.test(window.location.pathname)) {
+  if (!assessmentPath.test(window.location.pathname) || newQuizAuthoringPath.test(window.location.pathname)) {
     return;
   }
   if (document.querySelector('script[data-canvas-seb-detector="true"]')) {
     return;
   }
 
-  const courseId = (classicMatch || assignmentMatch)[1];
-  const contentId = classicMatch ? classicMatch[2] : "newquiz:" + courseId + ":" + assignmentMatch[2];
-  const requirementUrl = requirementBaseUrl + "/" + encodeURIComponent(courseId) + "/" + encodeURIComponent(contentId);
-
-  fetch(requirementUrl, { method: "GET", credentials: "omit", cache: "no-store", headers: { Accept: "application/json" } })
-    .then(function (response) { return response.ok ? response.json() : null; })
-    .then(function (result) {
-      if (!result || result.success !== true || result.sebRequired !== true) return;
-      if (document.querySelector('script[data-canvas-seb-detector="true"]')) return;
-      const script = document.createElement("script");
-      script.src = detectorUrl;
-      script.async = true;
-      script.dataset.canvasSebDetector = "true";
-      document.head.appendChild(script);
-    })
-    .catch(function () { /* Unavailable or malformed requirement checks fail closed without loading. */ });
+  const script = document.createElement("script");
+  script.src = detectorUrl;
+  script.async = true;
+  script.dataset.canvasSebDetector = "true";
+  document.head.appendChild(script);
 })();
 `;
 }

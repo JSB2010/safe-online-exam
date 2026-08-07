@@ -5,6 +5,33 @@ release.
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-06
+
+Safe Online Exam 1.0.5 is a backward-compatible Canvas authorization and
+administrator course-list release. It adds PostgreSQL migration 6 for
+root-account operational-term preferences and one administrator-only Canvas
+OAuth scope. It does not change Canvas LTI registration URLs, the OAuth
+callback URL, or public SEB compatibility endpoints.
+
+### Canvas authorization
+
+- Request and document the individual Classic Quiz read scope used by the
+  administrator reset preflight so Canvas can snapshot every current access
+  code before any reset mutation begins.
+- Keep the new capability administrator-only; ordinary instructor and student
+  OAuth scope contracts remain unchanged.
+
+### Administrator course terms
+
+- Persist one shared operational enrollment term per Canvas root account and
+  use it across browsers, administrators, reloads, the configured-course list,
+  summary counts, and the course connection picker.
+- Hide concluded courses and courses outside the operational term by default,
+  while retaining every historical connection in a **Show past and other
+  courses** view.
+- Reconcile stored Canvas course status in bounded batches and refresh it
+  immediately when a course is connected or manually refreshed.
+
 ## [1.0.4] - 2026-08-05
 
 Safe Online Exam 1.0.4 is a backward-compatible instructor-validation,
@@ -308,7 +335,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.5
 [1.0.4]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.4
 [1.0.3]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.3
 [1.0.2]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.2

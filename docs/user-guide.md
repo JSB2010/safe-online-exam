@@ -48,6 +48,13 @@ It does not import the root account’s complete history.
 4. Open a connected course and select **Refresh** to synchronize current
    Classic Quiz and New Quiz metadata.
 
+The **Operational term** selection is shared by the root account and persists
+across browsers and reloads. The dashboard shows non-concluded connected
+courses in that term by default. Use **Show past and other courses** to inspect
+historical connections; changing terms or course status never deletes those
+records. Safe Online Exam refreshes stored Canvas course status periodically
+and whenever a course is connected or manually refreshed.
+
 Course connection gives the root administrator a recovery and rollout view; it
 does not enable SEB for every assessment.
 

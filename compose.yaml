@@ -65,17 +65,6 @@ services:
     profiles: ["maintenance"]
     restart: "no"
 
-  encrypt-oauth-tokens:
-    <<: *app-base
-    command: ["dist/server/server/data/encrypt-oauth-tokens.js"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    profiles: ["maintenance"]
-    restart: "no"
-
 volumes:
   postgres_data:
 

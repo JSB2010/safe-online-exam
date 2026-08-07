@@ -1,4 +1,5 @@
 import type {
+  AdminAccountSettingsRecord,
   AdminCourseConnectionRecord,
   AdminToolPresetRecord,
   AdminToolPresetAssignmentRecord,
@@ -26,6 +27,7 @@ export function createInMemoryRepositories(
   seed?: Partial<Record<keyof AppRepositories, Record<string, any>>>
 ): AppRepositories {
   return {
+    adminAccountSettings: new InMemoryCollectionStore<AdminAccountSettingsRecord>(seed?.adminAccountSettings),
     adminCourseConnections: new InMemoryAdminCourseConnectionStore(seed?.adminCourseConnections),
     adminToolPresetAssignments: new InMemoryCollectionStore<AdminToolPresetAssignmentRecord>(
       seed?.adminToolPresetAssignments
@@ -102,6 +104,9 @@ class InMemoryAdminCourseConnectionStore
     return Array.from(this.documents.entries())
       .map(([id, value]) => withDocumentId(id, value))
       .filter((course) => course.rootAccountId === rootAccountId)
+      .filter((course) =>
+        options.includePast ? true : course.concluded !== true && (!options.termId || course.termId === options.termId)
+      )
       .filter(
         (course) =>
           !search ||
@@ -117,8 +122,15 @@ class InMemoryAdminCourseConnectionStore
       .slice(0, Math.min(Math.max(options.limit, 1), 100));
   }
 
-  async summarizeForRoot(rootAccountId: string): Promise<AdminCourseConnectionSummary> {
-    const courses = Array.from(this.documents.values()).filter((course) => course.rootAccountId === rootAccountId);
+  async summarizeForRoot(
+    rootAccountId: string,
+    options: Pick<AdminCourseConnectionListOptions, "termId" | "includePast"> = {}
+  ): Promise<AdminCourseConnectionSummary> {
+    const courses = Array.from(this.documents.values())
+      .filter((course) => course.rootAccountId === rootAccountId)
+      .filter((course) =>
+        options.includePast ? true : course.concluded !== true && (!options.termId || course.termId === options.termId)
+      );
     return courses.reduce(
       (summary, course) => ({
         courseCount: summary.courseCount + 1,

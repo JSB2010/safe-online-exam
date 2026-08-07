@@ -27,22 +27,8 @@ describe("InMemoryCollectionStore", () => {
 
       delete process.env.USE_IN_MEMORY_STORE;
       expect(
-        createRepositories(
-          {
-            profile: "prod",
-            isHardenedRuntime: () => true,
-            value: {
-              security: {
-                oauthTokenEncryption: {
-                  mode: "enforce",
-                  activeKeyId: "test",
-                  keyring: JSON.stringify({ test: Buffer.alloc(32, 1).toString("base64url") })
-                }
-              }
-            }
-          } as any,
-          {} as any
-        ).assessments.constructor.name
+        createRepositories({ profile: "prod", isHardenedRuntime: () => true } as any, {} as any).assessments.constructor
+          .name
       ).toBe("PostgresCollectionStore");
     } finally {
       if (previous === undefined) delete process.env.USE_IN_MEMORY_STORE;

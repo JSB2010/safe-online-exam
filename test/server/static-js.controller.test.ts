@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { runInNewContext } from "node:vm";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import {
   detectorAssetCandidates,
@@ -227,18 +226,14 @@ describe("StaticJsController", () => {
     expect(firstCandidate).toBe("/repo/dist/server/server/assets/canvas-seb-detector.min.js");
   });
 
-  it("serves a hosted theme loader that downloads the detector only for required Canvas assessments", () => {
+  it("serves a hosted theme loader that loads the detector only on Canvas assessment routes", () => {
     const script = renderCanvasThemeLoader("https://seb.example.edu");
 
     expect(script).toContain('const detectorUrl = "https://seb.example.edu/js/canvas-seb-detector.js";');
-    expect(script).toContain("classicQuizPath");
-    expect(script).toContain("assignmentPath");
+    expect(script).toContain("quizzes\\/\\d+\\/take");
+    expect(script).toContain("assignments\\/\\d+");
     expect(script).toContain("newQuizAuthoringPath");
     expect(script).toContain("build|settings|moderate|reports|exports");
-    expect(script).toContain('const requirementBaseUrl = "https://seb.example.edu/api/seb/requirement";');
-    expect(script).toContain('"newquiz:" + courseId + ":" + assignmentMatch[2]');
-    expect(script).toContain('credentials: "omit"');
-    expect(script).toContain("result.sebRequired !== true");
     expect(script).toContain('script.dataset.canvasSebDetector = "true";');
   });
 
@@ -250,46 +245,6 @@ describe("StaticJsController", () => {
 
     expect(script).toContain('const detectorUrl = "https://configured.example.com/js/canvas-seb-detector.js";');
     expect(response.headers.get("cache-control")).toBe("no-cache, must-revalidate");
-  });
-
-  it("does not fetch the full detector for an ordinary Canvas assignment", async () => {
-    const appended: Array<{ src?: string }> = [];
-    const fetch = async () => ({ ok: true, json: async () => ({ success: true, sebRequired: false }) });
-    runInNewContext(renderCanvasThemeLoader("https://seb.example.edu"), {
-      window: { location: { pathname: "/courses/11825/assignments/437577" } },
-      document: {
-        querySelector: () => null,
-        createElement: () => ({}),
-        head: { appendChild: (node: { src?: string }) => appended.push(node) }
-      },
-      fetch
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(appended).toEqual([]);
-  });
-
-  it("loads the full detector after an authoritative New Quiz requirement response", async () => {
-    const appended: Array<{ src?: string; dataset?: Record<string, string> }> = [];
-    let requestedUrl = "";
-    const fetch = async (url: string) => {
-      requestedUrl = url;
-      return { ok: true, json: async () => ({ success: true, sebRequired: true }) };
-    };
-    runInNewContext(renderCanvasThemeLoader("https://seb.example.edu"), {
-      window: { location: { pathname: "/courses/11825/assignments/437577" } },
-      document: {
-        querySelector: () => null,
-        createElement: () => ({ dataset: {} }),
-        head: { appendChild: (node: { src?: string; dataset?: Record<string, string> }) => appended.push(node) }
-      },
-      fetch
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(requestedUrl).toBe("https://seb.example.edu/api/seb/requirement/11825/newquiz%3A11825%3A437577");
-    expect(appended).toHaveLength(1);
-    expect(appended[0]?.src).toBe("https://seb.example.edu/js/canvas-seb-detector.js");
   });
 });
 

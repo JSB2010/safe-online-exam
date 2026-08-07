@@ -66,6 +66,7 @@ export interface CanvasAdminCourse {
   accountId: string;
   rootAccountId: string | null;
   workflowState: string | null;
+  concluded: boolean;
   termId: string | null;
   termName: string | null;
   teacherNames: string[];
@@ -91,6 +92,7 @@ interface CanvasAdminCourseResponse {
   account_id?: number | string;
   root_account_id?: number | string;
   workflow_state?: string;
+  concluded?: boolean;
   enrollment_term_id?: number | string;
   term?: { id?: number | string; name?: string };
   teachers?: Array<{ display_name?: string; name?: string }>;
@@ -410,7 +412,7 @@ export class CanvasApiService {
   async getAdminCourse(courseId: string, userId: string): Promise<CanvasAdminCourse> {
     const response = await this.request<CanvasAdminCourseResponse>(
       userId,
-      `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}?include[]=term&include[]=account`,
+      `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}?include[]=term&include[]=account&include[]=concluded`,
       {},
       "account_admin"
     );
@@ -1042,6 +1044,7 @@ function canvasAdminCourse(course: CanvasAdminCourseResponse): CanvasAdminCourse
     accountId,
     rootAccountId: rootAccountId && /^\d+$/u.test(rootAccountId) ? rootAccountId : null,
     workflowState: course.workflow_state || null,
+    concluded: course.concluded === true,
     termId: String(course.term?.id || course.enrollment_term_id || "") || null,
     termName: course.term?.name || null,
     teacherNames: (course.teachers || []).map((teacher) => teacher.display_name || teacher.name || "").filter(Boolean)
