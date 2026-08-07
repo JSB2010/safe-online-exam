@@ -25,7 +25,12 @@ import {
   matchingLtiOidcBrowserTransactionCookie,
   setLtiOidcBrowserTransactionCookie
 } from "../security/lti-oidc-browser-binding.js";
-import { AssessmentService } from "../services/assessment.service.js";
+import {
+  AssessmentService,
+  CourseMutationInProgressError,
+  CourseMutationOperationLockLostError,
+  CourseResetInProgressError
+} from "../services/assessment.service.js";
 import {
   CanvasApiService,
   isCanvasApiAuthorizationError,
@@ -536,6 +541,16 @@ export class LtiController {
       }
       if (isCanvasApiRequestError(error)) {
         return renderCanvasContentError(courseId, error);
+      }
+      if (
+        error instanceof CourseMutationInProgressError ||
+        error instanceof CourseMutationOperationLockLostError ||
+        error instanceof CourseResetInProgressError
+      ) {
+        return renderFallbackHtml(
+          "Course Update in Progress",
+          '<h1>Course Update in Progress</h1><p>Safe Online Exam is finishing another update for this course. Your verified Canvas session is still active.</p><p><a href="/lti/launch">Try again</a></p>'
+        );
       }
       throw error;
     }

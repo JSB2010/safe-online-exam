@@ -1,12 +1,12 @@
 import { Controller, Get, Param, Post, Put, Body, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { ExternalToolConfig, StructuredSebConfigRequest } from "../../shared/models.js";
+import type { CourseSebDefaults, ExternalToolConfig, StructuredSebConfigRequest } from "../../shared/models.js";
 import {
   applyCourseDefaultsToContentSetting,
   applyCourseDefaultsToQuizSetting,
   defaultQuizSebSetting,
   legacyDomainsToUrlRules,
-  normalizeCourseSebDefaults,
+  normalizeCourseExternalTools,
   normalizeConcreteDomains,
   normalizeExternalToolAccessRules,
   normalizeExternalToolIds,
@@ -89,20 +89,16 @@ export class QuizController {
   ): Promise<Record<string, unknown>> {
     this.authorization.requireInstructorForCourse(request, courseId, true);
     assertSafePolicyInput(body);
-    const existing = await this.courseSettings.getDefaults(courseId);
     const hasToolCatalog = Array.isArray(body.externalTools);
-    const defaults = await this.courseSettings.saveDefaults(
+    const defaults = await this.courseSettings.saveDefaults(courseId, {
       courseId,
-      normalizeCourseSebDefaults({
-        courseId,
-        quitPassword: secretUpdate(body, "quitPassword", existing.quitPassword),
-        startPassword: secretUpdate(body, "startPassword", existing.startPassword),
-        urlRules: Array.isArray(body.urlRules) ? (body.urlRules as any) : [],
-        externalTools: hasToolCatalog ? (body.externalTools as any) : existing.externalTools,
-        externalToolsInitialized: hasToolCatalog || existing.externalToolsInitialized === true,
-        setupCompleted: body.setupCompleted !== false
-      })
-    );
+      quitPassword: courseSecretUpdate(body, "quitPassword"),
+      startPassword: courseSecretUpdate(body, "startPassword"),
+      urlRules: Array.isArray(body.urlRules) ? normalizeUrlRules(body.urlRules as any) : undefined,
+      externalTools: hasToolCatalog ? normalizeCourseExternalTools(body.externalTools as any) : undefined,
+      externalToolsInitialized: hasToolCatalog ? true : undefined,
+      setupCompleted: body.setupCompleted !== false
+    });
     return {
       success: true,
       defaults: toCourseDefaultsView(defaults, this.config.value.seb.defaultQuitPassword)
@@ -142,7 +138,6 @@ export class QuizController {
     @Body() body: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireInstructorForCourse(request, courseId, true);
-    const sourceTool = await this.requireCopyableCourseTool(courseId, toolId);
     const targetCourseIds = copyTargetCourseIds(body);
     if (targetCourseIds.includes(courseId)) {
       return apiError(400, "Choose a different course to copy this exam tool.", {
@@ -150,6 +145,18 @@ export class QuizController {
       });
     }
     try {
+      // Snapshot each reset generation before either the source read or the
+      // live Canvas authorization call. A reset that completes while those
+      // awaits are in flight must fence the later target mutation.
+      const resetGenerations = new Map(
+        await Promise.all(
+          targetCourseIds.map(
+            async (targetCourseId) =>
+              [targetCourseId, await this.courseSettings.getCourseResetGeneration(targetCourseId)] as const
+          )
+        )
+      );
+      const sourceTool = await this.requireCopyableCourseTool(courseId, toolId);
       // Re-read the live Canvas list immediately before mutation. The picker is
       // only a convenience view; it is not an authorization grant.
       const availableCourses = await this.canvasApi.getInstructorCourses(principal.canvasUserId);
@@ -163,7 +170,11 @@ export class QuizController {
 
       const results = await mapWithConcurrency(targetCourses, COURSE_TOOL_COPY_CONCURRENCY, async (course) => {
         try {
-          const copied = await this.courseSettings.copyInstructorToolToCourse(course.id, sourceTool);
+          const copied = await this.courseSettings.copyInstructorToolToCourse(
+            course.id,
+            sourceTool,
+            resetGenerations.get(course.id) || ""
+          );
           return { ...courseToolCopyCourseView(course), status: copied.status };
         } catch (error) {
           return {
@@ -249,12 +260,7 @@ export class QuizController {
     const required = !!body.required;
     try {
       if (required) {
-        const setting = await this.assessments.enableSebWithAccessCode(
-          courseId,
-          quizId,
-          userId,
-          await this.courseSettings.getDefaults(courseId)
-        );
+        const setting = await this.assessments.enableSebWithAccessCode(courseId, quizId, userId);
         return {
           success: true,
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
@@ -303,92 +309,125 @@ export class QuizController {
       return apiError(403, "Course mismatch");
     }
     await this.authorization.requireInstructorForAssessment(request, courseId, contentId, true);
-    const defaults = await this.courseSettings.getDefaults(courseId);
     const urlRules = Array.isArray(body.urlRules)
       ? normalizeUrlRules(body.urlRules)
       : legacyDomainsToUrlRules(body.customDomains);
     const ssoDomains = normalizeConcreteDomains(body.ssoDomains);
     const educationalToolDomains = normalizeConcreteDomains(body.educationalToolDomains);
     if (parsed) {
-      const setting = await this.assessments.getContentSebSetting(contentId);
-      if (!setting) {
+      const saved = await this.assessments.withAssessmentLock(
+        contentId,
+        async (operationLease) => {
+          const [setting, defaults] = await Promise.all([
+            this.assessments.getContentSebSetting(contentId),
+            this.courseSettings.getDefaults(courseId)
+          ]);
+          if (!setting) {
+            return null;
+          }
+          operationLease.assertActive();
+          const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
+          return this.assessments.saveContentSebSetting(
+            applyCourseDefaultsToContentSetting(
+              {
+                ...setting,
+                ssoDomains,
+                educationalToolDomains,
+                customDomains: urlRulesToAllowedEntries(urlRules),
+                urlRules,
+                externalTools: setting.externalTools,
+                quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
+                externalToolIds,
+                externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
+                quitPassword: secretUpdate(
+                  body as unknown as Record<string, unknown>,
+                  "quitPassword",
+                  setting.quitPassword
+                ),
+                startPassword: secretUpdate(
+                  body as unknown as Record<string, unknown>,
+                  "startPassword",
+                  setting.startPassword
+                ),
+                usesCourseDefaults: body.usesCourseDefaults === true,
+                quitPasswordOverride: body.quitPasswordOverride === true,
+                startPasswordOverride: body.startPasswordOverride === true,
+                // Saving policy must not bypass the Canvas access-code commit workflow.
+                sebRequired: setting.sebRequired,
+                enabled: setting.enabled
+              },
+              defaults
+            )
+          );
+        },
+        courseId
+      );
+      if (!saved) {
         return apiError(404, "Assessment not found");
       }
-      const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
-      const saved = await this.assessments.saveContentSebSetting(
-        applyCourseDefaultsToContentSetting(
-          {
-            ...setting,
-            ssoDomains,
-            educationalToolDomains,
-            customDomains: urlRulesToAllowedEntries(urlRules),
-            urlRules,
-            externalTools: setting.externalTools,
-            quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
-            externalToolIds,
-            externalToolUrl: body.externalToolUrl || setting.externalToolUrl || null,
-            quitPassword: secretUpdate(
-              body as unknown as Record<string, unknown>,
-              "quitPassword",
-              setting.quitPassword
-            ),
-            startPassword: secretUpdate(
-              body as unknown as Record<string, unknown>,
-              "startPassword",
-              setting.startPassword
-            ),
-            usesCourseDefaults: body.usesCourseDefaults === true,
-            quitPasswordOverride: body.quitPasswordOverride === true,
-            startPasswordOverride: body.startPasswordOverride === true,
-            // Saving policy must not bypass the Canvas access-code commit workflow.
-            sebRequired: setting.sebRequired,
-            enabled: setting.enabled
-          },
-          defaults
-        )
-      );
       return {
         success: true,
         setting: toSebSettingView(saved, this.config.value.seb.defaultQuitPassword)
       };
     }
-    const setting = body.quizId ? await this.assessments.getSebSettingForQuiz(body.quizId) : null;
-    if (!body.quizId || !setting) {
+    if (!body.quizId) {
       return apiError(404, "Assessment not found");
     }
-    const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
-    const saved = await this.assessments.saveQuizSebSetting(
-      applyCourseDefaultsToQuizSetting(
-        {
-          ...defaultQuizSebSetting(body.quizId, courseId),
-          ...setting,
-          id: setting?.id || body.quizId,
-          quizId: body.quizId,
-          courseId: courseId || setting?.courseId || null,
-          ssoDomains,
-          educationalToolDomains,
-          customDomains: urlRulesToAllowedEntries(urlRules),
-          urlRules,
-          externalTools: setting.externalTools,
-          quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
-          externalToolIds,
-          externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
-          quitPassword: secretUpdate(body as unknown as Record<string, unknown>, "quitPassword", setting.quitPassword),
-          startPassword: secretUpdate(
-            body as unknown as Record<string, unknown>,
-            "startPassword",
-            setting.startPassword
-          ),
-          usesCourseDefaults: body.usesCourseDefaults === true,
-          quitPasswordOverride: body.quitPasswordOverride === true,
-          startPasswordOverride: body.startPasswordOverride === true,
-          // Saving policy must not bypass the Canvas access-code commit workflow.
-          sebRequired: setting.sebRequired,
-          enabled: setting.enabled
-        },
-        defaults
-      )
+    const quizId = body.quizId;
+    const saved = await this.assessments.withAssessmentLock(
+      quizId,
+      async (operationLease) => {
+        const [setting, defaults] = await Promise.all([
+          this.assessments.getSebSettingForQuiz(quizId),
+          this.courseSettings.getDefaults(courseId)
+        ]);
+        if (!setting) {
+          return null;
+        }
+        operationLease.assertActive();
+        const externalToolIds = requestedExternalToolIds(body, setting.externalToolIds);
+        return this.assessments.saveQuizSebSetting(
+          applyCourseDefaultsToQuizSetting(
+            {
+              ...defaultQuizSebSetting(quizId, courseId),
+              ...setting,
+              id: setting?.id || quizId,
+              quizId,
+              courseId: courseId || setting?.courseId || null,
+              ssoDomains,
+              educationalToolDomains,
+              customDomains: urlRulesToAllowedEntries(urlRules),
+              urlRules,
+              externalTools: setting.externalTools,
+              quizOnlyExternalTools: requestedQuizOnlyTools(body, setting.quizOnlyExternalTools),
+              externalToolIds,
+              externalToolUrl: body.externalToolUrl || setting?.externalToolUrl || null,
+              quitPassword: secretUpdate(
+                body as unknown as Record<string, unknown>,
+                "quitPassword",
+                setting.quitPassword
+              ),
+              startPassword: secretUpdate(
+                body as unknown as Record<string, unknown>,
+                "startPassword",
+                setting.startPassword
+              ),
+              usesCourseDefaults: body.usesCourseDefaults === true,
+              quitPasswordOverride: body.quitPasswordOverride === true,
+              startPasswordOverride: body.startPasswordOverride === true,
+              // Saving policy must not bypass the Canvas access-code commit workflow.
+              sebRequired: setting.sebRequired,
+              enabled: setting.enabled
+            },
+            defaults
+          )
+        );
+      },
+      courseId
     );
+    if (!saved) {
+      return apiError(404, "Assessment not found");
+    }
     return {
       success: true,
       setting: toSebSettingView(saved, this.config.value.seb.defaultQuitPassword)
@@ -438,8 +477,7 @@ export class QuizController {
           courseId,
           quizId,
           parsed.assignmentId,
-          userId,
-          await this.courseSettings.getDefaults(courseId)
+          userId
         );
         return {
           success: true,
@@ -447,12 +485,7 @@ export class QuizController {
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
         };
       }
-      const setting = await this.assessments.enableSebWithAccessCode(
-        courseId,
-        quizId,
-        userId,
-        await this.courseSettings.getDefaults(courseId)
-      );
+      const setting = await this.assessments.enableSebWithAccessCode(courseId, quizId, userId);
       return {
         success: true,
         message: "Safe Online Exam enabled.",
@@ -635,6 +668,20 @@ function secretUpdate(
   return typeof value === "string" && value.trim() ? value : existing || null;
 }
 
+function courseSecretUpdate(
+  body: Record<string, unknown>,
+  key: "quitPassword" | "startPassword"
+): CourseSebDefaults["quitPassword"] | undefined {
+  if (!Object.hasOwn(body, key)) {
+    return undefined;
+  }
+  const value = body[key];
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function assertSafePolicyInput(body: Record<string, unknown>): void {
   const rules = Array.isArray(body.urlRules) ? body.urlRules : [];
   if (rules.some((rule) => normalizeUrlRules([rule as any]).length !== 1)) {
@@ -792,7 +839,15 @@ function courseToolCopyFailureCode(error: unknown): string {
       : null;
   if (response && typeof response === "object" && "error_code" in response) {
     const errorCode = (response as { error_code?: unknown }).error_code;
-    if (typeof errorCode === "string" && errorCode === "COURSE_TOOL_LIMIT") {
+    if (
+      typeof errorCode === "string" &&
+      [
+        "COURSE_TOOL_LIMIT",
+        "COURSE_RESET_IN_PROGRESS",
+        "COURSE_UPDATE_IN_PROGRESS",
+        "COURSE_SETTINGS_NO_LONGER_AVAILABLE"
+      ].includes(errorCode)
+    ) {
       return errorCode;
     }
   }

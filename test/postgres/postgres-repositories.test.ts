@@ -3,7 +3,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/server/data/migrations.js";
 import { createPostgresRepositories } from "../../src/server/data/postgres-repositories.js";
-import type { CourseRecord, OAuthToken } from "../../src/shared/models.js";
+import { RepositoryProvider } from "../../src/server/data/repositories.js";
+import { assessmentWithQuizSebSetting, type CourseRecord, type OAuthToken } from "../../src/shared/models.js";
 import { createPostgresTestDatabase, type PostgresTestDatabase } from "./helpers.js";
 
 let testDatabase: PostgresTestDatabase;
@@ -82,6 +83,96 @@ describe("PostgreSQL document repositories", () => {
       id: "session-1",
       data: { userId: "user-1" },
       expiresAt: expect.any(Date)
+    });
+  });
+
+  it("atomically resets course state while preserving OAuth and the admin connection", async () => {
+    const repositories = createPostgresRepositories(testDatabase.database);
+    const courseId = "reset-course-101";
+    const connectionId = `7:${courseId}`;
+    await repositories.courses.save(courseId, courseRecord(courseId, true));
+    await repositories.assessments.save(
+      "classicquiz_reset-501",
+      assessmentWithQuizSebSetting(null, {
+        quizId: "reset-501",
+        courseId,
+        sebRequired: true,
+        enabled: true,
+        accessCode: "RESET-CODE",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        urlRules: [],
+        externalTools: []
+      })
+    );
+    await repositories.transientStates.save("reset-grant", {
+      kind: "seb-config-grant",
+      courseId,
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    await repositories.oauthTokens.save("reset-user", {
+      id: "reset-user",
+      userId: "reset-user",
+      accessToken: "preserved-oauth-token"
+    });
+    await repositories.adminCourseConnections.save(connectionId, {
+      id: connectionId,
+      rootAccountId: "7",
+      canvasOrigin: "https://canvas.example.edu",
+      courseId,
+      name: "Reset Biology",
+      accountId: "7",
+      teacherNames: [],
+      assessmentCount: 1,
+      enabledAssessmentCount: 1,
+      issueCount: 0,
+      connectedByUserId: "reset-user"
+    });
+    await repositories.adminToolPresetAssignments.save(`preset-1:${courseId}`, {
+      id: `preset-1:${courseId}`,
+      rootAccountId: "7",
+      presetId: "preset-1",
+      courseId,
+      desiredAssigned: true,
+      status: "applied",
+      error: null,
+      appliedPresetUpdatedAt: new Date().toISOString(),
+      updatedByUserId: "reset-user"
+    });
+    const provider = new RepositoryProvider({ profile: "production" } as any, testDatabase.database);
+    const operationId = "00000000-0000-4000-8000-000000000002";
+
+    await expect(provider.resetCourseState(courseId, connectionId, operationId)).resolves.toMatchObject({
+      version: 1,
+      operationId,
+      courseId,
+      assessmentCount: 1,
+      transientStateCount: 1,
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
+    });
+    await expect(provider.getCourseResetOutcome(connectionId, operationId, courseId)).resolves.toMatchObject({
+      version: 1,
+      operationId,
+      courseId,
+      assessmentCount: 1,
+      transientStateCount: 1,
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
+    });
+    await expect(repositories.courses.get(courseId)).resolves.toBeNull();
+    await expect(repositories.assessments.get("classicquiz_reset-501")).resolves.toBeNull();
+    await expect(repositories.transientStates.get("reset-grant")).resolves.toBeNull();
+    await expect(repositories.adminToolPresetAssignments.get(`preset-1:${courseId}`)).resolves.toBeNull();
+    await expect(repositories.oauthTokens.get("reset-user")).resolves.toMatchObject({
+      accessToken: "preserved-oauth-token"
+    });
+    await expect(repositories.adminCourseConnections.get(connectionId)).resolves.toMatchObject({
+      assessmentCount: 0,
+      enabledAssessmentCount: 0,
+      issueCount: 0,
+      lastResetOutcome: expect.objectContaining({ operationId, courseId })
     });
   });
 });

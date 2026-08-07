@@ -20,7 +20,7 @@ export class SebSessionHandoffService {
     settingsFingerprint: string,
     configKey: string,
     returnTo: string
-  ): Promise<void> {
+  ): Promise<string[]> {
     const urls = configProofUrls(returnTo);
     const proofUrl = canonicalProofUrl(returnTo);
     if (
@@ -34,10 +34,11 @@ export class SebSessionHandoffService {
       throw new Error("Invalid SEB session handoff configuration");
     }
     const expiresAt = new Date(Date.now() + HANDOFF_CONFIG_TTL_SECONDS * 1000);
-    await Promise.all(
-      urls.map(async (url) => {
+    const results = await Promise.allSettled(
+      urls.map(async (url): Promise<{ claimed: boolean; id: string }> => {
         const configKeyHash = this.configKey.hashForUrl(url, configKey);
-        const claimed = await this.repositories.value.transientStates.claim(documentId(configKeyHash), {
+        const id = documentId(configKeyHash);
+        const claimed = await this.repositories.value.transientStates.claim(id, {
           kind: "seb-session-handoff-config",
           version: 1,
           audience: "seb-access-proof",
@@ -49,10 +50,30 @@ export class SebSessionHandoffService {
           proofUrl,
           expiresAt
         });
-        if (!claimed) {
-          throw new Error("Unable to register SEB session handoff configuration");
-        }
+        return { claimed, id };
       })
+    );
+    const claimedIds = results.flatMap((result) =>
+      result.status === "fulfilled" && result.value.claimed ? [result.value.id] : []
+    );
+    const failure = results.find(
+      (result) => result.status === "rejected" || (result.status === "fulfilled" && !result.value.claimed)
+    );
+    if (failure) {
+      await this.revokeConfigs(claimedIds);
+      throw new Error(
+        "Unable to register SEB session handoff configuration",
+        failure.status === "rejected" ? { cause: failure.reason } : undefined
+      );
+    }
+    return claimedIds;
+  }
+
+  async revokeConfigs(documentIds: readonly string[]): Promise<void> {
+    await Promise.all(
+      [...new Set(documentIds)]
+        .filter((id) => /^[a-f0-9]{64}$/u.test(id))
+        .map((id) => this.repositories.value.transientStates.delete(id))
     );
   }
 

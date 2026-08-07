@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LtiController } from "../../src/server/controllers/lti.controller.js";
+import { CourseMutationInProgressError } from "../../src/server/services/assessment.service.js";
 import {
   createLtiOidcBrowserTransaction,
   LTI_OIDC_BROWSER_BINDING_FIELD,
@@ -621,13 +622,53 @@ describe("LtiController role routing", () => {
       "instructor"
     );
 
-    request.header = (name: string) =>
+    const reloadRequest = emptySessionRequest();
+    reloadRequest.session = { ...request.session };
+    reloadRequest.header = (name: string) =>
       ({
         "sec-fetch-dest": "iframe",
         "sec-fetch-site": "same-origin"
       })[name.toLowerCase()];
     const reloadResponse = responseDouble();
-    await controller.launchGet(request, reloadResponse);
+    await controller.launchGet(reloadRequest, reloadResponse);
+
+    expect(reloadResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
+  });
+
+  it("preserves a verified instructor session when course discovery is already in progress", async () => {
+    ltiService.validateToken.mockResolvedValue({
+      ltiSubject: "opaque-teacher-1",
+      canvasUserId: "42",
+      issuer: "https://canvas.example.test",
+      userId: "42",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+      deploymentId: "deployment-1",
+      targetLinkUri: "https://tool.example.test/lti/launch",
+      messageType: "LtiResourceLinkRequest"
+    });
+    assessments.refreshCourseContent.mockRejectedValueOnce(new CourseMutationInProgressError());
+    const launchResponse = responseDouble();
+    const request = emptySessionRequest();
+
+    await controller.launchPost(request, launchResponse, { id_token: "token", state: "state" });
+
+    expect(ltiState.claimState).toHaveBeenCalledWith("state");
+    expect(request.session.verifiedLtiPrincipal).toMatchObject({ canvasUserId: "42", courseId: "course-1" });
+    expect(launchResponse.status).not.toHaveBeenCalledWith(400);
+    expect(launchResponse.send).toHaveBeenCalledWith(expect.stringContaining("Course Update in Progress"));
+    expect(launchResponse.send).toHaveBeenCalledWith(expect.stringContaining('href="/lti/launch"'));
+    expect(launchResponse.send).not.toHaveBeenCalledWith(expect.stringContaining("Invalid LTI Launch"));
+
+    const reloadRequest = emptySessionRequest();
+    reloadRequest.session = { ...request.session };
+    reloadRequest.header = (name: string) =>
+      ({
+        "sec-fetch-dest": "iframe",
+        "sec-fetch-site": "same-origin"
+      })[name.toLowerCase()];
+    const reloadResponse = responseDouble();
+    await controller.launchGet(reloadRequest, reloadResponse);
 
     expect(reloadResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"teacher"'));
   });

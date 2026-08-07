@@ -41,6 +41,21 @@ describe("SebConfigGrantService", () => {
     await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toBeNull();
   });
 
+  it("revokes an issued grant when the course state changes before release", async () => {
+    const service = grantService();
+    const token = await service.mintGrant(
+      requestDouble(),
+      principal(),
+      "course-1",
+      "101",
+      sebConfigSettingsFingerprint("course-1", "101", classicSetting())
+    );
+
+    await service.revokeGrant(token);
+
+    await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toBeNull();
+  });
+
   it("validates a Windows HEAD probe without consuming the one-time grant", async () => {
     const service = grantService();
     const token = await service.mintGrant(

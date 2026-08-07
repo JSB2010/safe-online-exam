@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AppConfig } from "../../src/server/config/app-config.js";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
-import { CourseSettingsService } from "../../src/server/services/course-settings.service.js";
+import { AssessmentService, CourseResetInProgressError } from "../../src/server/services/assessment.service.js";
+import { CanvasApiService } from "../../src/server/services/canvas-api.service.js";
+import {
+  CourseSettingsNoLongerAvailableError,
+  CourseSettingsService
+} from "../../src/server/services/course-settings.service.js";
 import {
   assessmentToContentSebSetting,
   assessmentToQuizSebSetting,
@@ -29,6 +35,98 @@ afterEach(() => {
 });
 
 describe("CourseSettingsService", () => {
+  it("does not recreate course defaults while an administrator reset is in progress", async () => {
+    const repositories = createInMemoryRepositories();
+    let releaseDiscovery!: () => void;
+    let markDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((resolve) => {
+      markDiscoveryStarted = resolve;
+    });
+    const canvas = {
+      getQuizzesForCourse: vi.fn().mockImplementation(
+        () =>
+          new Promise<[]>((resolve) => {
+            releaseDiscovery = () => resolve([]);
+            markDiscoveryStarted();
+          })
+      ),
+      getNewQuizAssignments: vi.fn().mockResolvedValue([])
+    } as unknown as CanvasApiService;
+    const provider = {
+      value: repositories,
+      resetCourseState: vi.fn().mockResolvedValue({
+        assessmentCount: 0,
+        transientStateCount: 0,
+        courseRecordCount: 0,
+        presetAssignmentCount: 0
+      })
+    } as unknown as RepositoryProvider;
+    const assessments = new AssessmentService(provider, canvas);
+    const service = new CourseSettingsService(provider, new AppConfig(), assessments);
+    const reset = assessments.resetCourseForAdmin("course-1", "admin-1", "root-1");
+    await discoveryStarted;
+
+    await expect(service.ensureDefaults("course-1")).rejects.toBeInstanceOf(CourseResetInProgressError);
+    await expect(repositories.courses.get("course-1")).resolves.toBeNull();
+    releaseDiscovery();
+    await expect(reset).resolves.toMatchObject({ deletedCourseRecordCount: 0 });
+  });
+
+  it("does not recreate course settings when password rotation acquires its lease after reset deletion", async () => {
+    const repositories = createInMemoryRepositories();
+    const provider = { value: repositories } as RepositoryProvider;
+    await new CourseSettingsService(provider).saveDefaults(
+      "course-1",
+      {
+        setupCompleted: true,
+        startPassword: "course-start-passphrase",
+        quitPassword: "course-exit-passphrase",
+        urlRules: [{ id: "reference", match: "domain", value: "reference.example.edu" }],
+        externalTools: []
+      },
+      { propagate: false }
+    );
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: () => Promise<unknown>) => {
+      await repositories.courses.delete("course-1");
+      return action();
+    });
+    const service = new CourseSettingsService(provider, new AppConfig(), {
+      withCourseWriteLock
+    } as unknown as AssessmentService);
+
+    await expect(service.rotateQuitPassword("course-1")).rejects.toBeInstanceOf(CourseSettingsNoLongerAvailableError);
+    expect(withCourseWriteLock).toHaveBeenCalledOnce();
+    await expect(repositories.courses.get("course-1")).resolves.toBeNull();
+  });
+
+  it("rotates an existing course exit password without replacing other course settings", async () => {
+    const repositories = createInMemoryRepositories();
+    const provider = { value: repositories } as RepositoryProvider;
+    const service = new CourseSettingsService(provider);
+    await service.saveDefaults(
+      "course-1",
+      {
+        setupCompleted: true,
+        startPassword: "course-start-passphrase",
+        quitPassword: "course-exit-passphrase",
+        urlRules: [{ id: "reference", match: "domain", value: "reference.example.edu" }],
+        externalTools: []
+      },
+      { propagate: false }
+    );
+
+    const password = await service.rotateQuitPassword("course-1");
+
+    expect(password).not.toBe("course-exit-passphrase");
+    expect(password).not.toBe("course-start-passphrase");
+    await expect(service.getDefaults("course-1")).resolves.toMatchObject({
+      setupCompleted: true,
+      startPassword: "course-start-passphrase",
+      quitPassword: password,
+      urlRules: [{ id: "reference", match: "domain", value: "reference.example.edu" }]
+    });
+  });
+
   it("starts new courses without hardcoded tools so the school or instructor can choose the catalog", async () => {
     const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
     const service = new CourseSettingsService(repos);
@@ -88,11 +186,11 @@ describe("CourseSettingsService", () => {
       ]
     });
 
-    await expect(service.copyInstructorToolToCourse("target-course", sourceTool)).resolves.toEqual({
+    await expect(service.copyInstructorToolToCourse("target-course", sourceTool, "")).resolves.toEqual({
       status: "copied",
       toolId: "formula-sheet-copy"
     });
-    await expect(service.copyInstructorToolToCourse("target-course", sourceTool)).resolves.toEqual({
+    await expect(service.copyInstructorToolToCourse("target-course", sourceTool, "")).resolves.toEqual({
       status: "already_present",
       toolId: "formula-sheet-copy"
     });
@@ -114,18 +212,66 @@ describe("CourseSettingsService", () => {
     const service = new CourseSettingsService(repos);
 
     await expect(
-      service.copyInstructorToolToCourse("target-course", {
-        id: "school-tool",
-        label: "School tool",
-        url: "https://school.example.edu/tool",
-        enabled: true,
-        adminPresetId: "preset-1",
-        managedByAdmin: true
-      })
+      service.copyInstructorToolToCourse(
+        "target-course",
+        {
+          id: "school-tool",
+          label: "School tool",
+          url: "https://school.example.edu/tool",
+          enabled: true,
+          adminPresetId: "preset-1",
+          managedByAdmin: true
+        },
+        ""
+      )
     ).rejects.toMatchObject({
       response: expect.objectContaining({ error_code: "COURSE_TOOL_COPY_NOT_ALLOWED" }),
       status: 400
     });
+    await expect(repos.value.courses.get("target-course")).resolves.toBeNull();
+  });
+
+  it("fences a tool copy across reset completion and preserves fresh setup", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    const sourceTool = {
+      id: "formula-sheet",
+      label: "Formula sheet",
+      url: "https://reference.example.edu/formulas",
+      enabled: true
+    };
+    const generationBeforeCanvas = await service.getCourseResetGeneration("target-course");
+    await repos.value.adminCourseConnections.save("root-1:target-course", {
+      id: "root-1:target-course",
+      rootAccountId: "root-1",
+      canvasOrigin: "https://canvas.example.edu",
+      courseId: "target-course",
+      name: "Target course",
+      accountId: "root-1",
+      teacherNames: [],
+      assessmentCount: 0,
+      enabledAssessmentCount: 0,
+      issueCount: 0,
+      connectedByUserId: "admin-1",
+      lastResetOutcome: {
+        version: 1,
+        operationId: "reset-after-copy-started",
+        courseId: "target-course",
+        completedAt: new Date().toISOString(),
+        assessmentCount: 0,
+        transientStateCount: 0,
+        courseRecordCount: 1,
+        presetAssignmentCount: 0
+      }
+    });
+
+    await expect(
+      service.copyInstructorToolToCourse("target-course", sourceTool, generationBeforeCanvas)
+    ).rejects.toBeInstanceOf(CourseSettingsNoLongerAvailableError);
+    const currentGeneration = await service.getCourseResetGeneration("target-course");
+    await expect(
+      service.copyInstructorToolToCourse("target-course", sourceTool, currentGeneration)
+    ).rejects.toBeInstanceOf(CourseSettingsNoLongerAvailableError);
     await expect(repos.value.courses.get("target-course")).resolves.toBeNull();
   });
 
@@ -268,6 +414,31 @@ describe("CourseSettingsService", () => {
         { propagate: false }
       )
     ).resolves.toMatchObject({ quitPassword: null, startPassword: null });
+  });
+
+  it("merges sequential partial saves against the latest persisted course state", async () => {
+    const repos = { value: createInMemoryRepositories() } as RepositoryProvider;
+    const service = new CourseSettingsService(repos);
+    await service.saveDefaults(
+      "course-1",
+      {
+        quitPassword: "original-quit-passphrase",
+        startPassword: "original-start-passphrase",
+        setupCompleted: true
+      },
+      { propagate: false }
+    );
+    const delayedUpdate = { quitPassword: "replacement-quit-passphrase", setupCompleted: true };
+
+    await service.saveDefaults(
+      "course-1",
+      { startPassword: "replacement-start-passphrase", setupCompleted: true },
+      { propagate: false }
+    );
+    await expect(service.saveDefaults("course-1", delayedUpdate, { propagate: false })).resolves.toMatchObject({
+      quitPassword: "replacement-quit-passphrase",
+      startPassword: "replacement-start-passphrase"
+    });
   });
 
   it("rejects newly supplied weak course start and exit passwords without persisting them", async () => {

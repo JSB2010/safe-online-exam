@@ -184,6 +184,65 @@ describe("CanvasApiService", () => {
     expect(params.get("quiz[quiz_settings][student_access_code]")).toBe("ACCESS42");
   });
 
+  it("snapshots current Classic and New Quiz access codes for reversible resets", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ id: 42, access_code: "MANUAL-CLASSIC-CODE" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          quiz_settings: { require_student_access_code: true, student_access_code: "MANUAL-NEW-CODE" }
+        })
+      );
+
+    await expect(service.getQuizAccessCode("course-7", "42", "user-1", "account_admin")).resolves.toBe(
+      "MANUAL-CLASSIC-CODE"
+    );
+    await expect(service.getNewQuizAccessCode("course-7", "99", "user-1", "account_admin")).resolves.toBe(
+      "MANUAL-NEW-CODE"
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes/42",
+      expect.anything()
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://canvas.example.com/api/quiz/v1/courses/course-7/quizzes/99",
+      expect.anything()
+    );
+  });
+
+  it("refuses a reset snapshot when Canvas omits a required access-code field", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ id: 42 }))
+      .mockResolvedValueOnce(jsonResponse({ quiz_settings: { require_student_access_code: true } }));
+
+    await expect(service.getQuizAccessCode("course-7", "42", "user-1", "account_admin")).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringContaining("did not return")
+    });
+    await expect(service.getNewQuizAccessCode("course-7", "99", "user-1", "account_admin")).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringContaining("did not return")
+    });
+  });
+
+  it("maps empty and null reset snapshots to bounded Canvas response errors", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(jsonResponse(null));
+
+    await expect(service.getQuizAccessCode("course-7", "42", "user-1", "account_admin")).rejects.toMatchObject({
+      name: "CanvasApiRequestError",
+      status: 502,
+      message: expect.stringContaining("valid Classic Quiz response")
+    });
+    await expect(service.getNewQuizAccessCode("course-7", "99", "user-1", "account_admin")).rejects.toMatchObject({
+      name: "CanvasApiRequestError",
+      status: 502,
+      message: expect.stringContaining("valid New Quiz response")
+    });
+  });
+
   it("discovers and hydrates New Quiz assignments from Canvas", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(

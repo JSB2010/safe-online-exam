@@ -43,6 +43,19 @@ describe("SebAccessProofService", () => {
     await expect(service.consumeProof(undefined, "course-1", "quiz-1", "settings-1")).resolves.toBeNull();
   });
 
+  it("revokes proof and exit-grant tokens after a crossed course reset", async () => {
+    const service = new SebAccessProofService({
+      value: createInMemoryRepositories()
+    } as RepositoryProvider);
+    const proof = await service.mintProof("course-1", "quiz-1", "generation-1", "settings-1");
+    const exitGrant = await service.mintExitGrant("course-1", "quiz-1", "generation-1");
+
+    await Promise.all([service.revokeProof(proof), service.revokeExitGrant(exitGrant)]);
+
+    await expect(service.consumeProof(proof, "course-1", "quiz-1", "settings-1")).resolves.toBeNull();
+    await expect(service.validateExitGrant(exitGrant, "course-1", "quiz-1", "generation-1")).resolves.toBe(false);
+  });
+
   it("mints reusable exam-session exit grants bound to the current configuration generation", async () => {
     const repositories = createInMemoryRepositories();
     const firstInstance = new SebAccessProofService({ value: repositories } as RepositoryProvider);

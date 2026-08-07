@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuizController } from "../../src/server/controllers/quiz.controller.js";
 import { createActionToken } from "../../src/server/http/action-token.js";
 import { AssessmentAuthorizationService } from "../../src/server/services/assessment-authorization.service.js";
+import {
+  CourseMutationInProgressError,
+  CourseResetInProgressError
+} from "../../src/server/services/assessment.service.js";
+import { CourseSettingsNoLongerAvailableError } from "../../src/server/services/course-settings.service.js";
 import { defaultCourseSebDefaults } from "../../src/shared/models.js";
 
 const SESSION_SECRET = "test-session-secret";
@@ -39,8 +44,10 @@ describe("QuizController", () => {
       getAssessmentRecord: vi.fn(async (id: string) => assessmentById(id)),
       validateSebConfiguration: vi.fn()
     };
+    assessments.withAssessmentLock = vi.fn(async (_contentId, action) => action({ assertActive: vi.fn() }));
     courseSettings = {
       getDefaults: vi.fn().mockResolvedValue(defaultCourseSebDefaults(COURSE_ID)),
+      getCourseResetGeneration: vi.fn().mockResolvedValue(""),
       saveDefaults: vi.fn(),
       resetQuizToDefaults: vi.fn(),
       copyInstructorToolToCourse: vi.fn()
@@ -87,8 +94,8 @@ describe("QuizController", () => {
       COURSE_ID,
       expect.objectContaining({
         courseId: COURSE_ID,
-        quitPassword: "exit-passphrase",
-        startPassword: "start-passphrase",
+        quitPassword: " exit-passphrase ",
+        startPassword: " start-passphrase ",
         setupCompleted: true,
         urlRules: [{ id: "docs", match: "domain", value: "docs.example.edu" }],
         externalTools: expect.arrayContaining([
@@ -144,12 +151,12 @@ describe("QuizController", () => {
   });
 
   it("preserves write-only course secrets when the client omits masked fields", async () => {
-    courseSettings.getDefaults.mockResolvedValue({
+    const existing = {
       ...defaultCourseSebDefaults(COURSE_ID),
       quitPassword: "existing-quit",
       startPassword: "existing-start"
-    });
-    courseSettings.saveDefaults.mockImplementation(async (_courseId, defaults) => defaults);
+    };
+    courseSettings.saveDefaults.mockResolvedValue(existing);
 
     const result = await controller.saveCourseDefaults(mutationRequest(), COURSE_ID, {
       setupCompleted: true,
@@ -159,8 +166,9 @@ describe("QuizController", () => {
 
     expect(courseSettings.saveDefaults).toHaveBeenCalledWith(
       COURSE_ID,
-      expect.objectContaining({ quitPassword: "existing-quit", startPassword: "existing-start" })
+      expect.objectContaining({ quitPassword: undefined, startPassword: undefined })
     );
+    expect(courseSettings.getDefaults).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       defaults: { hasQuitPassword: true, hasStartPassword: true }
     });
@@ -291,7 +299,8 @@ describe("QuizController", () => {
     });
     expect(courseSettings.copyInstructorToolToCourse).toHaveBeenCalledWith(
       "course-2",
-      expect.objectContaining({ id: "formula-sheet" })
+      expect.objectContaining({ id: "formula-sheet" }),
+      ""
     );
 
     canvasApi.getInstructorCourses.mockResolvedValue([]);
@@ -300,6 +309,35 @@ describe("QuizController", () => {
       403
     );
     expect(courseSettings.copyInstructorToolToCourse).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves course reset and mutation conflicts for each tool-copy destination", async () => {
+    courseSettings.getDefaults.mockResolvedValue({
+      ...defaultCourseSebDefaults(COURSE_ID),
+      externalTools: [copyableTool()]
+    });
+    canvasApi.getInstructorCourses.mockResolvedValue([
+      { id: "course-2", name: "Biology", courseCode: "BIO-2" },
+      { id: "course-3", name: "Chemistry", courseCode: "CHEM-3" },
+      { id: "course-4", name: "Physics", courseCode: "PHYS-4" }
+    ]);
+    courseSettings.copyInstructorToolToCourse
+      .mockRejectedValueOnce(new CourseResetInProgressError())
+      .mockRejectedValueOnce(new CourseMutationInProgressError())
+      .mockRejectedValueOnce(new CourseSettingsNoLongerAvailableError());
+
+    await expect(
+      controller.copyCourseTool(mutationRequest(), COURSE_ID, "formula-sheet", {
+        courseIds: ["course-2", "course-3", "course-4"]
+      })
+    ).resolves.toMatchObject({
+      success: false,
+      failed: [
+        { courseId: "course-2", errorCode: "COURSE_RESET_IN_PROGRESS" },
+        { courseId: "course-3", errorCode: "COURSE_UPDATE_IN_PROGRESS" },
+        { courseId: "course-4", errorCode: "COURSE_SETTINGS_NO_LONGER_AVAILABLE" }
+      ]
+    });
   });
 
   it("does not expose copying for a school-managed course tool", async () => {
@@ -402,8 +440,7 @@ describe("QuizController", () => {
       COURSE_ID,
       "newquiz:course-1:assignment-99",
       "assignment-99",
-      USER_ID,
-      expect.objectContaining({ courseId: COURSE_ID, startPassword: "course-start-secret" })
+      USER_ID
     );
   });
 
@@ -415,6 +452,17 @@ describe("QuizController", () => {
     await expectHttpError(() => controller.enable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99"), 400);
 
     expect(assessments.enableContentSebWithAccessCode).toHaveBeenCalledOnce();
+  });
+
+  it("returns a structured conflict while an administrator resets the course", async () => {
+    assessments.enableContentSebWithAccessCode.mockRejectedValue(new CourseResetInProgressError());
+
+    await expect(
+      controller.enable(mutationRequest(), COURSE_ID, "newquiz:course-1:assignment-99")
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "COURSE_RESET_IN_PROGRESS" })
+    });
   });
 
   it("does not mutate a New Quiz when its stored Canvas identity does not match the route", async () => {
@@ -610,36 +658,51 @@ describe("QuizController", () => {
   });
 
   it("saves a Classic Quiz structured policy and returns only secret-presence flags", async () => {
-    courseSettings.getDefaults.mockResolvedValue({
-      ...defaultCourseSebDefaults(COURSE_ID),
-      externalTools: [
-        {
-          id: "desmos-graphing",
-          label: "Desmos Graphing",
-          url: "https://www.desmos.com/calculator",
-          enabled: false
-        },
-        {
-          id: "desmos-scientific",
-          label: "Desmos Scientific",
-          url: "https://www.desmos.com/scientific",
-          enabled: false
-        }
-      ]
+    let lockActive = false;
+    assessments.withAssessmentLock.mockImplementation(async (_contentId, action) => {
+      lockActive = true;
+      try {
+        return await action({ assertActive: vi.fn() });
+      } finally {
+        lockActive = false;
+      }
     });
-    assessments.getSebSettingForQuiz.mockResolvedValue({
-      quizId: "quiz-1",
-      courseId: COURSE_ID,
-      sebRequired: true,
-      enabled: true,
-      accessCode: "ACCESS-SECRET",
-      configKey: "CONFIG-SECRET",
-      quitPassword: "OLD-UNIQUE-QUIT",
-      startPassword: "OLD-UNIQUE-START",
-      ssoDomains: [],
-      educationalToolDomains: [],
-      customDomains: [],
-      externalTools: []
+    courseSettings.getDefaults.mockImplementation(async () => {
+      expect(lockActive).toBe(true);
+      return {
+        ...defaultCourseSebDefaults(COURSE_ID),
+        externalTools: [
+          {
+            id: "desmos-graphing",
+            label: "Desmos Graphing",
+            url: "https://www.desmos.com/calculator",
+            enabled: false
+          },
+          {
+            id: "desmos-scientific",
+            label: "Desmos Scientific",
+            url: "https://www.desmos.com/scientific",
+            enabled: false
+          }
+        ]
+      };
+    });
+    assessments.getSebSettingForQuiz.mockImplementation(async () => {
+      expect(lockActive).toBe(true);
+      return {
+        quizId: "quiz-1",
+        courseId: COURSE_ID,
+        sebRequired: true,
+        enabled: true,
+        accessCode: "ACCESS-SECRET",
+        configKey: "CONFIG-SECRET",
+        quitPassword: "OLD-UNIQUE-QUIT",
+        startPassword: "OLD-UNIQUE-START",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      };
     });
     assessments.saveQuizSebSetting.mockImplementation(async (setting) => setting);
 
@@ -697,6 +760,7 @@ describe("QuizController", () => {
         ])
       })
     );
+    expect(assessments.withAssessmentLock).toHaveBeenCalledWith("quiz-1", expect.any(Function), COURSE_ID);
   });
 
   it("rejects attempts to replace the course catalog from a quiz request", async () => {

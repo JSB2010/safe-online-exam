@@ -65,6 +65,22 @@ From a connected course, a root administrator can:
 - enable or disable SEB; and
 - refresh assessment metadata from Canvas.
 
+To rebuild an entire course from a clean Safe Online Exam setup, choose the
+course reset action and enter the exact Canvas course ID. The reset first
+records the current access-code state of every Classic Quiz and New Quiz in
+Canvas, then removes every current code.
+Only after all Canvas changes succeed does it delete the local course policy,
+assessment settings, outstanding course grants, and school-tool assignments for
+that course. It preserves the Canvas OAuth grant and administrator course
+connection. The next instructor launch opens guided setup again. School tools
+must be assigned again if the rebuilt course should use them. If Canvas rejects
+or cannot confirm any assessment change, Safe Online Exam restores the exact
+pre-reset Canvas access-code state for every assessment already removed or
+possibly changed during that attempt and keeps the local assessment settings
+available for recovery and retry. If Canvas cannot confirm a restoration, the
+dashboard requires manual verification of every assessment before another
+reset.
+
 Use reveal and recovery actions only through the embedded dashboard. Sensitive
 responses are short-lived and sent with no-store headers. Do not copy them
 into tickets or chat. Every administrator mutation requires a short-lived
@@ -110,6 +126,10 @@ The guided setup has four stages:
 4. **First assessment:** save the course policy, then enable an assessment from
    the list.
 
+Each stage must be valid before **Continue** advances. Password fields show the
+same live requirements enforced by the server, and incomplete exam-tool
+definitions identify the field that needs attention.
+
 Course policy remains editable from **Course settings** after onboarding. Use
 **Advanced website access** there only when an exam tool cannot express the
 resource a student needs.
@@ -141,7 +161,10 @@ the assessment opens. It does not replace certificate encryption, Canvas
 authentication, or Config Key proof.
 
 The exit password protects native early quit. It is not the Canvas access code.
-Do not reuse the same value for start and exit protection.
+Do not reuse the same value for start and exit protection. New passwords must
+be 8–128 characters after surrounding spaces are removed, contain at least five
+different letters or numbers, contain no control characters or line breaks,
+and avoid common words, sequences, and repeated patterns.
 
 ### Add Exam Tools And URL Rules
 

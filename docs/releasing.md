@@ -31,7 +31,7 @@ the root package-lock versions without letting npm create a premature commit
 or tag:
 
 ```bash
-npm version 1.0.3 --no-git-tag-version
+npm version 1.0.4 --no-git-tag-version
 ```
 
 Then update:
@@ -65,8 +65,8 @@ or completed:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v1.0.3 -m "Safe Online Exam 1.0.3"
-git push origin v1.0.3
+git tag -a v1.0.4 -m "Safe Online Exam 1.0.4"
+git push origin v1.0.4
 ```
 
 No other release interaction is required. The tag push starts

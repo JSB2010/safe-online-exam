@@ -9,7 +9,7 @@ import {
 } from "../../src/server/data/in-memory-repositories.js";
 import { isExpired, stripUndefinedValues } from "../../src/server/data/document-values.js";
 import type { QueryOperator } from "../../src/server/data/repository-contracts.js";
-import { createRepositories } from "../../src/server/data/repositories.js";
+import { createRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
 import { RepositorySessionStore, sessionDocumentId } from "../../src/server/data/session-store.js";
 import { assessmentWithQuizSebSetting } from "../../src/shared/models.js";
 
@@ -96,6 +96,55 @@ describe("InMemoryCollectionStore", () => {
       expiresAt: new Date(Date.now() + 1000)
     });
     await expect(repositories.sessions.get("session-1")).resolves.toMatchObject({ data: { userId: "user-1" } });
+  });
+
+  it("removes course preset assignments during an in-memory reset while preserving OAuth", async () => {
+    const provider = new RepositoryProvider({ profile: "test", isHardenedRuntime: () => false } as any, {} as any);
+    const repositories = provider.value;
+    await repositories.courses.save("course-1", {
+      id: "course-1",
+      courseId: "course-1",
+      setupCompleted: true,
+      sebDefaults: { quitPassword: null, startPassword: null, urlRules: [], externalTools: [] }
+    });
+    await repositories.adminToolPresetAssignments.save("preset-1:course-1", {
+      id: "preset-1:course-1",
+      rootAccountId: "7",
+      presetId: "preset-1",
+      courseId: "course-1",
+      desiredAssigned: true,
+      status: "applied",
+      updatedByUserId: "42"
+    });
+    await repositories.adminCourseConnections.save("7:course-1", {
+      id: "7:course-1",
+      rootAccountId: "7",
+      canvasOrigin: "https://canvas.example.edu",
+      courseId: "course-1",
+      name: "Course 1",
+      accountId: "7",
+      teacherNames: [],
+      assessmentCount: 0,
+      enabledAssessmentCount: 0,
+      issueCount: 0,
+      connectedByUserId: "42"
+    });
+    await repositories.oauthTokens.save("42", { id: "42", userId: "42", accessToken: "preserved-token" });
+
+    const operationId = "00000000-0000-4000-8000-000000000001";
+    await expect(provider.resetCourseState("course-1", "7:course-1", operationId)).resolves.toMatchObject({
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
+    });
+    await expect(provider.getCourseResetOutcome("7:course-1", operationId, "course-1")).resolves.toMatchObject({
+      version: 1,
+      operationId,
+      courseId: "course-1",
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
+    });
+    await expect(repositories.adminToolPresetAssignments.get("preset-1:course-1")).resolves.toBeNull();
+    await expect(repositories.oauthTokens.get("42")).resolves.toMatchObject({ accessToken: "preserved-token" });
   });
 
   it("strips undefined values before documents are written", () => {

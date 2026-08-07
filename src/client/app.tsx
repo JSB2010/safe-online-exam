@@ -47,6 +47,15 @@ import {
   normalizeUrlRules,
   YOUTUBE_VIDEO_TOOL_PRESET
 } from "../shared/models.js";
+import {
+  evaluateSebPasswordRequirements,
+  normalizeSebPassword,
+  SEB_PASSWORD_MAX_LENGTH,
+  SEB_PASSWORD_MIN_LENGTH,
+  sebPasswordPolicyMessage,
+  sebPasswordPolicyViolation
+} from "../shared/seb-password-policy.js";
+import type { SebPasswordPurpose } from "../shared/seb-password-policy.js";
 
 interface BootstrapPayload {
   view: string;
@@ -103,6 +112,7 @@ type CourseToolCopyResult = {
 type ClientRequestError = Error & {
   code?: string;
   status?: number;
+  detail?: string;
   userFacing?: true;
 };
 
@@ -268,6 +278,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
   const [editingPreset, setEditingPreset] = useState<AdminToolPresetView | "new" | null>(null);
   const [connectingCourses, setConnectingCourses] = useState(false);
   const [rolloutPreset, setRolloutPreset] = useState<AdminToolPresetView | null>(null);
+  const [courseToReset, setCourseToReset] = useState<AdminCourseView | null>(null);
 
   const startBusy = (key: string) => setBusy((current) => new Set(current).add(key));
   const stopBusy = (key: string) =>
@@ -494,6 +505,34 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
       await loadCourseDetail(course.id);
     } catch (value) {
       pushToast("error", errorMessage(value, "The course exit password could not be rotated."));
+    } finally {
+      stopBusy(busyKey);
+    }
+  }
+
+  async function resetCourse(course: AdminCourseView, confirmation: string) {
+    const busyKey = `reset-course:${course.id}`;
+    startBusy(busyKey);
+    try {
+      const body = await requestJson(`/api/admin/courses/${encodeURIComponent(course.id)}/reset`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
+        body: JSON.stringify({ confirmation })
+      });
+      const assessmentSecretKeys = new Set(
+        (course.assessments || []).map((assessment) => `assessment:${assessment.id}`)
+      );
+      setRevealed((current) =>
+        Object.fromEntries(
+          Object.entries(current).filter(([key]) => key !== `course:${course.id}` && !assessmentSecretKeys.has(key))
+        )
+      );
+      await loadOverview(true);
+      setCourseToReset(null);
+      pushToast(
+        "success",
+        `${Number(body.disabledAssessmentCount || 0)} Canvas assessment${Number(body.disabledAssessmentCount || 0) === 1 ? " was" : "s were"} disabled. ${course.name} will open as a new Safe Online Exam course.`
+      );
     } finally {
       stopBusy(busyKey);
     }
@@ -805,6 +844,14 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                     >
                       <RefreshCw className={isBusy(`refresh:${selectedCourse.id}`) ? "spin" : ""} size={15} /> Refresh
                       course
+                    </button>
+                    <button
+                      className="button danger compact"
+                      type="button"
+                      disabled={isBusy(`reset-course:${selectedCourse.id}`)}
+                      onClick={() => setCourseToReset(selectedCourse)}
+                    >
+                      <Trash2 size={15} /> Reset course
                     </button>
                   </div>
                 </div>
@@ -1149,11 +1196,125 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
           }}
         />
       )}
+      {courseToReset && (
+        <AdminCourseResetDialog
+          course={courseToReset}
+          busy={isBusy(`reset-course:${courseToReset.id}`)}
+          onClose={() => setCourseToReset(null)}
+          onReset={(confirmation) => resetCourse(courseToReset, confirmation)}
+        />
+      )}
       <ToastRegion
         toasts={toasts}
         onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))}
       />
     </main>
+  );
+}
+
+function AdminCourseResetDialog({
+  course,
+  busy,
+  onClose,
+  onReset
+}: {
+  course: AdminCourseView;
+  busy: boolean;
+  onClose: () => void;
+  onReset: (confirmation: string) => Promise<void>;
+}) {
+  useEscapeToClose(busy ? undefined : onClose);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useDialogInitialFocus(inputRef);
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState("");
+  const confirmed = confirmation.trim() === course.id;
+
+  const submit = async () => {
+    if (!confirmed || busy) return;
+    setError("");
+    try {
+      await onReset(confirmation.trim());
+    } catch (value) {
+      setError(
+        errorMessage(
+          value,
+          "The course reset could not be confirmed. Refresh the course and verify its Canvas assessment access codes before trying again"
+        )
+      );
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section
+        className="dialog admin-course-reset-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="admin-course-reset-title"
+      >
+        <header className="dialog-header">
+          <div>
+            <span className="section-kicker">Administrator-only reset</span>
+            <h2 id="admin-course-reset-title">Reset {course.name}?</h2>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+            aria-label="Close course reset"
+          >
+            <X size={17} />
+          </button>
+        </header>
+        <div className="admin-course-reset-warning">
+          <AlertCircle size={20} />
+          <div>
+            <strong>This rebuilds the Safe Online Exam setup for this course.</strong>
+            <p>The reset completes in this order:</p>
+            <ol>
+              <li>Remove Safe Online Exam access codes from every current Classic Quiz and New Quiz in Canvas.</li>
+              <li>
+                Delete the local course policy, assessment settings, outstanding course access grants, and school tool
+                assignments.
+              </li>
+              <li>Show the guided setup the next time an instructor opens this course.</li>
+            </ol>
+          </div>
+        </div>
+        <p className="admin-course-reset-preserved">
+          Canvas authorization and the administrator connection stay in place. If Canvas cannot disable every
+          assessment, local records will not be deleted.
+        </p>
+        <label className="admin-course-reset-confirmation">
+          Enter course ID <strong>{course.id}</strong> to confirm
+          <input
+            ref={inputRef}
+            value={confirmation}
+            disabled={busy}
+            autoComplete="off"
+            inputMode="numeric"
+            onChange={(event) => setConfirmation(event.target.value)}
+            aria-invalid={!!confirmation && !confirmed}
+          />
+        </label>
+        {error && (
+          <div className="notice error" role="alert">
+            <AlertCircle size={17} /> <span>{error}</span>
+          </div>
+        )}
+        <footer className="dialog-actions">
+          <button className="button secondary" type="button" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button className="button danger" type="button" disabled={!confirmed || busy} onClick={() => void submit()}>
+            {busy ? <RefreshCw className="spin" size={16} /> : <Trash2 size={16} />}
+            {busy ? "Disabling quizzes and resetting…" : "Disable quizzes and reset course"}
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1957,7 +2118,11 @@ function TeacherDashboard({ data }: { data: Record<string, any> }) {
     if (redirectForAuth(body)) return;
     if (!body.success) {
       handleRecovery(body);
-      throw clientRequestError(typeof body.error_code === "string" ? body.error_code : undefined);
+      throw clientRequestError(
+        typeof body.error_code === "string" ? body.error_code : undefined,
+        undefined,
+        apiErrorDetail(body.message)
+      );
     }
     setCourseDefaults(normalizeCourseDefaults(body.defaults, data.courseId));
     if (successMessage) {
@@ -2290,8 +2455,13 @@ function InstructorSetupWizard({
   useDialogInitialFocus(dialogRef);
   const [step, setStep] = useState<InstructorSetupStep>("welcome");
   const [draft, setDraft] = useDefaultsDraft(defaults);
+  const [startPasswordEnabled, setStartPasswordEnabled] = useState(
+    () => !!draft.startPassword || !!(draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
+  );
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState("");
+  const [showPasswordValidationErrors, setShowPasswordValidationErrors] = useState(false);
+  const [showToolValidationErrors, setShowToolValidationErrors] = useState(false);
   const steps: Array<{ id: InstructorSetupStep; label: string }> = [
     { id: "welcome", label: "Welcome" },
     { id: "security", label: "Exit password" },
@@ -2302,9 +2472,51 @@ function InstructorSetupWizard({
   const previousStep = stepIndex > 0 ? steps[stepIndex - 1].id : null;
   const nextStep = stepIndex < steps.length - 1 ? steps[stepIndex + 1].id : null;
   const hasExistingExitSecurity = securityReady;
-  const hasExitSecurity = hasExistingExitSecurity || !!draft.quitPassword?.trim();
+
+  useEffect(() => {
+    setError("");
+  }, [draft, startPasswordEnabled]);
+
+  const validateStep = (candidate: InstructorSetupStep): boolean => {
+    if (candidate === "security") {
+      const passwordError = coursePasswordValidationMessage(draft, startPasswordEnabled, !hasExistingExitSecurity);
+      setShowPasswordValidationErrors(!!passwordError);
+      if (passwordError) {
+        setError("Review the highlighted password requirements before continuing.");
+        return false;
+      }
+    }
+    if (candidate === "tools") {
+      const toolError = externalToolsValidationMessage(draft.externalTools);
+      setShowToolValidationErrors(!!toolError);
+      if (toolError) {
+        setError(`Review the exam tool settings before continuing. ${toolError}`);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const advance = () => {
+    if (!nextStep || !validateStep(step)) return;
+    setError("");
+    setStep(nextStep);
+  };
 
   const finish = async () => {
+    const passwordError = coursePasswordValidationMessage(draft, startPasswordEnabled, !hasExistingExitSecurity);
+    const toolError = externalToolsValidationMessage(draft.externalTools);
+    if (passwordError || toolError) {
+      setShowPasswordValidationErrors(!!passwordError);
+      setShowToolValidationErrors(!!toolError);
+      setStep(passwordError ? "security" : toolError ? "tools" : "security");
+      setError(
+        passwordError
+          ? "Review the highlighted password requirements before finishing setup."
+          : `Review the exam tool settings. ${toolError}`
+      );
+      return;
+    }
     setFinishing(true);
     setError("");
     try {
@@ -2374,7 +2586,14 @@ function InstructorSetupWizard({
         <ol className="setup-wizard-progress" aria-label="Course setup progress">
           {steps.map((candidate, index) => (
             <li className={clsx(index === stepIndex && "active", index < stepIndex && "complete")} key={candidate.id}>
-              <button type="button" disabled={index > stepIndex} onClick={() => setStep(candidate.id)}>
+              <button
+                type="button"
+                disabled={index > stepIndex}
+                onClick={() => {
+                  setError("");
+                  setStep(candidate.id);
+                }}
+              >
                 <span>{index < stepIndex ? <Check size={14} /> : index + 1}</span>
                 {candidate.label}
               </button>
@@ -2410,8 +2629,12 @@ function InstructorSetupWizard({
               <DefaultsEditor
                 draft={draft}
                 setDraft={setDraft}
+                startPasswordEnabled={startPasswordEnabled}
+                setStartPasswordEnabled={setStartPasswordEnabled}
                 visibleSection={step === "security" ? "password" : "tools"}
                 requireExitPassword={step === "security" && !hasExistingExitSecurity}
+                showPasswordValidationErrors={showPasswordValidationErrors}
+                showToolValidationErrors={showToolValidationErrors}
               />
             </div>
           )}
@@ -2426,39 +2649,31 @@ function InstructorSetupWizard({
             </button>
           )}
           {previousStep && (
-            <button className="button secondary" type="button" onClick={() => setStep(previousStep)}>
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => {
+                setError("");
+                setStep(previousStep);
+              }}
+            >
               <ArrowLeft size={16} /> Back
             </button>
           )}
           {step === "enable" ? (
-            <button
-              className="button primary"
-              type="button"
-              disabled={finishing || !hasExitSecurity}
-              onClick={() => void finish()}
-            >
+            <button className="button primary" type="button" disabled={finishing} onClick={() => void finish()}>
               <Check size={16} /> {finishing ? "Saving…" : "Save and finish"}
             </button>
           ) : nextStep ? (
-            <button
-              className="button primary"
-              type="button"
-              disabled={step === "security" && !hasExitSecurity}
-              onClick={() => setStep(nextStep)}
-            >
+            <button className="button primary" type="button" onClick={advance}>
               {step === "security" ? <Lock size={16} /> : <Check size={16} />} Continue
             </button>
           ) : null}
         </footer>
-        {!hasExitSecurity && step === "security" && (
-          <p className="field-error" role="alert">
-            Set an exit password before continuing.
-          </p>
-        )}
         {error && (
-          <p className="field-error" role="alert">
-            {error}
-          </p>
+          <div className="notice error setup-validation-error" role="alert">
+            <AlertCircle size={17} /> <span>{error}</span>
+          </div>
         )}
       </section>
     </div>
@@ -2612,7 +2827,11 @@ function SebSetupCheckDialog({
         headers: actionHeaders(authToken)
       });
       if (!result.success) {
-        throw clientRequestError(typeof result.error_code === "string" ? result.error_code : undefined);
+        throw clientRequestError(
+          typeof result.error_code === "string" ? result.error_code : undefined,
+          undefined,
+          apiErrorDetail(result.message)
+        );
       }
       await onCompleted?.();
       setOpeningHandoff(true);
@@ -2748,7 +2967,13 @@ function SettingsDialog({
   const [startPassword, setStartPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPasswordValidationErrors, setShowPasswordValidationErrors] = useState(false);
+  const [showUrlValidationErrors, setShowUrlValidationErrors] = useState(false);
   const [showToolValidationErrors, setShowToolValidationErrors] = useState(false);
+
+  useEffect(() => {
+    setError(null);
+  }, [externalToolIds, passwordOverride, quitPassword, quizOnlyTools, startPassword, startPasswordOverride, urlRules]);
 
   const customizeUrlRules = (next: SebUrlRule[]) => {
     setUsesDefaults(false);
@@ -2775,6 +3000,31 @@ function SettingsDialog({
   async function save() {
     setSaving(true);
     setError(null);
+    const startPasswordError = startPasswordOverride
+      ? passwordValidationMessage(startPassword, "start", {
+          required: !(setting.startPasswordOverride === true && setting.hasStartPassword === true),
+          otherPassword: passwordOverride ? quitPassword : null
+        })
+      : null;
+    const exitPasswordError = passwordOverride
+      ? passwordValidationMessage(quitPassword, "exit", {
+          required: !(setting.quitPasswordOverride === true && setting.hasQuitPassword === true),
+          otherPassword: startPasswordOverride ? startPassword : null
+        })
+      : null;
+    if (startPasswordError || exitPasswordError) {
+      setShowPasswordValidationErrors(true);
+      setError("Review the highlighted quiz password requirements before saving.");
+      setSaving(false);
+      return;
+    }
+    const urlError = urlRulesValidationMessage(urlRules);
+    if (urlError) {
+      setShowUrlValidationErrors(true);
+      setError(`Review the website access settings before saving. ${urlError}`);
+      setSaving(false);
+      return;
+    }
     const toolError = externalToolsValidationMessage(quizOnlyTools);
     if (toolError) {
       setShowToolValidationErrors(true);
@@ -2884,10 +3134,14 @@ function SettingsDialog({
           setPasswordOverride={customizePasswordOverride}
           startPasswordOverride={startPasswordOverride}
           setStartPasswordOverride={customizeStartPasswordOverride}
+          hasSavedPasswordOverride={setting.quitPasswordOverride === true && setting.hasQuitPassword === true}
+          hasSavedStartPasswordOverride={setting.startPasswordOverride === true && setting.hasStartPassword === true}
           hasDefaultPassword={canEnableSebAssessment(undefined, courseDefaults)}
           hasDefaultStartPassword={
             !!(courseDefaults as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
           }
+          showPasswordValidationErrors={showPasswordValidationErrors}
+          showUrlValidationErrors={showUrlValidationErrors}
         />
 
         {error && (
@@ -2991,8 +3245,103 @@ function PasswordRevealValue({ label, password }: { label: string; password: Rev
   );
 }
 
-function passwordRequirementText(otherPassword: "exit" | "start"): string {
-  return `Use 8–128 characters with at least 5 different letters or numbers. Letters-only and numbers-only are allowed; avoid common words, sequences, and repeated patterns. It must differ from the ${otherPassword} password.`;
+function PasswordRequirements({
+  value,
+  purpose,
+  otherPassword,
+  hasSavedOtherPassword = false,
+  id
+}: {
+  value: string;
+  purpose: SebPasswordPurpose;
+  otherPassword?: string | null;
+  hasSavedOtherPassword?: boolean;
+  id: string;
+}) {
+  if (!value) return null;
+  const state = evaluateSebPasswordRequirements(value, otherPassword);
+  const otherLabel = purpose === "exit" ? "start" : "exit";
+  const hasTypedOtherPassword = !!normalizeSebPassword(otherPassword);
+  const requirements = [
+    {
+      label: `${SEB_PASSWORD_MIN_LENGTH}–${SEB_PASSWORD_MAX_LENGTH} characters after surrounding spaces are removed`,
+      met: state.hasAllowedLength
+    },
+    { label: "At least 5 different letters or numbers", met: state.hasEnoughDistinctCharacters },
+    { label: "No common words, sequences, or repeated patterns", met: state.avoidsPredictablePatterns },
+    { label: "No control or invisible formatting characters", met: state.hasNoControlCharacters },
+    {
+      label:
+        hasSavedOtherPassword && !hasTypedOtherPassword
+          ? `Different from the saved ${otherLabel} password (checked when you save)`
+          : `Different from the ${otherLabel} password`,
+      met: state.differsFromOtherPassword && (!hasSavedOtherPassword || hasTypedOtherPassword),
+      pending: hasSavedOtherPassword && !hasTypedOtherPassword
+    }
+  ];
+  return (
+    <div className="password-requirements" id={id} aria-live="polite">
+      <strong>Password requirements</strong>
+      <ul>
+        {requirements.map((requirement) => (
+          <li className={clsx(requirement.met && "met", requirement.pending && "pending")} key={requirement.label}>
+            <span aria-hidden="true">{requirement.met ? <Check size={13} /> : null}</span>
+            {requirement.label}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function passwordValidationMessage(
+  value: string | null | undefined,
+  purpose: SebPasswordPurpose,
+  options: {
+    required?: boolean;
+    otherPassword?: string | null;
+  } = {}
+): string | null {
+  const violation = sebPasswordPolicyViolation(value);
+  const normalized = normalizeSebPassword(value);
+  if (violation === "control-character") {
+    return sebPasswordPolicyMessage(purpose, violation);
+  }
+  if (!normalized) {
+    return options.required
+      ? `Enter a ${purpose === "exit" ? "course exit" : "start"} password before continuing.`
+      : null;
+  }
+  if (violation) {
+    return sebPasswordPolicyMessage(purpose, violation);
+  }
+  if (!evaluateSebPasswordRequirements(normalized, options.otherPassword).differsFromOtherPassword) {
+    return "Start and exit passwords must be different. Use the exit password only when a student needs permission to leave Safe Exam Browser.";
+  }
+  return null;
+}
+
+function coursePasswordValidationMessage(
+  draft: CourseSebDefaults,
+  startPasswordEnabled: boolean,
+  requireExitPassword = false
+): string | null {
+  const hasSavedStartPassword = (draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword === true;
+  const hasSavedExitPassword =
+    (draft as CourseSebDefaults & { hasQuitPassword?: boolean; hasEffectiveQuitPassword?: boolean })
+      .hasEffectiveQuitPassword === true ||
+    (draft as CourseSebDefaults & { hasQuitPassword?: boolean }).hasQuitPassword === true;
+  if (startPasswordEnabled) {
+    const startError = passwordValidationMessage(draft.startPassword, "start", {
+      required: !hasSavedStartPassword,
+      otherPassword: draft.quitPassword
+    });
+    if (startError) return startError;
+  }
+  return passwordValidationMessage(draft.quitPassword, "exit", {
+    required: requireExitPassword && !hasSavedExitPassword,
+    otherPassword: startPasswordEnabled ? draft.startPassword : null
+  });
 }
 
 function DefaultsDialog({
@@ -3012,9 +3361,14 @@ function DefaultsDialog({
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [draft, setDraft] = useDefaultsDraft(defaults);
+  const [startPasswordEnabled, setStartPasswordEnabled] = useState(
+    () => !!draft.startPassword || !!(draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<"password" | "urls" | "tools">(initialSection);
+  const [showPasswordValidationErrors, setShowPasswordValidationErrors] = useState(false);
+  const [showUrlValidationErrors, setShowUrlValidationErrors] = useState(false);
   const [showToolValidationErrors, setShowToolValidationErrors] = useState(false);
   const [toolToCopy, setToolToCopy] = useState<ExternalToolConfig | null>(null);
   useEscapeToClose(toolToCopy ? () => undefined : onClose);
@@ -3032,9 +3386,29 @@ function DefaultsDialog({
     [defaults.externalTools, draft.externalTools]
   );
 
+  useEffect(() => {
+    setError(null);
+  }, [draft, startPasswordEnabled]);
+
   async function save() {
     setSaving(true);
     setError(null);
+    const passwordError = coursePasswordValidationMessage(draft, startPasswordEnabled);
+    if (passwordError) {
+      setSection("password");
+      setShowPasswordValidationErrors(true);
+      setError("Review the highlighted password requirements before saving.");
+      setSaving(false);
+      return;
+    }
+    const urlError = urlRulesValidationMessage(draft.urlRules);
+    if (urlError) {
+      setSection("urls");
+      setShowUrlValidationErrors(true);
+      setError(`Review the website access settings before saving. ${urlError}`);
+      setSaving(false);
+      return;
+    }
     const toolError = externalToolsValidationMessage(draft.externalTools);
     if (toolError) {
       setSection("tools");
@@ -3117,7 +3491,11 @@ function DefaultsDialog({
           <DefaultsEditor
             draft={draft}
             setDraft={setDraft}
+            startPasswordEnabled={startPasswordEnabled}
+            setStartPasswordEnabled={setStartPasswordEnabled}
             visibleSection={section}
+            showPasswordValidationErrors={showPasswordValidationErrors}
+            showUrlValidationErrors={showUrlValidationErrors}
             showToolValidationErrors={showToolValidationErrors}
             copyableToolIds={copyableToolIds}
             onCopyTool={setToolToCopy}
@@ -3152,16 +3530,24 @@ function DefaultsDialog({
 function DefaultsEditor({
   draft,
   setDraft,
+  startPasswordEnabled,
+  setStartPasswordEnabled,
   visibleSection = "all",
   requireExitPassword = false,
+  showPasswordValidationErrors = false,
+  showUrlValidationErrors = false,
   showToolValidationErrors = false,
   copyableToolIds,
   onCopyTool
 }: {
   draft: CourseSebDefaults;
   setDraft: (value: SetStateAction<CourseSebDefaults>) => void;
+  startPasswordEnabled: boolean;
+  setStartPasswordEnabled: (enabled: boolean) => void;
   visibleSection?: "all" | "password" | "urls" | "tools";
   requireExitPassword?: boolean;
+  showPasswordValidationErrors?: boolean;
+  showUrlValidationErrors?: boolean;
   showToolValidationErrors?: boolean;
   copyableToolIds?: ReadonlySet<string>;
   onCopyTool?: (tool: ExternalToolConfig) => void;
@@ -3169,15 +3555,26 @@ function DefaultsEditor({
   const showPassword = visibleSection === "all" || visibleSection === "password";
   const showUrls = visibleSection === "all" || visibleSection === "urls";
   const showTools = visibleSection === "all" || visibleSection === "tools";
-  const [startPasswordEnabled, setStartPasswordEnabled] = useState(
-    () => !!draft.startPassword || !!(draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword
-  );
   const updateStartPasswordEnabled = (enabled: boolean) => {
     setStartPasswordEnabled(enabled);
     if (!enabled) {
       setDraft((current) => ({ ...current, startPassword: null }));
     }
   };
+  const hasSavedStartPassword = (draft as CourseSebDefaults & { hasStartPassword?: boolean }).hasStartPassword === true;
+  const hasSavedExitPassword =
+    (draft as CourseSebDefaults & { hasEffectiveQuitPassword?: boolean }).hasEffectiveQuitPassword === true ||
+    (draft as CourseSebDefaults & { hasQuitPassword?: boolean }).hasQuitPassword === true;
+  const startPasswordError = startPasswordEnabled
+    ? passwordValidationMessage(draft.startPassword, "start", {
+        required: !hasSavedStartPassword,
+        otherPassword: draft.quitPassword
+      })
+    : null;
+  const exitPasswordError = passwordValidationMessage(draft.quitPassword, "exit", {
+    required: requireExitPassword && !hasSavedExitPassword,
+    otherPassword: startPasswordEnabled ? draft.startPassword : null
+  });
 
   return (
     <div className="settings-stack">
@@ -3195,34 +3592,70 @@ function DefaultsEditor({
               <small>Add a second check before an assessment opens in Safe Online Exam.</small>
             </span>
           </label>
-          <input
-            type="password"
-            value={draft.startPassword || ""}
-            disabled={!startPasswordEnabled}
-            onChange={(event) => setDraft((current) => ({ ...current, startPassword: event.target.value }))}
-            placeholder={startPasswordEnabled ? "Enter a replacement password, or leave blank to keep it" : "Disabled"}
-            autoComplete="new-password"
-            minLength={8}
-            maxLength={128}
-          />
-          {startPasswordEnabled && <small>{passwordRequirementText("exit")}</small>}
+          <div className="password-input-group">
+            <input
+              id="course-start-password"
+              type="password"
+              value={draft.startPassword || ""}
+              disabled={!startPasswordEnabled}
+              aria-invalid={showPasswordValidationErrors && !!startPasswordError}
+              aria-describedby={draft.startPassword ? "course-start-password-requirements" : undefined}
+              onChange={(event) => setDraft((current) => ({ ...current, startPassword: event.target.value }))}
+              placeholder={
+                startPasswordEnabled ? "Enter a replacement password, or leave blank to keep it" : "Disabled"
+              }
+              autoComplete="new-password"
+              minLength={SEB_PASSWORD_MIN_LENGTH}
+              maxLength={SEB_PASSWORD_MAX_LENGTH}
+            />
+            {startPasswordEnabled && (
+              <PasswordRequirements
+                id="course-start-password-requirements"
+                value={draft.startPassword || ""}
+                purpose="start"
+                otherPassword={draft.quitPassword}
+                hasSavedOtherPassword={hasSavedExitPassword}
+              />
+            )}
+            {showPasswordValidationErrors && startPasswordError && (
+              <small className="field-error" role="alert">
+                {startPasswordError}
+              </small>
+            )}
+          </div>
 
           <SectionHeading title="Exit password" />
           <p className="field-help">
             This course password is required before you can enable Safe Online Exam.{" "}
             {requireExitPassword ? "Enter one to continue." : "Leave this blank to keep the current protection."}
           </p>
-          <input
-            type="password"
-            value={draft.quitPassword || ""}
-            onChange={(event) => setDraft((current) => ({ ...current, quitPassword: event.target.value }))}
-            placeholder={requireExitPassword ? "Enter an exit password" : "Enter a replacement password"}
-            autoComplete="new-password"
-            minLength={8}
-            maxLength={128}
-            required={requireExitPassword}
-          />
-          <small>{passwordRequirementText("start")}</small>
+          <div className="password-input-group">
+            <input
+              id="course-exit-password"
+              type="password"
+              value={draft.quitPassword || ""}
+              aria-invalid={showPasswordValidationErrors && !!exitPasswordError}
+              aria-describedby={draft.quitPassword ? "course-exit-password-requirements" : undefined}
+              onChange={(event) => setDraft((current) => ({ ...current, quitPassword: event.target.value }))}
+              placeholder={requireExitPassword ? "Enter an exit password" : "Enter a replacement password"}
+              autoComplete="new-password"
+              minLength={SEB_PASSWORD_MIN_LENGTH}
+              maxLength={SEB_PASSWORD_MAX_LENGTH}
+              required={requireExitPassword}
+            />
+            <PasswordRequirements
+              id="course-exit-password-requirements"
+              value={draft.quitPassword || ""}
+              purpose="exit"
+              otherPassword={startPasswordEnabled ? draft.startPassword : null}
+              hasSavedOtherPassword={startPasswordEnabled && hasSavedStartPassword}
+            />
+            {showPasswordValidationErrors && exitPasswordError && (
+              <small className="field-error" role="alert">
+                {exitPasswordError}
+              </small>
+            )}
+          </div>
         </section>
       )}
       {showUrls && (
@@ -3235,6 +3668,7 @@ function DefaultsEditor({
           <UrlRuleEditor
             rules={draft.urlRules}
             onChange={(urlRules) => setDraft((current) => ({ ...current, urlRules }))}
+            showValidationErrors={showUrlValidationErrors}
           />
           <p className="field-help">
             Use exam tools for student resources whenever possible. Add URLs only when needed.
@@ -3273,8 +3707,12 @@ function SettingsSections({
   setPasswordOverride,
   startPasswordOverride,
   setStartPasswordOverride,
+  hasSavedPasswordOverride,
+  hasSavedStartPasswordOverride,
   hasDefaultPassword,
   hasDefaultStartPassword,
+  showPasswordValidationErrors = false,
+  showUrlValidationErrors = false,
   showToolValidationErrors = false
 }: {
   urlRules: SebUrlRule[];
@@ -3292,10 +3730,26 @@ function SettingsSections({
   setPasswordOverride: (value: boolean) => void;
   startPasswordOverride: boolean;
   setStartPasswordOverride: (value: boolean) => void;
+  hasSavedPasswordOverride: boolean;
+  hasSavedStartPasswordOverride: boolean;
   hasDefaultPassword: boolean;
   hasDefaultStartPassword: boolean;
+  showPasswordValidationErrors?: boolean;
+  showUrlValidationErrors?: boolean;
   showToolValidationErrors?: boolean;
 }) {
+  const startPasswordError = startPasswordOverride
+    ? passwordValidationMessage(startPassword, "start", {
+        required: !hasSavedStartPasswordOverride,
+        otherPassword: passwordOverride ? quitPassword : null
+      })
+    : null;
+  const exitPasswordError = passwordOverride
+    ? passwordValidationMessage(quitPassword, "exit", {
+        required: !hasSavedPasswordOverride,
+        otherPassword: startPasswordOverride ? startPassword : null
+      })
+    : null;
   return (
     <div className="settings-stack">
       <section className="settings-section">
@@ -3315,19 +3769,37 @@ function SettingsSections({
             </small>
           </span>
         </label>
-        <input
-          type="password"
-          value={startPasswordOverride ? startPassword : ""}
-          disabled={!startPasswordOverride}
-          onChange={(event) => setStartPassword(event.target.value)}
-          placeholder={
-            startPasswordOverride ? "Enter a replacement password, or leave blank to keep it" : "Using course default"
-          }
-          autoComplete="new-password"
-          minLength={8}
-          maxLength={128}
-        />
-        {startPasswordOverride && <small>{passwordRequirementText("exit")}</small>}
+        <div className="password-input-group">
+          <input
+            id="quiz-start-password"
+            type="password"
+            value={startPasswordOverride ? startPassword : ""}
+            disabled={!startPasswordOverride}
+            aria-invalid={showPasswordValidationErrors && !!startPasswordError}
+            aria-describedby={startPassword ? "quiz-start-password-requirements" : undefined}
+            onChange={(event) => setStartPassword(event.target.value)}
+            placeholder={
+              startPasswordOverride ? "Enter a replacement password, or leave blank to keep it" : "Using course default"
+            }
+            autoComplete="new-password"
+            minLength={SEB_PASSWORD_MIN_LENGTH}
+            maxLength={SEB_PASSWORD_MAX_LENGTH}
+          />
+          {startPasswordOverride && (
+            <PasswordRequirements
+              id="quiz-start-password-requirements"
+              value={startPassword}
+              purpose="start"
+              otherPassword={passwordOverride ? quitPassword : null}
+              hasSavedOtherPassword={hasSavedPasswordOverride}
+            />
+          )}
+          {showPasswordValidationErrors && startPasswordError && (
+            <small className="field-error" role="alert">
+              {startPasswordError}
+            </small>
+          )}
+        </div>
       </section>
 
       <section className="settings-section">
@@ -3347,19 +3819,37 @@ function SettingsSections({
             </small>
           </span>
         </label>
-        <input
-          type="password"
-          value={passwordOverride ? quitPassword : ""}
-          disabled={!passwordOverride}
-          onChange={(event) => setQuitPassword(event.target.value)}
-          placeholder={
-            passwordOverride ? "Enter a replacement password, or leave blank to keep it" : "Using course default"
-          }
-          autoComplete="new-password"
-          minLength={8}
-          maxLength={128}
-        />
-        {passwordOverride && <small>{passwordRequirementText("start")}</small>}
+        <div className="password-input-group">
+          <input
+            id="quiz-exit-password"
+            type="password"
+            value={passwordOverride ? quitPassword : ""}
+            disabled={!passwordOverride}
+            aria-invalid={showPasswordValidationErrors && !!exitPasswordError}
+            aria-describedby={quitPassword ? "quiz-exit-password-requirements" : undefined}
+            onChange={(event) => setQuitPassword(event.target.value)}
+            placeholder={
+              passwordOverride ? "Enter a replacement password, or leave blank to keep it" : "Using course default"
+            }
+            autoComplete="new-password"
+            minLength={SEB_PASSWORD_MIN_LENGTH}
+            maxLength={SEB_PASSWORD_MAX_LENGTH}
+          />
+          {passwordOverride && (
+            <PasswordRequirements
+              id="quiz-exit-password-requirements"
+              value={quitPassword}
+              purpose="exit"
+              otherPassword={startPasswordOverride ? startPassword : null}
+              hasSavedOtherPassword={hasSavedStartPasswordOverride}
+            />
+          )}
+          {showPasswordValidationErrors && exitPasswordError && (
+            <small className="field-error" role="alert">
+              {exitPasswordError}
+            </small>
+          )}
+        </div>
       </section>
 
       <details className="advanced-settings-disclosure">
@@ -3376,7 +3866,7 @@ function SettingsSections({
             actionLabel="Add URL"
             onAction={() => setUrlRules([...urlRules, newUrlRule()])}
           />
-          <UrlRuleEditor rules={urlRules} onChange={setUrlRules} />
+          <UrlRuleEditor rules={urlRules} onChange={setUrlRules} showValidationErrors={showUrlValidationErrors} />
         </div>
       </details>
 
@@ -3404,43 +3894,53 @@ function SettingsSections({
 function UrlRuleEditor({
   rules,
   onChange,
-  disabled = false
+  disabled = false,
+  showValidationErrors = false
 }: {
   rules: SebUrlRule[];
   onChange: (rules: SebUrlRule[]) => void;
   disabled?: boolean;
+  showValidationErrors?: boolean;
 }) {
   const update = (id: string, patch: Partial<SebUrlRule>) =>
     onChange(rules.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)));
 
   return (
     <div className="rule-list">
-      {rules.map((rule) => (
-        <div className="rule-row" key={rule.id}>
-          <select
-            value={rule.match}
-            disabled={disabled}
-            onChange={(event) => update(rule.id, { match: event.target.value as SebUrlRuleMatch })}
-          >
-            <option value="domain">Any URL on domain</option>
-            <option value="exact">Exact URL</option>
-          </select>
-          <input
-            value={rule.value}
-            disabled={disabled}
-            onChange={(event) => update(rule.id, { value: event.target.value })}
-            placeholder={rule.match === "exact" ? "https://example.edu/resource" : "example.edu"}
-          />
-          <button
-            className="icon-button"
-            disabled={disabled}
-            onClick={() => onChange(rules.filter((entry) => entry.id !== rule.id))}
-            title="Remove URL"
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
-      ))}
+      {rules.map((rule) => {
+        const validationError = urlRuleValidationMessage(rule, showValidationErrors);
+        return (
+          <div className="rule-row" key={rule.id}>
+            <select
+              value={rule.match}
+              disabled={disabled}
+              onChange={(event) => update(rule.id, { match: event.target.value as SebUrlRuleMatch })}
+            >
+              <option value="domain">Any URL on domain</option>
+              <option value="exact">Exact URL</option>
+            </select>
+            <div className="rule-value-field">
+              <input
+                value={rule.value}
+                disabled={disabled}
+                aria-invalid={!!validationError}
+                onChange={(event) => update(rule.id, { value: event.target.value })}
+                placeholder={rule.match === "exact" ? "https://example.edu/resource" : "example.edu"}
+              />
+              {validationError && <small className="field-error">{validationError}</small>}
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(rules.filter((entry) => entry.id !== rule.id))}
+              title="Remove URL"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+        );
+      })}
       {rules.length === 0 && <p className="empty-line">No extra URLs configured.</p>}
     </div>
   );
@@ -4065,6 +4565,42 @@ function displayToolAccessValue(rule: ExternalToolAccessRule): string {
   return rule.match === "path" ? rule.value.replace(/\/\*$/u, "") : rule.value;
 }
 
+function urlRuleValidationMessage(rule: SebUrlRule, required = false): string | null {
+  const value = rule.value.trim();
+  if (!value) {
+    return required ? "Enter the website or exact page students may open." : null;
+  }
+  if (rule.match === "regex" || value.includes("*")) {
+    return "Use a concrete website or exact HTTPS page without wildcards or regular expressions.";
+  }
+  if (rule.match === "exact") {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) {
+        return "Use a complete HTTPS address without a username, password, or port.";
+      }
+    } catch {
+      return "Enter a complete HTTPS address, such as https://example.edu/resource.";
+    }
+  }
+  if (rule.match === "domain" && (value.includes("://") || value.includes("/") || value.includes(":"))) {
+    return "Enter only a concrete hostname, such as example.edu.";
+  }
+  return normalizeUrlRules([rule]).length === 1
+    ? null
+    : rule.match === "domain"
+      ? "Enter a concrete public hostname, such as example.edu."
+      : "Enter a complete HTTPS address, such as https://example.edu/resource.";
+}
+
+function urlRulesValidationMessage(rules: SebUrlRule[]): string | null {
+  for (const [index, rule] of rules.entries()) {
+    const error = urlRuleValidationMessage(rule, true);
+    if (error) return `Allowed website ${index + 1}: ${error}`;
+  }
+  return null;
+}
+
 function toolStartUrlValidationMessage(value: string, required = false): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -4549,7 +5085,11 @@ function SebLaunchButton({
         headers: { accept: "application/json", "x-auth-token": token }
       });
       if (typeof payload.sebLaunchUrl !== "string" || !/^sebs?:\/\//iu.test(payload.sebLaunchUrl)) {
-        throw clientRequestError(typeof payload.error_code === "string" ? payload.error_code : undefined);
+        throw clientRequestError(
+          typeof payload.error_code === "string" ? payload.error_code : undefined,
+          undefined,
+          apiErrorDetail(payload.message)
+        );
       }
       setOpeningHandoff(true);
       queueSebLaunchHandoff(payload.sebLaunchUrl, window.location.href, handoffPurpose);
@@ -5242,7 +5782,11 @@ async function persistStudentReadinessPromptDismissal(authToken?: string): Promi
     headers: actionHeaders(authToken)
   });
   if (!body.success) {
-    throw clientRequestError(typeof body.error_code === "string" ? body.error_code : undefined);
+    throw clientRequestError(
+      typeof body.error_code === "string" ? body.error_code : undefined,
+      undefined,
+      apiErrorDetail(body.message)
+    );
   }
 }
 
@@ -5263,29 +5807,50 @@ async function requestJson(url: string, init?: RequestInit): Promise<Record<stri
     }
   }
   if (!response.ok) {
-    throw clientRequestError(typeof body.error_code === "string" ? body.error_code : undefined, response.status);
+    throw clientRequestError(
+      typeof body.error_code === "string" ? body.error_code : undefined,
+      response.status,
+      response.status < 500 ? apiErrorDetail(body.message) : undefined
+    );
   }
   return body;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
   const candidate = error as ClientRequestError | undefined;
-  return safeErrorMessage(candidate?.code, candidate?.status, fallback);
+  return safeErrorMessage(candidate?.code, candidate?.status, fallback, candidate?.detail);
 }
 
 function apiMessage(body: Record<string, any>, fallback: string): string {
-  return safeErrorMessage(typeof body.error_code === "string" ? body.error_code : undefined, undefined, fallback);
+  return safeErrorMessage(
+    typeof body.error_code === "string" ? body.error_code : undefined,
+    undefined,
+    fallback,
+    apiErrorDetail(body.message)
+  );
 }
 
-function clientRequestError(code?: string, status?: number): ClientRequestError {
+function clientRequestError(code?: string, status?: number, detail?: string): ClientRequestError {
   const error = new Error("Safe Online Exam request failed") as ClientRequestError;
   error.code = code;
   error.status = status;
+  error.detail = detail;
   error.userFacing = true;
   return error;
 }
 
-function safeErrorMessage(code: string | undefined, status: number | undefined, fallback: string): string {
+function apiErrorDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/gu, " ").trim().slice(0, 500);
+  return normalized && !/^internal server error$/iu.test(normalized) ? normalized : undefined;
+}
+
+function safeErrorMessage(
+  code: string | undefined,
+  status: number | undefined,
+  fallback: string,
+  detail?: string
+): string {
   switch (code) {
     case "CANVAS_AUTHORIZATION_REQUIRED":
       return "Canvas needs to be reconnected before this can continue. Reconnect Canvas, then try again.";
@@ -5306,9 +5871,28 @@ function safeErrorMessage(code: string | undefined, status: number | undefined, 
     case "INVALID_SEB_URL_POLICY":
     case "INVALID_SEB_DOMAIN_POLICY":
     case "INVALID_SEB_TOOL_SELECTION":
-      return "One or more website permissions cannot be saved. Check the URL settings in this course or assessment and try again.";
+      return detail || "One or more website permissions cannot be saved. Check each highlighted URL and try again.";
     case "INVALID_SEB_TOOL_POLICY":
-      return "We could not save a tool because its start page or an extra link is not allowed. Check the tool’s highlighted URL fields and try again.";
+      return (
+        detail ||
+        "We could not save a tool because its start page or an extra link is not allowed. Check each highlighted URL and try again."
+      );
+    case "SEB_PASSWORD_POLICY_VIOLATION":
+      return (
+        detail ||
+        "The new password does not meet every listed requirement. Review the password checklist and try again."
+      );
+    case "SEB_PASSWORD_REUSE":
+      return (
+        detail ||
+        "Start and exit passwords must be different. Use the exit password only when a student needs permission to leave Safe Exam Browser."
+      );
+    case "SEB_QUIT_PASSWORD_REQUIRED":
+      return "Set a valid course or quiz exit password before enabling Safe Online Exam.";
+    case "SEB_QUIT_PASSWORD_WEAK":
+      return detail || "The saved exit password no longer meets the password policy. Replace it in Course Settings.";
+    case "COURSE_TOOL_LIMIT":
+      return detail || "This course already has 16 exam tools. Remove one before adding another.";
     case "COURSE_TOOL_COPY_LIMIT":
       return "Choose no more than 100 courses at a time, then copy this tool in another batch.";
     case "COURSE_TOOL_COPY_TARGETS_REQUIRED":
@@ -5321,16 +5905,46 @@ function safeErrorMessage(code: string | undefined, status: number | undefined, 
       return "School-managed exam tools cannot be duplicated from course settings.";
     case "COURSE_TOOL_NOT_FOUND":
       return "This exam tool is no longer saved in the course. Refresh the settings and try again.";
+    case "COURSE_RESET_IN_PROGRESS":
+      return "A Canvas administrator is resetting this course. Wait for the reset to finish, then reopen Safe Online Exam from Canvas.";
+    case "COURSE_UPDATE_IN_PROGRESS":
+    case "ASSESSMENT_UPDATE_IN_PROGRESS":
+      return detail || "Another course update is still in progress. Wait a moment, refresh the course, and try again.";
+    case "COURSE_UPDATE_VERIFY_REQUIRED":
+      return detail || "The course update could not be confirmed. Refresh the course and verify its current settings.";
+    case "ADMIN_COURSE_RESET_CONFIRMATION_REQUIRED":
+      return "Enter the Canvas course ID exactly as shown before starting the reset.";
+    case "ADMIN_COURSE_RESET_CANVAS_FAILED":
+      return (
+        detail ||
+        "Canvas could not disable every assessment. Course records were not deleted; refresh the course and retry."
+      );
+    case "ADMIN_COURSE_RESET_ASSESSMENT_BUSY":
+      return (
+        detail ||
+        "An assessment update is still in progress. Wait for it to finish, refresh the course, and retry the reset."
+      );
+    case "ADMIN_COURSE_RESET_VERIFY_REQUIRED":
+      return (
+        detail ||
+        "The reset could not be confirmed. It may have completed; refresh the course and verify Canvas assessment access codes before retrying."
+      );
     case "NETWORK_ERROR":
       return "We could not reach the Safe Online Exam service. Check your connection and try again.";
     default:
       break;
+  }
+  if (detail && status === undefined) {
+    return detail;
   }
   if (status === 401 || status === 403) {
     return "Your Canvas session cannot complete this action. Reopen the tool from Canvas and try again.";
   }
   if (status === 404) {
     return "The requested item is no longer available. Refresh the page and try again.";
+  }
+  if (detail && status && status >= 400 && status < 500) {
+    return detail;
   }
   if (status === 409 || status === 422) {
     return "This change could not be applied because the current settings need attention. Refresh the page, review the settings, and try again.";

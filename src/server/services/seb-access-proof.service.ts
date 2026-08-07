@@ -31,6 +31,12 @@ export class SebAccessProofService {
     return token;
   }
 
+  async revokeProof(token: string): Promise<void> {
+    if (/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      await this.repositories.value.transientStates.delete(proofDocumentId(token));
+    }
+  }
+
   async consumeProof(
     token: string | undefined | null,
     courseId: string,
@@ -76,6 +82,12 @@ export class SebAccessProofService {
       expiresAt: new Date(Date.now() + this.exitGrantTtlSeconds * 1000)
     });
     return token;
+  }
+
+  async revokeExitGrant(token: string): Promise<void> {
+    if (/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      await this.repositories.value.transientStates.delete(exitGrantDocumentId(token));
+    }
   }
 
   async validateExitGrant(

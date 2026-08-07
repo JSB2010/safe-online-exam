@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import type {
@@ -19,16 +19,29 @@ import { RepositoryProvider } from "../data/repositories.js";
 import { apiError } from "../http/api-error.js";
 import { toSebSettingView } from "../http/seb-response.js";
 import { AdminAuthorizationService } from "../services/admin-authorization.service.js";
-import { AssessmentService } from "../services/assessment.service.js";
+import {
+  AssessmentAccessCodeConsistencyError,
+  AssessmentOperationLockLostError,
+  AssessmentOperationInProgressError,
+  AssessmentService,
+  CourseMutationInProgressError,
+  CourseMutationOperationLockLostError,
+  CourseResetAssessmentIdentityError,
+  CourseResetCompensationError,
+  CourseResetInProgressError,
+  CourseResetOutcomeUnknownError,
+  CourseResetOperationLockLostError,
+  type OperationLease
+} from "../services/assessment.service.js";
 import {
   CanvasApiService,
   type CanvasAdminCourse,
+  isCanvasApiAuthorizationError,
   isCanvasApiPermissionError,
   isCanvasApiRequestError
 } from "../services/canvas-api.service.js";
 import { CourseSettingsService } from "../services/course-settings.service.js";
 import { canonicalSebConfigContentId } from "../services/seb-config-grant.service.js";
-import { sebPasswordPolicyViolation, sebPasswordsMatch } from "../services/seb-password-policy.js";
 import type { VerifiedAccountAdminPrincipal } from "../security/verified-lti-principal.js";
 
 const ADMIN_PAGE_SIZE = 25;
@@ -183,12 +196,16 @@ export class AdminController {
           results.push({ courseId, success: false, error: "Course is outside this root account" });
           continue;
         }
-        const refreshed = await this.assessments.refreshCourseContent(
-          courseId,
-          principal.canvasUserId,
-          "account_admin"
-        );
-        const connection = await this.saveCourseConnection(principal, canvasCourse, refreshed.assessments);
+        const connection = await this.assessments.withCourseWriteLock(courseId, async (operationLease) => {
+          const refreshed = await this.assessments.refreshCourseContent(
+            courseId,
+            principal.canvasUserId,
+            "account_admin",
+            { courseWriteLockHeld: true, operationLease }
+          );
+          operationLease.assertActive();
+          return this.saveCourseConnection(principal, canvasCourse, refreshed.assessments, operationLease);
+        });
         results.push({ courseId, success: true, course: adminCourseListView(connection) });
       } catch (error) {
         results.push({ courseId, success: false, error: safeErrorDetail(error) });
@@ -255,18 +272,21 @@ export class AdminController {
       { field: "rootAccountId", op: "==", value: principal.rootAccountId },
       { field: "presetId", op: "==", value: presetId }
     ]);
-    await this.repositories.value.adminToolPresetAssignments.saveMany(
+    await Promise.all(
       assignments
         .filter((assignment) => assignment.desiredAssigned)
-        .map((assignment) => ({
-          id: assignment.id,
-          value: {
-            ...assignment,
-            status: "pending" as const,
-            error: null,
-            updatedByUserId: principal.canvasUserId
-          }
-        }))
+        .map((assignment) =>
+          this.repositories.value.adminToolPresetAssignments.update(assignment.id, (current) =>
+            current
+              ? {
+                  ...current,
+                  status: "pending" as const,
+                  error: null,
+                  updatedByUserId: principal.canvasUserId
+                }
+              : null
+          )
+        )
     );
     return { success: true, preset: await this.adminToolPresetView(saved) };
   }
@@ -392,13 +412,145 @@ export class AdminController {
   @Post("/courses/:courseId/refresh")
   async refreshCourse(@Req() request: Request, @Param("courseId") courseId: string): Promise<Record<string, unknown>> {
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
-    const result = await this.assessments.refreshCourseContent(courseId, principal.canvasUserId, "account_admin");
-    await this.updateConnectionCounts(principal, courseId, result.assessments);
+    const result = await this.assessments.withCourseWriteLock(courseId, async (operationLease) => {
+      const refreshed = await this.assessments.refreshCourseContent(courseId, principal.canvasUserId, "account_admin", {
+        courseWriteLockHeld: true,
+        operationLease
+      });
+      operationLease.assertActive();
+      await this.updateConnectionCounts(principal, courseId, refreshed.assessments, operationLease);
+      return refreshed;
+    });
     return {
       success: true,
       assessmentCount: result.assessments.length,
       assessments: result.assessments.map(adminAssessmentView)
     };
+  }
+
+  @Post("/courses/:courseId/reset")
+  async resetCourse(
+    @Req() request: Request,
+    @Param("courseId") courseId: string,
+    @Body() body: unknown
+  ): Promise<Record<string, unknown>> {
+    const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
+    await this.requireCourseConnection(principal, courseId);
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      (body as { confirmation?: unknown }).confirmation !== courseId
+    ) {
+      return apiError(400, "Enter the Canvas course ID to confirm this reset", {
+        error_code: "ADMIN_COURSE_RESET_CONFIRMATION_REQUIRED"
+      });
+    }
+    try {
+      const result = await this.assessments.resetCourseForAdmin(
+        courseId,
+        principal.canvasUserId,
+        principal.rootAccountId
+      );
+      return {
+        success: true,
+        message:
+          "Canvas assessment access codes were removed and the local course setup was reset. Canvas authorization was preserved.",
+        ...result
+      };
+    } catch (error) {
+      if (error instanceof CourseResetInProgressError) {
+        return apiError(409, "This course is already being reset. Wait for it to finish before trying again.", {
+          error_code: "COURSE_RESET_IN_PROGRESS"
+        });
+      }
+      if (error instanceof CourseResetAssessmentIdentityError) {
+        return apiError(
+          409,
+          "Canvas did not provide an assessment identifier required for reset. Course records were not deleted; refresh the course and retry.",
+          {
+            error_code: "ADMIN_COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE"
+          }
+        );
+      }
+      if (error instanceof CourseResetCompensationError) {
+        return apiError(
+          409,
+          "The reset stopped, but one or more prior Canvas access codes could not be restored. Refresh the course and verify every assessment before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_ROLLBACK_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (error instanceof CourseResetOutcomeUnknownError) {
+        return apiError(
+          409,
+          "The database reset outcome could not be confirmed and may have completed. Refresh the local course state and verify every Canvas assessment access code before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (error instanceof AssessmentAccessCodeConsistencyError) {
+        return apiError(
+          409,
+          "A saved enabled assessment has no recoverable Canvas access code. Course records were not deleted; verify the assessment and reconcile its access code before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (
+        error instanceof AssessmentOperationLockLostError ||
+        error instanceof CourseMutationOperationLockLostError ||
+        error instanceof CourseResetOperationLockLostError
+      ) {
+        return apiError(
+          409,
+          "The reset could not confirm operation-lock ownership through completion. It may have completed; refresh the course and verify Canvas assessment access codes before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (error instanceof AssessmentOperationInProgressError || error instanceof CourseMutationInProgressError) {
+        return apiError(
+          409,
+          "An assessment update is already in progress. Wait for it to finish, refresh the course, and retry; course records were not deleted.",
+          {
+            error_code: "ADMIN_COURSE_RESET_ASSESSMENT_BUSY"
+          }
+        );
+      }
+      if (isCanvasApiAuthorizationError(error)) {
+        return apiError(
+          401,
+          "Canvas authorization expired before every assessment could be disabled. Reconnect Canvas and retry; course records were not deleted.",
+          {
+            error_code: "CANVAS_AUTHORIZATION_REQUIRED"
+          }
+        );
+      }
+      if (isCanvasApiPermissionError(error)) {
+        return apiError(
+          403,
+          "Canvas denied access to at least one assessment. Check the administrator Developer Key scopes and course permissions, then retry; course records were not deleted.",
+          {
+            error_code: "CANVAS_PERMISSION_DENIED"
+          }
+        );
+      }
+      if (isCanvasApiRequestError(error)) {
+        return apiError(
+          502,
+          "Canvas could not disable every assessment. Course records were not deleted; wait a moment, refresh the course, and retry the reset.",
+          {
+            error_code: "ADMIN_COURSE_RESET_CANVAS_FAILED"
+          }
+        );
+      }
+      throw error;
+    }
   }
 
   @Post("/courses/:courseId/passwords/reveal")
@@ -472,9 +624,7 @@ export class AdminController {
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
     setSecretResponseHeaders(response);
     void principal;
-    const defaults = await this.courseSettings.getDefaults(courseId);
-    const password = generateSebPassword(defaults.startPassword);
-    await this.courseSettings.saveDefaults(courseId, { ...defaults, quitPassword: password });
+    const password = await this.courseSettings.rotateQuitPassword(courseId);
     return {
       success: true,
       expiresInSeconds: 30,
@@ -564,42 +714,52 @@ export class AdminController {
     }
     const required = (body as { required: boolean }).required;
     const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
-    const assessment = await this.requireAssessment(courseId, assessmentId);
-    const defaults = await this.courseSettings.getDefaults(courseId);
-    const setting =
-      assessment.contentType === "NEW_QUIZ"
-        ? required
-          ? await this.assessments.enableContentSebWithAccessCode(
-              courseId,
-              assessment.id,
-              requiredAssignmentId(assessment),
-              principal.canvasUserId,
-              defaults,
-              "account_admin"
-            )
-          : await this.assessments.disableContentSebWithAccessCode(
-              courseId,
-              assessment.id,
-              requiredAssignmentId(assessment),
-              principal.canvasUserId,
-              "account_admin"
-            )
-        : required
-          ? await this.assessments.enableSebWithAccessCode(
-              courseId,
-              requiredQuizId(assessment),
-              principal.canvasUserId,
-              defaults,
-              "account_admin"
-            )
-          : await this.assessments.disableSebWithAccessCode(
-              courseId,
-              requiredQuizId(assessment),
-              principal.canvasUserId,
-              "account_admin"
-            );
-    await this.refreshConnectionCounts(principal, courseId);
-    return { success: true, setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword) };
+    return this.assessments.withCourseWriteLock(courseId, async (operationLease) => {
+      const assessment = await this.requireAssessment(courseId, assessmentId);
+      operationLease.assertActive();
+      const setting =
+        assessment.contentType === "NEW_QUIZ"
+          ? required
+            ? await this.assessments.enableContentSebWithAccessCode(
+                courseId,
+                assessment.id,
+                requiredAssignmentId(assessment),
+                principal.canvasUserId,
+                undefined,
+                "account_admin",
+                { courseWriteLockHeld: true, operationLease }
+              )
+            : await this.assessments.disableContentSebWithAccessCode(
+                courseId,
+                assessment.id,
+                requiredAssignmentId(assessment),
+                principal.canvasUserId,
+                "account_admin",
+                { courseWriteLockHeld: true, operationLease }
+              )
+          : required
+            ? await this.assessments.enableSebWithAccessCode(
+                courseId,
+                requiredQuizId(assessment),
+                principal.canvasUserId,
+                undefined,
+                "account_admin",
+                { courseWriteLockHeld: true, operationLease }
+              )
+            : await this.assessments.disableSebWithAccessCode(
+                courseId,
+                requiredQuizId(assessment),
+                principal.canvasUserId,
+                "account_admin",
+                { courseWriteLockHeld: true, operationLease }
+              );
+      const assessments = await this.repositories.value.assessments.find([
+        { field: "courseId", op: "==", value: courseId }
+      ]);
+      operationLease.assertActive();
+      await this.updateConnectionCounts(principal, courseId, assessments, operationLease);
+      return { success: true, setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword) };
+    });
   }
 
   private async requireAssessment(courseId: string, assessmentId: string): Promise<AssessmentRecord> {
@@ -672,11 +832,13 @@ export class AdminController {
   private async saveCourseConnection(
     principal: VerifiedAccountAdminPrincipal,
     course: CanvasAdminCourse,
-    assessments: AssessmentRecord[]
+    assessments: AssessmentRecord[],
+    operationLease?: OperationLease
   ): Promise<AdminCourseConnectionRecord> {
     const now = new Date().toISOString();
     const id = `${principal.rootAccountId}:${course.id}`;
     const previous = await this.repositories.value.adminCourseConnections.get(id);
+    operationLease?.assertActive();
     return this.repositories.value.adminCourseConnections.save(id, {
       id,
       rootAccountId: principal.rootAccountId,
@@ -700,19 +862,24 @@ export class AdminController {
   private async updateConnectionCounts(
     principal: VerifiedAccountAdminPrincipal,
     courseId: string,
-    assessments: AssessmentRecord[]
+    assessments: AssessmentRecord[],
+    operationLease?: OperationLease
   ): Promise<void> {
     const id = `${principal.rootAccountId}:${courseId}`;
+    operationLease?.assertActive();
     await this.repositories.value.adminCourseConnections.update(id, (current) =>
       current ? { ...current, ...assessmentCounts(assessments), lastRefreshedAt: new Date().toISOString() } : null
     );
   }
 
   private async refreshConnectionCounts(principal: VerifiedAccountAdminPrincipal, courseId: string): Promise<void> {
-    const assessments = await this.repositories.value.assessments.find([
-      { field: "courseId", op: "==", value: courseId }
-    ]);
-    await this.updateConnectionCounts(principal, courseId, assessments);
+    await this.assessments.withCourseWriteLock(courseId, async (operationLease) => {
+      const assessments = await this.repositories.value.assessments.find([
+        { field: "courseId", op: "==", value: courseId }
+      ]);
+      operationLease.assertActive();
+      await this.updateConnectionCounts(principal, courseId, assessments, operationLease);
+    });
   }
 
   private async requireCourseConnection(
@@ -734,20 +901,23 @@ export class AdminController {
     courseId: string,
     desiredAssigned: boolean
   ): Promise<AdminToolPresetAssignmentRecord> {
-    await this.requireCourseConnection(principal, courseId);
-    const id = `${presetId}:${courseId}`;
-    const current = await this.repositories.value.adminToolPresetAssignments.get(id);
-    return this.repositories.value.adminToolPresetAssignments.save(id, {
-      id,
-      rootAccountId: principal.rootAccountId,
-      presetId,
-      courseId,
-      desiredAssigned,
-      status: "pending",
-      error: null,
-      appliedPresetUpdatedAt: current?.appliedPresetUpdatedAt || null,
-      updatedByUserId: principal.canvasUserId,
-      createdAt: current?.createdAt || null
+    return this.assessments.withCourseWriteLock(courseId, async (operationLease) => {
+      await this.requireCourseConnection(principal, courseId);
+      const id = `${presetId}:${courseId}`;
+      const current = await this.repositories.value.adminToolPresetAssignments.get(id);
+      operationLease.assertActive();
+      return this.repositories.value.adminToolPresetAssignments.save(id, {
+        id,
+        rootAccountId: principal.rootAccountId,
+        presetId,
+        courseId,
+        desiredAssigned,
+        status: "pending",
+        error: null,
+        appliedPresetUpdatedAt: current?.appliedPresetUpdatedAt || null,
+        updatedByUserId: principal.canvasUserId,
+        createdAt: current?.createdAt || null
+      });
     });
   }
 
@@ -773,26 +943,47 @@ export class AdminController {
           return null;
         }
         try {
-          await this.authorization.requireAdminForCourse(request, assignment.courseId, true);
-          if (assignment.desiredAssigned) {
-            await this.courseSettings.pushAdminToolPreset(assignment.courseId, preset);
-          } else {
-            await this.courseSettings.removeAdminToolPreset(assignment.courseId, preset.id);
-          }
-          await this.repositories.value.adminToolPresetAssignments.save(assignment.id, {
-            ...assignment,
-            status: "applied",
-            error: null,
-            appliedPresetUpdatedAt: preset.updatedAt || new Date().toISOString()
+          return await this.assessments.withCourseWriteLock(assignment.courseId, async (operationLease) => {
+            const current = await this.repositories.value.adminToolPresetAssignments.get(assignment.id);
+            if (!current || (current.status !== "pending" && !(retryFailed && current.status === "failed"))) {
+              return null;
+            }
+            try {
+              await this.authorization.requireAdminForCourse(request, current.courseId, true);
+              operationLease.assertActive();
+              if (current.desiredAssigned) {
+                await this.courseSettings.pushAdminToolPreset(current.courseId, preset, {
+                  courseWriteLockHeld: true,
+                  operationLease
+                });
+              } else {
+                await this.courseSettings.removeAdminToolPreset(current.courseId, preset.id, {
+                  courseWriteLockHeld: true,
+                  operationLease
+                });
+              }
+              operationLease.assertActive();
+              await this.repositories.value.adminToolPresetAssignments.update(current.id, (latest) =>
+                latest
+                  ? {
+                      ...latest,
+                      status: "applied",
+                      error: null,
+                      appliedPresetUpdatedAt: preset.updatedAt || new Date().toISOString()
+                    }
+                  : null
+              );
+              return true;
+            } catch (error) {
+              operationLease.assertActive();
+              await this.repositories.value.adminToolPresetAssignments.update(current.id, (latest) =>
+                latest ? { ...latest, status: "failed", error: safeErrorDetail(error) } : null
+              );
+              return false;
+            }
           });
-          return true;
-        } catch (error) {
-          await this.repositories.value.adminToolPresetAssignments.save(assignment.id, {
-            ...assignment,
-            status: "failed",
-            error: safeErrorDetail(error)
-          });
-          return false;
+        } catch {
+          return null;
         } finally {
           await this.repositories.value.operationLocks.release(lockId, ownerId);
         }
@@ -1096,16 +1287,6 @@ function setSecretResponseHeaders(response: Response): void {
 
 function isNumericCanvasId(value: string): boolean {
   return /^\d+$/u.test(value);
-}
-
-function generateSebPassword(startPassword?: string | null): string {
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    const candidate = randomBytes(18).toString("base64url");
-    if (!sebPasswordPolicyViolation(candidate) && !sebPasswordsMatch(candidate, startPassword)) {
-      return candidate;
-    }
-  }
-  throw new Error("A secure exit password could not be generated");
 }
 
 function safeErrorDetail(error: unknown): string {

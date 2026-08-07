@@ -4,6 +4,17 @@ import { describe, expect, it, vi } from "vitest";
 import { AdminController } from "../../src/server/controllers/admin.controller.js";
 import { createInMemoryRepositories } from "../../src/server/data/in-memory-repositories.js";
 import { AdminAuthorizationService } from "../../src/server/services/admin-authorization.service.js";
+import {
+  AssessmentAccessCodeConsistencyError,
+  AssessmentOperationLockLostError,
+  AssessmentOperationInProgressError,
+  CourseMutationOperationLockLostError,
+  CourseResetAssessmentIdentityError,
+  CourseResetCompensationError,
+  CourseResetOutcomeUnknownError,
+  CourseResetOperationLockLostError
+} from "../../src/server/services/assessment.service.js";
+import { CanvasApiRequestError } from "../../src/server/services/canvas-api.service.js";
 
 const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator";
 
@@ -91,11 +102,165 @@ describe("AdminController", () => {
       connectedCount: 1,
       results: [{ courseId: "101", success: true }]
     });
-    expect(assessments.refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin");
+    expect(assessments.refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin", {
+      courseWriteLockHeld: true,
+      operationLease: expect.objectContaining({ assertActive: expect.any(Function) })
+    });
     await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
       rootAccountId: "7",
       courseId: "101",
       name: "Biology"
+    });
+  });
+
+  it("requires exact confirmation and delegates the admin-only course reset without touching OAuth directly", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
+      oauthTokens: { "42": { id: "42", userId: "42", accessToken: "preserved-token" } }
+    });
+    const resetCourseForAdmin = vi.fn().mockResolvedValue({
+      disabledAssessmentCount: 2,
+      deletedAssessmentCount: 2,
+      deletedTransientStateCount: 1,
+      deletedCourseRecordCount: 1,
+      deletedPresetAssignmentCount: 1
+    });
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "wrong" })).rejects.toThrow(
+      "Enter the Canvas course ID"
+    );
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).resolves.toMatchObject({
+      success: true,
+      disabledAssessmentCount: 2,
+      deletedAssessmentCount: 2,
+      deletedPresetAssignmentCount: 1
+    });
+    expect(resetCourseForAdmin).toHaveBeenCalledWith("101", "42", "7");
+    await expect(repositories.oauthTokens.get("42")).resolves.toMatchObject({ accessToken: "preserved-token" });
+  });
+
+  it("returns an actionable conflict when an assessment update blocks a course reset", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi.fn().mockRejectedValue(new AssessmentOperationInProgressError());
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_ASSESSMENT_BUSY",
+        message: expect.stringContaining("course records were not deleted")
+      })
+    });
+  });
+
+  it.each([
+    new AssessmentOperationLockLostError(),
+    new CourseMutationOperationLockLostError(),
+    new CourseResetOperationLockLostError()
+  ])("requires reset verification when any operation lease is lost", async (lockError) => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi.fn().mockRejectedValue(lockError);
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED",
+        message: expect.stringContaining("verify Canvas assessment access codes")
+      })
+    });
+  });
+
+  it("reports a bounded upstream failure when Canvas reset discovery fails", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new CanvasApiRequestError("Canvas unavailable", "42", "", 502));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 502,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_CANVAS_FAILED",
+        message: expect.stringContaining("Course records were not deleted")
+      })
+    });
+  });
+
+  it("keeps local records when Canvas omits an assessment identity required for reset", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi.fn().mockRejectedValue(new CourseResetAssessmentIdentityError());
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE",
+        message: expect.stringContaining("Course records were not deleted")
+      })
+    });
+  });
+
+  it("requires manual verification when a stopped reset cannot restore every Canvas access code", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new CourseResetCompensationError(new Error("reset failed"), [new Error("rollback failed")]));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_ROLLBACK_VERIFY_REQUIRED",
+        message: expect.stringContaining("verify every assessment")
+      })
+    });
+  });
+
+  it("requires manual verification when the database reset outcome is unknown", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new CourseResetOutcomeUnknownError(new Error("commit lost"), new Error("read failed")));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED",
+        message: expect.stringContaining("may have completed")
+      })
+    });
+  });
+
+  it("requires reconciliation before reset when an enabled assessment has no stored access code", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new AssessmentAccessCodeConsistencyError("missing access code"));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED",
+        message: expect.stringContaining("Course records were not deleted")
+      })
     });
   });
 
@@ -114,6 +279,27 @@ describe("AdminController", () => {
       }
     });
     expect(Object.keys(repositories)).not.toContain("adminAuditLogs");
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
+  });
+
+  it("rotates the course exit password through the leased course-settings operation", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const rotateQuitPassword = vi.fn().mockResolvedValue("generated-exit-passphrase");
+    const courseSettings = {
+      getDefaults: vi.fn().mockResolvedValue({}),
+      resetQuizToDefaults: vi.fn(),
+      rotateQuitPassword
+    };
+    const response = { setHeader: vi.fn() };
+    const controller = controllerDouble(repositories, canvasApiDouble(), {}, null, courseSettings);
+
+    await expect(controller.rotateCourseQuitPassword({} as any, response as any, "101")).resolves.toMatchObject({
+      success: true,
+      passwords: { exit: { value: "generated-exit-passphrase", source: "course" } }
+    });
+    expect(rotateQuitPassword).toHaveBeenCalledWith("101");
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
   });
 
@@ -154,6 +340,157 @@ describe("AdminController", () => {
     expect(courseSettings.pushAdminToolPreset).toHaveBeenCalledTimes(2);
     await expect(controller.toolPresets({} as any)).resolves.toMatchObject({
       presets: [{ assignedCourseCount: 2, pendingAssignmentCount: 0, failedAssignmentCount: 0 }]
+    });
+  });
+
+  it("does not recreate a preset assignment deleted before its course lease is acquired", async () => {
+    const presetId = "00000000-0000-4000-8000-000000000001";
+    const assignmentId = `${presetId}:101`;
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
+      adminToolPresetAssignments: {
+        [assignmentId]: {
+          id: assignmentId,
+          rootAccountId: "7",
+          presetId,
+          courseId: "101",
+          desiredAssigned: true,
+          status: "pending",
+          updatedByUserId: "42"
+        }
+      }
+    });
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) => {
+      await repositories.adminToolPresetAssignments.delete(assignmentId);
+      return action(operationLeaseDouble());
+    });
+    const courseSettings = {
+      getDefaults: vi.fn().mockResolvedValue({}),
+      resetQuizToDefaults: vi.fn(),
+      pushAdminToolPreset: vi.fn(),
+      removeAdminToolPreset: vi.fn()
+    };
+    const controller = controllerDouble(repositories, canvasApiDouble(), { withCourseWriteLock }, null, courseSettings);
+    const preset = {
+      id: presetId,
+      rootAccountId: "7",
+      name: "School Desmos",
+      tool: { id: "desmos", label: "Desmos", url: "https://www.desmos.com/calculator", enabled: false },
+      createdByUserId: "42",
+      updatedByUserId: "42"
+    };
+
+    await expect(
+      (controller as any).reconcilePresetAssignments({} as any, adminPrincipal(), preset, false, 1)
+    ).resolves.toEqual({ processed: 0, applied: 0, failed: 0, pending: 0 });
+    expect(courseSettings.pushAdminToolPreset).not.toHaveBeenCalled();
+    await expect(repositories.adminToolPresetAssignments.get(assignmentId)).resolves.toBeNull();
+  });
+
+  it("updates administrator connection counts inside the refresh course lease", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    let lockActive = false;
+    const operationLease = operationLeaseDouble();
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) => {
+      lockActive = true;
+      try {
+        return await action(operationLease);
+      } finally {
+        lockActive = false;
+      }
+    });
+    const originalUpdate = repositories.adminCourseConnections.update.bind(repositories.adminCourseConnections);
+    vi.spyOn(repositories.adminCourseConnections, "update").mockImplementation((id, updater) => {
+      expect(lockActive).toBe(true);
+      return originalUpdate(id, updater);
+    });
+    const refreshCourseContent = vi.fn().mockResolvedValue({ assessments: [assessmentRecord()] });
+    const controller = controllerDouble(repositories, canvasApiDouble(), {
+      withCourseWriteLock,
+      refreshCourseContent
+    });
+
+    await expect(controller.refreshCourse({} as any, "101")).resolves.toMatchObject({ assessmentCount: 1 });
+    expect(refreshCourseContent).toHaveBeenCalledWith("101", "42", "account_admin", {
+      courseWriteLockHeld: true,
+      operationLease
+    });
+    await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
+      assessmentCount: 1,
+      enabledAssessmentCount: 1
+    });
+  });
+
+  it("keeps an administrator SEB toggle and its connection counts in one course lease", async () => {
+    const disabledAssessment = assessmentRecord();
+    disabledAssessment.seb = {
+      ...disabledAssessment.seb,
+      required: false,
+      enabled: false,
+      accessCode: null
+    };
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
+      assessments: { classicquiz_501: disabledAssessment }
+    });
+    let lockActive = false;
+    const operationLease = operationLeaseDouble();
+    const withCourseWriteLock = vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) => {
+      lockActive = true;
+      try {
+        return await action(operationLease);
+      } finally {
+        lockActive = false;
+      }
+    });
+    const enableSebWithAccessCode = vi.fn(async () => {
+      expect(lockActive).toBe(true);
+      await repositories.assessments.update("classicquiz_501", (current) =>
+        current
+          ? {
+              ...current,
+              seb: { ...current.seb, required: true, enabled: true, accessCode: "NEW-CANVAS-CODE" }
+            }
+          : null
+      );
+      return {
+        quizId: "501",
+        courseId: "101",
+        sebRequired: true,
+        enabled: true,
+        accessCode: "NEW-CANVAS-CODE",
+        ssoDomains: [],
+        educationalToolDomains: [],
+        customDomains: [],
+        externalTools: []
+      };
+    });
+    const originalConnectionUpdate = repositories.adminCourseConnections.update.bind(
+      repositories.adminCourseConnections
+    );
+    vi.spyOn(repositories.adminCourseConnections, "update").mockImplementation((id, updater) => {
+      expect(lockActive).toBe(true);
+      return originalConnectionUpdate(id, updater);
+    });
+    const controller = controllerDouble(repositories, canvasApiDouble(), {
+      withCourseWriteLock,
+      enableSebWithAccessCode
+    });
+
+    await expect(
+      controller.setSebRequirement({} as any, "101", "classicquiz_501", { required: true })
+    ).resolves.toMatchObject({ success: true, setting: { sebRequired: true } });
+
+    expect(withCourseWriteLock).toHaveBeenCalledOnce();
+    expect(enableSebWithAccessCode).toHaveBeenCalledWith("101", "501", "42", undefined, "account_admin", {
+      courseWriteLockHeld: true,
+      operationLease
+    });
+    await expect(repositories.adminCourseConnections.get("7:101")).resolves.toMatchObject({
+      assessmentCount: 1,
+      enabledAssessmentCount: 1
     });
   });
 
@@ -243,11 +580,15 @@ function controllerDouble(
   };
   const courseSettings = courseSettingsOverride || {
     getDefaults: vi.fn().mockResolvedValue({}),
-    resetQuizToDefaults: vi.fn()
+    resetQuizToDefaults: vi.fn(),
+    rotateQuitPassword: vi.fn()
   };
   const assessmentService = {
     getAssessmentRecord: (id: string) => repositories.assessments.get(id),
     refreshCourseContent: vi.fn().mockResolvedValue({ assessments: [] }),
+    withCourseWriteLock: vi.fn(async (_courseId: string, action: (lease: any) => Promise<unknown>) =>
+      action(operationLeaseDouble())
+    ),
     ...assessments
   };
   return new AdminController(
@@ -267,6 +608,10 @@ function canvasApiDouble() {
     getAdminCourse: vi.fn().mockResolvedValue(canvasCourse()),
     getAdminPermissions: vi.fn().mockResolvedValue({ manage_course_content_edit: true })
   };
+}
+
+function operationLeaseDouble() {
+  return { assertActive: vi.fn() };
 }
 
 function canvasCourse() {
