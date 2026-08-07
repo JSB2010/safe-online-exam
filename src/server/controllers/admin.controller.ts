@@ -29,6 +29,7 @@ import {
   CourseResetAssessmentIdentityError,
   CourseResetCompensationError,
   CourseResetInProgressError,
+  CourseResetOutcomeUnknownError,
   CourseResetOperationLockLostError
 } from "../services/assessment.service.js";
 import {
@@ -474,6 +475,15 @@ export class AdminController {
           "The reset stopped, but one or more prior Canvas access codes could not be restored. Refresh the course and verify every assessment before retrying.",
           {
             error_code: "ADMIN_COURSE_RESET_ROLLBACK_VERIFY_REQUIRED"
+          }
+        );
+      }
+      if (error instanceof CourseResetOutcomeUnknownError) {
+        return apiError(
+          409,
+          "The database reset outcome could not be confirmed and may have completed. Refresh the local course state and verify every Canvas assessment access code before retrying.",
+          {
+            error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED"
           }
         );
       }

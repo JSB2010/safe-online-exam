@@ -11,6 +11,7 @@ import {
   CourseMutationOperationLockLostError,
   CourseResetAssessmentIdentityError,
   CourseResetCompensationError,
+  CourseResetOutcomeUnknownError,
   CourseResetOperationLockLostError
 } from "../../src/server/services/assessment.service.js";
 import { CanvasApiRequestError } from "../../src/server/services/canvas-api.service.js";
@@ -222,6 +223,24 @@ describe("AdminController", () => {
       response: expect.objectContaining({
         error_code: "ADMIN_COURSE_RESET_ROLLBACK_VERIFY_REQUIRED",
         message: expect.stringContaining("verify every assessment")
+      })
+    });
+  });
+
+  it("requires manual verification when the database reset outcome is unknown", async () => {
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: { "7:101": connectionRecord("101", "Biology") }
+    });
+    const resetCourseForAdmin = vi
+      .fn()
+      .mockRejectedValue(new CourseResetOutcomeUnknownError(new Error("commit lost"), new Error("read failed")));
+    const controller = controllerDouble(repositories, canvasApiDouble(), { resetCourseForAdmin });
+
+    await expect(controller.resetCourse({} as any, "101", { confirmation: "101" })).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({
+        error_code: "ADMIN_COURSE_RESET_VERIFY_REQUIRED",
+        message: expect.stringContaining("may have completed")
       })
     });
   });

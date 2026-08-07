@@ -187,6 +187,7 @@ export class AssessmentService {
             mutations.push(await this.courseResetMutation(assessment, courseId, userId));
           }
           const attempted: CourseResetMutation[] = [];
+          let resetOperationId: string | null = null;
           try {
             for (const mutation of mutations) {
               await this.withAssessmentLock(
@@ -220,7 +221,12 @@ export class AssessmentService {
                 true
               );
             }
-            const deleted = await this.repositories.resetCourseState(courseId, `${rootAccountId}:${courseId}`);
+            resetOperationId = randomUUID();
+            const deleted = await this.repositories.resetCourseState(
+              courseId,
+              `${rootAccountId}:${courseId}`,
+              resetOperationId
+            );
             return {
               disabledAssessmentCount: discovered.assessments.length,
               deletedAssessmentCount: deleted.assessmentCount,
@@ -229,6 +235,27 @@ export class AssessmentService {
               deletedPresetAssignmentCount: deleted.presetAssignmentCount
             };
           } catch (error) {
+            if (resetOperationId) {
+              let committed;
+              try {
+                committed = await this.repositories.getCourseResetOutcome(
+                  `${rootAccountId}:${courseId}`,
+                  resetOperationId,
+                  courseId
+                );
+              } catch (verificationError) {
+                throw new CourseResetOutcomeUnknownError(error, verificationError);
+              }
+              if (committed) {
+                return {
+                  disabledAssessmentCount: discovered.assessments.length,
+                  deletedAssessmentCount: committed.assessmentCount,
+                  deletedTransientStateCount: committed.transientStateCount,
+                  deletedCourseRecordCount: committed.courseRecordCount,
+                  deletedPresetAssignmentCount: committed.presetAssignmentCount
+                };
+              }
+            }
             await this.rollbackCourseReset(attempted, error);
             throw error;
           }
@@ -1230,6 +1257,19 @@ export class CourseResetCompensationError extends Error {
       { cause }
     );
     this.name = "CourseResetCompensationError";
+  }
+}
+
+export class CourseResetOutcomeUnknownError extends Error {
+  constructor(
+    cause: unknown,
+    readonly verificationError: unknown
+  ) {
+    super(
+      "The database reset outcome could not be verified. The reset may have committed; manual verification is required before retrying.",
+      { cause }
+    );
+    this.name = "CourseResetOutcomeUnknownError";
   }
 }
 

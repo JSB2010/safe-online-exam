@@ -141,8 +141,21 @@ describe("PostgreSQL document repositories", () => {
       updatedByUserId: "reset-user"
     });
     const provider = new RepositoryProvider({ profile: "production" } as any, testDatabase.database);
+    const operationId = "00000000-0000-4000-8000-000000000002";
 
-    await expect(provider.resetCourseState(courseId, connectionId)).resolves.toEqual({
+    await expect(provider.resetCourseState(courseId, connectionId, operationId)).resolves.toMatchObject({
+      version: 1,
+      operationId,
+      courseId,
+      assessmentCount: 1,
+      transientStateCount: 1,
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
+    });
+    await expect(provider.getCourseResetOutcome(connectionId, operationId, courseId)).resolves.toMatchObject({
+      version: 1,
+      operationId,
+      courseId,
       assessmentCount: 1,
       transientStateCount: 1,
       courseRecordCount: 1,
@@ -158,7 +171,8 @@ describe("PostgreSQL document repositories", () => {
     await expect(repositories.adminCourseConnections.get(connectionId)).resolves.toMatchObject({
       assessmentCount: 0,
       enabledAssessmentCount: 0,
-      issueCount: 0
+      issueCount: 0,
+      lastResetOutcome: expect.objectContaining({ operationId, courseId })
     });
   });
 });

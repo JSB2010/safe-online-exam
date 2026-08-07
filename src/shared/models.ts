@@ -298,6 +298,17 @@ export interface AdminToolPresetRecord {
   updatedAt?: string | null;
 }
 
+export interface AdminCourseResetOutcome {
+  version: 1;
+  operationId: string;
+  courseId: string;
+  completedAt: string;
+  assessmentCount: number;
+  transientStateCount: number;
+  courseRecordCount: number;
+  presetAssignmentCount: number;
+}
+
 export interface AdminCourseConnectionRecord {
   id: string;
   rootAccountId: string;
@@ -316,6 +327,8 @@ export interface AdminCourseConnectionRecord {
   connectedByUserId: string;
   lastCanvasCheckedAt?: string | null;
   lastRefreshedAt?: string | null;
+  /** Durable receipt used to resolve an ambiguous reset transaction commit. */
+  lastResetOutcome?: AdminCourseResetOutcome | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }

@@ -116,9 +116,30 @@ describe("InMemoryCollectionStore", () => {
       status: "applied",
       updatedByUserId: "42"
     });
+    await repositories.adminCourseConnections.save("7:course-1", {
+      id: "7:course-1",
+      rootAccountId: "7",
+      canvasOrigin: "https://canvas.example.edu",
+      courseId: "course-1",
+      name: "Course 1",
+      accountId: "7",
+      teacherNames: [],
+      assessmentCount: 0,
+      enabledAssessmentCount: 0,
+      issueCount: 0,
+      connectedByUserId: "42"
+    });
     await repositories.oauthTokens.save("42", { id: "42", userId: "42", accessToken: "preserved-token" });
 
-    await expect(provider.resetCourseState("course-1", "7:course-1")).resolves.toMatchObject({
+    const operationId = "00000000-0000-4000-8000-000000000001";
+    await expect(provider.resetCourseState("course-1", "7:course-1", operationId)).resolves.toMatchObject({
+      courseRecordCount: 1,
+      presetAssignmentCount: 1
+    });
+    await expect(provider.getCourseResetOutcome("7:course-1", operationId, "course-1")).resolves.toMatchObject({
+      version: 1,
+      operationId,
+      courseId: "course-1",
       courseRecordCount: 1,
       presetAssignmentCount: 1
     });
