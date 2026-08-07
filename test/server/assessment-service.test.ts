@@ -1219,6 +1219,44 @@ describe("AssessmentService", () => {
     await expect(repositories.operationLocks.get("assessment:classicquiz_quiz-1")).resolves.toBeNull();
   });
 
+  it("preserves the verified action result when lease cleanup fails", async () => {
+    const repositories = createInMemoryRepositories();
+    const release = vi.spyOn(repositories.operationLocks, "release").mockRejectedValue(new Error("release failed"));
+    const service = new AssessmentService(
+      { value: repositories } as RepositoryProvider,
+      {
+        getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+        getNewQuizAssignments: vi.fn().mockResolvedValue([])
+      } as unknown as CanvasApiService
+    );
+
+    await expect(service.withAssessmentLock("quiz-1", async () => "completed")).resolves.toBe("completed");
+    expect(release).toHaveBeenCalledTimes(1);
+    await expect(repositories.operationLocks.get("assessment:classicquiz_quiz-1")).resolves.toMatchObject({
+      ownerId: expect.any(String),
+      expiresAt: expect.any(Date)
+    });
+  });
+
+  it("preserves the action error when lease cleanup also fails", async () => {
+    const repositories = createInMemoryRepositories();
+    vi.spyOn(repositories.operationLocks, "release").mockRejectedValue(new Error("release failed"));
+    const service = new AssessmentService(
+      { value: repositories } as RepositoryProvider,
+      {
+        getQuizzesForCourse: vi.fn().mockResolvedValue([]),
+        getNewQuizAssignments: vi.fn().mockResolvedValue([])
+      } as unknown as CanvasApiService
+    );
+    const actionError = new Error("action failed");
+
+    await expect(
+      service.withAssessmentLock("quiz-1", async () => {
+        throw actionError;
+      })
+    ).rejects.toBe(actionError);
+  });
+
   it("renews a long-running assessment lock and proves ownership again before returning success", async () => {
     vi.useFakeTimers();
     try {

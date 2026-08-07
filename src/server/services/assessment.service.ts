@@ -997,7 +997,13 @@ export class AssessmentService {
       if (renewalInFlight) {
         await renewalInFlight;
       }
-      await operationLocks.release(lockId, ownerId);
+      try {
+        await operationLocks.release(lockId, ownerId);
+      } catch {
+        // Ownership was already verified before the action result was accepted.
+        // A failed cleanup must not replace that result; the bounded lease is
+        // still safe because it expires automatically.
+      }
     }
   }
 
