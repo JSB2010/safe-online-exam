@@ -1,6 +1,6 @@
 import type { PostgresDatabase } from "./postgres-client.js";
 
-export const EXPECTED_SCHEMA_VERSION = 5;
+export const EXPECTED_SCHEMA_VERSION = 6;
 
 export async function assertSchemaReady(database: Pick<PostgresDatabase, "query">): Promise<void> {
   let version: number;

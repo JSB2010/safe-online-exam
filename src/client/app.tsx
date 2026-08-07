@@ -210,6 +210,8 @@ type AdminCourseView = {
   name: string;
   courseCode?: string | null;
   workflowState?: string | null;
+  concluded?: boolean;
+  termId?: string | null;
   termName?: string | null;
   teacherNames?: string[];
   setupCompleted?: boolean;
@@ -220,6 +222,13 @@ type AdminCourseView = {
   lastRefreshedAt?: string | null;
   adminToolPresetIds?: string[];
   assessments?: AdminAssessmentView[];
+};
+
+type AdminTermView = {
+  id: string;
+  name: string;
+  startAt?: string | null;
+  endAt?: string | null;
 };
 
 type AdminToolPresetView = {
@@ -236,6 +245,8 @@ type AdminToolPresetView = {
 
 type AdminOverview = {
   account?: { id?: string; name?: string };
+  operationalTerm?: AdminTermView | null;
+  terms?: AdminTermView[];
   summary?: {
     courseCount?: number;
     configuredCourseCount?: number;
@@ -270,6 +281,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
     () => window.localStorage.getItem(ADMIN_COURSE_STORAGE_KEY) || ""
   );
   const [query, setQuery] = useState("");
+  const [includePast, setIncludePast] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState("");
@@ -319,19 +331,23 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
     setOverview((current) => (current ? { ...current, account: body.account, summary: body.summary } : current));
   };
 
-  const loadOverview = async (preserveSelection = true, search = query) => {
+  const loadOverview = async (preserveSelection = true, search = query, includePastCourses = includePast) => {
     setLoading(true);
     setError("");
     try {
       const params = new URLSearchParams({ limit: "25" });
       if (search.trim()) params.set("search", search.trim());
-      const [summaryBody, courseBody] = await Promise.all([
+      if (includePastCourses) params.set("includePast", "true");
+      const [summaryBody, courseBody, termsBody] = await Promise.all([
         requestJson("/api/admin/summary"),
-        requestJson(`/api/admin/courses?${params.toString()}`)
+        requestJson(`/api/admin/courses?${params.toString()}`),
+        requestJson("/api/admin/terms")
       ]);
       const courses = (courseBody.courses || []) as AdminCourseView[];
-      const preferred =
-        preserveSelection && !search.trim() && selectedCourseId ? selectedCourseId : courses[0]?.id || "";
+      const requestedSelection = preserveSelection && !search.trim() ? selectedCourseId : "";
+      const preferred = courses.some((course) => course.id === requestedSelection)
+        ? requestedSelection
+        : courses[0]?.id || "";
       const [detailBody, presetBody] = await Promise.all([
         preferred
           ? requestJson(`/api/admin/courses/${encodeURIComponent(preferred)}`).catch(() => null)
@@ -348,6 +364,8 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
         ...current,
         account: summaryBody.account,
         summary: summaryBody.summary,
+        operationalTerm: termsBody.operationalTerm || summaryBody.operationalTerm || null,
+        terms: termsBody.terms || [],
         courses: detailedCourses,
         toolPresets: presetBody?.presets || current?.toolPresets,
         nextCourseCursor: courseBody.nextCursor || null
@@ -365,6 +383,7 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
     if (!cursor) return;
     const params = new URLSearchParams({ limit: "25", cursor });
     if (query.trim()) params.set("search", query.trim());
+    if (includePast) params.set("includePast", "true");
     const key = "courses:more";
     startBusy(key);
     try {
@@ -407,7 +426,26 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
   useEffect(() => {
     const timer = window.setTimeout(() => void loadOverview(true, query), 350);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, includePast]);
+
+  async function updateOperationalTerm(termId: string) {
+    const key = "operational-term";
+    startBusy(key);
+    try {
+      await requestJson("/api/admin/terms/operational", {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...actionHeaders(data.authToken) },
+        body: JSON.stringify({ termId })
+      });
+      setIncludePast(false);
+      await loadOverview(false, query, false);
+      pushToast("success", "Operational term updated for all administrators.");
+    } catch (value) {
+      pushToast("error", errorMessage(value, "The operational term could not be updated."));
+    } finally {
+      stopBusy(key);
+    }
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -752,6 +790,31 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
                 aria-label="Search configured courses"
               />
             </div>
+            <div className="admin-course-scope-controls">
+              <label>
+                Operational term
+                <select
+                  value={overview?.operationalTerm?.id || ""}
+                  disabled={isBusy("operational-term") || !overview?.terms?.length}
+                  onChange={(event) => void updateOperationalTerm(event.target.value)}
+                >
+                  {!overview?.terms?.length && <option value="">No active Canvas terms</option>}
+                  {(overview?.terms || []).map((term) => (
+                    <option value={term.id} key={term.id}>
+                      {term.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="checkbox-line compact">
+                <input
+                  type="checkbox"
+                  checked={includePast}
+                  onChange={(event) => setIncludePast(event.target.checked)}
+                />
+                Show past and other courses
+              </label>
+            </div>
             <div className="admin-course-list">
               {loading && !overview && (
                 <div className="admin-loading">
@@ -760,7 +823,11 @@ function AdminDashboard({ data }: { data: Record<string, any> }) {
               )}
               {!loading && !filteredCourses.length && (
                 <div className="empty-line">
-                  {query ? "No matching configured courses." : "No courses have configured Safe Online Exam yet."}
+                  {query
+                    ? "No matching configured courses."
+                    : includePast
+                      ? "No courses have configured Safe Online Exam yet."
+                      : "No configured courses are active in the operational term."}
                 </div>
               )}
               {filteredCourses.map((course) => (
@@ -1353,7 +1420,7 @@ function AdminConnectCoursesDialog({
   useEscapeToClose(onClose);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   useDialogInitialFocus(closeButtonRef);
-  const [terms, setTerms] = useState<Array<{ id: string; name: string; startAt?: string; endAt?: string }>>([]);
+  const [terms, setTerms] = useState<AdminTermView[]>([]);
   const [termId, setTermId] = useState("");
   const [query, setQuery] = useState("");
   const [includeUnpublished, setIncludeUnpublished] = useState(true);
@@ -1391,13 +1458,7 @@ function AdminConnectCoursesDialog({
       .then((body) => {
         const values = (body.terms || []) as typeof terms;
         setTerms(values);
-        const now = Date.now();
-        const current = values.find((term) => {
-          const start = term.startAt ? Date.parse(term.startAt) : Number.NEGATIVE_INFINITY;
-          const end = term.endAt ? Date.parse(term.endAt) : Number.POSITIVE_INFINITY;
-          return start <= now && end >= now;
-        });
-        setTermId(current?.id || values[0]?.id || "");
+        setTermId(String(body.operationalTerm?.id || values[0]?.id || ""));
       })
       .catch(() => undefined);
   }, []);

@@ -167,6 +167,7 @@ On Windows, the configuration requests the OS-session and SEB-service controls u
 | `courses`                       | Course defaults, setup state, and exam-tool catalog                                                 | Durable until intentionally changed.                          |
 | `canvas_oauth_tokens`           | Canvas access and refresh tokens                                                                    | Durable; lifecycle is driven by Canvas authorization/refresh. |
 | `admin_course_connections`      | Root-account-scoped cached Canvas course metadata and assessment counts                             | Durable until a course connection is intentionally removed.   |
+| `admin_account_settings`        | Root-account operational-term selection                                                             | Durable until an administrator changes it.                    |
 | `admin_tool_presets`            | Root-account tool definitions                                                                       | Durable until an administrator changes or deletes the preset. |
 | `admin_tool_preset_assignments` | Per-course desired state, rollout status, and retry information                                     | Durable until the preset is deleted or the course is reset.   |
 | `sessions`                      | Express session payloads keyed by a hashed session ID                                               | Expired rows are removed by bounded cleanup.                  |
@@ -217,10 +218,11 @@ All routes below are under `/api/admin`, require a verified root-account adminis
 | Route                                                                             | Purpose                                                           |
 | --------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `GET /api/admin/summary`                                                          | Read lightweight account and configured-course totals.            |
-| `GET /api/admin/courses`                                                          | Search and cursor-page the root-account course index.             |
+| `GET /api/admin/courses`                                                          | Page operational-term courses or the preserved historical index.  |
 | `GET /api/admin/courses/:courseId`                                                | Read one connected course and its assessments.                    |
 | `GET /api/admin/course-catalog`                                                   | Browse active Canvas courses in bounded, filtered pages.          |
-| `GET /api/admin/terms`                                                            | Read active Canvas enrollment terms for the course picker.        |
+| `GET /api/admin/terms`                                                            | Read active terms and the persisted operational term.             |
+| `PUT /api/admin/terms/operational`                                                | Persist the root account's shared operational term.               |
 | `POST /api/admin/courses/connect`                                                 | Validate, connect, and initially synchronize selected courses.    |
 | `POST /api/admin/courses/:courseId/refresh`                                       | Refresh one course's Classic and New Quiz discovery.              |
 | `POST /api/admin/courses/:courseId/reset`                                         | Disable every Canvas assessment, then reset local course setup.   |

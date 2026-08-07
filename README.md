@@ -81,7 +81,7 @@ support, protected secret bootstrap, an upgrade helper, and optional Caddy
 HTTPS.
 
 ```bash
-export VERSION=1.0.4
+export VERSION=1.0.5
 curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz"
 curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${VERSION}/safe-online-exam-${VERSION}-compose.tar.gz.sha256"
 sha256sum --check "safe-online-exam-${VERSION}-compose.tar.gz.sha256"
@@ -103,7 +103,7 @@ traffic, schedules cleanup, and stages upgrades without traffic until
 readiness checks pass.
 
 ```bash
-export CLOUDRUN_VERSION="1.0.4"
+export CLOUDRUN_VERSION="1.0.5"
 curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz"
 curl -fLO "https://github.com/JSB2010/safe-online-exam/releases/download/v${CLOUDRUN_VERSION}/safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"
 sha256sum --check "safe-online-exam-${CLOUDRUN_VERSION}-cloud-run.tar.gz.sha256"

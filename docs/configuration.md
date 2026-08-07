@@ -60,6 +60,7 @@ The migration ledger is `schema_migrations`. Application/runtime data uses nine 
 | Table                           | Contents                                                     |
 | ------------------------------- | ------------------------------------------------------------ |
 | `admin_course_connections`      | Root-scoped Canvas course metadata and summary counts.       |
+| `admin_account_settings`        | Root-scoped persisted operational-term selection.            |
 | `admin_tool_presets`            | School-managed tool definitions.                             |
 | `admin_tool_preset_assignments` | Durable per-course rollout state and failures.               |
 | `assessments`                   | Assessment discovery state and SEB settings.                 |

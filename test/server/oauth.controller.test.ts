@@ -37,6 +37,7 @@ describe("canvasScopes", () => {
       "url:GET|/api/v1/accounts/:account_id/courses",
       "url:GET|/api/v1/accounts/:account_id/terms",
       "url:GET|/api/v1/courses/:id",
+      "url:GET|/api/v1/courses/:course_id/quizzes/:id",
       ...canvasScopes()
     ]);
   });

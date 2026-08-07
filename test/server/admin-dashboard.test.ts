@@ -113,6 +113,54 @@ describe("AdminController", () => {
     });
   });
 
+  it("persists the operational term and separates current courses from historical records", async () => {
+    const checkedAt = new Date().toISOString();
+    const repositories = createInMemoryRepositories({
+      adminCourseConnections: {
+        "7:101": { ...connectionRecord("101", "Biology"), concluded: false, lastCanvasCheckedAt: checkedAt },
+        "7:102": {
+          ...connectionRecord("102", "Archived Biology"),
+          termId: "21",
+          termName: "Spring 2026",
+          concluded: true,
+          lastCanvasCheckedAt: checkedAt
+        },
+        "7:103": {
+          ...connectionRecord("103", "Future Biology"),
+          termId: "23",
+          termName: "Spring 2027",
+          concluded: false,
+          lastCanvasCheckedAt: checkedAt
+        }
+      }
+    });
+    const controller = controllerDouble(repositories, canvasApiDouble());
+
+    await expect(controller.terms({} as any)).resolves.toMatchObject({
+      operationalTerm: { id: "22", name: "Fall 2026" }
+    });
+    await expect(controller.listCourses({} as any)).resolves.toMatchObject({
+      courses: [expect.objectContaining({ id: "101" })]
+    });
+    await expect(controller.updateOperationalTerm({} as any, { termId: "23" })).resolves.toMatchObject({
+      operationalTerm: { id: "23", name: "Spring 2027" }
+    });
+    await expect(repositories.adminAccountSettings.get("7")).resolves.toMatchObject({
+      operationalTermId: "23",
+      updatedByUserId: "42"
+    });
+    await expect(controller.listCourses({} as any)).resolves.toMatchObject({
+      courses: [expect.objectContaining({ id: "103" })]
+    });
+    await expect(controller.listCourses({} as any, undefined, undefined, undefined, "true")).resolves.toMatchObject({
+      courses: [
+        expect.objectContaining({ id: "102", concluded: true }),
+        expect.objectContaining({ id: "101" }),
+        expect.objectContaining({ id: "103" })
+      ]
+    });
+  });
+
   it("requires exact confirmation and delegates the admin-only course reset without touching OAuth directly", async () => {
     const repositories = createInMemoryRepositories({
       adminCourseConnections: { "7:101": connectionRecord("101", "Biology") },
@@ -606,6 +654,11 @@ function canvasApiDouble() {
     getCanvasDomain: () => "https://canvas.example.edu",
     getAdminAccount: vi.fn().mockResolvedValue({ id: "7", name: "Example School", rootAccountId: "7" }),
     getAdminCourse: vi.fn().mockResolvedValue(canvasCourse()),
+    getAdminEnrollmentTerms: vi.fn().mockResolvedValue([
+      { id: "1", name: "Default Term", startAt: null, endAt: null },
+      { id: "22", name: "Fall 2026", startAt: "2000-01-01T00:00:00.000Z", endAt: "2100-12-31T23:59:59.000Z" },
+      { id: "23", name: "Spring 2027", startAt: "2101-01-01T00:00:00.000Z", endAt: "2101-06-30T23:59:59.000Z" }
+    ]),
     getAdminPermissions: vi.fn().mockResolvedValue({ manage_course_content_edit: true })
   };
 }
@@ -622,6 +675,7 @@ function canvasCourse() {
     accountId: "7",
     rootAccountId: "7",
     workflowState: "available",
+    concluded: false,
     termId: "22",
     termName: "Fall 2026",
     teacherNames: ["Teacher One"]
@@ -638,13 +692,15 @@ function connectionRecord(courseId: string, name: string) {
     courseCode: null,
     accountId: "7",
     workflowState: "available",
+    concluded: false,
     termId: "22",
     termName: "Fall 2026",
     teacherNames: [],
     assessmentCount: 0,
     enabledAssessmentCount: 0,
     issueCount: 0,
-    connectedByUserId: "42"
+    connectedByUserId: "42",
+    lastCanvasCheckedAt: new Date().toISOString()
   };
 }
 

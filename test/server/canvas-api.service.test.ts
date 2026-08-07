@@ -126,6 +126,30 @@ describe("CanvasApiService", () => {
     expect(requested.searchParams.has("published")).toBe(false);
   });
 
+  it("loads an administrator course with Canvas concluded status", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        id: 41,
+        name: "Physics",
+        course_code: "PHY-101",
+        account_id: 7,
+        root_account_id: 7,
+        workflow_state: "available",
+        concluded: true,
+        term: { id: 22, name: "Fall 2026" }
+      })
+    );
+
+    await expect(service.getAdminCourse("41", "user-1")).resolves.toMatchObject({
+      id: "41",
+      concluded: true,
+      termId: "22"
+    });
+    const requested = new URL(String(vi.mocked(fetch).mock.calls[0]?.[0]));
+    expect(requested.pathname).toBe("/api/v1/courses/41");
+    expect(requested.searchParams.getAll("include[]")).toEqual(["term", "account", "concluded"]);
+  });
+
   it("loads active administrator enrollment terms", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({

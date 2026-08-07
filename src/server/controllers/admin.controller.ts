@@ -36,6 +36,7 @@ import {
 import {
   CanvasApiService,
   type CanvasAdminCourse,
+  type CanvasEnrollmentTerm,
   isCanvasApiAuthorizationError,
   isCanvasApiPermissionError,
   isCanvasApiRequestError
@@ -47,10 +48,12 @@ import type { VerifiedAccountAdminPrincipal } from "../security/verified-lti-pri
 const ADMIN_PAGE_SIZE = 25;
 const ADMIN_BULK_LIMIT = 50;
 const ADMIN_RECONCILE_BATCH_SIZE = 12;
+const ADMIN_COURSE_STATUS_TTL_MS = 6 * 60 * 60 * 1000;
 
 @Controller("/api/admin")
 export class AdminController {
   private readonly indexedRoots = new Set<string>();
+  private readonly courseStatusReconciliations = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
@@ -65,10 +68,14 @@ export class AdminController {
   async summary(@Req() request: Request): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireAdmin(request);
     await this.ensureLegacyCourseConnections(principal);
+    await this.reconcileCourseStatuses(principal);
+    const operationalTerm = await this.resolveOperationalTerm(principal);
     const [account, permissions, summary, presets, assignments] = await Promise.all([
       this.canvasApi.getAdminAccount(principal.rootAccountId, principal.canvasUserId),
       this.canvasApi.getAdminPermissions(principal.rootAccountId, principal.canvasUserId),
-      this.repositories.value.adminCourseConnections.summarizeForRoot(principal.rootAccountId),
+      this.repositories.value.adminCourseConnections.summarizeForRoot(principal.rootAccountId, {
+        termId: operationalTerm?.id
+      }),
       this.repositories.value.adminToolPresets.find([
         { field: "rootAccountId", op: "==", value: principal.rootAccountId }
       ]),
@@ -80,6 +87,7 @@ export class AdminController {
       success: true,
       account,
       permissions,
+      operationalTerm,
       summary: {
         ...summary,
         configuredCourseCount: summary.courseCount,
@@ -95,14 +103,20 @@ export class AdminController {
     @Req() request: Request,
     @Query("search") search?: unknown,
     @Query("cursor") cursor?: unknown,
-    @Query("limit") rawLimit?: unknown
+    @Query("limit") rawLimit?: unknown,
+    @Query("includePast") rawIncludePast?: unknown
   ): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireAdmin(request);
     await this.ensureLegacyCourseConnections(principal);
+    await this.reconcileCourseStatuses(principal);
+    const operationalTerm = await this.resolveOperationalTerm(principal);
+    const includePast = rawIncludePast === "true";
     const limit = normalizedPageSize(rawLimit);
     const after = decodeCourseCursor(cursor);
     const courses = await this.repositories.value.adminCourseConnections.listForRoot(principal.rootAccountId, {
       search: normalizedSearch(search),
+      termId: operationalTerm?.id,
+      includePast,
       afterName: after?.name,
       afterCourseId: after?.courseId,
       limit: limit + 1
@@ -112,6 +126,8 @@ export class AdminController {
     const last = items.at(-1);
     return {
       success: true,
+      operationalTerm,
+      includePast,
       courses: items.map(adminCourseListView),
       nextCursor: hasMore && last ? encodeCourseCursor(last) : null
     };
@@ -177,10 +193,34 @@ export class AdminController {
   @Get("/terms")
   async terms(@Req() request: Request): Promise<Record<string, unknown>> {
     const principal = this.authorization.requireAdmin(request);
+    const terms = await this.canvasApi.getAdminEnrollmentTerms(principal.rootAccountId, principal.canvasUserId);
     return {
       success: true,
-      terms: await this.canvasApi.getAdminEnrollmentTerms(principal.rootAccountId, principal.canvasUserId)
+      terms,
+      operationalTerm: await this.resolveOperationalTerm(principal, terms)
     };
+  }
+
+  @Put("/terms/operational")
+  async updateOperationalTerm(@Req() request: Request, @Body() body: unknown): Promise<Record<string, unknown>> {
+    const principal = this.authorization.requireAdmin(request, true);
+    const termId = normalizedOperationalTermId(body);
+    const terms = await this.canvasApi.getAdminEnrollmentTerms(principal.rootAccountId, principal.canvasUserId);
+    const selected = terms.find((term) => term.id === termId);
+    if (!selected) {
+      return apiError(400, "Select an active Canvas enrollment term", {
+        error_code: "INVALID_OPERATIONAL_TERM"
+      });
+    }
+    const previous = await this.repositories.value.adminAccountSettings.get(principal.rootAccountId);
+    await this.repositories.value.adminAccountSettings.save(principal.rootAccountId, {
+      id: principal.rootAccountId,
+      rootAccountId: principal.rootAccountId,
+      operationalTermId: selected.id,
+      updatedByUserId: principal.canvasUserId,
+      createdAt: previous?.createdAt || null
+    });
+    return { success: true, operationalTerm: selected };
   }
 
   @Post("/courses/connect")
@@ -411,14 +451,14 @@ export class AdminController {
 
   @Post("/courses/:courseId/refresh")
   async refreshCourse(@Req() request: Request, @Param("courseId") courseId: string): Promise<Record<string, unknown>> {
-    const { principal } = await this.authorization.requireAdminForCourse(request, courseId, true);
+    const { principal, course } = await this.authorization.requireAdminForCourse(request, courseId, true);
     const result = await this.assessments.withCourseWriteLock(courseId, async (operationLease) => {
       const refreshed = await this.assessments.refreshCourseContent(courseId, principal.canvasUserId, "account_admin", {
         courseWriteLockHeld: true,
         operationLease
       });
       operationLease.assertActive();
-      await this.updateConnectionCounts(principal, courseId, refreshed.assessments, operationLease);
+      await this.saveCourseConnection(principal, course, refreshed.assessments, operationLease);
       return refreshed;
     });
     return {
@@ -829,6 +869,87 @@ export class AdminController {
     return course.rootAccountId || (await this.canvasApi.getAdminAccount(course.accountId, canvasUserId)).rootAccountId;
   }
 
+  private async resolveOperationalTerm(
+    principal: VerifiedAccountAdminPrincipal,
+    providedTerms?: CanvasEnrollmentTerm[]
+  ): Promise<CanvasEnrollmentTerm | null> {
+    const terms =
+      providedTerms || (await this.canvasApi.getAdminEnrollmentTerms(principal.rootAccountId, principal.canvasUserId));
+    const existing = await this.repositories.value.adminAccountSettings.get(principal.rootAccountId);
+    const selected = terms.find((term) => term.id === existing?.operationalTermId) || currentEnrollmentTerm(terms);
+    if (!selected) {
+      return null;
+    }
+    if (existing?.operationalTermId !== selected.id) {
+      await this.repositories.value.adminAccountSettings.save(principal.rootAccountId, {
+        id: principal.rootAccountId,
+        rootAccountId: principal.rootAccountId,
+        operationalTermId: selected.id,
+        updatedByUserId: principal.canvasUserId,
+        createdAt: existing?.createdAt || null
+      });
+    }
+    return selected;
+  }
+
+  private async reconcileCourseStatuses(principal: VerifiedAccountAdminPrincipal): Promise<void> {
+    const active = this.courseStatusReconciliations.get(principal.rootAccountId);
+    if (active) {
+      return active;
+    }
+    const reconciliation = this.performCourseStatusReconciliation(principal).finally(() => {
+      this.courseStatusReconciliations.delete(principal.rootAccountId);
+    });
+    this.courseStatusReconciliations.set(principal.rootAccountId, reconciliation);
+    return reconciliation;
+  }
+
+  private async performCourseStatusReconciliation(principal: VerifiedAccountAdminPrincipal): Promise<void> {
+    const cutoff = Date.now() - ADMIN_COURSE_STATUS_TTL_MS;
+    const connections = await this.repositories.value.adminCourseConnections.find(
+      [{ field: "rootAccountId", op: "==", value: principal.rootAccountId }],
+      { orderBy: "updatedAt", direction: "asc", limit: 100 }
+    );
+    const candidates = connections
+      .filter(
+        (connection) =>
+          typeof connection.concluded !== "boolean" ||
+          !connection.lastCanvasCheckedAt ||
+          Date.parse(connection.lastCanvasCheckedAt) < cutoff
+      )
+      .sort((left, right) => Number(typeof left.concluded === "boolean") - Number(typeof right.concluded === "boolean"))
+      .slice(0, ADMIN_RECONCILE_BATCH_SIZE);
+    await Promise.all(
+      candidates.map(async (connection) => {
+        try {
+          const course = await this.canvasApi.getAdminCourse(connection.courseId, principal.canvasUserId);
+          const now = new Date().toISOString();
+          await this.repositories.value.adminCourseConnections.update(connection.id, (current) =>
+            current
+              ? {
+                  ...current,
+                  name: course.name,
+                  courseCode: course.courseCode,
+                  accountId: course.accountId,
+                  workflowState: course.workflowState,
+                  concluded: course.concluded,
+                  termId: course.termId,
+                  termName: course.termName,
+                  teacherNames: course.teacherNames,
+                  lastCanvasCheckedAt: now
+                }
+              : null
+          );
+        } catch (error) {
+          if ((isCanvasApiRequestError(error) && error.status === 404) || isCanvasApiPermissionError(error)) {
+            return;
+          }
+          throw error;
+        }
+      })
+    );
+  }
+
   private async saveCourseConnection(
     principal: VerifiedAccountAdminPrincipal,
     course: CanvasAdminCourse,
@@ -848,6 +969,7 @@ export class AdminController {
       courseCode: course.courseCode,
       accountId: course.accountId,
       workflowState: course.workflowState,
+      concluded: course.concluded,
       termId: course.termId,
       termName: course.termName,
       teacherNames: course.teacherNames,
@@ -1055,6 +1177,7 @@ function adminCourseListView(course: AdminCourseConnectionRecord) {
     courseCode: course.courseCode || null,
     accountId: course.accountId,
     workflowState: course.workflowState || null,
+    concluded: course.concluded === true,
     termId: course.termId || null,
     termName: course.termName || null,
     teacherNames: course.teacherNames,
@@ -1063,6 +1186,22 @@ function adminCourseListView(course: AdminCourseConnectionRecord) {
     issueCount: course.issueCount,
     lastRefreshedAt: course.lastRefreshedAt || null
   };
+}
+
+function currentEnrollmentTerm(terms: CanvasEnrollmentTerm[], now = Date.now()): CanvasEnrollmentTerm | null {
+  const dated = terms.map((term) => ({
+    term,
+    start: term.startAt ? Date.parse(term.startAt) : Number.NEGATIVE_INFINITY,
+    end: term.endAt ? Date.parse(term.endAt) : Number.POSITIVE_INFINITY,
+    hasBoundary: !!term.startAt || !!term.endAt
+  }));
+  return (
+    dated.find(({ start, end, hasBoundary }) => hasBoundary && start <= now && end >= now)?.term ||
+    dated.filter(({ start }) => start <= now).sort((left, right) => right.start - left.start)[0]?.term ||
+    dated.filter(({ start }) => start > now).sort((left, right) => left.start - right.start)[0]?.term ||
+    terms[0] ||
+    null
+  );
 }
 
 function normalizedPageSize(value: unknown): number {
@@ -1149,6 +1288,17 @@ function normalizedCourseIds(body: unknown): string[] {
     });
   }
   return courseIds;
+}
+
+function normalizedOperationalTermId(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return apiError(400, "Select an active Canvas enrollment term");
+  }
+  const termId = (body as { termId?: unknown }).termId;
+  if (typeof termId !== "string" || !/^\d+$/u.test(termId)) {
+    return apiError(400, "Select an active Canvas enrollment term");
+  }
+  return termId;
 }
 
 function normalizedBulkAssignmentInput(body: unknown): {

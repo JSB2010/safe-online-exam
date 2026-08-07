@@ -1,4 +1,5 @@
 import type {
+  AdminAccountSettingsRecord,
   AdminCourseConnectionRecord,
   AdminToolPresetRecord,
   AdminToolPresetAssignmentRecord,
@@ -58,6 +59,10 @@ const ADMIN_COURSE_CONNECTION_MAPPING: DocumentMapping<AdminCourseConnectionReco
     { field: "courseCode", column: "course_code" }
   ]
 };
+const ADMIN_ACCOUNT_SETTINGS_MAPPING: DocumentMapping<AdminAccountSettingsRecord> = {
+  table: "admin_account_settings",
+  extracted: [{ field: "rootAccountId", column: "root_account_id" }]
+};
 const ADMIN_TOOL_PRESET_MAPPING: DocumentMapping<AdminToolPresetRecord> = {
   table: "admin_tool_presets",
   extracted: [{ field: "rootAccountId", column: "root_account_id" }]
@@ -74,6 +79,7 @@ const ADMIN_TOOL_PRESET_ASSIGNMENT_MAPPING: DocumentMapping<AdminToolPresetAssig
 
 export function createPostgresRepositories(database: PostgresDatabase): AppRepositories {
   return {
+    adminAccountSettings: new PostgresCollectionStore(database, ADMIN_ACCOUNT_SETTINGS_MAPPING),
     adminCourseConnections: new PostgresAdminCourseConnectionStore(database),
     adminToolPresetAssignments: new PostgresCollectionStore(database, ADMIN_TOOL_PRESET_ASSIGNMENT_MAPPING),
     adminToolPresets: new PostgresCollectionStore(database, ADMIN_TOOL_PRESET_MAPPING),
@@ -181,6 +187,13 @@ class PostgresAdminCourseConnectionStore
   ): Promise<AdminCourseConnectionRecord[]> {
     const values: unknown[] = [rootAccountId];
     const conditions = ["root_account_id = $1"];
+    if (!options.includePast) {
+      conditions.push("COALESCE((document->>'concluded')::boolean, false) = false");
+      if (options.termId) {
+        values.push(options.termId);
+        conditions.push(`document->>'termId' = $${values.length}`);
+      }
+    }
     const search = options.search?.trim();
     if (search) {
       values.push(`%${search.replace(/[\\\\%_]/gu, "\\$&")}%`);
@@ -207,7 +220,19 @@ class PostgresAdminCourseConnectionStore
     return rows.map((row) => decodeDocument<AdminCourseConnectionRecord>(row));
   }
 
-  async summarizeForRoot(rootAccountId: string): Promise<AdminCourseConnectionSummary> {
+  async summarizeForRoot(
+    rootAccountId: string,
+    options: Pick<AdminCourseConnectionListOptions, "termId" | "includePast"> = {}
+  ): Promise<AdminCourseConnectionSummary> {
+    const values: unknown[] = [rootAccountId];
+    const conditions = ["root_account_id = $1"];
+    if (!options.includePast) {
+      conditions.push("COALESCE((document->>'concluded')::boolean, false) = false");
+      if (options.termId) {
+        values.push(options.termId);
+        conditions.push(`document->>'termId' = $${values.length}`);
+      }
+    }
     const result = await this.database.query<{
       course_count: number | string;
       assessment_count: number | string;
@@ -220,8 +245,8 @@ class PostgresAdminCourseConnectionStore
          COALESCE(sum(COALESCE((document->>'enabledAssessmentCount')::int, 0)), 0)::int AS enabled_assessment_count,
          COALESCE(sum(COALESCE((document->>'issueCount')::int, 0)), 0)::int AS issue_count
        FROM admin_course_connections
-       WHERE root_account_id = $1`,
-      [rootAccountId]
+       WHERE ${conditions.join(" AND ")}`,
+      values
     );
     const row = result.rows[0];
     return {

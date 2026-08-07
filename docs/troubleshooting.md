@@ -107,6 +107,7 @@ configured client ID is intentionally trusted.
 | Popup completed but the LTI page did not     | Return to Canvas and reopen the tool. Popup blocking or loss of the exact opener can prevent the fixed completion message from refreshing it.      |
 | Course-copy picker is empty                  | Reconnect after OAuth scope version changes and confirm the user is an active teacher in another course.                                           |
 | Root-account dashboard cannot load courses   | Use `/api/admin/oauth2authorize`, confirm root-account permissions and all administrator scopes, then reconnect.                                   |
+| Course reset repeatedly requests reconnect   | Confirm the Developer Key allows `url:GET                                                                                                          | /api/v1/courses/:course_id/quizzes/:id`, then reconnect the administrator once. |
 
 The LTI Developer Key and API OAuth Developer Key are separate registrations.
 Do not exchange their client IDs or secrets.

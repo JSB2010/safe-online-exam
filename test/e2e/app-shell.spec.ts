@@ -583,9 +583,29 @@ test("renders the responsive root-account administrator workspace and controlled
     });
   });
   await page.route("**/api/admin/courses?*", async (route) => {
+    const includePast = new URL(route.request().url()).searchParams.get("includePast") === "true";
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ success: true, courses: [{ ...adminCourse, assessments: undefined }], nextCursor: null })
+      body: JSON.stringify({
+        success: true,
+        courses: [
+          { ...adminCourse, assessments: undefined },
+          ...(includePast
+            ? [
+                {
+                  ...adminCourse,
+                  id: "99",
+                  name: "Archived Biology",
+                  termId: "21",
+                  termName: "Spring 2026",
+                  concluded: true,
+                  assessments: undefined
+                }
+              ]
+            : [])
+        ],
+        nextCursor: null
+      })
     });
   });
   await page.route("**/api/admin/courses/101", async (route) => {
@@ -600,12 +620,29 @@ test("renders the responsive root-account administrator workspace and controlled
       body: JSON.stringify({ success: true, presets: [adminPreset] })
     });
   });
+  let operationalTermId = "22";
+  const adminTerms = [
+    { id: "22", name: "Fall 2026", startAt: "2026-07-01", endAt: "2026-12-31" },
+    { id: "23", name: "Spring 2027", startAt: "2027-01-01", endAt: "2027-06-30" }
+  ];
   await page.route("**/api/admin/terms", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         success: true,
-        terms: [{ id: "22", name: "Fall 2026", startAt: "2026-07-01", endAt: "2026-12-31" }]
+        terms: adminTerms,
+        operationalTerm: adminTerms.find((term) => term.id === operationalTermId)
+      })
+    });
+  });
+  await page.route("**/api/admin/terms/operational", async (route) => {
+    expect(route.request().headers()["x-auth-token"]).toBe("test-admin-token");
+    operationalTermId = String(route.request().postDataJSON().termId);
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        operationalTerm: adminTerms.find((term) => term.id === operationalTermId)
       })
     });
   });
@@ -668,6 +705,13 @@ test("renders the responsive root-account administrator workspace and controlled
   const coursesTab = page.getByRole("tab", { name: /Courses/u });
   await expect(coursesTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
+  await expect(page.getByLabel("Operational term")).toHaveValue("22");
+  await page.getByLabel("Show past and other courses").check();
+  await expect(page.getByRole("button", { name: /Archived Biology/u })).toBeVisible();
+  await page.getByLabel("Show past and other courses").uncheck();
+  await expect(page.getByRole("button", { name: /Archived Biology/u })).toHaveCount(0);
+  await page.getByLabel("Operational term").selectOption("23");
+  await expect(page.getByLabel("Operational term")).toHaveValue("23");
   await page.getByRole("button", { name: "Connect" }).click();
   const connectDialog = page.getByRole("dialog", { name: "Connect Canvas courses" });
   await expect(connectDialog).toBeVisible();

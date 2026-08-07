@@ -2663,6 +2663,46 @@ select[aria-invalid="true"] {
   margin: 14px 0 10px;
 }
 
+.admin-course-scope-controls {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 11px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+}
+
+.admin-course-scope-controls > label:first-child {
+  display: grid;
+  gap: 5px;
+  color: #344054;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.admin-course-scope-controls select {
+  min-height: 34px;
+  padding-block: 6px;
+  font-size: 12px;
+}
+
+.admin-course-scope-controls .checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.admin-course-scope-controls .checkbox-line input {
+  width: 15px;
+  min-width: 15px;
+  min-height: 15px;
+  margin: 0;
+}
+
 .admin-course-list {
   display: grid;
   gap: 5px;

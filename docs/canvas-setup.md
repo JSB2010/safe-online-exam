@@ -125,9 +125,10 @@ url:GET|/api/v1/accounts/:account_id/permissions
 url:GET|/api/v1/accounts/:account_id/courses
 url:GET|/api/v1/accounts/:account_id/terms
 url:GET|/api/v1/courses/:id
+url:GET|/api/v1/courses/:course_id/quizzes/:id
 ```
 
-The administrator authorization requests the complete application scope set—including `url:GET|/api/v1/login/session_token`—plus these administrator scopes. Course and term collection access powers the paginated active-course picker; it does not import or preload the root account's complete historical catalog. Individual course access supports connection, refresh, recovery, and assessment changes. PostgreSQL stores one OAuth grant per Canvas user. Administrator consent upgrades that grant in place, and later instructor or student reauthorization preserves the complete administrator scope profile. A multi-role administrator therefore authorizes once and uses the same refreshable grant in every Canvas context.
+The administrator authorization requests the complete application scope set—including `url:GET|/api/v1/login/session_token`—plus these administrator scopes. Course and term collection access powers the paginated active-course picker; it does not import or preload the root account's complete historical catalog. Individual course access supports connection, refresh, recovery, and assessment changes. Individual Classic Quiz access lets the administrator reset flow snapshot every current access code before it changes anything. PostgreSQL stores one OAuth grant per Canvas user. Administrator consent upgrades that grant in place, and later instructor or student reauthorization preserves the complete administrator scope profile. A multi-role administrator therefore authorizes once and uses the same refreshable grant in every Canvas context.
 
 Some Canvas environments do not show every endpoint scope in the UI. Do not replace the session-token scope with a similarly named login permission. Use the instance’s supported Developer Keys administration/API path to add the exact endpoint scope, deploy the service, then have each affected administrator select **Reconnect Canvas** once. Administrator-only scope additions do not invalidate ordinary instructor or student connections. Scope changes apply only to newly issued tokens.
 
