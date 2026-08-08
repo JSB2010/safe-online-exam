@@ -6,7 +6,11 @@ import { JwkController } from "../../src/server/controllers/jwk.controller.js";
 describe("public utility controllers", () => {
   it("serves health and launch fallback responses", () => {
     const controller = new HomeController(
-      { getRequiredToolUrl: () => "https://tool.example.edu" } as any,
+      {
+        profile: "prod",
+        value: { testbed: { enabled: false }, security: {} },
+        getRequiredToolUrl: () => "https://tool.example.edu"
+      } as any,
       { assertReady: vi.fn().mockResolvedValue(undefined) } as any
     );
 
@@ -28,17 +32,32 @@ describe("public utility controllers", () => {
 
   it("records detector traces only when debug mode is enabled", () => {
     const detectorTrace = { recordEvent: vi.fn() };
-    const enabled = new DebugController({ value: { security: { debugEnabled: true } } } as any, detectorTrace as any);
+    const enabled = new DebugController(
+      {
+        value: {
+          testbed: { enabled: true },
+          security: { debugEnabled: true, detectorDiagnosticsEnabled: false }
+        },
+        getCanvasDomain: () => "https://canvas.example.edu"
+      } as any,
+      detectorTrace as any
+    );
 
     expect(enabled.canvasDetectorTrace({ event: "loaded" }, "https://canvas.example.edu")).toEqual({
       enabled: true
     });
     expect(detectorTrace.recordEvent).toHaveBeenCalledWith(
       { event: "loaded" },
-      { origin: "https://canvas.example.edu" }
+      { origin: "https://canvas.example.edu", includeDetails: false }
     );
 
-    const disabled = new DebugController({ value: { security: { debugEnabled: false } } } as any, detectorTrace as any);
+    const disabled = new DebugController(
+      {
+        value: { testbed: { enabled: false }, security: { debugEnabled: false } },
+        getCanvasDomain: () => "https://canvas.example.edu"
+      } as any,
+      detectorTrace as any
+    );
     expect(disabled.canvasDetectorTrace({ event: "ignored" })).toEqual({ enabled: false });
     expect(detectorTrace.recordEvent).toHaveBeenCalledTimes(1);
   });

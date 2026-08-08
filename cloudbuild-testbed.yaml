@@ -1,0 +1,74 @@
+substitutions:
+  _SOURCE_COMMIT_SHA: REPLACE_WITH_FULL_GIT_SHA
+  _SOURCE_REF: REPLACE_WITH_GIT_REF
+  _SOURCE_WORKTREE_STATE: clean
+  _SOURCE_DIFF_SHA: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  _CREATE_BACKUP: "false"
+
+steps:
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+    entrypoint: "/workspace/scripts/validate-school-testbed-target.sh"
+    args: ["$PROJECT_ID"]
+
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+    entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"
+    args: ["$PROJECT_ID", "school-canvas-seb", "us-central1", "enforce"]
+
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+    args: ["pull", "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"]
+    allowFailure: true
+
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+    env: ["DOCKER_BUILDKIT=1"]
+    args:
+      - "build"
+      - "--build-arg"
+      - "BUILDKIT_INLINE_CACHE=1"
+      - "--label"
+      - "org.opencontainers.image.revision=${_SOURCE_COMMIT_SHA}"
+      - "--label"
+      - "org.opencontainers.image.ref.name=${_SOURCE_REF}"
+      - "--label"
+      - "com.safeonlineexam.cloud-build-id=$BUILD_ID"
+      - "-t"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:$BUILD_ID"
+      - "-t"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"
+      - "--cache-from"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+    entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"
+
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+    entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
+    args:
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:$BUILD_ID"
+      - "/workspace/school-canvas-testbed.digest"
+
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+    args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"]
+
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+    entrypoint: "/workspace/scripts/create-school-testbed-backup.sh"
+    args: ["$PROJECT_ID", "${_CREATE_BACKUP}"]
+
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+    entrypoint: "/workspace/scripts/deploy-school-testbed-runtime.sh"
+    args:
+      - "$PROJECT_ID"
+      - "${_SOURCE_COMMIT_SHA}"
+      - "${_SOURCE_REF}"
+      - "${_SOURCE_WORKTREE_STATE}"
+      - "${_SOURCE_DIFF_SHA}"
+      - "$BUILD_ID"
+
+images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:$BUILD_ID"
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"
+
+tags:
+  - "school-canvas-seb-testbed"
+
+timeout: 3600s

@@ -692,6 +692,8 @@ p {
 
 .service-status-panel {
   padding: 28px;
+  display: grid;
+  gap: 24px;
 }
 
 .service-status-main {
@@ -707,6 +709,48 @@ p {
 .service-status-main h2 {
   margin: 0;
   font-size: 24px;
+}
+
+.testbed-status {
+  padding-top: 20px;
+  border-top: 1px solid #dbe2ea;
+}
+
+.testbed-status dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 0;
+}
+
+.testbed-status dl div {
+  min-width: 0;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+}
+
+.testbed-status dt {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.testbed-status dd {
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: #182230;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .testbed-status dl {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .onboarding-card {

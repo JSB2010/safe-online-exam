@@ -123,6 +123,52 @@ describe("AppConfig", () => {
     );
   });
 
+  it("allows bounded diagnostics only for an explicit, fully identified development testbed", () => {
+    const env = productionRuntimeEnv({
+      APP_ENV: "dev",
+      K_SERVICE: "school-canvas-seb",
+      DEV_TESTBED_ENABLED: "true",
+      APP_DEBUG_ENABLED: "true",
+      APP_DETECTOR_DIAGNOSTICS_ENABLED: "true",
+      SOURCE_COMMIT_SHA: "a".repeat(40),
+      SOURCE_REF: "feature/testbed",
+      SOURCE_WORKTREE_STATE: "dirty",
+      SOURCE_DIFF_SHA: "b".repeat(64),
+      CLOUD_BUILD_ID: "12345678-abcd-1234-abcd-123456789abc",
+      APP_IMAGE_DIGEST: `sha256:${"c".repeat(64)}`
+    });
+
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual([]);
+
+    const production = { ...env, APP_ENV: "prod" };
+    expect(validateRuntimeConfig(loadConfigFromEnv(production), production)).toEqual(
+      expect.arrayContaining([
+        "APP_DEBUG_ENABLED must be false in Cloud Run",
+        "APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in Cloud Run",
+        "DEV_TESTBED_ENABLED may only be true when APP_ENV is dev in Cloud Run"
+      ])
+    );
+  });
+
+  it("requires immutable provenance for Cloud Run development testbeds", () => {
+    const env = productionRuntimeEnv({
+      APP_ENV: "dev",
+      K_SERVICE: "school-canvas-seb",
+      DEV_TESTBED_ENABLED: "true",
+      SOURCE_WORKTREE_STATE: "dirty"
+    });
+
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual(
+      expect.arrayContaining([
+        "SOURCE_COMMIT_SHA must be a full lowercase Git commit SHA in Cloud Run testbeds",
+        "SOURCE_REF must be a safe Git ref label in Cloud Run testbeds",
+        "SOURCE_DIFF_SHA must be a lowercase SHA-256 digest for dirty Cloud Run testbeds",
+        "CLOUD_BUILD_ID must identify the build in Cloud Run testbeds",
+        "APP_IMAGE_DIGEST must be an immutable sha256 digest in Cloud Run testbeds"
+      ])
+    );
+  });
+
   it("preserves a fully configured non-Cloud production runtime", () => {
     const env = productionRuntimeEnv();
     const config = loadConfigFromEnv(env);

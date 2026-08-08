@@ -118,7 +118,7 @@ describe("weekly supply-chain maintenance", () => {
       join(fakeBin, "curl"),
       '#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ "$1" == "--output" ]]; then : >"$2"; exit 0; fi; shift; done\nexit 1\n'
     );
-    writeExecutable(join(fakeBin, "sha256sum"), "#!/usr/bin/env bash\nexit 0\n");
+    writeExecutable(join(fakeBin, "sha256sum"), "#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n");
     writeExecutable(
       join(fakeBin, "tar"),
       `#!/usr/bin/env bash
@@ -152,6 +152,7 @@ chmod +x "$destination/gh_2.97.0_linux_amd64/bin/gh"
       ],
       {
         cwd: ROOT,
+        encoding: "utf8",
         env: {
           ...process.env,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
@@ -209,25 +210,14 @@ if [[ "$*" == *"services list"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"services describe"* ]]; then
-  printf '%s\n' "$GCLOUD_SERVICE_JSON"
+  printf '%s\t%s\n' "$GCLOUD_SERVING_REVISION" "$GCLOUD_SERVING_PERCENT"
   exit 0
 fi
 if [[ "$*" == *"revisions describe"* ]]; then
-  printf '%s\n' "$GCLOUD_REVISION_JSON"
+  printf 'OAUTH_TOKEN_ENCRYPTION_MODE\t%s\n' "$GCLOUD_CURRENT_MODE"
   exit 0
 fi
 exit 99
-`
-    );
-    writeExecutable(
-      join(fakeBin, "python3"),
-      `#!/usr/bin/env bash
-input="$(cat)"
-if [[ "$input" == *'"status"'* ]]; then
-  printf '%s\n' "$GCLOUD_SERVING_REVISION"
-else
-  printf '%s\n' "$GCLOUD_CURRENT_MODE"
-fi
 `
     );
 
@@ -241,7 +231,8 @@ fi
     const baseEnvironment = {
       ...process.env,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      GCLOUD_EXISTING_SERVICE: "canvas-seb-prod"
+      GCLOUD_EXISTING_SERVICE: "canvas-seb-prod",
+      GCLOUD_SERVING_PERCENT: "100"
     };
     const unstaged = spawnSync("bash", args, {
       cwd: ROOT,
@@ -249,10 +240,7 @@ fi
       env: {
         ...baseEnvironment,
         GCLOUD_SERVING_REVISION: "revision-old",
-        GCLOUD_CURRENT_MODE: "",
-        GCLOUD_SERVICE_JSON:
-          '{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"OAUTH_TOKEN_ENCRYPTION_MODE","value":"compat"}]}]}}},"status":{"latestReadyRevisionName":"revision-compat","traffic":[{"revisionName":"revision-old","percent":100}]}}',
-        GCLOUD_REVISION_JSON: '{"spec":{"containers":[{"env":[]}]}}'
+        GCLOUD_CURRENT_MODE: ""
       }
     });
     expect(unstaged.status).toBe(1);
@@ -264,11 +252,7 @@ fi
       env: {
         ...baseEnvironment,
         GCLOUD_SERVING_REVISION: "revision-compat",
-        GCLOUD_CURRENT_MODE: "compat",
-        GCLOUD_SERVICE_JSON:
-          '{"status":{"latestReadyRevisionName":"revision-compat","traffic":[{"revisionName":"revision-compat","percent":100}]}}',
-        GCLOUD_REVISION_JSON:
-          '{"spec":{"containers":[{"env":[{"name":"OAUTH_TOKEN_ENCRYPTION_MODE","value":"compat"}]}]}}'
+        GCLOUD_CURRENT_MODE: "compat"
       }
     });
     expect(staged.status).toBe(0);
@@ -281,9 +265,7 @@ fi
         ...baseEnvironment,
         GCLOUD_EXISTING_SERVICE: "",
         GCLOUD_SERVING_REVISION: "",
-        GCLOUD_CURRENT_MODE: "",
-        GCLOUD_SERVICE_JSON: "{}",
-        GCLOUD_REVISION_JSON: "{}"
+        GCLOUD_CURRENT_MODE: ""
       }
     });
     expect(fresh.status).toBe(0);

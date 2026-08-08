@@ -119,6 +119,48 @@ Publishing a release requires only pushing a `vX.Y.Z` tag whose version matches 
 
 The multi-architecture Docker build runs the full typecheck, lint, format, coverage, and build gate once on BuildKit's native build platform. It installs production dependencies separately for each target platform before assembling the matching distroless runtime image. Persistent BuildKit caches reuse verified dependency layers across CI and release runs without making cache contents a trust decision; BuildKit still invalidates changed inputs and executes uncached gates. Timing-sensitive application tests never run through QEMU emulation.
 
+## Commit Testbed Acceptance
+
+Keep the self-hosted Canvas sandbox stable so results are comparable across
+commits. Use dedicated synthetic accounts only: one root administrator, one
+instructor, and one student. Maintain one published course named
+`Safe Online Exam Commit Testbed` with these fixtures:
+
+- a published two-question Classic Quiz named `Classic Quiz - Baseline`;
+- a published two-question New Quiz named `New Quiz - Baseline` when New
+  Quizzes is enabled;
+- Safe Online Exam enabled for both assessments with a non-production exit
+  password and no real student submissions; and
+- the account-level LTI installation, API Developer Key, course/account
+  navigation placements, and detector theme loader pointed at the stable
+  custom tool origin.
+
+Do not create per-commit Canvas Developer Keys or change redirect URLs. Canvas
+requires exact redirect matching, so the stable custom origin is part of the
+fixture. Change the Canvas registration only when the commit specifically
+tests registration behavior, then restore the baseline values.
+
+For every candidate, first require the automated build, migration execution,
+candidate smoke, and custom-origin smoke to pass. Then check the relevant
+manual layers:
+
+1. Administrator: account launch, connected-course inventory, and operational
+   status load without console errors.
+2. Instructor: course launch, Classic/New Quiz discovery, enable/regenerate/
+   disable behavior, and settings persistence after a cold start.
+3. Student browser: Canvas prompts for Safe Exam Browser only on protected
+   assessments and leaves ordinary Canvas pages alone.
+4. Managed SEB client when SEB/config behavior changed: configuration opens,
+   Config Key proof releases the access code once, submission exits correctly,
+   and approved exam tools remain constrained.
+
+Record the `/api/testbed/status` response with the result so a failure maps to
+one commit/diff, image digest, build, and revision. Detector trace logs are for
+short diagnostic windows; they remain sanitized but should still be treated as
+operational logs. Reset the application database only when a clean-state test
+is intentional, because reset removes OAuth connections and app settings while
+leaving the Canvas fixture in place.
+
 The workflow verifies both architectures, their source/version OCI labels, every promoted tag, the artifact attestation, and GitHub release immutability before reporting success. Cloud Run promotion independently requires the matching release to be published, stable, and immutable and verifies that same GitHub attestation before creating the Google Binary Authorization attestation used at deploy time. Confirm the migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets after promotion.
 
 ## Test Coverage By Layer

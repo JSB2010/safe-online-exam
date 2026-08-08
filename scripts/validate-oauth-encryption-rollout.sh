@@ -41,46 +41,42 @@ fi
   exit 1
 }
 
-service_json="$(gcloud run services describe "$service" \
+traffic_rows="$(gcloud run services describe "$service" \
   --project="$project_id" \
   --region="$region" \
   --platform=managed \
-  --format=json)"
-serving_revision="$(python3 -c '
-import json
-import sys
+  --flatten='status.traffic[]' \
+  --format='value(status.traffic.revisionName,status.traffic.percent)')"
 
-service = json.load(sys.stdin)
-traffic = service.get("status", {}).get("traffic", [])
-revisions = [
-    item.get("revisionName", "")
-    for item in traffic
-    if item.get("percent") == 100 and item.get("revisionName")
-]
-print(revisions[0] if len(revisions) == 1 else "")
-' <<<"$service_json")"
+serving_revision=""
+serving_revision_count=0
+while IFS=$'\t' read -r revision percent; do
+  [[ -n "$revision" && "$percent" == "100" ]] || continue
+  serving_revision="$revision"
+  ((serving_revision_count += 1))
+done <<<"$traffic_rows"
 
-[[ -n "$serving_revision" ]] || {
+[[ "$serving_revision_count" -eq 1 && -n "$serving_revision" ]] || {
   echo "Existing service $service does not have one explicit 100% traffic-serving revision; complete or roll back the current rollout before enforce" >&2
   exit 1
 }
 
-revision_json="$(gcloud run revisions describe "$serving_revision" \
+revision_environment="$(gcloud run revisions describe "$serving_revision" \
   --project="$project_id" \
   --region="$region" \
   --platform=managed \
-  --format=json)"
-current_mode="$(python3 -c '
-import json
-import sys
+  --flatten='spec.containers[].env[]' \
+  --format='value(spec.containers.env.name,spec.containers.env.value)')"
 
-revision = json.load(sys.stdin)
-containers = revision.get("spec", {}).get("containers", [])
-environment = containers[0].get("env", []) if containers else []
-print(next((item.get("value", "") for item in environment if item.get("name") == "OAUTH_TOKEN_ENCRYPTION_MODE"), ""))
-' <<<"$revision_json")"
+current_mode=""
+current_mode_count=0
+while IFS=$'\t' read -r name value; do
+  [[ "$name" == "OAUTH_TOKEN_ENCRYPTION_MODE" ]] || continue
+  current_mode="$value"
+  ((current_mode_count += 1))
+done <<<"$revision_environment"
 
-[[ "$current_mode" == "compat" || "$current_mode" == "enforce" ]] || {
+[[ "$current_mode_count" -eq 1 && ( "$current_mode" == "compat" || "$current_mode" == "enforce" ) ]] || {
   echo "Traffic-serving revision $serving_revision has not completed a compat-mode deployment; deploy compat and verify it before enforce" >&2
   exit 1
 }

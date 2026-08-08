@@ -317,6 +317,63 @@ gcloud builds submit --config=cloudbuild-school.yaml \
   --substitutions=_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=KEYRING_VERSION,_OAUTH_TOKEN_ENCRYPTION_MODE=compat
 ```
 
+### Commit testbed for the self-hosted Canvas sandbox
+
+The repository has one deliberately narrower source-build workflow for the
+existing `seb-for-canvas` sandbox. It is locked in code to the
+`school-canvas-seb` service, jobs, Cloud SQL instance, service account, secret
+versions, and `https://seb.jacobbarkin.com` public origin. It cannot be
+retargeted through substitutions and never addresses a production resource.
+
+Deploy a clean commit from the repository root:
+
+```bash
+npm run deploy:testbed
+```
+
+For an intentionally uncommitted experiment, make the exception visible and
+record a SHA-256 fingerprint of the tracked diff and included untracked files:
+
+```bash
+npm run deploy:testbed -- --include-working-tree
+```
+
+Add `--backup` when a commit carries a data migration for which a disposable
+testbed backup is still useful. Backups are intentionally opt-in because this
+instance is a low-cost, resettable development environment.
+
+The workflow refuses a second concurrent tagged testbed build, runs the full
+Docker and real-PostgreSQL gates, pushes an immutable digest, optionally takes
+the backup, applies migrations, updates cleanup, and deploys a tagged
+no-traffic revision. It verifies health, readiness, JWKS, LTI metadata, the
+detector, and build provenance at the candidate URL before traffic changes.
+It then repeats those checks at the custom origin. A failed post-cutover check
+automatically restores the prior revision; forward database migrations remain.
+
+The root status page and `GET /api/testbed/status` show the commit, worktree
+state or diff fingerprint, Cloud Build ID, image digest, Cloud Run revision,
+and diagnostic state. The debug trace endpoint accepts only the exact Canvas
+origin, caps detail and event sizes, redacts sensitive fields, and rate-limits
+each instance. Those diagnostics cannot start under `APP_ENV=prod`.
+
+To route traffic to a known schema-compatible earlier revision:
+
+```bash
+npm run rollback:testbed -- school-canvas-seb-REVISION --confirm-schema-compatible
+```
+
+To erase only the application database and reapply the currently deployed
+migrations, use the interactive exact-target reset:
+
+```bash
+npm run db:reset:gcloud:testbed
+```
+
+The reset does not delete Canvas courses, users, keys, or the LTI installation,
+but it removes application OAuth grants and settings, so users must reconnect
+Canvas. See [Commit testbed acceptance](testing.md#commit-testbed-acceptance)
+for the stable Canvas fixture and per-commit checks.
+
 `cloudbuild-school.yaml` is the parameterized source-build variant for a new
 named environment. Inspect every substitution and referenced secret before
 submission. A self-hosted Canvas must override its actual LTI authorization

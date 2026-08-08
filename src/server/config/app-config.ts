@@ -30,6 +30,15 @@ export function usesSourceKnownLocalOAuthTokenKey(settings: OAuthTokenEncryption
 export interface AppConfigSnapshot {
   profile: AppProfile;
   port: number;
+  testbed: {
+    enabled: boolean;
+    sourceCommitSha?: string;
+    sourceRef?: string;
+    sourceWorktreeState: "clean" | "dirty" | "unknown";
+    sourceDiffSha?: string;
+    cloudBuildId?: string;
+    imageDigest?: string;
+  };
   database: {
     host: string;
     port: number;
@@ -153,6 +162,15 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
   return {
     profile,
     port: parseInteger(env.PORT, 8080),
+    testbed: {
+      enabled: parseBoolean(env.DEV_TESTBED_ENABLED, false),
+      sourceCommitSha: firstPresent(env.SOURCE_COMMIT_SHA),
+      sourceRef: firstPresent(env.SOURCE_REF),
+      sourceWorktreeState: parseSourceWorktreeState(env.SOURCE_WORKTREE_STATE),
+      sourceDiffSha: firstPresent(env.SOURCE_DIFF_SHA),
+      cloudBuildId: firstPresent(env.CLOUD_BUILD_ID),
+      imageDigest: firstPresent(env.APP_IMAGE_DIGEST)
+    },
     database: {
       host: firstPresent(env.DATABASE_HOST, "127.0.0.1")!,
       port: parseInteger(env.DATABASE_PORT, 5432),
@@ -381,12 +399,21 @@ export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.P
     errors.push(`CANVAS_DOMAIN must be set to the school's Canvas base URL in ${runtimeLabel}`);
   }
 
-  if (snapshot.security.debugEnabled) {
+  const cloudTestbedDiagnosticsAllowed = cloudRunRuntime && snapshot.profile === "dev" && snapshot.testbed.enabled;
+  if (snapshot.security.debugEnabled && !cloudTestbedDiagnosticsAllowed) {
     errors.push(`APP_DEBUG_ENABLED must be false in ${runtimeLabel}`);
   }
 
-  if (snapshot.security.detectorDiagnosticsEnabled) {
+  if (snapshot.security.detectorDiagnosticsEnabled && !cloudTestbedDiagnosticsAllowed) {
     errors.push(`APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in ${runtimeLabel}`);
+  }
+
+  if (snapshot.testbed.enabled && snapshot.profile !== "dev") {
+    errors.push(`DEV_TESTBED_ENABLED may only be true when APP_ENV is dev in ${runtimeLabel}`);
+  }
+
+  if (snapshot.testbed.enabled && cloudRunRuntime && snapshot.profile === "dev") {
+    validateCloudTestbedProvenance(errors, snapshot, runtimeLabel);
   }
 
   if (parseBoolean(env.USE_IN_MEMORY_STORE, false)) {
@@ -425,6 +452,34 @@ export function requiresHardenedRuntimeValidation(
   env: NodeJS.ProcessEnv
 ): boolean {
   return snapshot.profile === "prod" || isCloudRunRuntime(env);
+}
+
+function validateCloudTestbedProvenance(errors: string[], snapshot: AppConfigSnapshot, runtimeLabel: string): void {
+  if (!snapshot.testbed.sourceCommitSha || !/^[0-9a-f]{40}$/u.test(snapshot.testbed.sourceCommitSha)) {
+    errors.push(`SOURCE_COMMIT_SHA must be a full lowercase Git commit SHA in ${runtimeLabel} testbeds`);
+  }
+  if (!snapshot.testbed.sourceRef || !/^[A-Za-z0-9._/-]{1,200}$/u.test(snapshot.testbed.sourceRef)) {
+    errors.push(`SOURCE_REF must be a safe Git ref label in ${runtimeLabel} testbeds`);
+  }
+  if (snapshot.testbed.sourceWorktreeState === "unknown") {
+    errors.push(`SOURCE_WORKTREE_STATE must be clean or dirty in ${runtimeLabel} testbeds`);
+  }
+  if (
+    snapshot.testbed.sourceWorktreeState === "dirty" &&
+    (!snapshot.testbed.sourceDiffSha || !/^[0-9a-f]{64}$/u.test(snapshot.testbed.sourceDiffSha))
+  ) {
+    errors.push(`SOURCE_DIFF_SHA must be a lowercase SHA-256 digest for dirty ${runtimeLabel} testbeds`);
+  }
+  if (!snapshot.testbed.cloudBuildId || !/^[A-Za-z0-9-]{8,64}$/u.test(snapshot.testbed.cloudBuildId)) {
+    errors.push(`CLOUD_BUILD_ID must identify the build in ${runtimeLabel} testbeds`);
+  }
+  if (!snapshot.testbed.imageDigest || !/^sha256:[0-9a-f]{64}$/u.test(snapshot.testbed.imageDigest)) {
+    errors.push(`APP_IMAGE_DIGEST must be an immutable sha256 digest in ${runtimeLabel} testbeds`);
+  }
+}
+
+function parseSourceWorktreeState(value?: string): "clean" | "dirty" | "unknown" {
+  return value === "clean" || value === "dirty" ? value : "unknown";
 }
 
 function isHttpsOrigin(value?: string): boolean {

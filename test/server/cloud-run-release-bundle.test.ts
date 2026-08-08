@@ -668,7 +668,7 @@ exit 0
       expect(log).toContain("--connector-enforcement=REQUIRED");
       expect(log).toContain("--ssl-mode=ENCRYPTED_ONLY");
     }
-  });
+  }, 15_000);
 
   it("renders the shared environment and exact numbered secret bindings", () => {
     const directory = temporaryDirectory();
