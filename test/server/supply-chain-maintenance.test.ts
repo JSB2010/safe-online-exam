@@ -281,12 +281,16 @@ exit 99
     writeExecutable(
       join(fakeBin, "docker"),
       `#!/usr/bin/env bash
-if [[ "$1" == "compose" && "$*" == *" ps -q app" ]]; then
+if [[ "$1" == "ps" ]]; then
   printf '%s\n' 'old-app-container'
   exit 0
 fi
+if [[ "$1" == "inspect" && "$*" == *com.docker.compose.project* ]]; then
+  printf '%s\n' 'legacy-compose-project'
+  exit 0
+fi
 if [[ "$1" == "inspect" ]]; then
-  printf '%s\n' 'NODE_ENV=production'
+  printf '%s\n' 'NODE_ENV=production' 'TOOL_URL=https://legacy.school.edu'
   exit 0
 fi
 exit 99
@@ -294,7 +298,11 @@ exit 99
     );
     writeFileSync(
       environmentFile,
-      [`APP_IMAGE=ghcr.io/jsb2010/safe-online-exam@${DIGEST_A}`, "OAUTH_TOKEN_ENCRYPTION_MODE=enforce"].join("\n")
+      [
+        `APP_IMAGE=ghcr.io/jsb2010/safe-online-exam@${DIGEST_A}`,
+        "TOOL_URL=https://legacy.school.edu",
+        "OAUTH_TOKEN_ENCRYPTION_MODE=enforce"
+      ].join("\n")
     );
 
     const result = spawnSync("bash", ["scripts/upgrade-compose.sh", environmentFile], {

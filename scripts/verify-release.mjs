@@ -126,6 +126,11 @@ if (composeVersion !== version) {
   fail(`.env.compose.example image version must be ${version}, found ${composeVersion ?? "none"}`);
 }
 
+const composeSecretsEnvironment = readText(".env.compose.secrets.example");
+if (!/^COMPOSE_PROJECT_NAME=$/mu.test(composeSecretsEnvironment)) {
+  fail(".env.compose.secrets.example must let setup record a stable new or discovered legacy project name");
+}
+
 const cloudRunEnvironment = readText("deploy/cloudrun.env.example");
 const cloudRunVersion = cloudRunEnvironment.match(/^APP_VERSION=(.+)$/mu)?.[1];
 if (cloudRunVersion !== version) {

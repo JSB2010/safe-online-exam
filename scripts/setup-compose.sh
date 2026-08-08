@@ -25,11 +25,15 @@ if [[ -f "$script_directory/setup-common.sh" ]]; then
   # Release bundle layout.
   # shellcheck disable=SC1091
   source "$script_directory/setup-common.sh"
+  # shellcheck disable=SC1091
+  source "$script_directory/compose-deployment.sh"
   template_file="$script_directory/.env.compose.secrets.example"
 else
   # Source repository layout.
   # shellcheck disable=SC1091
   source "$script_directory/../deploy/setup-common.sh"
+  # shellcheck disable=SC1091
+  source "$script_directory/compose-deployment.sh"
   template_file="$script_directory/../.env.compose.secrets.example"
 fi
 
@@ -151,10 +155,10 @@ if [[ "$interaction_mode" == "interactive" ]]; then
   bootstrap_requested=true
 fi
 
-set -a
-# shellcheck disable=SC1090
-source "$environment_file"
-set +a
+compose_deployment_load "$script_directory" "$environment_file"
+environment_file="$COMPOSE_DEPLOYMENT_ENV_FILE"
+identity_directory="$(compose_deployment_resolve_path \
+  "$COMPOSE_DEPLOYMENT_DIRECTORY" "$identity_directory")"
 
 for required_name in APP_IMAGE TOOL_URL CANVAS_DOMAIN CANVAS_REDIRECT_URI LTI_ISSUER LTI_KEY_SET_URL LTI_AUTH_URL LTI_CLIENT_ID LTI_DEPLOYMENT_ID CANVAS_API_CLIENT_ID DATABASE_NAME DATABASE_USER APP_ASSET_VERSION; do
   setup_require_configured_value "$required_name" "${!required_name:-}"
@@ -166,7 +170,7 @@ done
 [[ "$CANVAS_DOMAIN" =~ ^https://[^[:space:]]+$ ]] ||
   setup_usage_error "CANVAS_DOMAIN must be an HTTPS origin"
 
-secrets_directory="${SECRETS_DIRECTORY:-./secrets}"
+secrets_directory="$SECRETS_DIRECTORY"
 bootstrap_command="$(compose_bundle_command bootstrap-secrets.sh bootstrap-compose-secrets.sh)"
 if [[ ! -e "$secrets_directory" ]]; then
   [[ ! -e "$identity_directory" ]] ||
@@ -200,11 +204,13 @@ for command_name in curl docker; do
     setup_die "required command is unavailable: $command_name"
 done
 docker info >/dev/null 2>&1 || setup_die "Docker is installed but its engine is unavailable"
+compose_deployment_resolve_project_name allow-new
+compose_deployment_command
 
-compose=(docker compose --env-file "$environment_file" -f compose.yaml -f compose.secrets.yaml)
+compose=("${COMPOSE_DEPLOYMENT_COMMAND[@]}")
 if [[ "$caddy_mode" == "enabled" ]]; then
   setup_require_configured_value PUBLIC_HOST "${PUBLIC_HOST:-}"
-  compose+=(-f compose.caddy.yaml --profile caddy)
+  compose+=(-f "$COMPOSE_DEPLOYMENT_TOPOLOGY_DIRECTORY/compose.caddy.yaml" --profile caddy)
 fi
 "${compose[@]}" config --quiet
 

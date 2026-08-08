@@ -318,14 +318,22 @@ needs permission to invoke candidate revisions for readiness verification.
 
 ## Upgrade
 
-Download and checksum the new bundle. Preserve the prior protected
-`cloudrun.env`, bootstrap directory, state directory, and client identity.
-Merge any new keys from `cloudrun.env.example`, then replace only
-`APP_VERSION` and `APP_IMAGE` with the new bundle's values:
+Treat the directory containing the protected `cloudrun.env` as the durable
+installation home. Its relative bootstrap, state, and client-identity paths
+remain anchored there even when a command is run from a newly extracted
+bundle. Download and checksum the new bundle, preserve that installation home,
+merge any new keys from `cloudrun.env.example`, then replace only `APP_VERSION`
+and `APP_IMAGE` with the new bundle's values:
 
 ```bash
-./upgrade.sh cloudrun.env
+NEW_BUNDLE=/opt/safe-online-exam-X.Y.Z-cloud-run
+EXISTING_ENV=/srv/safe-online-exam/cloudrun.env
+"$NEW_BUNDLE/upgrade.sh" "$EXISTING_ENV"
 ```
+
+Do not copy `.bootstrap`, `.state`, or `.client-identity` into each versioned
+bundle. Absolute paths remain absolute; relative protected paths resolve from
+the existing environment file, not from the new bundle or current directory.
 
 The upgrade refuses to continue unless `OAUTH_TOKEN_ENCRYPTION_MODE` is
 assigned explicitly in `cloudrun.env`. Use `compat` for the first deployment

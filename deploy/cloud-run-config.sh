@@ -52,15 +52,21 @@ cloudrun_script_directory() {
 
 cloudrun_load_environment() {
   local environment_file="${1:-cloudrun.env}"
+  local environment_directory environment_name
   [[ -f "$environment_file" && ! -L "$environment_file" ]] ||
     cloudrun_usage_error "configuration file must be a regular file: $environment_file"
+
+  environment_directory="$(cd "$(dirname "$environment_file")" && pwd -P)"
+  environment_name="$(basename "$environment_file")"
+  CLOUDRUN_ENVIRONMENT_FILE="$environment_directory/$environment_name"
+  CLOUDRUN_DEPLOYMENT_DIRECTORY="$environment_directory"
 
   # The operator owns this protected configuration file. Shell syntax keeps the
   # downloaded bundle usable in macOS, Linux, and Cloud Shell without another
   # parser dependency.
   set -a
   # shellcheck disable=SC1090
-  source "$environment_file"
+  source "$CLOUDRUN_ENVIRONMENT_FILE"
   set +a
 
   : "${RESOURCE_NAME:=safe-online-exam}"
@@ -108,6 +114,16 @@ cloudrun_load_environment() {
   : "${TOOL_URL:=}"
   : "${CANVAS_DOMAIN:=}"
   : "${CANVAS_API_CLIENT_ID:=}"
+
+  # Relative protected paths belong to the durable directory containing the
+  # operator's cloudrun.env, not to whichever new release bundle invokes the
+  # upgrade command.
+  [[ "$BOOTSTRAP_DIRECTORY" == /* ]] ||
+    BOOTSTRAP_DIRECTORY="$CLOUDRUN_DEPLOYMENT_DIRECTORY/$BOOTSTRAP_DIRECTORY"
+  [[ "$CLIENT_IDENTITY_DIRECTORY" == /* ]] ||
+    CLIENT_IDENTITY_DIRECTORY="$CLOUDRUN_DEPLOYMENT_DIRECTORY/$CLIENT_IDENTITY_DIRECTORY"
+  [[ "$STATE_DIRECTORY" == /* ]] ||
+    STATE_DIRECTORY="$CLOUDRUN_DEPLOYMENT_DIRECTORY/$STATE_DIRECTORY"
 
   # Keep the original release-candidate profile names compatible without
   # changing the resources they describe.

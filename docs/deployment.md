@@ -31,6 +31,16 @@ For a new public installation, prefer a published release bundle over a source
 checkout. The bundle contains the exact image digest, version-matched scripts,
 and its own self-contained README.
 
+Hosting and artifact source are separate choices. A school may run the
+published image on Cloud Run, Compose, or another reviewed container platform.
+A source checkout or fork may build the same runtime contract, but that
+operator owns dependency review, image publication, provenance, and keeping
+its deployment code in sync. The repository's `cloudbuild-*.yaml` files are
+maintainer/contributor paths for existing named environments, not additional
+public installation methods. Development and testbed status should be expressed
+through isolated resources and configuration, not by inventing another install
+family.
+
 ## Release Trust And Image Selection
 
 Stable images are published at:
@@ -222,7 +232,18 @@ Classic Quiz, New Quiz, and managed-client test.
 
 Download and verify the next Cloud Run bundle. Preserve the protected
 environment, bootstrap, state, and client-identity records; merge new template
-keys instead of overwriting local configuration. The bundle’s `upgrade.sh`:
+keys instead of overwriting local configuration. Keep `cloudrun.env` in a
+durable installation directory and invoke the new bundle with its path:
+
+```bash
+NEW_BUNDLE=/opt/safe-online-exam-X.Y.Z-cloud-run
+EXISTING_ENV=/srv/safe-online-exam/cloudrun.env
+"$NEW_BUNDLE/upgrade.sh" "$EXISTING_ENV"
+```
+
+Relative bootstrap, state, and client-identity paths resolve from the existing
+environment file rather than the new bundle or current directory. The bundle’s
+`upgrade.sh`:
 
 1. validates the complete current environment and bootstrap contract, creates
    any newly required numbered Secret Manager versions, and grants the existing
@@ -592,21 +613,35 @@ A backup that has never been restored is not verified.
 ### Compose Upgrade, Schema And Application Rollback
 
 Download and checksum the next bundle. Preserve the protected environment,
-secret files, client identity record, and database volume; merge new template
-keys. Run:
+secret files, client identity record, and database volume. Keep those files in
+a durable installation directory, merge new template keys, and invoke the new
+bundle with the prior environment path:
 
 ```bash
-./upgrade.sh .env.secrets
+NEW_BUNDLE=/opt/safe-online-exam-X.Y.Z
+EXISTING_ENV=/srv/safe-online-exam/.env.secrets
+"$NEW_BUNDLE/upgrade.sh" "$EXISTING_ENV"
 ```
 
 The helper creates a PostgreSQL custom-format backup, validates it, pulls the
 exact pinned images, applies checked forward migrations, restarts the
 topology, and verifies readiness. Copy the backup to encrypted off-host
-storage.
+storage. Relative secret and backup paths resolve from the directory containing
+the existing environment file.
 
-Existing installations use the same staged mode transition: upgrade once with
-`OAUTH_TOKEN_ENCRYPTION_MODE=compat`, then change it to `enforce`, recreate the
-application, and run the maintenance service:
+The helper preserves `COMPOSE_PROJECT_NAME`, which owns the existing PostgreSQL
+volume. New installs record a stable name. For a legacy installation without
+that key, it discovers the unique existing Compose app with the exact matching
+`TOOL_URL` and persists that app's project name. It stops on zero or multiple
+matches instead of starting against a new empty volume. Do not copy a guessed
+project name from the template into an existing installation.
+
+When a legacy installation lacks only
+`secrets/oauth_token_encryption_keyring`, the compat upgrade generates that new
+file atomically with mode `0600`. It never changes an existing keyring or any
+other established secret. Existing installations use the same staged mode
+transition: upgrade once with `OAUTH_TOKEN_ENCRYPTION_MODE=compat`, then change
+it to `enforce`, recreate the application, and run the maintenance service:
 
 ```bash
 docker compose --env-file .env.secrets -f compose.yaml -f compose.secrets.yaml \

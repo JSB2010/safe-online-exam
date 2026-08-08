@@ -40,6 +40,7 @@ cp \
   Caddyfile \
   .env.compose.secrets.example \
   deploy/setup-common.sh \
+  scripts/compose-deployment.sh \
   "$bundle_directory/"
 cp scripts/setup-compose.sh "$bundle_directory/setup.sh"
 cp scripts/bootstrap-compose-secrets.sh "$bundle_directory/bootstrap-secrets.sh"
@@ -68,6 +69,7 @@ chmod 0644 \
   "$bundle_directory/Caddyfile" \
   "$bundle_directory/.env.compose.secrets.example" \
   "$bundle_directory/setup-common.sh" \
+  "$bundle_directory/compose-deployment.sh" \
   "$bundle_directory/org.safeonlineexam.seb-identity-installer.plist" \
   "$bundle_directory/README.md"
 

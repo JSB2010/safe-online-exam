@@ -69,7 +69,10 @@ argument.
 
 For explicit phase-by-phase operation, the original commands remain available:
 
-1. Copy `.env.compose.secrets.example` to `.env.secrets`, set the Canvas/LTI values, and protect it with `chmod 600 .env.secrets`.
+1. Copy `.env.compose.secrets.example` to `.env.secrets`, set a unique stable
+   `COMPOSE_PROJECT_NAME` plus the Canvas/LTI values, and protect the file with
+   `chmod 600 .env.secrets`. Never change the project name after the database
+   volume is created.
 2. Run `APP_IMAGE="$(sed -n 's/^APP_IMAGE=//p' .env.compose.secrets.example)" ./bootstrap-secrets.sh` before creating either `secrets/` or `.local/seb-client-identity/`.
 3. Put the Canvas API Developer Key secret in `secrets/canvas_api_client_secret` and move `.local/seb-client-identity/` to approved client/MDM storage.
 4. Validate and start the hardened stack:
@@ -87,13 +90,17 @@ For explicit phase-by-phase operation, the original commands remain available:
 
 ## Upgrade and backup
 
-Pin the exact bundled digest for production. For a later release, download and
-checksum the new bundle, preserve the prior `secrets/` directory and database
-volume, and merge newly documented keys into the protected `.env.secrets`.
-Set `APP_IMAGE` and `APP_ASSET_VERSION` to the new release, then run:
+Treat the directory containing the protected `.env.secrets` as the durable
+installation home. Relative secret and backup paths remain anchored there.
+For a later release, download and checksum the new bundle, preserve that
+installation home and the existing database volume, and merge newly documented
+keys into the protected environment. Set `APP_IMAGE` and `APP_ASSET_VERSION` to
+the new release, then run the new bundle against the existing environment:
 
 ```bash
-./upgrade.sh .env.secrets
+NEW_BUNDLE=/opt/safe-online-exam-X.Y.Z
+EXISTING_ENV=/srv/safe-online-exam/.env.secrets
+"$NEW_BUNDLE/upgrade.sh" "$EXISTING_ENV"
 ```
 
 The upgrade helper creates a PostgreSQL custom-format backup and validates it
@@ -102,9 +109,17 @@ backup to approved encrypted, off-host storage and exercise a restore drill.
 Application rollback does not reverse database migrations; confirm schema
 compatibility before restoring an older image.
 
-If the prior release may contain plaintext OAuth tokens, first add
-`secrets/oauth_token_encryption_keyring`, merge the active key ID and mode from
-the new template, and upgrade once with `OAUTH_TOKEN_ENCRYPTION_MODE=compat`.
+`COMPOSE_PROJECT_NAME` is the stable owner of the PostgreSQL volume. New guided
+installs record it automatically. On a legacy upgrade where it is absent, the
+helper finds the one existing Compose app whose exact `TOOL_URL` matches,
+records that app's existing project name in `.env.secrets`, and continues. It
+stops if no unique match exists. Never guess or replace this value during an
+upgrade; use the existing Compose project name.
+
+If the prior release may contain plaintext OAuth tokens, merge the active key
+ID and set `OAUTH_TOKEN_ENCRYPTION_MODE=compat`. When the protected OAuth
+keyring is the only missing secret, `upgrade.sh` creates it atomically with mode
+`0600`; it does not replace an existing keyring or modify any other secret.
 Then switch to `enforce`, recreate the application, and run:
 
 ```bash

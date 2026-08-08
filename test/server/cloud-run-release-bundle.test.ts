@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -638,6 +647,91 @@ exit 0
     expect(statSync(join(unattendedIdentityDirectory, "seb-config-encryption.p12")).size).toBeGreaterThan(0);
   });
 
+  it("upgrades a legacy Compose installation from a new bundle without changing its project or secrets", () => {
+    const directory = temporaryDirectory();
+    const durableDirectory = join(directory, "existing-installation");
+    const secretsDirectory = join(durableDirectory, "secrets");
+    const environmentFile = join(durableDirectory, ".env.secrets");
+    const fakeBin = join(directory, "bin");
+    const dockerLog = join(directory, "docker.log");
+    const bundleOutput = join(directory, "bundle-output");
+    const bundleExtract = join(directory, "new-release");
+    const legacyProject = "safe-online-exam-1-0-5";
+
+    mkdirSync(durableDirectory);
+    mkdirSync(secretsDirectory);
+    mkdirSync(fakeBin);
+    mkdirSync(bundleOutput);
+    mkdirSync(bundleExtract);
+    writeFileSync(
+      environmentFile,
+      [
+        `APP_IMAGE=${IMAGE}`,
+        `APP_ASSET_VERSION=${VERSION}`,
+        "TOOL_URL=https://legacy.school.edu",
+        "DATABASE_NAME=canvas_seb",
+        "DATABASE_USER=canvas_seb",
+        "SECRETS_DIRECTORY=secrets",
+        "BACKUP_DIRECTORY=backups",
+        "OAUTH_TOKEN_ENCRYPTION_MODE=compat",
+        "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary"
+      ].join("\n"),
+      { mode: 0o600 }
+    );
+    writeFileSync(join(secretsDirectory, "existing_secret"), "preserve-me", { mode: 0o600 });
+    writeFileSync(dockerLog, "");
+    writeFileSync(
+      join(fakeBin, "docker"),
+      `#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >>"$DOCKER_TEST_LOG"
+if [[ "$1" == "ps" ]]; then
+  printf 'legacy-app\n'
+elif [[ "$1" == "inspect" && "$*" == *com.docker.compose.project* ]]; then
+  printf '%s\n' "$LEGACY_COMPOSE_PROJECT"
+elif [[ "$1" == "inspect" ]]; then
+  printf 'TOOL_URL=https://legacy.school.edu\n'
+elif [[ "$1" == "compose" && "$*" == *pg_dump* ]]; then
+  printf 'representative-v1.0.5-dump\n'
+fi
+exit 0
+`,
+      { mode: 0o755 }
+    );
+    writeFileSync(join(fakeBin, "curl"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(fakeBin, "pg_restore"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+
+    const archive = execFileSync("bash", ["scripts/create-release-bundle.sh", VERSION, IMAGE, bundleOutput], {
+      cwd: ROOT,
+      encoding: "utf8"
+    }).trim();
+    execFileSync("tar", ["-xzf", archive, "-C", bundleExtract]);
+    const bundle = join(bundleExtract, `safe-online-exam-${VERSION}`);
+    execFileSync("bash", [join(bundle, "upgrade.sh"), environmentFile], {
+      cwd: bundle,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        DOCKER_TEST_LOG: dockerLog,
+        LEGACY_COMPOSE_PROJECT: legacyProject
+      }
+    });
+
+    const upgradedEnvironment = readFileSync(environmentFile, "utf8");
+    const keyringPath = join(secretsDirectory, "oauth_token_encryption_keyring");
+    const keyring = JSON.parse(readFileSync(keyringPath, "utf8")) as Record<string, string>;
+    const dockerCommands = readFileSync(dockerLog, "utf8");
+    expect(upgradedEnvironment).toContain(`COMPOSE_PROJECT_NAME=${legacyProject}`);
+    expect(readFileSync(join(secretsDirectory, "existing_secret"), "utf8")).toBe("preserve-me");
+    expect(keyring.primary).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(statSync(keyringPath).mode & 0o777).toBe(0o600);
+    expect(statSync(join(durableDirectory, "backups")).mode & 0o777).toBe(0o700);
+    expect(dockerCommands).toContain(`--project-name ${legacyProject}`);
+    expect(dockerCommands).toContain(`--env-file ${realpathSync(environmentFile)}`);
+    expect(dockerCommands).toContain(`-f ${join(bundle, "compose.yaml")}`);
+  });
+
   it("maps every managed SQL profile to the intended tier and availability model", () => {
     const rendered = execFileSync(
       "bash",
@@ -751,6 +845,41 @@ exit 0
     expect(rendered).toContain("CANVAS_DOMAIN=sample_canvas_domain:1");
     expect(rendered).toContain("DATABASE_PASSWORD=sample_database_password:12");
     expect(rendered).not.toContain(":latest");
+  });
+
+  it("anchors relative Cloud Run state to the durable environment file across release directories", () => {
+    const directory = temporaryDirectory();
+    const durableDirectory = join(directory, "existing-installation");
+    const newBundleDirectory = join(directory, "new-release-bundle");
+    const environmentFile = join(durableDirectory, "cloudrun.env");
+    mkdirSync(durableDirectory);
+    mkdirSync(newBundleDirectory);
+    writeFileSync(
+      environmentFile,
+      ["BOOTSTRAP_DIRECTORY=.bootstrap", "CLIENT_IDENTITY_DIRECTORY=.client-identity", "STATE_DIRECTORY=.state"].join(
+        "\n"
+      ),
+      { mode: 0o600 }
+    );
+
+    const rendered = execFileSync(
+      "bash",
+      [
+        "-c",
+        'source "$1"; cloudrun_load_environment "$2"; printf "%s\\n%s\\n%s\\n" "$BOOTSTRAP_DIRECTORY" "$CLIENT_IDENTITY_DIRECTORY" "$STATE_DIRECTORY"',
+        "durable-path-test",
+        join(ROOT, "deploy/cloud-run-config.sh"),
+        environmentFile
+      ],
+      { cwd: newBundleDirectory, encoding: "utf8" }
+    );
+
+    const durableRealPath = realpathSync(durableDirectory);
+    expect(rendered.trim().split("\n")).toEqual([
+      join(durableRealPath, ".bootstrap"),
+      join(durableRealPath, ".client-identity"),
+      join(durableRealPath, ".state")
+    ]);
   });
 
   it("creates a new numbered secret version only when protected bootstrap content changes", () => {
@@ -870,7 +999,8 @@ exit 99
     expect(rendered).toContain(`--source-digest ${"a".repeat(40)}`);
     expect(rendered).toContain("--source-ref refs/tags/v1.0.0");
     expect(rendered).toContain("safe-online-exam-${VERSION}-cloud-run.tar.gz.sha256");
-    expect(rendered).toContain("./upgrade.sh cloudrun.env");
+    expect(rendered).toContain('"$NEW_BUNDLE/upgrade.sh" "$EXISTING_ENV"');
+    expect(rendered).toContain("Compose project identity");
     expect(rendered).toContain("SQL_INSTANCE");
   });
 

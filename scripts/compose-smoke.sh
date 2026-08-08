@@ -55,6 +55,7 @@ chmod 644 "$secrets_directory"/*
 
 cat >"$environment_file" <<EOF
 APP_IMAGE=$image
+COMPOSE_PROJECT_NAME=$project_name
 APP_ENV_FILE=$environment_file
 BIND_ADDRESS=127.0.0.1
 APP_PORT=$app_port
