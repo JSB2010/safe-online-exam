@@ -21,6 +21,9 @@ cloudrun_require_explicit_oauth_token_encryption_mode "$environment_file"
 cloudrun_load_environment "$environment_file"
 cloudrun_validate_complete
 cloudrun_require_commands cmp curl gcloud jq openssl
+"$script_directory/validate-oauth-encryption-rollout.sh" \
+  "$PROJECT_ID" "$SERVICE" "$REGION" "$OAUTH_TOKEN_ENCRYPTION_MODE"
+cloudrun_ensure_oauth_token_encryption_bootstrap
 cloudrun_assert_bootstrap
 
 for job in "$CLOUDRUN_MIGRATE_JOB" "$CLOUDRUN_CLEANUP_JOB"; do

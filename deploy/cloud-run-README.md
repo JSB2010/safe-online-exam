@@ -332,6 +332,14 @@ assigned explicitly in `cloudrun.env`. Use `compat` for the first deployment
 to an existing installation; do not let a default opt the installation into
 encrypted writes.
 
+For the first upgrade from a release without OAuth-token encryption,
+`upgrade.sh` generates only the missing protected
+`oauth_token_encryption_keyring` file. It never reruns bootstrap, overwrites an
+existing keyring, or rotates any established secret. The normal version check
+then uploads and records the new keyring as its own numbered Secret Manager
+version. The upgrade also rejects `enforce` until the existing traffic-serving
+revision has completed a `compat` deployment.
+
 Before reusing a recorded secret version, the helper byte-compares that exact
 enabled Secret Manager version with its protected bootstrap file. The
 comparison uses a mode-`0600` temporary file under the protected state

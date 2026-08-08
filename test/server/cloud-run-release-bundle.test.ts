@@ -145,6 +145,7 @@ describe("portable Cloud Run release bundle", () => {
       "install.sh",
       "finalize-lti.sh",
       "upgrade.sh",
+      "validate-oauth-encryption-rollout.sh",
       "encrypt-oauth-tokens.sh",
       "rollback.sh"
     ]) {
@@ -328,6 +329,32 @@ exit 0
     expect(source("scripts/prepare-cloud-run.sh")).toContain("cloudrun_wait_for_sql_admin_api");
     expect(source("scripts/finalize-cloud-run-lti.sh")).toContain("cloudrun_disable_default_url_after_finalization");
     expect(source("deploy/cloudrun.env.example")).toContain("DISABLE_DEFAULT_URL_AFTER_FINALIZE=false");
+  });
+
+  it("adds only the missing OAuth keyring to an existing protected Cloud Run bootstrap", () => {
+    const directory = temporaryDirectory();
+    const bootstrapDirectory = join(directory, "bootstrap");
+    const existingSecret = join(bootstrapDirectory, "session_secret");
+    const keyringPath = join(bootstrapDirectory, "oauth_token_encryption_keyring");
+    mkdirSync(bootstrapDirectory, { mode: 0o700 });
+    writeFileSync(existingSecret, "preserve-this-value", { mode: 0o600 });
+
+    const command = [
+      "source deploy/cloud-run-config.sh",
+      `BOOTSTRAP_DIRECTORY=${JSON.stringify(bootstrapDirectory)}`,
+      "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary",
+      "cloudrun_ensure_oauth_token_encryption_bootstrap"
+    ].join("\n");
+    execFileSync("bash", ["-c", command], { cwd: ROOT, encoding: "utf8" });
+
+    const firstKeyring = readFileSync(keyringPath, "utf8");
+    expect(JSON.parse(firstKeyring)).toEqual({ primary: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u) });
+    expect(statSync(keyringPath).mode & 0o777).toBe(0o600);
+    expect(readFileSync(existingSecret, "utf8")).toBe("preserve-this-value");
+
+    execFileSync("bash", ["-c", command], { cwd: ROOT, encoding: "utf8" });
+    expect(readFileSync(keyringPath, "utf8")).toBe(firstKeyring);
+    expect(readFileSync(existingSecret, "utf8")).toBe("preserve-this-value");
   });
 
   it("fails candidate verification when either public probe fails", () => {

@@ -246,10 +246,12 @@ Rollback verifies `TOOL_URL` when configured. Upgrade verifies that origin
 before temporarily enabling—and after re-disabling—the generated URL.
 
 For an existing installation that may contain plaintext OAuth tokens, first
-merge the new template keys, generate the protected bootstrap
-`oauth_token_encryption_keyring` file, and run the upgrade with
-`OAUTH_TOKEN_ENCRYPTION_MODE=compat`. The upgrade creates and binds the numbered
-Secret Manager version. That revision can read
+merge the new template keys and run the upgrade with
+`OAUTH_TOKEN_ENCRYPTION_MODE=compat`. When the protected bootstrap does not yet
+contain `oauth_token_encryption_keyring`, `upgrade.sh` generates only that new
+keyring file with the configured active key ID. It never replaces an existing
+keyring or changes any other bootstrap value. The upgrade then creates and
+binds its numbered Secret Manager version. That revision can read
 both formats while continuing rollback-compatible writes. Then set the mode to
 `enforce`, deploy the same image again, verify the service, and run:
 
@@ -268,10 +270,16 @@ byte-compares it with the corresponding bootstrap file, and removes the
 temporary file immediately. An unchanged value reuses its version; a changed
 value receives a new numbered version. If the deployer cannot access the
 pinned value for comparison, the upgrade stops before backup or deployment.
+The first 1.0.5-to-1.1 upgrade is the one exception to "already present": it
+creates the newly required OAuth keyring locally and uploads version 1 (or the
+next available version) without rotating established application secrets.
 
 `upgrade.sh` requires `OAUTH_TOKEN_ENCRYPTION_MODE` to be assigned explicitly
 in `cloudrun.env`; it never treats the default as approval to begin encrypted
-writes during an upgrade.
+writes during an upgrade. When `enforce` is requested for an existing Cloud Run
+service, the upgrade also verifies that the sole traffic-serving revision
+already reports `compat` or `enforce`; a 1.0.5 revision therefore cannot skip
+the compatibility deployment.
 
 For data recovery, restore a backup into a controlled target first. Do not
 overwrite the active database as the first diagnostic action.
@@ -408,6 +416,13 @@ Authorization attestation for that digest, and requests the project's default
 Binary Authorization policy on the migration job, cleanup job, and service.
 The policy becomes blocking only after the separately documented enforcement
 step.
+
+This Binary Authorization section applies to the repository-maintained
+`canvas-seb-prod` Cloud Build target. It is not an application runtime
+dependency, is not required to publish the 1.1 release, and is not required by
+the portable `upgrade.sh` or Docker Compose upgrade paths. An institution may
+adopt an equivalent admission policy for its own service, but the 1.0.5-to-1.1
+OAuth migration does not depend on doing so.
 
 Prepare these controls once before using the production promotion config:
 

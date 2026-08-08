@@ -482,6 +482,39 @@ cloudrun_write_random_secret() {
   printf '%s' "$value" >"$output_path"
 }
 
+cloudrun_ensure_oauth_token_encryption_bootstrap() (
+  local keyring_path="$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"
+  local temporary_file oauth_token_key
+
+  [[ -d "$BOOTSTRAP_DIRECTORY" && ! -L "$BOOTSTRAP_DIRECTORY" ]] ||
+    cloudrun_die "bootstrap directory is missing: $BOOTSTRAP_DIRECTORY"
+
+  # Existing installations keep every previously protected value. The 1.1
+  # transition adds only this new file; never replace it once it exists, even
+  # when the existing path is malformed (cloudrun_assert_bootstrap reports that
+  # condition without destroying operator-managed material).
+  if [[ -e "$keyring_path" || -L "$keyring_path" ]]; then
+    return 0
+  fi
+
+  oauth_token_key="$(openssl rand -base64 32 | tr '/+' '_-' | tr -d '=\n')" ||
+    cloudrun_die "OpenSSL could not generate the OAuth token encryption key"
+  [[ "$oauth_token_key" =~ ^[A-Za-z0-9_-]{43}$ ]] ||
+    cloudrun_die "OpenSSL generated an invalid OAuth token encryption key"
+
+  temporary_file="$(mktemp "$BOOTSTRAP_DIRECTORY/.oauth-token-encryption-keyring.XXXXXX")"
+  trap 'rm -f -- "$temporary_file"' EXIT
+  jq -cn \
+    --arg key_id "$OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID" \
+    --arg key "$oauth_token_key" \
+    '{($key_id): $key}' >"$temporary_file"
+  chmod 600 "$temporary_file"
+  mv "$temporary_file" "$keyring_path"
+  trap - EXIT
+
+  echo "Generated the new protected OAuth token encryption keyring without changing existing bootstrap values." >&2
+)
+
 cloudrun_require_single_line_secret() {
   local name="$1"
   local file_path="$2"
