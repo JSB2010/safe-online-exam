@@ -370,21 +370,105 @@ exit 0
     const directory = temporaryDirectory();
     const bootstrapDirectory = join(directory, "bootstrap");
     const stateDirectory = join(directory, "state");
+    const scriptDirectory = join(directory, "scripts");
     mkdirSync(bootstrapDirectory, { mode: 0o700 });
     mkdirSync(stateDirectory, { mode: 0o700 });
+    mkdirSync(scriptDirectory, { mode: 0o700 });
     writeFileSync(join(stateDirectory, "secret-versions.env"), "OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=7\n", {
       mode: 0o600
     });
+    writeFileSync(join(scriptDirectory, "upgrade-cloud-run.sh"), source("scripts/upgrade-cloud-run.sh"), {
+      mode: 0o700
+    });
+    writeFileSync(join(scriptDirectory, "validate-oauth-encryption-rollout.sh"), "#!/usr/bin/env bash\nexit 0\n", {
+      mode: 0o700
+    });
+    writeFileSync(
+      join(scriptDirectory, "cloud-run-config.sh"),
+      [
+        "cloudrun_require_explicit_oauth_token_encryption_mode() { :; }",
+        "cloudrun_load_environment() { :; }",
+        "cloudrun_validate_complete() { :; }",
+        "cloudrun_require_commands() { :; }",
+        "cloudrun_die() { printf 'error: %s\\n' \"$*\" >&2; return 1; }",
+        source("deploy/cloud-run-config.sh").match(
+          /cloudrun_assert_oauth_token_encryption_keyring_not_established\(\) \{[\s\S]*?\n\}/u
+        )?.[0] ?? "",
+        'cloudrun_ensure_oauth_token_encryption_bootstrap() { : >"$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"; }'
+      ].join("\n"),
+      { mode: 0o600 }
+    );
 
-    const command = [
-      "source deploy/cloud-run-config.sh",
-      `BOOTSTRAP_DIRECTORY=${JSON.stringify(bootstrapDirectory)}`,
-      `CLOUDRUN_SECRET_VERSION_STATE=${JSON.stringify(join(stateDirectory, "secret-versions.env"))}`,
-      "cloudrun_assert_oauth_token_encryption_keyring_not_established"
-    ].join("\n");
-
-    expect(() => execFileSync("bash", ["-c", command], { cwd: ROOT, encoding: "utf8" })).toThrow();
+    expect(() =>
+      execFileSync("bash", [join(scriptDirectory, "upgrade-cloud-run.sh")], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BOOTSTRAP_DIRECTORY: bootstrapDirectory,
+          CLOUDRUN_SECRET_VERSION_STATE: join(stateDirectory, "secret-versions.env"),
+          OAUTH_TOKEN_ENCRYPTION_MODE: "compat",
+          PROJECT_ID: "sample-project",
+          REGION: "us-central1",
+          SERVICE: "safe-online-exam"
+        }
+      })
+    ).toThrow();
     expect(() => statSync(join(bootstrapDirectory, "oauth_token_encryption_keyring"))).toThrow();
+  });
+
+  it("generates an OAuth keyring only when Secret Manager confirms the secret is absent", () => {
+    for (const scenario of ["permission-denied", "not-found"] as const) {
+      const directory = temporaryDirectory();
+      const bootstrapDirectory = join(directory, "bootstrap");
+      const fakeBin = join(directory, "bin");
+      const keyringPath = join(bootstrapDirectory, "oauth_token_encryption_keyring");
+      mkdirSync(bootstrapDirectory, { mode: 0o700 });
+      mkdirSync(fakeBin, { mode: 0o700 });
+      writeFileSync(
+        join(fakeBin, "gcloud"),
+        `#!/usr/bin/env bash
+if [[ "$GCLOUD_SCENARIO" == "not-found" ]]; then
+  printf 'ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret does not exist.\\n' >&2
+else
+  printf 'ERROR: (gcloud.secrets.describe) PERMISSION_DENIED: Permission denied.\\n' >&2
+fi
+exit 1
+`,
+        { mode: 0o700 }
+      );
+
+      const command = [
+        "source deploy/cloud-run-config.sh",
+        `BOOTSTRAP_DIRECTORY=${JSON.stringify(bootstrapDirectory)}`,
+        `CLOUDRUN_SECRET_VERSION_STATE=${JSON.stringify(join(directory, "missing-secret-versions.env"))}`,
+        "PROJECT_ID=sample-project",
+        "SECRET_PREFIX=safe-online-exam",
+        "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary",
+        "cloudrun_assert_oauth_token_encryption_keyring_not_established",
+        "cloudrun_ensure_oauth_token_encryption_bootstrap"
+      ].join("\n");
+      const run = () =>
+        execFileSync("bash", ["-c", command], {
+          cwd: ROOT,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            GCLOUD_SCENARIO: scenario
+          }
+        });
+
+      if (scenario === "permission-denied") {
+        expect(run).toThrow();
+        expect(() => statSync(keyringPath)).toThrow();
+      } else {
+        expect(run).not.toThrow();
+        expect(JSON.parse(readFileSync(keyringPath, "utf8"))).toEqual({
+          primary: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u)
+        });
+      }
+    }
   });
 
   it("fails candidate verification when either public probe fails", () => {
