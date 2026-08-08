@@ -345,7 +345,10 @@ For the first upgrade from a release without OAuth-token encryption,
 `oauth_token_encryption_keyring` file. It never reruns bootstrap, overwrites an
 existing keyring, or rotates any established secret. The normal version check
 then uploads and records the new keyring as its own numbered Secret Manager
-version. The upgrade also rejects `enforce` until the existing traffic-serving
+version. If the local file is missing after a keyring version has been recorded
+locally or created in Secret Manager, the upgrade stops and requires the
+protected file to be restored instead of silently generating replacement key
+bytes. The upgrade also rejects `enforce` until the existing traffic-serving
 revision has completed a `compat` deployment.
 
 Before reusing a recorded secret version, the helper byte-compares that exact

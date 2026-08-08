@@ -366,6 +366,27 @@ exit 0
     expect(readFileSync(existingSecret, "utf8")).toBe("preserve-this-value");
   });
 
+  it("refuses to replace a missing OAuth keyring after a secret version was recorded", () => {
+    const directory = temporaryDirectory();
+    const bootstrapDirectory = join(directory, "bootstrap");
+    const stateDirectory = join(directory, "state");
+    mkdirSync(bootstrapDirectory, { mode: 0o700 });
+    mkdirSync(stateDirectory, { mode: 0o700 });
+    writeFileSync(join(stateDirectory, "secret-versions.env"), "OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=7\n", {
+      mode: 0o600
+    });
+
+    const command = [
+      "source deploy/cloud-run-config.sh",
+      `BOOTSTRAP_DIRECTORY=${JSON.stringify(bootstrapDirectory)}`,
+      `CLOUDRUN_SECRET_VERSION_STATE=${JSON.stringify(join(stateDirectory, "secret-versions.env"))}`,
+      "cloudrun_assert_oauth_token_encryption_keyring_not_established"
+    ].join("\n");
+
+    expect(() => execFileSync("bash", ["-c", command], { cwd: ROOT, encoding: "utf8" })).toThrow();
+    expect(() => statSync(join(bootstrapDirectory, "oauth_token_encryption_keyring"))).toThrow();
+  });
+
   it("fails candidate verification when either public probe fails", () => {
     const directory = temporaryDirectory();
     const fakeBin = join(directory, "bin");
