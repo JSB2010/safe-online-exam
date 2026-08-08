@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -383,6 +383,12 @@ exit 0
     writeFileSync(join(scriptDirectory, "validate-oauth-encryption-rollout.sh"), "#!/usr/bin/env bash\nexit 0\n", {
       mode: 0o700
     });
+    const keyringGuard = source("deploy/cloud-run-config.sh").match(
+      /cloudrun_assert_oauth_token_encryption_keyring_not_established\(\) \{[\s\S]*?\n\}/u
+    );
+    if (keyringGuard === null) {
+      throw new Error("Could not extract OAuth keyring guard");
+    }
     writeFileSync(
       join(scriptDirectory, "cloud-run-config.sh"),
       [
@@ -391,29 +397,28 @@ exit 0
         "cloudrun_validate_complete() { :; }",
         "cloudrun_require_commands() { :; }",
         "cloudrun_die() { printf 'error: %s\\n' \"$*\" >&2; return 1; }",
-        source("deploy/cloud-run-config.sh").match(
-          /cloudrun_assert_oauth_token_encryption_keyring_not_established\(\) \{[\s\S]*?\n\}/u
-        )?.[0] ?? "",
+        keyringGuard[0],
         'cloudrun_ensure_oauth_token_encryption_bootstrap() { : >"$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"; }'
       ].join("\n"),
       { mode: 0o600 }
     );
 
-    expect(() =>
-      execFileSync("bash", [join(scriptDirectory, "upgrade-cloud-run.sh")], {
-        cwd: ROOT,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          BOOTSTRAP_DIRECTORY: bootstrapDirectory,
-          CLOUDRUN_SECRET_VERSION_STATE: join(stateDirectory, "secret-versions.env"),
-          OAUTH_TOKEN_ENCRYPTION_MODE: "compat",
-          PROJECT_ID: "sample-project",
-          REGION: "us-central1",
-          SERVICE: "safe-online-exam"
-        }
-      })
-    ).toThrow();
+    const upgrade = spawnSync("bash", [join(scriptDirectory, "upgrade-cloud-run.sh")], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BOOTSTRAP_DIRECTORY: bootstrapDirectory,
+        CLOUDRUN_SECRET_VERSION_STATE: join(stateDirectory, "secret-versions.env"),
+        OAUTH_TOKEN_ENCRYPTION_MODE: "compat",
+        PROJECT_ID: "sample-project",
+        REGION: "us-central1",
+        SERVICE: "safe-online-exam"
+      }
+    });
+
+    expect(upgrade.status).not.toBe(0);
+    expect(upgrade.stderr).toContain("restore the protected bootstrap file instead of replacing its encryption key");
     expect(() => statSync(join(bootstrapDirectory, "oauth_token_encryption_keyring"))).toThrow();
   });
 
