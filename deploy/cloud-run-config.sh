@@ -531,6 +531,35 @@ cloudrun_ensure_oauth_token_encryption_bootstrap() (
   echo "Generated the new protected OAuth token encryption keyring without changing existing bootstrap values." >&2
 )
 
+cloudrun_assert_oauth_token_encryption_keyring_not_established() {
+  local keyring_path="$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"
+  local describe_error recorded_version secret_name versions
+
+  [[ ! -e "$keyring_path" && ! -L "$keyring_path" ]] || return 0
+
+  recorded_version=""
+  if [[ -f "$CLOUDRUN_SECRET_VERSION_STATE" ]]; then
+    recorded_version="$(awk -F= -v key=OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION \
+      '$1 == key { value=$2 } END { print value }' "$CLOUDRUN_SECRET_VERSION_STATE")"
+  fi
+  [[ ! "$recorded_version" =~ ^[1-9][0-9]*$ ]] ||
+    cloudrun_die "the local OAuth token encryption keyring is missing but Secret Manager version $recorded_version is already recorded; restore the protected bootstrap file instead of replacing its encryption key"
+
+  secret_name="${SECRET_PREFIX}_oauth_token_encryption_keyring"
+  if describe_error="$(gcloud secrets describe "$secret_name" --project="$PROJECT_ID" 2>&1 >/dev/null)"; then
+    versions="$(gcloud secrets versions list \
+      --secret="$secret_name" \
+      --project="$PROJECT_ID" \
+      --limit=1 \
+      --format='value(name)')" ||
+      cloudrun_die "could not inspect existing versions of $secret_name"
+    [[ -z "$versions" ]] ||
+      cloudrun_die "the local OAuth token encryption keyring is missing but $secret_name already has a Secret Manager version; restore the protected bootstrap file instead of replacing its encryption key"
+  elif ! grep -qE '(^|[[:space:]])NOT_FOUND:' <<<"$describe_error"; then
+    cloudrun_die "could not determine whether $secret_name already exists; Secret Manager inspection failed: $describe_error"
+  fi
+}
+
 cloudrun_require_single_line_secret() {
   local name="$1"
   local file_path="$2"

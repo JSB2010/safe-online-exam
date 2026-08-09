@@ -23,6 +23,7 @@ cloudrun_validate_complete
 cloudrun_require_commands cmp curl gcloud jq openssl
 "$script_directory/validate-oauth-encryption-rollout.sh" \
   "$PROJECT_ID" "$SERVICE" "$REGION" "$OAUTH_TOKEN_ENCRYPTION_MODE"
+cloudrun_assert_oauth_token_encryption_keyring_not_established
 cloudrun_ensure_oauth_token_encryption_bootstrap
 cloudrun_assert_bootstrap
 
