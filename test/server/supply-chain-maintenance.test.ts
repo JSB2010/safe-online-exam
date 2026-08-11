@@ -19,7 +19,11 @@ function writeExecutable(path: string, body: string): void {
   writeFileSync(path, body, { mode: 0o755 });
 }
 
-function supplyChainFixture(outdated: Record<string, unknown> = {}, imageDigest = DIGEST_A): string {
+function supplyChainFixture(
+  outdated: Record<string, unknown> = {},
+  imageDigest = DIGEST_A,
+  npmEligible: Record<string, string> = {}
+): string {
   const directory = temporaryDirectory("safe-online-exam-supply-chain-");
   mkdirSync(join(directory, ".github", "workflows"), { recursive: true });
   mkdirSync(join(directory, "scripts"));
@@ -46,6 +50,7 @@ function supplyChainFixture(outdated: Record<string, unknown> = {}, imageDigest 
         "gcr.io/cloud-builders/docker:latest": imageDigest
       },
       tools: { npm: "11.19.0", trivy: "v0.73.0", githubCli: "v2.97.0" },
+      npmEligible,
       outdated
     })
   );
@@ -107,6 +112,73 @@ describe("weekly supply-chain maintenance", () => {
     expect(readFileSync(report, "utf8")).toContain("Actionable drift");
     expect(readFileSync(report, "utf8")).toContain("npm vite");
     expect(readFileSync(report, "utf8")).toContain("Major migrations (informational)");
+  });
+
+  it("uses the wanted version when npm outdated runs before dependencies are installed", () => {
+    const directory = supplyChainFixture({ vite: { wanted: "8.0.0", latest: "8.1.0" } });
+    const report = join(directory, "report.md");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/check-supply-chain-pins.mjs",
+        "--root",
+        directory,
+        "--report",
+        report,
+        "--fixtures",
+        join(directory, "fixtures.json")
+      ],
+      { cwd: ROOT, encoding: "utf8" }
+    );
+
+    expect(result.status).toBe(2);
+    expect(readFileSync(report, "utf8")).toContain("npm vite");
+  });
+
+  it("reports newly published npm updates without treating them as actionable drift", () => {
+    const directory = supplyChainFixture({ vite: { current: "8.0.0", wanted: "8.0.0", latest: "8.1.0" } }, DIGEST_A, {
+      vite: "8.0.0"
+    });
+    const report = join(directory, "report.md");
+
+    execFileSync(
+      process.execPath,
+      [
+        "scripts/check-supply-chain-pins.mjs",
+        "--root",
+        directory,
+        "--report",
+        report,
+        "--fixtures",
+        join(directory, "fixtures.json")
+      ],
+      { cwd: ROOT }
+    );
+
+    const contents = readFileSync(report, "utf8");
+    expect(contents).toContain("Cooldown-deferred npm updates (informational)");
+    expect(contents).not.toContain("## Actionable drift");
+  });
+
+  it("renders a monitor error instead of crashing on incomplete npm outdated data", () => {
+    const directory = supplyChainFixture({ vite: { latest: "8.1.0" } });
+    const report = join(directory, "report.md");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/check-supply-chain-pins.mjs",
+        "--root",
+        directory,
+        "--report",
+        report,
+        "--fixtures",
+        join(directory, "fixtures.json")
+      ],
+      { cwd: ROOT, encoding: "utf8" }
+    );
+
+    expect(result.status).toBe(1);
+    expect(readFileSync(report, "utf8")).toContain("incomplete or invalid version data for vite");
   });
 
   it("verifies the immutable GitHub release attestation with a checksum-pinned CLI", () => {
@@ -398,7 +470,7 @@ exit 99
     const monitor = readFileSync(join(ROOT, "scripts/check-supply-chain-pins.mjs"), "utf8");
     const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
 
-    expect(monitor.match(/AbortSignal\.timeout\(EXTERNAL_CHECK_TIMEOUT_MS\)/gu)).toHaveLength(2);
+    expect(monitor.match(/AbortSignal\.timeout\(EXTERNAL_CHECK_TIMEOUT_MS\)/gu)).toHaveLength(3);
     expect(monitor.match(/timeout: EXTERNAL_CHECK_TIMEOUT_MS/gu)).toHaveLength(2);
     expect(monitor.match(/if \(result\.error\)/gu)).toHaveLength(2);
     expect(workflow).toContain('elif [[ "$pin_status" -ne 0 ]]; then');

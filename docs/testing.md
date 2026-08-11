@@ -26,10 +26,9 @@ versions, the public npm registry, SHA-512 integrity metadata, no linked/Git/
 URL/file/directory dependencies, and an explicit denial for optional
 `fsevents` native builds. It also checks every locked version against npm
 registry publication metadata and rejects packages published less than three
-days ago. Exact versions already present in the preserved hardening commit when
-this gate was corrected are narrowly grandfathered after signature, provenance,
-advisory, and CI verification; they stop bypassing the comparison as soon as
-they naturally pass the age threshold. Review any allowlist or integrity change
+days ago. The temporary exact-version exceptions used while this gate was
+introduced have expired and were removed, so every locked registry package now
+follows the same publication-age rule. Review any allowlist or integrity change
 as executable third-party code.
 
 Run the network-backed supply-chain gate when dependencies change and before a

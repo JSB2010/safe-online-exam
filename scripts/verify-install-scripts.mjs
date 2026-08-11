@@ -9,29 +9,6 @@ const DEFAULT_MIN_RELEASE_AGE_DAYS = 3;
 const REGISTRY_CONCURRENCY = 8;
 const REGISTRY_REQUEST_TIMEOUT_MS = 15_000;
 const REGISTRY_REQUEST_ATTEMPTS = 3;
-// These exact versions were already locked in the preserved local hardening
-// commit before its publication-age gate was corrected. They were covered by
-// the signature, provenance, advisory, and CI checks. They bypass only the age
-// comparison and stop needing the exception automatically once three days old.
-const GRANDFATHERED_RELEASE_AGE_VERSIONS = new Set([
-  "@rolldown/binding-android-arm64@1.2.3",
-  "@rolldown/binding-darwin-arm64@1.2.3",
-  "@rolldown/binding-darwin-x64@1.2.3",
-  "@rolldown/binding-freebsd-x64@1.2.3",
-  "@rolldown/binding-linux-arm-gnueabihf@1.2.3",
-  "@rolldown/binding-linux-arm64-gnu@1.2.3",
-  "@rolldown/binding-linux-arm64-musl@1.2.3",
-  "@rolldown/binding-linux-ppc64-gnu@1.2.3",
-  "@rolldown/binding-linux-s390x-gnu@1.2.3",
-  "@rolldown/binding-linux-x64-gnu@1.2.3",
-  "@rolldown/binding-linux-x64-musl@1.2.3",
-  "@rolldown/binding-openharmony-arm64@1.2.3",
-  "@rolldown/binding-win32-arm64-msvc@1.2.3",
-  "@rolldown/binding-win32-x64-msvc@1.2.3",
-  "@types/pg@8.20.4",
-  "rolldown@1.2.3",
-  "tsx@4.23.8"
-]);
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/u;
 const APPROVED_LIFECYCLE_ENTRIES = new Map([
@@ -209,7 +186,6 @@ async function fetchRegistryMetadata(packageName) {
 
 async function verifyPublicationAges(packages, minimumAgeDays, failures) {
   const versionsByPackage = new Map();
-  const lockedPackageVersions = new Set();
   for (const [path, metadata] of packages) {
     if (path === "" || metadata?.link === true) continue;
     const packageName = packageNameFromPath(path);
@@ -220,20 +196,11 @@ async function verifyPublicationAges(packages, minimumAgeDays, failures) {
     const versions = versionsByPackage.get(packageName) || new Set();
     versions.add(metadata.version);
     versionsByPackage.set(packageName, versions);
-    lockedPackageVersions.add(`${packageName}@${metadata.version}`);
-  }
-
-  for (const grandfatheredVersion of GRANDFATHERED_RELEASE_AGE_VERSIONS) {
-    if (!lockedPackageVersions.has(grandfatheredVersion)) {
-      failures.push(`Release-age grandfather entry is not present in the lockfile: ${grandfatheredVersion}`);
-    }
   }
 
   const entries = [...versionsByPackage.entries()];
   const cutoff = Date.now() - minimumAgeDays * 24 * 60 * 60 * 1000;
   let nextIndex = 0;
-  let grandfatheredCount = 0;
-
   async function worker() {
     while (nextIndex < entries.length) {
       const entry = entries[nextIndex];
@@ -250,10 +217,6 @@ async function verifyPublicationAges(packages, minimumAgeDays, failures) {
           }
           if (publishedTimestamp > cutoff) {
             const packageVersion = `${packageName}@${version}`;
-            if (GRANDFATHERED_RELEASE_AGE_VERSIONS.has(packageVersion)) {
-              grandfatheredCount += 1;
-              continue;
-            }
             failures.push(`${packageVersion} was published ${publishedAt}, less than ${minimumAgeDays} days ago`);
           }
         }
@@ -265,8 +228,7 @@ async function verifyPublicationAges(packages, minimumAgeDays, failures) {
 
   await Promise.all(Array.from({ length: Math.min(REGISTRY_CONCURRENCY, entries.length) }, () => worker()));
   return {
-    checkedCount: entries.reduce((count, [, versions]) => count + versions.size, 0),
-    grandfatheredCount
+    checkedCount: entries.reduce((count, [, versions]) => count + versions.size, 0)
   };
 }
 
@@ -350,7 +312,7 @@ for (const [path, approved] of APPROVED_LIFECYCLE_ENTRIES) {
   }
 }
 
-let publicationResult = { checkedCount: 0, grandfatheredCount: 0 };
+let publicationResult = { checkedCount: 0 };
 if (!failures.length && !skipReleaseAge && minimumReleaseAgeDays > 0) {
   publicationResult = await verifyPublicationAges(packages, minimumReleaseAgeDays, failures);
 }
@@ -364,7 +326,7 @@ if (failures.length) {
     ? "release-age lookup skipped for the post-install offline recheck"
     : minimumReleaseAgeDays === 0
       ? "release-age gate disabled by explicit command-line override"
-      : `${publicationResult.checkedCount} locked package versions checked against the ${minimumReleaseAgeDays}-day minimum (${publicationResult.grandfatheredCount} exact pre-policy versions grandfathered)`;
+      : `${publicationResult.checkedCount} locked package versions checked against the ${minimumReleaseAgeDays}-day minimum`;
   process.stdout.write(
     `Verified strict npm configuration, ${packages.length - 1} registry dependencies, sha512 integrity metadata, exact direct and override versions, ${lifecycleCount} lifecycle-script entries, and ${publicationSummary}.\n`
   );
