@@ -244,6 +244,9 @@ await Promise.all(
     }
   })
 );
+routineUpdates.sort(([left], [right]) => left.localeCompare(right));
+deferredUpdates.sort(([left], [right]) => left.localeCompare(right));
+errors.sort();
 drift.push(...routineUpdates.map(([name, from, to]) => [`npm ${name}`, from, to]));
 
 const lines = ["# Weekly supply-chain maintenance", "", `Generated: ${new Date().toISOString()}`, ""];
