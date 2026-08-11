@@ -29,11 +29,11 @@ steps:
     entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"
     args: ["$PROJECT_ID", "${_SERVICE}", "${_LOCATION}", "${_OAUTH_TOKEN_ENCRYPTION_MODE}"]
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20"
     args: ["pull", "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"]
     allowFailure: true
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20"
     env:
       - "DOCKER_BUILDKIT=1"
     args:
@@ -48,16 +48,16 @@ steps:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
       - "."
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20"
     entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20"
     entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
       - "/workspace/canvas-seb-school.digest"
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f8b08c609fdc392ee6827ff3e1725e4980f7d96bde9f76f4695086405c96c147"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20"
     args: ["push", "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"]
 
   - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"

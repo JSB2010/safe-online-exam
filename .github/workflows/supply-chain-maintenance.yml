@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md
+          node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md >pin-monitor.log 2>&1
           pin_status=$?
           if [[ ! -f supply-chain-report.md ]]; then
             printf '# Weekly supply-chain maintenance\n\nThe immutable-pin monitor failed before it could render its report.\n' \
@@ -98,6 +98,7 @@ jobs:
           name: supply-chain-maintenance
           path: |
             supply-chain-report.md
+            pin-monitor.log
             dependency-policy.log
             signatures.log
             advisories.log

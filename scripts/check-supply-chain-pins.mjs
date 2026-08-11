@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u;
 const EXTERNAL_CHECK_TIMEOUT_MS = 30_000;
+const NPM_PATCH_RELEASE_AGE_DAYS = 3;
+const NPM_MINOR_RELEASE_AGE_DAYS = 7;
 
 function argumentValue(name, fallback = null) {
   const index = process.argv.indexOf(name);
@@ -19,6 +21,7 @@ function read(path) {
 }
 
 function parseVersion(version) {
+  if (typeof version !== "string") return null;
   const match = version.match(SEMVER);
   return match ? match.slice(1, 4).map(Number) : null;
 }
@@ -116,6 +119,42 @@ function npmOutdated(root, fixtures) {
   return result.stdout.trim() ? JSON.parse(result.stdout) : {};
 }
 
+async function latestEligibleNpmWithinMajor(packageName, currentVersion, latestVersion, fixtures) {
+  const currentMajor = parseVersion(currentVersion)?.[0];
+  if (currentMajor === undefined)
+    throw new Error(`Invalid installed npm version for ${packageName}: ${currentVersion}`);
+  if (fixtures) {
+    const candidate = fixtures.npmEligible?.[packageName] || latestVersion;
+    return parseVersion(candidate)?.[0] === currentMajor ? candidate : null;
+  }
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`, {
+    headers: { accept: "application/json", "user-agent": "safe-online-exam-supply-chain-monitor" },
+    redirect: "error",
+    signal: AbortSignal.timeout(EXTERNAL_CHECK_TIMEOUT_MS)
+  });
+  if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status} for ${packageName}`);
+  if (new URL(response.url).origin !== "https://registry.npmjs.org") {
+    throw new Error(`npm registry returned an unexpected origin for ${packageName}`);
+  }
+  const packument = await response.json();
+  return Object.keys(packument.versions || {})
+    .filter((version) => {
+      const publishedAt = packument.time?.[version];
+      const parsed = parseVersion(version);
+      const minimumAgeDays =
+        parsed?.[1] === parseVersion(currentVersion)?.[1] ? NPM_PATCH_RELEASE_AGE_DAYS : NPM_MINOR_RELEASE_AGE_DAYS;
+      const cutoff = Date.now() - minimumAgeDays * 24 * 60 * 60 * 1000;
+      return (
+        parsed?.[0] === currentMajor &&
+        !version.includes("-") &&
+        typeof publishedAt === "string" &&
+        Date.parse(publishedAt) <= cutoff
+      );
+    })
+    .sort(compareVersions)
+    .at(-1);
+}
+
 const root = resolve(argumentValue("--root", "."));
 const reportPath = resolve(argumentValue("--report", "supply-chain-report.md"));
 const fixturePath = argumentValue("--fixtures");
@@ -179,17 +218,32 @@ try {
 }
 const routineUpdates = [];
 const majorMigrations = [];
-for (const [name, details] of Object.entries(outdated)) {
-  const currentVersion = details.current;
-  const latestVersion = details.latest;
-  const wantedVersion = details.wanted || latestVersion;
-  const currentMajor = parseVersion(currentVersion)?.[0];
-  const latestMajor = parseVersion(latestVersion)?.[0];
-  if (currentMajor === latestMajor && latestVersion !== currentVersion) {
-    routineUpdates.push([name, currentVersion, latestVersion]);
-  }
-  if (currentMajor !== latestMajor) majorMigrations.push([name, currentVersion, latestVersion]);
-}
+const deferredUpdates = [];
+await Promise.all(
+  Object.entries(outdated).map(async ([name, details]) => {
+    const manifestVersion = packageJson.dependencies?.[name] || packageJson.devDependencies?.[name];
+    const currentVersion = details?.current || manifestVersion || details?.wanted;
+    const latestVersion = details?.latest;
+    const currentMajor = parseVersion(currentVersion)?.[0];
+    const latestMajor = parseVersion(latestVersion)?.[0];
+    if (currentMajor === undefined || latestMajor === undefined) {
+      errors.push(`npm outdated returned incomplete or invalid version data for ${name}`);
+      return;
+    }
+    if (currentMajor !== latestMajor) majorMigrations.push([name, currentVersion, latestVersion]);
+    try {
+      const eligibleVersion = await latestEligibleNpmWithinMajor(name, currentVersion, latestVersion, fixtures);
+      if (eligibleVersion && compareVersions(eligibleVersion, currentVersion) > 0) {
+        routineUpdates.push([name, currentVersion, eligibleVersion]);
+      }
+      if (currentMajor === latestMajor && compareVersions(latestVersion, eligibleVersion || currentVersion) > 0) {
+        deferredUpdates.push([name, eligibleVersion || currentVersion, latestVersion]);
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  })
+);
 drift.push(...routineUpdates.map(([name, from, to]) => [`npm ${name}`, from, to]));
 
 const lines = ["# Weekly supply-chain maintenance", "", `Generated: ${new Date().toISOString()}`, ""];
@@ -204,12 +258,26 @@ if (majorMigrations.length) {
   for (const [name, from, to] of majorMigrations) lines.push(`| ${name} | \`${from}\` | \`${to}\` |`);
   lines.push("", "Major upgrades remain deliberate migration work and do not by themselves open the drift issue.", "");
 }
+if (deferredUpdates.length) {
+  lines.push(
+    "## Cooldown-deferred npm updates (informational)",
+    "",
+    `These releases are still inside the configured ${NPM_PATCH_RELEASE_AGE_DAYS}-day patch or ${NPM_MINOR_RELEASE_AGE_DAYS}-day minor cooldown and are not actionable yet.`,
+    "",
+    "| Dependency | Eligible | Latest |",
+    "| --- | --- | --- |"
+  );
+  for (const [name, from, to] of deferredUpdates) lines.push(`| ${name} | \`${from}\` | \`${to}\` |`);
+  lines.push("");
+}
 if (errors.length) {
   lines.push("## Monitor errors", "");
   for (const error of errors) lines.push(`- ${error.replaceAll("\n", " ")}`);
   lines.push("");
 }
-lines.push(`Checked ${current.length + drift.length} pinned dependency, tool, and image references.`);
+lines.push(
+  `Checked ${current.length + drift.length + majorMigrations.length + deferredUpdates.length} pinned dependency, tool, and image references.`
+);
 writeFileSync(reportPath, `${lines.join("\n")}\n`);
 
 if (errors.length) process.exitCode = 1;
