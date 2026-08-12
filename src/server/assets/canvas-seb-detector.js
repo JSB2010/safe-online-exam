@@ -9,6 +9,7 @@
 
     const SEB_DOWNLOAD_BASE_URL = "__SEB_BASE_URL__";
     const LTI_CLIENT_ID = "__LTI_CLIENT_ID__";
+    const LTI_DEPLOYMENT_ID_CHECKING_ENABLED = "__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__";
     const LTI_DEPLOYMENT_IDS = "__LTI_DEPLOYMENT_IDS__";
     const SERVER_DEBUG_ENABLED = "__SEB_DEBUG_ENABLED__";
     const SERVER_DIAGNOSTIC_MODE = "__SEB_DIAGNOSTIC_MODE__";
@@ -22,6 +23,7 @@
     const DETECTOR_TRACE_BATCH_SIZE = 15;
     const LATE_ACCESS_CODE_CHECK_DELAY_MS = 300;
     const SEB_REQUIREMENT_CACHE_TTL_MS = 30 * 1000;
+    const CANVAS_EXTERNAL_TOOLS_MAX_PAGES = 20;
     const PENDING_REDIRECT_TTL_MS = 10 * 60 * 1000;
     const EXAM_SESSION_CAPABILITY_TTL_MS = 12 * 60 * 60 * 1000;
     const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
@@ -1200,6 +1202,7 @@
             return null;
         }
         const clientId = String(LTI_CLIENT_ID);
+        const deploymentIdCheckingEnabled = LTI_DEPLOYMENT_ID_CHECKING_ENABLED === true || LTI_DEPLOYMENT_ID_CHECKING_ENABLED === 'true';
         const deploymentIds = Array.isArray(LTI_DEPLOYMENT_IDS)
             ? LTI_DEPLOYMENT_IDS.map(String).filter(Boolean)
             : [];
@@ -1210,7 +1213,7 @@
             if (tool.version && String(tool.version) !== '1.3') {
                 return false;
             }
-            return !deploymentIds.length || deploymentIds.includes(String(tool.deployment_id || ''));
+            return !deploymentIdCheckingEnabled || deploymentIds.includes(String(tool.deployment_id || ''));
         });
         for (const tool of matchingTools) {
             const url = canvasExternalToolUrl(courseId, tool.id);
@@ -1221,15 +1224,37 @@
         return null;
     }
 
+    function nextCanvasExternalToolsPageUrl(response, courseId) {
+        const linkHeader = response.headers && typeof response.headers.get === 'function'
+            ? response.headers.get('Link') || response.headers.get('link')
+            : null;
+        if (!linkHeader) {
+            return null;
+        }
+        const expectedPath = `/api/v1/courses/${encodeURIComponent(courseId)}/external_tools`;
+        for (const entry of linkHeader.split(',')) {
+            const urlMatch = entry.match(/<([^>]+)>/u);
+            const relMatch = entry.match(/;\s*rel="?([^";]+)"?/iu);
+            if (!urlMatch || !relMatch || !relMatch[1].split(/\s+/u).includes('next')) {
+                continue;
+            }
+            try {
+                const nextUrl = new URL(urlMatch[1], window.location.origin);
+                if (nextUrl.origin === window.location.origin && nextUrl.pathname === expectedPath) {
+                    return nextUrl.href;
+                }
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
     async function resolveSebCourseNavigationUrl(courseId) {
         const navigationUrl = findSebCourseNavigationUrl(courseId);
-        if (navigationUrl) {
-            return navigationUrl;
-        }
-
         const courseIdValue = String(courseId || '');
         if (!/^\d{1,20}$/u.test(courseIdValue) || !String(LTI_CLIENT_ID || '').trim()) {
-            return null;
+            return navigationUrl;
         }
         const existingRequest = state.courseNavigationUrlRequests.get(courseIdValue);
         if (existingRequest) {
@@ -1242,21 +1267,39 @@
                 endpoint.searchParams.set('include_parents', 'true');
                 endpoint.searchParams.set('placement', 'course_navigation');
                 endpoint.searchParams.set('per_page', '100');
-                const response = await fetch(endpoint.href, {
-                    method: 'GET',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { Accept: 'application/json' }
-                });
-                if (!response.ok) {
-                    throw new Error('Canvas returned HTTP ' + response.status);
+                const tools = [];
+                const visitedPages = new Set();
+                let pageUrl = endpoint.href;
+                while (pageUrl) {
+                    if (visitedPages.has(pageUrl) || visitedPages.size >= CANVAS_EXTERNAL_TOOLS_MAX_PAGES) {
+                        throw new Error('Canvas external-tools pagination exceeded its safe limit');
+                    }
+                    visitedPages.add(pageUrl);
+                    const response = await fetch(pageUrl, {
+                        method: 'GET',
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        headers: { Accept: 'application/json' }
+                    });
+                    if (!response.ok) {
+                        throw new Error('Canvas returned HTTP ' + response.status);
+                    }
+                    const pageTools = await response.json();
+                    if (!Array.isArray(pageTools)) {
+                        throw new Error('Canvas returned an invalid external-tools response');
+                    }
+                    tools.push(...pageTools);
+                    const matchingUrl = matchingCanvasExternalToolUrl(courseIdValue, tools);
+                    if (matchingUrl) {
+                        return matchingUrl;
+                    }
+                    pageUrl = nextCanvasExternalToolsPageUrl(response, courseIdValue);
                 }
-                const tools = await response.json();
-                return matchingCanvasExternalToolUrl(courseIdValue, tools);
+                return null;
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'unknown error';
                 debugLog('Could not resolve the Safe Online Exam Canvas installation: ' + message, 'warn');
-                return null;
+                return navigationUrl;
             }
         })();
         state.courseNavigationUrlRequests.set(courseIdValue, request);

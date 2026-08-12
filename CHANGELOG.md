@@ -17,9 +17,10 @@ compatibility endpoint.
   hides the Safe Online Exam course-navigation item from students.
 - Resolve the installed LTI 1.3 tool through Canvas's same-origin External
   Tools API, matching the service's configured client and deployment IDs
-  before constructing the signed assessment launch.
-- Retain the rendered course-navigation link as a no-request compatibility
-  path when it is available.
+  before constructing the signed assessment launch, following bounded Canvas
+  pagination and honoring self-service deployment-ID checking mode.
+- Use the rendered course-navigation link as a compatibility fallback when the
+  Canvas lookup is unavailable.
 - Show actionable reload and administrator guidance if Canvas cannot resolve
   the expected installation instead of sending the student to the course home
   without launching Safe Online Exam.

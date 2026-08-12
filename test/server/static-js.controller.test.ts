@@ -26,6 +26,7 @@ describe("StaticJsController", () => {
     expect(script).toContain("https://canvas-seb-dev.run.app");
     expect(script).not.toContain("${SEB_API_KEY}");
     expect(script).not.toContain("__LTI_CLIENT_ID__");
+    expect(script).not.toContain("__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__");
     expect(script).not.toContain("__LTI_DEPLOYMENT_IDS__");
     expect(script).not.toContain("https://canvas-seb-dev.run.app:80");
   });
@@ -36,7 +37,8 @@ describe("StaticJsController", () => {
         security: { debugEnabled: false, detectorDiagnosticsEnabled: false },
         lti: {
           clientId: '10000000000001";globalThis.injected=true;//',
-          deploymentId: "deployment-one,\ndeployment-two"
+          deploymentId: "deployment-one,\ndeployment-two",
+          deploymentIdCheckingEnabled: false
         }
       },
       getApplicationBaseUrl() {
@@ -48,6 +50,7 @@ describe("StaticJsController", () => {
 
     expect(script).toContain('const LTI_CLIENT_ID = "10000000000001\\";globalThis.injected=true;//";');
     expect(script).toContain('const LTI_DEPLOYMENT_IDS = ["deployment-one","deployment-two"];');
+    expect(script).toContain("const LTI_DEPLOYMENT_ID_CHECKING_ENABLED = false;");
     expect(script).not.toContain('const LTI_CLIENT_ID = "10000000000001";globalThis');
   });
 
