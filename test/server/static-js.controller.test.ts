@@ -25,7 +25,30 @@ describe("StaticJsController", () => {
 
     expect(script).toContain("https://canvas-seb-dev.run.app");
     expect(script).not.toContain("${SEB_API_KEY}");
+    expect(script).not.toContain("__LTI_CLIENT_ID__");
+    expect(script).not.toContain("__LTI_DEPLOYMENT_IDS__");
     expect(script).not.toContain("https://canvas-seb-dev.run.app:80");
+  });
+
+  it("injects the Canvas LTI installation identity used when course navigation is hidden", async () => {
+    const controller = new StaticJsController({
+      value: {
+        security: { debugEnabled: false, detectorDiagnosticsEnabled: false },
+        lti: {
+          clientId: '10000000000001";globalThis.injected=true;//',
+          deploymentId: "deployment-one,\ndeployment-two"
+        }
+      },
+      getApplicationBaseUrl() {
+        return "https://configured.example.com";
+      }
+    } as AppConfig);
+
+    const script = await controller.canvasDetector(createRequest());
+
+    expect(script).toContain('const LTI_CLIENT_ID = "10000000000001\\";globalThis.injected=true;//";');
+    expect(script).toContain('const LTI_DEPLOYMENT_IDS = ["deployment-one","deployment-two"];');
+    expect(script).not.toContain('const LTI_CLIENT_ID = "10000000000001";globalThis');
   });
 
   it("includes a generic progress overlay for the SEB quiz handoff", async () => {

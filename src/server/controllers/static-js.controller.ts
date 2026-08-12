@@ -18,9 +18,18 @@ export class StaticJsController {
 
     const script = await readFirstAvailable(detectorAssetCandidates(debugEnabled || diagnosticsEnabled));
     const baseUrl = this.config?.getApplicationBaseUrl() || requestBaseUrl(request);
+    const ltiClientId = this.config?.value.lti?.clientId || "";
+    const ltiDeploymentIds = (this.config?.value.lti?.deploymentId || "")
+      .split(/[,\n]/u)
+      .map((deploymentId) => deploymentId.trim())
+      .filter(Boolean);
     return script
       .replaceAll('"__SEB_BASE_URL__"', JSON.stringify(baseUrl))
       .replaceAll("'__SEB_BASE_URL__'", JSON.stringify(baseUrl))
+      .replaceAll('"__LTI_CLIENT_ID__"', JSON.stringify(ltiClientId))
+      .replaceAll("'__LTI_CLIENT_ID__'", JSON.stringify(ltiClientId))
+      .replaceAll('"__LTI_DEPLOYMENT_IDS__"', JSON.stringify(ltiDeploymentIds))
+      .replaceAll("'__LTI_DEPLOYMENT_IDS__'", JSON.stringify(ltiDeploymentIds))
       .replaceAll('"__SEB_DEBUG_ENABLED__"', JSON.stringify(debugEnabled))
       .replaceAll("'__SEB_DEBUG_ENABLED__'", JSON.stringify(debugEnabled))
       .replaceAll('"__SEB_DIAGNOSTIC_MODE__"', JSON.stringify(diagnosticsEnabled))

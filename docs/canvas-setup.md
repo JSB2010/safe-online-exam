@@ -184,6 +184,13 @@ For a controlled self-service rollout where instructors may add this exact regis
 
 Use a root-account-level installation for a broad rollout and for the school administrator dashboard. Use a course-level installation only for an isolated instructor/student pilot; a course-level installation does not provide the root-account navigation surface. Do not install the same registration both account-wide and course-local in the same course unless duplicate navigation entries are intentional.
 
+The course-navigation placement may be hidden from students without breaking
+assessment launches. When the navigation link is absent from the page, the
+detector uses the student's same-origin Canvas session to locate the installed
+LTI 1.3 tool by the configured client and deployment IDs. Keep the external app
+installed in the course or an inherited account even when its navigation tab is
+hidden.
+
 ## 4. Load the Detector Script Through the Canvas Theme
 
 The detector runs on Canvas quiz-taking pages. It treats a Canvas access-code field only as a challenge signal and verifies the exact course/assessment against the service before showing the protected SEB flow. It fills an access code only after Config Key proof, shows approved web tools, and detects Canvas-confirmed completion. The stable script URL is:
@@ -272,8 +279,9 @@ Use separate administrator, instructor, and student accounts.
 3. As an instructor, launch the tool from Canvas, complete OAuth, refresh assessments, enable the assigned school tool, create one quiz-only tool, set an effective exit-password policy, and enable one Classic Quiz and one New Quiz.
 4. In a normal browser, open each assessment page and verify that the theme loaded the detector script without console errors.
 5. As a student, launch the course-navigation tool, complete the one-time Canvas connection, and run the optional setup check.
-6. Download a fresh configuration. On an approved SEB client, verify the configuration opens, reaches Canvas, proves its Config Key, fills the Canvas access-code prompt, and makes only selected exam tools available.
-7. For each assessment type, cancel one Canvas submission confirmation and ensure no exit occurs. Then submit successfully and ensure the exit flow begins only after Canvas shows the authoritative completed state.
+6. Hide the course-navigation placement from students, revisit both assessment pages in a normal browser, and confirm **Open Safe Exam Browser** still starts the signed LTI launch.
+7. Download a fresh configuration. On an approved SEB client, verify the configuration opens, reaches Canvas, proves its Config Key, fills the Canvas access-code prompt, and makes only selected exam tools available.
+8. For each assessment type, cancel one Canvas submission confirmation and ensure no exit occurs. Then submit successfully and ensure the exit flow begins only after Canvas shows the authoritative completed state.
 
 See [Testing](testing.md) for the full acceptance sequence and [Certificate management](certificate-management.md) for the client identity prerequisite.
 

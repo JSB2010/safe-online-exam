@@ -5,6 +5,25 @@ release.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-08-12
+
+Safe Online Exam 1.0.6 is a backward-compatible Canvas detector hotfix. It
+adds no database migration, OAuth scope, LTI registration URL, or public
+compatibility endpoint.
+
+### Hidden course navigation
+
+- Keep protected Classic Quiz and New Quiz launches working when a school
+  hides the Safe Online Exam course-navigation item from students.
+- Resolve the installed LTI 1.3 tool through Canvas's same-origin External
+  Tools API, matching the service's configured client and deployment IDs
+  before constructing the signed assessment launch.
+- Retain the rendered course-navigation link as a no-request compatibility
+  path when it is available.
+- Show actionable reload and administrator guidance if Canvas cannot resolve
+  the expected installation instead of sending the student to the course home
+  without launching Safe Online Exam.
+
 ## [1.0.5] - 2026-08-06
 
 Safe Online Exam 1.0.5 is a backward-compatible Canvas authorization and
@@ -335,7 +354,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.6
 [1.0.5]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.5
 [1.0.4]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.4
 [1.0.3]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.3
