@@ -1,11 +1,11 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import * as plist from "plist";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
+import { readDetectorSourceSync } from "../../src/server/services/detector-source.js";
 
-const DETECTOR_PATH = join(process.cwd(), "src/server/assets/canvas-seb-detector.js");
+const DETECTOR_SOURCE = readDetectorSourceSync(join(process.cwd(), "src/server/assets/detector"));
 const APP_BASE_URL = "https://tool.example.edu";
 const CANVAS_BASE_URL = "https://canvas.example.edu";
 const DETECTOR_CONFIG_KEY = new SebConfigKeyService().computeConfigKey(
@@ -2143,9 +2143,10 @@ function createDetectorContext(options: DetectorContextOptions) {
     Event: dom.window.Event,
     async runDetector() {
       const debugEnabled = options.debugResponse?.enabled === true || options.debugResponse?.debugEnabled === true;
-      const source = readFileSync(DETECTOR_PATH, "utf8")
-        .replaceAll('"__SEB_BASE_URL__"', JSON.stringify(APP_BASE_URL))
-        .replaceAll('"__SEB_DEBUG_ENABLED__"', JSON.stringify(debugEnabled));
+      const source = DETECTOR_SOURCE.replaceAll('"__SEB_BASE_URL__"', JSON.stringify(APP_BASE_URL)).replaceAll(
+        '"__SEB_DEBUG_ENABLED__"',
+        JSON.stringify(debugEnabled)
+      );
       const execute = new Function(
         "window",
         "document",

@@ -5,7 +5,7 @@ test-results
 playwright-report
 package-lock.json
 .env.example
-src/server/assets/canvas-seb-detector.js
+src/server/assets/detector/*.js
 .git
 .github/java-upgrade
 .idea

@@ -1,5 +1,5 @@
-import { randomInt, randomUUID } from "node:crypto";
-import { ConflictException, Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
+import { Injectable } from "@nestjs/common";
 import type {
   AssessmentRecord,
   CanvasOAuthGrantType,
@@ -35,24 +35,45 @@ import {
 } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
-import { CanvasApiService, isCanvasApiAuthorizationError, isCanvasApiPermissionError } from "./canvas-api.service.js";
+import { CanvasApiService } from "./canvas-api.service.js";
+import {
+  AssessmentAccessCodeConsistencyError,
+  AssessmentNoLongerAvailableError,
+  AssessmentOperationInProgressError,
+  AssessmentOperationLockLostError,
+  CourseMutationInProgressError,
+  CourseMutationOperationLockLostError,
+  CourseResetInProgressError,
+  CourseResetOperationLockLostError
+} from "./assessment-errors.js";
+import {
+  type AccessCodeSetting,
+  type OperationLease,
+  assertPriorAccessCodeIsRecoverable,
+  canvasGrantArgs,
+  combineOperationLeases,
+  compareAssessmentRecords,
+  courseResetLockId,
+  courseWriteLockId,
+  generateAccessCode,
+  hasNewerCanvasVerification,
+  hasSameAccessCodeState,
+  hasSameCanvasAccessState,
+  isCanvasAssessmentCurrentlyAvailable,
+  isDefinitiveCanvasRejection,
+  isFreshCanvasVerification,
+  mapInBatches
+} from "./assessment-helpers.js";
 import { hasSameSebConfigFingerprint, invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 import { assertDistinctSebPasswords, assertNewSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
 import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtectedSetting } from "./seb-quit-password.js";
+import { resetCourseForAdmin, type CourseResetResult } from "./assessment-course-reset.js";
 
 export interface CourseAssessmentContent {
   classicQuizzes: Quiz[];
   contentItems: ContentItem[];
   assessments: AssessmentRecord[];
-}
-
-export interface CourseResetResult {
-  disabledAssessmentCount: number;
-  deletedAssessmentCount: number;
-  deletedTransientStateCount: number;
-  deletedCourseRecordCount: number;
-  deletedPresetAssignmentCount: number;
 }
 
 type CourseWriteLockOptions =
@@ -63,21 +84,7 @@ type RefreshCourseContentOptions = CourseWriteLockOptions & {
   requireCompleteDiscovery?: boolean;
 };
 
-interface CourseResetMutation {
-  assessment: AssessmentRecord;
-  priorAssessment: AssessmentRecord | null;
-  disableCanvas: () => Promise<unknown>;
-  restoreCanvas: () => Promise<unknown>;
-}
-
-export const ASSESSMENT_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-export const ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const ASSESSMENT_SYNC_WRITE_BATCH_SIZE = 50;
-
-type AccessCodeSetting = Pick<
-  QuizSebSetting | ContentSebSetting,
-  "sebRequired" | "enabled" | "accessCode" | "configKey"
->;
 
 interface AccessCodeMutation<T extends AccessCodeSetting> {
   assertActive: () => void;
@@ -91,9 +98,26 @@ interface AccessCodeMutation<T extends AccessCodeSetting> {
 
 type AccessCodeMutationOptions = CourseWriteLockOptions;
 
-export interface OperationLease {
-  assertActive(): void;
-}
+export {
+  AssessmentAccessCodeConsistencyError,
+  AssessmentNoLongerAvailableError,
+  AssessmentOperationInProgressError,
+  AssessmentOperationLockLostError,
+  CourseMutationInProgressError,
+  CourseMutationOperationLockLostError,
+  CourseResetAssessmentIdentityError,
+  CourseResetCompensationError,
+  CourseResetInProgressError,
+  CourseResetOperationLockLostError,
+  CourseResetOutcomeUnknownError
+} from "./assessment-errors.js";
+export {
+  ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS,
+  ASSESSMENT_VERIFICATION_MAX_AGE_MS,
+  generateAccessCode
+} from "./assessment-helpers.js";
+export type { OperationLease } from "./assessment-helpers.js";
+export type { CourseResetResult } from "./assessment-course-reset.js";
 
 @Injectable()
 export class AssessmentService {
@@ -203,202 +227,26 @@ export class AssessmentService {
   }
 
   async resetCourseForAdmin(courseId: string, userId: string, rootAccountId: string): Promise<CourseResetResult> {
-    return this.withCourseResetLock(courseId, (resetLease) =>
-      this.withCourseWriteLock(
-        courseId,
-        async (courseWriteLease) => {
-          const resetOperationLease = combineOperationLeases(resetLease, courseWriteLease);
-          const discovered = await this.refreshCourseContent(courseId, userId, "account_admin", {
+    return resetCourseForAdmin(
+      {
+        repositories: this.repositories,
+        canvasApi: this.canvasApi,
+        refreshCourseContent: (targetCourseId, targetUserId, operationLease) =>
+          this.refreshCourseContent(targetCourseId, targetUserId, "account_admin", {
             requireCompleteDiscovery: true,
             courseWriteLockHeld: true,
-            operationLease: resetOperationLease
-          });
-          const mutations: CourseResetMutation[] = [];
-          for (const assessment of discovered.assessments) {
-            resetOperationLease.assertActive();
-            mutations.push(await this.courseResetMutation(assessment, courseId, userId, resetOperationLease));
-          }
-          const attempted: CourseResetMutation[] = [];
-          let resetOperationId: string | null = null;
-          try {
-            for (const mutation of mutations) {
-              await this.withAssessmentLock(
-                mutation.assessment.id,
-                async (assessmentLease) => {
-                  const mutationLease = combineOperationLeases(resetOperationLease, assessmentLease);
-                  mutationLease.assertActive();
-                  try {
-                    await mutation.disableCanvas();
-                  } catch (error) {
-                    if (!isDefinitiveCanvasRejection(error)) {
-                      attempted.push(mutation);
-                    }
-                    throw error;
-                  }
-                  attempted.push(mutation);
-                  mutationLease.assertActive();
-                  await this.repositories.value.assessments.update(mutation.assessment.id, (current) =>
-                    current && current.courseId === courseId
-                      ? {
-                          ...current,
-                          seb: {
-                            ...current.seb,
-                            required: false,
-                            enabled: false,
-                            accessCode: null,
-                            configKey: null
-                          }
-                        }
-                      : null
-                  );
-                },
-                courseId,
-                true
-              );
-            }
-            resetOperationLease.assertActive();
-            resetOperationId = randomUUID();
-            const deleted = await this.repositories.resetCourseState(
-              courseId,
-              `${rootAccountId}:${courseId}`,
-              resetOperationId
-            );
-            return {
-              disabledAssessmentCount: discovered.assessments.length,
-              deletedAssessmentCount: deleted.assessmentCount,
-              deletedTransientStateCount: deleted.transientStateCount,
-              deletedCourseRecordCount: deleted.courseRecordCount,
-              deletedPresetAssignmentCount: deleted.presetAssignmentCount
-            };
-          } catch (error) {
-            if (resetOperationId) {
-              let committed;
-              try {
-                committed = await this.repositories.getCourseResetOutcome(
-                  `${rootAccountId}:${courseId}`,
-                  resetOperationId,
-                  courseId
-                );
-              } catch (verificationError) {
-                throw new CourseResetOutcomeUnknownError(error, verificationError);
-              }
-              if (committed) {
-                return {
-                  disabledAssessmentCount: discovered.assessments.length,
-                  deletedAssessmentCount: committed.assessmentCount,
-                  deletedTransientStateCount: committed.transientStateCount,
-                  deletedCourseRecordCount: committed.courseRecordCount,
-                  deletedPresetAssignmentCount: committed.presetAssignmentCount
-                };
-              }
-            }
-            await this.rollbackCourseReset(attempted, error);
-            throw error;
-          }
-        },
-        true
-      )
-    );
-  }
-
-  private async courseResetMutation(
-    assessment: AssessmentRecord,
-    courseId: string,
-    userId: string,
-    operationLease: OperationLease
-  ): Promise<CourseResetMutation> {
-    const priorAssessment = await this.repositories.value.assessments.get(assessment.id);
-    operationLease.assertActive();
-    const parsed = parseNewQuizContentId(assessment.id);
-    if (parsed) {
-      const prior = assessmentToContentSebSetting(assessment);
-      this.assertPriorAccessCodeIsRecoverable(prior);
-      const canvasAccessCode = await this.canvasApi.getNewQuizAccessCode(
-        courseId,
-        parsed.assignmentId,
-        userId,
-        ...canvasGrantArgs("account_admin")
-      );
-      operationLease.assertActive();
-      return {
-        assessment,
-        priorAssessment,
-        disableCanvas: () =>
-          this.canvasApi.removeNewQuizAccessCode(
-            courseId,
-            parsed.assignmentId,
-            userId,
-            ...canvasGrantArgs("account_admin")
-          ),
-        restoreCanvas: () =>
-          canvasAccessCode
-            ? this.canvasApi.setNewQuizAccessCode(
-                courseId,
-                parsed.assignmentId,
-                canvasAccessCode,
-                userId,
-                ...canvasGrantArgs("account_admin")
-              )
-            : this.canvasApi.removeNewQuizAccessCode(
-                courseId,
-                parsed.assignmentId,
-                userId,
-                ...canvasGrantArgs("account_admin")
-              )
-      };
-    }
-    const quizId = assessment.canvas.quizId || extractClassicQuizId(assessment.id);
-    const prior = assessmentToQuizSebSetting(assessment);
-    if (!quizId || !prior) {
-      throw new CourseResetAssessmentIdentityError();
-    }
-    this.assertPriorAccessCodeIsRecoverable(prior);
-    const canvasAccessCode = await this.canvasApi.getQuizAccessCode(
+            operationLease
+          }),
+        withCourseResetLock: (targetCourseId, action) => this.withCourseResetLock(targetCourseId, action),
+        withCourseWriteLock: (targetCourseId, action, allowDuringCourseReset) =>
+          this.withCourseWriteLock(targetCourseId, action, allowDuringCourseReset),
+        withAssessmentLock: (contentId, action, targetCourseId, allowDuringCourseReset) =>
+          this.withAssessmentLock(contentId, action, targetCourseId, allowDuringCourseReset)
+      },
       courseId,
-      quizId,
       userId,
-      ...canvasGrantArgs("account_admin")
+      rootAccountId
     );
-    operationLease.assertActive();
-    return {
-      assessment,
-      priorAssessment,
-      disableCanvas: () =>
-        this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin")),
-      restoreCanvas: () =>
-        canvasAccessCode
-          ? this.canvasApi.setQuizAccessCode(
-              courseId,
-              quizId,
-              canvasAccessCode,
-              userId,
-              ...canvasGrantArgs("account_admin")
-            )
-          : this.canvasApi.removeQuizAccessCode(courseId, quizId, userId, ...canvasGrantArgs("account_admin"))
-    };
-  }
-
-  private async rollbackCourseReset(mutations: CourseResetMutation[], cause: unknown): Promise<void> {
-    const compensationErrors: unknown[] = [];
-    for (const mutation of mutations.slice().reverse()) {
-      try {
-        await mutation.restoreCanvas();
-      } catch (error) {
-        compensationErrors.push(error);
-      }
-      try {
-        if (mutation.priorAssessment) {
-          await this.repositories.value.assessments.save(mutation.assessment.id, mutation.priorAssessment);
-        } else {
-          await this.repositories.value.assessments.delete(mutation.assessment.id);
-        }
-      } catch (error) {
-        compensationErrors.push(error);
-      }
-    }
-    if (compensationErrors.length) {
-      throw new CourseResetCompensationError(cause, compensationErrors);
-    }
   }
 
   async getAssessmentRecord(id: string): Promise<AssessmentRecord | null> {
@@ -626,7 +474,7 @@ export class AssessmentService {
           currentDefaults
         );
         this.assertAssessmentCanRunSeb(next);
-        this.assertPriorAccessCodeIsRecoverable(existing);
+        assertPriorAccessCodeIsRecoverable(existing);
         return this.commitAccessCodeMutation({
           assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
@@ -665,7 +513,7 @@ export class AssessmentService {
         if (!existing || existing.courseId !== courseId) {
           throw new AssessmentNoLongerAvailableError();
         }
-        this.assertPriorAccessCodeIsRecoverable(existing);
+        assertPriorAccessCodeIsRecoverable(existing);
         const disabled: QuizSebSetting = {
           ...existing,
           id: quizId,
@@ -721,7 +569,7 @@ export class AssessmentService {
           currentDefaults
         );
         this.assertAssessmentCanRunSeb(next);
-        this.assertPriorAccessCodeIsRecoverable(existing);
+        assertPriorAccessCodeIsRecoverable(existing);
         return this.commitAccessCodeMutation({
           assertActive: () => operationLease.assertActive(),
           applyCanvas: () =>
@@ -759,7 +607,7 @@ export class AssessmentService {
         if (!existing || existing.courseId !== courseId || existing.assignmentId !== assignmentId) {
           throw new AssessmentNoLongerAvailableError();
         }
-        this.assertPriorAccessCodeIsRecoverable(existing);
+        assertPriorAccessCodeIsRecoverable(existing);
         const disabled: ContentSebSetting = {
           ...existing,
           sebRequired: false,
@@ -795,7 +643,7 @@ export class AssessmentService {
         if (!existing?.sebRequired) {
           return null;
         }
-        this.assertPriorAccessCodeIsRecoverable(existing);
+        assertPriorAccessCodeIsRecoverable(existing);
         const accessCode = generateAccessCode();
         const next = { ...existing, accessCode, configKey: null };
         this.assertAssessmentCanRunSeb(next);
@@ -828,7 +676,7 @@ export class AssessmentService {
         if (!existing?.sebRequired) {
           return null;
         }
-        this.assertPriorAccessCodeIsRecoverable(existing);
+        assertPriorAccessCodeIsRecoverable(existing);
         const accessCode = generateAccessCode();
         const next = { ...existing, accessCode, configKey: null };
         this.assertAssessmentCanRunSeb(next);
@@ -1096,14 +944,6 @@ export class AssessmentService {
     }
   }
 
-  private assertPriorAccessCodeIsRecoverable(setting: AccessCodeSetting | null | undefined): void {
-    if ((setting?.sebRequired || setting?.enabled) && !setting.accessCode) {
-      throw new AssessmentAccessCodeConsistencyError(
-        "The stored enabled assessment has no recoverable Canvas access code. Reconcile it before changing SEB state."
-      );
-    }
-  }
-
   private async commitAccessCodeMutation<T extends AccessCodeSetting>(mutation: AccessCodeMutation<T>): Promise<T> {
     mutation.assertActive();
     try {
@@ -1267,260 +1107,4 @@ export class AssessmentService {
       };
     });
   }
-}
-
-export class AssessmentAccessCodeConsistencyError extends Error {
-  constructor(
-    message: string,
-    cause?: unknown,
-    readonly compensationError?: unknown
-  ) {
-    super(message, cause === undefined ? undefined : { cause });
-    this.name = "AssessmentAccessCodeConsistencyError";
-  }
-}
-
-export class AssessmentOperationLockLostError extends Error {
-  constructor(cause?: unknown) {
-    super(
-      "The assessment update lock was lost before the operation completed. The result was not accepted as successful; verify the assessment state before retrying.",
-      cause === undefined ? undefined : { cause }
-    );
-    this.name = "AssessmentOperationLockLostError";
-  }
-}
-
-export class AssessmentOperationInProgressError extends ConflictException {
-  constructor() {
-    super({
-      success: false,
-      statusCode: 409,
-      error_code: "ASSESSMENT_UPDATE_IN_PROGRESS",
-      message: "Another SEB update is already in progress for this assessment. Try again shortly."
-    });
-    this.name = "AssessmentOperationInProgressError";
-  }
-}
-
-export class AssessmentNoLongerAvailableError extends ConflictException {
-  constructor() {
-    super({
-      success: false,
-      statusCode: 409,
-      error_code: "ASSESSMENT_NO_LONGER_AVAILABLE",
-      message: "This assessment is no longer available. Refresh the course before making another change."
-    });
-    this.name = "AssessmentNoLongerAvailableError";
-  }
-}
-
-export class CourseResetInProgressError extends ConflictException {
-  constructor() {
-    super({
-      success: false,
-      statusCode: 409,
-      error_code: "COURSE_RESET_IN_PROGRESS",
-      message: "A Canvas administrator is resetting this course. Wait for the reset to finish, then try again."
-    });
-    this.name = "CourseResetInProgressError";
-  }
-}
-
-export class CourseResetAssessmentIdentityError extends ConflictException {
-  constructor() {
-    super({
-      success: false,
-      statusCode: 409,
-      error_code: "COURSE_RESET_ASSESSMENT_IDENTITY_UNAVAILABLE",
-      message:
-        "Canvas did not provide an assessment identifier required for reset. Course records were not deleted; refresh the course and retry."
-    });
-    this.name = "CourseResetAssessmentIdentityError";
-  }
-}
-
-export class CourseResetCompensationError extends Error {
-  constructor(
-    cause: unknown,
-    readonly compensationErrors: readonly unknown[]
-  ) {
-    super(
-      "One or more Canvas assessment access codes could not be restored after the course reset stopped. Manual verification is required.",
-      { cause }
-    );
-    this.name = "CourseResetCompensationError";
-  }
-}
-
-export class CourseResetOutcomeUnknownError extends Error {
-  constructor(
-    cause: unknown,
-    readonly verificationError: unknown
-  ) {
-    super(
-      "The database reset outcome could not be verified. The reset may have committed; manual verification is required before retrying.",
-      { cause }
-    );
-    this.name = "CourseResetOutcomeUnknownError";
-  }
-}
-
-export class CourseMutationInProgressError extends ConflictException {
-  constructor() {
-    super({
-      success: false,
-      statusCode: 409,
-      error_code: "COURSE_UPDATE_IN_PROGRESS",
-      message: "Another course update is already in progress. Wait for it to finish, then try again."
-    });
-    this.name = "CourseMutationInProgressError";
-  }
-}
-
-export class CourseMutationOperationLockLostError extends ConflictException {
-  constructor(cause?: unknown) {
-    super(
-      {
-        success: false,
-        statusCode: 409,
-        error_code: "COURSE_UPDATE_VERIFY_REQUIRED",
-        message: "The course update could not be confirmed. Refresh the course and verify its current settings."
-      },
-      cause === undefined ? undefined : { cause }
-    );
-    this.name = "CourseMutationOperationLockLostError";
-  }
-}
-
-export class CourseResetOperationLockLostError extends Error {
-  constructor(cause?: unknown) {
-    super(
-      "The course reset lock was lost before completion could be confirmed. The reset may have completed; refresh the course and verify Canvas assessment access codes before retrying.",
-      cause === undefined ? undefined : { cause }
-    );
-    this.name = "CourseResetOperationLockLostError";
-  }
-}
-
-export function generateAccessCode(length = 16): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let value = "";
-  for (let i = 0; i < length; i += 1) {
-    value += chars[randomInt(chars.length)];
-  }
-  return value;
-}
-
-function compareAssessmentRecords(left: AssessmentRecord, right: AssessmentRecord): number {
-  return (
-    String(left.canvas.title || "").localeCompare(String(right.canvas.title || "")) || left.id.localeCompare(right.id)
-  );
-}
-
-function courseResetLockId(courseId: string): string {
-  return `course-reset:${courseId}`;
-}
-
-function courseWriteLockId(courseId: string): string {
-  return `course-write:${courseId}`;
-}
-
-function isCanvasAssessmentCurrentlyAvailable(record: AssessmentRecord): boolean {
-  if (record.canvas.published !== true) {
-    return false;
-  }
-  const now = Date.now();
-  if (record.canvas.unlockAt) {
-    const unlockAt = Date.parse(record.canvas.unlockAt);
-    if (!Number.isFinite(unlockAt) || now < unlockAt) {
-      return false;
-    }
-  }
-  if (record.canvas.lockAt) {
-    const lockAt = Date.parse(record.canvas.lockAt);
-    if (!Number.isFinite(lockAt) || now >= lockAt) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isFreshCanvasVerification(record: AssessmentRecord): boolean {
-  const checkedAtValue = record.canvasVerification?.checkedAt;
-  const lastVerifiedAtValue = record.canvasVerification?.lastVerifiedAt;
-  if (!checkedAtValue || !lastVerifiedAtValue) {
-    return false;
-  }
-  const checkedAt = Date.parse(checkedAtValue);
-  const lastVerifiedAt = Date.parse(lastVerifiedAtValue);
-  if (!Number.isFinite(checkedAt) || !Number.isFinite(lastVerifiedAt) || checkedAt !== lastVerifiedAt) {
-    return false;
-  }
-  const age = Date.now() - checkedAt;
-  return age <= ASSESSMENT_VERIFICATION_MAX_AGE_MS && age >= -ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS;
-}
-
-function combineOperationLeases(...leases: readonly OperationLease[]): OperationLease {
-  return {
-    assertActive() {
-      for (const lease of leases) {
-        lease.assertActive();
-      }
-    }
-  };
-}
-
-function hasNewerCanvasVerification(record: AssessmentRecord | null, candidateCheckedAt: string): boolean {
-  const currentCheckedAt = Date.parse(record?.canvasVerification?.checkedAt || "");
-  const candidate = Date.parse(candidateCheckedAt);
-  return (
-    Number.isFinite(currentCheckedAt) &&
-    Number.isFinite(candidate) &&
-    currentCheckedAt > candidate &&
-    currentCheckedAt <= Date.now() + ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS
-  );
-}
-
-async function mapInBatches<T, R>(
-  values: readonly T[],
-  batchSize: number,
-  action: (value: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  for (let offset = 0; offset < values.length; offset += batchSize) {
-    results.push(...(await Promise.all(values.slice(offset, offset + batchSize).map(action))));
-  }
-  return results;
-}
-
-function isDefinitiveCanvasRejection(error: unknown): boolean {
-  return isCanvasApiAuthorizationError(error) || isCanvasApiPermissionError(error);
-}
-
-function hasSameAccessCodeState(
-  left: AccessCodeSetting | null | undefined,
-  right: AccessCodeSetting | null | undefined
-): boolean {
-  if (!left || !right) {
-    return !left && !right;
-  }
-  return (
-    left.sebRequired === right.sebRequired &&
-    left.enabled === right.enabled &&
-    (left.accessCode || null) === (right.accessCode || null) &&
-    (left.configKey || null) === (right.configKey || null)
-  );
-}
-
-function hasSameCanvasAccessState(
-  left: AccessCodeSetting | null | undefined,
-  right: AccessCodeSetting | null | undefined
-): boolean {
-  const leftEnabled = !!(left?.sebRequired || left?.enabled);
-  const rightEnabled = !!(right?.sebRequired || right?.enabled);
-  return leftEnabled === rightEnabled && (!leftEnabled || (left?.accessCode || null) === (right?.accessCode || null));
-}
-
-function canvasGrantArgs(grantType: CanvasOAuthGrantType): [] | [CanvasOAuthGrantType] {
-  return grantType === "instructor" ? [] : [grantType];
 }

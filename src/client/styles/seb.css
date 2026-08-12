@@ -1,0 +1,397 @@
+.seb-launch-action-stack {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.seb-launch-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.seb-launch-recovery {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 18px;
+  padding: 14px 16px;
+  color: #475467;
+  background: #f7faff;
+  border: 1px solid #c9ddf6;
+  border-radius: 12px;
+  text-align: left;
+}
+
+.seb-launch-recovery-copy {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.seb-launch-recovery-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #0b63ce;
+  background: #eaf4ff;
+  border: 1px solid #c9e5ff;
+  border-radius: 8px;
+}
+
+.seb-launch-recovery strong {
+  display: block;
+  color: #182230;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.seb-launch-recovery p {
+  margin: 2px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.seb-launch-download-link {
+  flex: 0 0 auto;
+  color: #0b63ce;
+  border-color: #a8c8ee;
+}
+
+.canvas-action-stack {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.setup-check-panel {
+  display: grid;
+  gap: 0;
+  text-align: left;
+}
+
+.check-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 22px;
+}
+
+.check-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 14px;
+  background: #fbfcfe;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.check-row.pass {
+  background: #f6fef9;
+  border-color: #abefc6;
+}
+
+.check-row.fail {
+  background: #fff1f0;
+  border-color: #fecdca;
+}
+
+.check-status {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: #eef2f6;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+}
+
+.check-status::before {
+  content: "";
+  display: block;
+  width: 8px;
+  height: 8px;
+  background: #98a2b3;
+  border-radius: 999px;
+}
+
+.check-row.pass .check-status {
+  background: #12b76a;
+  border-color: #12b76a;
+}
+
+.check-row.pass .check-status::before {
+  position: absolute;
+  top: 8px;
+  left: 7px;
+  width: 10px;
+  height: 6px;
+  background: transparent;
+  border-bottom: 2px solid #ffffff;
+  border-left: 2px solid #ffffff;
+  border-radius: 0;
+  transform: rotate(-45deg);
+}
+
+.check-row.fail .check-status {
+  background: #d92d20;
+  border-color: #d92d20;
+}
+
+.check-row.fail .check-status::before,
+.check-row.fail .check-status::after {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: 6px;
+  width: 12px;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 999px;
+}
+
+.check-row.fail .check-status::before {
+  transform: rotate(45deg);
+}
+
+.check-row.fail .check-status::after {
+  transform: rotate(-45deg);
+}
+
+.check-row strong,
+.check-row span {
+  display: block;
+}
+
+.check-row > div {
+  min-width: 0;
+}
+
+.check-row strong {
+  color: #182230;
+  font-size: 14px;
+}
+
+.check-row span {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.countdown-action {
+  width: 100%;
+}
+
+.countdown-status {
+  width: 100%;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.countdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.countdown-status strong,
+.countdown-status span {
+  display: block;
+}
+
+.countdown-status strong {
+  color: #182230;
+  font-size: 13px;
+}
+
+.countdown-status span {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.countdown-track {
+  height: 7px;
+  overflow: hidden;
+  background: #e7ecf2;
+  border-radius: 999px;
+}
+
+.countdown-track span {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #0b63ce;
+  border-radius: inherit;
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: countdown-progress linear forwards;
+  will-change: transform;
+}
+
+@keyframes countdown-progress {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.countdown-button {
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block {
+    animation: none;
+  }
+
+  .dialog-backdrop .dialog,
+  .toast {
+    transform: none;
+  }
+
+  .countdown-track span {
+    animation: none;
+    transform: scaleX(1);
+  }
+
+  .password-requirements {
+    animation: none;
+  }
+
+  .password-requirements li,
+  .password-requirements li > span {
+    transition: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .content-row,
+  .student-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .row-actions {
+    justify-content: flex-start;
+  }
+
+  .tool-custom-fields,
+  .tool-access-scope-options {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-access-address .icon-button {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell,
+  .student-shell {
+    width: min(100vw - 20px, 100%);
+    padding-top: 14px;
+  }
+
+  .topbar,
+  .list-header,
+  .dialog-header,
+  .dialog-actions,
+  .section-title-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .topbar-actions,
+  .row-actions,
+  .dialog-action-group {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .row-actions .button {
+    flex: 1 1 140px;
+  }
+
+  .dialog-actions .button,
+  .dialog-action-group .button {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .search {
+    width: 100%;
+  }
+
+  .rule-row {
+    grid-template-columns: 1fr;
+  }
+
+  .countdown-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .countdown-button {
+    width: 100%;
+  }
+
+  .dialog-backdrop {
+    padding: 10px;
+  }
+
+  .dialog {
+    padding: 16px;
+  }
+
+  .message-shell {
+    padding: 18px;
+  }
+
+  .setup-check-panel {
+    padding: 24px 20px;
+  }
+
+  .setup-check-panel .message-actions .button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .seb-launch-action-buttons {
+    width: 100%;
+    display: grid;
+  }
+
+  .seb-launch-action-buttons .button {
+    width: 100%;
+  }
+
+  .seb-launch-recovery {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .seb-launch-download-link {
+    width: 100%;
+  }
+
+  .check-row {
+    gap: 10px;
+    padding: 12px;
+  }
+}

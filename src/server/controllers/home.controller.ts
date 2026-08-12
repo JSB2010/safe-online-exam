@@ -110,6 +110,16 @@ export class HomeController {
 }
 
 async function faviconBytes(): Promise<Buffer> {
+  faviconPromise ||= loadFaviconBytes().catch((error: unknown) => {
+    faviconPromise = undefined;
+    throw error;
+  });
+  return faviconPromise;
+}
+
+let faviconPromise: Promise<Buffer> | undefined;
+
+async function loadFaviconBytes(): Promise<Buffer> {
   for (const path of [join(process.cwd(), "dist/client/favicon.ico"), join(process.cwd(), "public/favicon.ico")]) {
     try {
       return await readFile(path);

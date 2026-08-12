@@ -14,12 +14,24 @@ export default defineConfig({
   build: {
     outDir: "dist/client",
     emptyOutDir: true,
+    manifest: true,
     sourcemap: false,
     rollupOptions: {
       output: {
         entryFileNames: "assets/index.js",
-        chunkFileNames: "assets/[name].js",
-        assetFileNames: "assets/[name][extname]"
+        // Route-level chunks are content-addressed so a page opened during a
+        // deployment cannot reuse an older view implementation from cache.
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name][extname]",
+        manualChunks(moduleId) {
+          if (/[/\\]node_modules[/\\](?:react|react-dom|scheduler)[/\\]/u.test(moduleId)) {
+            return "react-vendor";
+          }
+          if (/[/\\]node_modules[/\\]lucide-react[/\\]/u.test(moduleId)) {
+            return "icons";
+          }
+          return undefined;
+        }
       }
     }
   },
@@ -58,6 +70,7 @@ export default defineConfig({
         "src/server/app.module.ts",
         "src/server/data/cleanup.ts",
         "src/server/data/migrate.ts",
+        "src/server/data/postgres/**",
         "src/server/data/postgres-repositories.ts",
         "src/server/data/schema.ts",
         "test/**",

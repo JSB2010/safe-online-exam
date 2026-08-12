@@ -1,3 +1,5 @@
+import { clientEntryModulePreloads } from "./static-assets.js";
+
 export interface AppShellOptions {
   title: string;
   view: string;
@@ -16,6 +18,9 @@ export function renderAppShell(options: AppShellOptions): string {
   const appStylesheetPath = versionedAssetPath("/assets/index.css");
   const appIconPath = versionedAssetPath("/assets/safe-online-exam-icon.png");
   const faviconPath = versionedAssetPath("/favicon.ico");
+  const modulePreloads = clientEntryModulePreloads()
+    .map((path) => `    <link rel="modulepreload" href="${path}" />`)
+    .join("\n");
 
   return `<!doctype html>
 <html lang="en">
@@ -26,7 +31,7 @@ export function renderAppShell(options: AppShellOptions): string {
     <link rel="icon" type="image/png" sizes="192x192" href="${appIconPath}" />
     <link rel="apple-touch-icon" href="${appIconPath}" />
     <title>${escapeHtml(options.title)}</title>
-    <script id="seb-bootstrap" type="application/json">${payload}</script>
+${modulePreloads ? `${modulePreloads}\n` : ""}    <script id="seb-bootstrap" type="application/json">${payload}</script>
     <script type="module" src="${appScriptPath}"></script>
     <link rel="stylesheet" href="${appStylesheetPath}">
     <style>
@@ -64,7 +69,7 @@ export function renderFallbackHtml(title: string, body: string): string {
 </html>`;
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
 }
 

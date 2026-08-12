@@ -1,0 +1,183 @@
+/* Administrator connection and rollout dialogs */
+.admin-preset-rollout-status {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-preset-rollout-status span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-preset-rollout-status small {
+  color: #b54708;
+  font-weight: 700;
+}
+
+.admin-preset-rollout-status small.error {
+  color: #b42318;
+}
+
+.admin-connect-dialog,
+.admin-rollout-dialog {
+  width: min(860px, calc(100vw - 32px));
+}
+
+.admin-connect-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.5fr);
+  gap: 12px;
+}
+
+.admin-connect-filters label,
+.admin-direct-connect {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-connect-filters .checkbox-line {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.admin-connect-results,
+.admin-rollout-list {
+  display: grid;
+  max-height: 310px;
+  margin-top: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  overflow: auto;
+}
+
+.admin-connect-course {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: #fff;
+  border-bottom: 1px solid #eef2f6;
+  cursor: pointer;
+}
+
+.admin-connect-course:last-child {
+  border-bottom: 0;
+}
+
+.admin-connect-course:hover {
+  background: #f8fafc;
+}
+
+.admin-connect-course.connected {
+  background: #f8fafc;
+  cursor: default;
+}
+
+.admin-connect-course > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.admin-connect-course strong,
+.admin-connect-course small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-connect-course small {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.admin-connect-course em {
+  color: #175cd3;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.admin-direct-connect {
+  margin-top: 16px;
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+}
+
+.admin-direct-connect > small {
+  color: #667085;
+  font-weight: 500;
+}
+
+.admin-direct-connect > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.admin-direct-connect textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.admin-rollout-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-rollout-controls .search {
+  width: min(390px, 100%);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  background: #f2f4f7;
+  border-radius: 8px;
+}
+
+.segmented button {
+  min-height: 32px;
+  padding: 5px 13px;
+  color: #667085;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.segmented button.active {
+  color: #175cd3;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(16 24 40 / 12%);
+}
+
+.admin-rollout-actions {
+  flex-wrap: wrap;
+}
+
+.spin {
+  animation: admin-spin 700ms linear infinite;
+}
+
+@keyframes admin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
