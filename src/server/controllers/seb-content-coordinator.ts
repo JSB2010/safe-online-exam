@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { Response } from "express";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
 import {
@@ -209,7 +209,12 @@ export class SebContentCoordinator {
       setting,
       settingsFingerprint: createHash("sha256")
         .update(
-          `${sebConfigSettingsFingerprint(courseId, canonicalContentId, setting)}\0${this.managedQuitPolicyDigest()}`,
+          `${sebConfigSettingsFingerprint(
+            courseId,
+            canonicalContentId,
+            setting,
+            this.config.value.security.sessionSecret
+          )}\0${this.managedQuitPolicyDigest()}`,
           "utf8"
         )
         .digest("base64url")
@@ -337,7 +342,7 @@ export class SebContentCoordinator {
   }
 
   managedQuitPolicyDigest(): string {
-    return createHash("sha256")
+    return createHmac("sha256", this.config.value.security.sessionSecret)
       .update(`managed-quit-policy-v1\0${this.config.value.seb.defaultQuitPassword || ""}`, "utf8")
       .digest("base64url");
   }
