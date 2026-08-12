@@ -20,16 +20,18 @@ case "$mode" in
     exit 64
     ;;
 esac
-[[ -f "$environment_file" && ! -L "$environment_file" ]] || {
-  echo "configuration file must be a regular file: $environment_file" >&2
-  exit 64
-}
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_directory/compose-deployment.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$script_directory/compose-deployment.sh"
+else
+  # shellcheck disable=SC1091
+  source "$script_directory/../scripts/compose-deployment.sh"
+fi
+compose_deployment_load "$script_directory" "$environment_file"
+environment_file="$COMPOSE_DEPLOYMENT_ENV_FILE"
 
-set -a
-# shellcheck disable=SC1090
-source "$environment_file"
-set +a
-for command_name in curl docker; do
+for command_name in curl docker openssl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "required command is unavailable: $command_name" >&2
     exit 69
@@ -54,19 +56,81 @@ else
     exit 64
   }
 fi
+[[ "${OAUTH_TOKEN_ENCRYPTION_MODE:-}" == "compat" || "${OAUTH_TOKEN_ENCRYPTION_MODE:-}" == "enforce" ]] || {
+  echo "OAUTH_TOKEN_ENCRYPTION_MODE must be set explicitly to compat or enforce" >&2
+  exit 64
+}
 
-script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+compose_deployment_resolve_project_name defer-persist
+compose_deployment_command
+compose=("${COMPOSE_DEPLOYMENT_COMMAND[@]}")
+if [[ "$caddy_mode" == "--caddy" ]]; then
+  compose+=(-f "$COMPOSE_DEPLOYMENT_TOPOLOGY_DIRECTORY/compose.caddy.yaml" --profile caddy)
+fi
+
+current_app_containers=()
+while IFS= read -r container_id; do
+  [[ -n "$container_id" ]] && current_app_containers+=("$container_id")
+done < <(docker ps -a \
+  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+  --filter label=com.docker.compose.service=app \
+  --format '{{.ID}}')
+[[ "${#current_app_containers[@]}" -eq 1 ]] || {
+  echo "expected exactly one existing Compose app container for project $COMPOSE_PROJECT_NAME; use setup.sh for a fresh installation or repair the existing project before upgrading" >&2
+  exit 64
+}
+current_app_container="${current_app_containers[0]}"
+current_oauth_mode=""
+while IFS= read -r environment_entry; do
+  case "$environment_entry" in
+    OAUTH_TOKEN_ENCRYPTION_MODE=*) current_oauth_mode="${environment_entry#*=}" ;;
+  esac
+done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$current_app_container")
+if [[ -z "$current_oauth_mode" && "$OAUTH_TOKEN_ENCRYPTION_MODE" != "compat" ]]; then
+  echo "the current Compose application has not completed a compat-mode deployment; set OAUTH_TOKEN_ENCRYPTION_MODE=compat for the first upgrade" >&2
+  exit 64
+fi
+if [[ -n "$current_oauth_mode" && "$current_oauth_mode" != "compat" && "$current_oauth_mode" != "enforce" ]]; then
+  echo "the current Compose application reports an invalid OAuth token encryption mode" >&2
+  exit 1
+fi
+compose_deployment_persist_discovered_project_name
+
+keyring_path="$SECRETS_DIRECTORY/oauth_token_encryption_keyring"
+if [[ ! -e "$keyring_path" && ! -L "$keyring_path" ]]; then
+  [[ "$OAUTH_TOKEN_ENCRYPTION_MODE" == "compat" ]] || {
+    echo "the missing OAuth token encryption keyring may only be created during the first compat-mode upgrade" >&2
+    exit 64
+  }
+  [[ "${OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+    echo "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID is invalid" >&2
+    exit 64
+  }
+  mkdir -p "$SECRETS_DIRECTORY"
+  chmod 700 "$SECRETS_DIRECTORY"
+  oauth_token_key="$(openssl rand -base64 32 | tr '/+' '_-' | tr -d '=\n')"
+  [[ "$oauth_token_key" =~ ^[A-Za-z0-9_-]{43}$ ]] || {
+    echo "OpenSSL generated an invalid OAuth token encryption key" >&2
+    exit 1
+  }
+  keyring_temporary="$(mktemp "$SECRETS_DIRECTORY/.oauth-token-encryption-keyring.XXXXXX")"
+  trap 'rm -f -- "$keyring_temporary"' EXIT
+  printf '{"%s":"%s"}\n' "$OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID" "$oauth_token_key" >"$keyring_temporary"
+  chmod 600 "$keyring_temporary"
+  mv "$keyring_temporary" "$keyring_path"
+  trap - EXIT
+  printf 'Generated the missing OAuth token encryption keyring without changing existing Compose secrets.\n' >&2
+elif [[ ! -f "$keyring_path" || -L "$keyring_path" || ! -s "$keyring_path" ]]; then
+  echo "the OAuth token encryption keyring must be a non-empty regular file: $keyring_path" >&2
+  exit 1
+fi
+
 if [[ -x "$script_directory/backup.sh" ]]; then
   backup_command="$script_directory/backup.sh"
 else
   backup_command="$script_directory/backup-compose.sh"
 fi
-backup_path="$("$backup_command" "$environment_file" "${BACKUP_DIRECTORY:-backups}")"
-
-compose=(docker compose --env-file "$environment_file" -f compose.yaml -f compose.secrets.yaml)
-if [[ "$caddy_mode" == "--caddy" ]]; then
-  compose+=(-f compose.caddy.yaml --profile caddy)
-fi
+backup_path="$("$backup_command" "$environment_file" "$BACKUP_DIRECTORY")"
 
 "${compose[@]}" config --quiet
 if [[ "$local_smoke_image" != "true" ]]; then

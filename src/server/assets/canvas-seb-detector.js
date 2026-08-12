@@ -83,24 +83,6 @@
     ];
     const NEW_QUIZ_BEGIN_SELECTOR = '[data-automation="sdk-start-resume-button"]';
 
-    const COMPLETION_TEXT_INDICATORS = [
-        'your quiz has been submitted',
-        'quiz submitted',
-        'submission successful',
-        'quiz completed',
-        'thank you for taking',
-        'quiz submission complete',
-        'your submission has been recorded',
-        'submission recorded',
-        'assignment submitted',
-        'assignment turned in',
-        'submission complete',
-        'successfully submitted',
-        'turned in successfully',
-        'submission received',
-        'submission confirmed',
-        'thank you for your submission'
-    ];
     const COMPLETION_PAGE_SELECTORS = [
         '[aria-label="Assessment results page" i]',
         '[data-automation="sdk-result-list-title"]'
@@ -108,31 +90,6 @@
     const CLASSIC_COMPLETION_PAGE_SELECTORS = [
         '.quiz-submission',
         '.muted-notice'
-    ];
-    const POST_SUBMIT_URL_PATTERNS = [
-        /\/quizzes\/\d+\/submissions\b/,
-        /\/quizzes\/\d+\/results\b/,
-        /\/quizzes\/\d+\/history\b/,
-        /\/assignments\/\d+\/submissions\b/,
-        /\/assignments\/\d+\/results\b/,
-        /\/assignments\/\d+\/taking\/[^/?#]+\/(?:results?|summary|completed?)\b/,
-        /\/courses\/\d+\/quizzes(?:[?#]|$)/,
-        /\/courses\/\d+\/assignments(?:[?#]|$)/,
-        /submitted=true\b/,
-        /submission_id=\d+/,
-        /quiz_submission_id=\d+/,
-        /submission_attempt=/
-    ];
-    const COMPLETION_URL_PATTERNS = [
-        ...POST_SUBMIT_URL_PATTERNS,
-        /\/courses\/\d+$/,
-        /\/courses\/\d+\/grades\b/,
-        /\/courses\/\d+\/gradebook\b/,
-        /quiz.*complete/i,
-        /submission.*complete/i,
-        /assignment.*complete/i,
-        /quiz.*submitted/i,
-        /assignment.*submitted/i
     ];
     const NON_FINAL_SUBMIT_SIGNALS = [
         'access code',
@@ -261,11 +218,16 @@
         return state.debugMode;
     }
 
-    function debugLog(message, type = 'info') {
+    // Console output is deliberately structural only. Call-site descriptions make
+    // the control flow readable, but are not emitted because they can contain
+    // Canvas URLs, element metadata, user agents, or upstream error text. Use the
+    // separately sanitized detectorTrace channel for diagnostic detail.
+    function debugLog(_message, type = 'info') {
         if (!state.debugMode && type !== 'warn' && type !== 'error') {
             return;
         }
 
+        void _message;
         const logger = type === 'warn' ? console.warn : type === 'error' ? console.error : console.log;
         logger('Safe Online Exam detector:', type);
     }

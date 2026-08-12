@@ -74,11 +74,14 @@ LTI registration, and finalization. Use \`./setup.sh --help\` for resumable
 stages and the fully unattended file-based interface. The lower-level phase
 commands remain available for explicit orchestration.
 
-For an existing installation, merge new keys from \`cloudrun.env.example\` into
-the protected prior \`cloudrun.env\`, set the new digest, and run:
+For an existing installation, keep the prior \`cloudrun.env\` and its protected
+state in a durable installation directory, merge new template keys, set the new
+digest, and run the new bundle against that existing file:
 
 \`\`\`bash
-./upgrade.sh cloudrun.env
+NEW_BUNDLE=/opt/safe-online-exam-$version-cloud-run
+EXISTING_ENV=/srv/safe-online-exam/cloudrun.env
+"\$NEW_BUNDLE/upgrade.sh" "\$EXISTING_ENV"
 \`\`\`
 
 The upgrade creates and verifies a backup of the configured
@@ -100,10 +103,17 @@ The guided setup covers HTTPS mode, Canvas values, protected secret
 generation, validation, startup, and readiness. Use \`./setup.sh --help\` for
 the non-interactive configuration-and-secret-file interface.
 
-On an upgrade, preserve the existing secret files and database volume, merge
-new keys from the downloaded \`.env.compose.secrets.example\` into the protected
-\`.env.secrets\`, and run \`./upgrade.sh .env.secrets\`. The command creates a
-validated PostgreSQL backup before pulling or restarting containers.
+On an upgrade, keep the existing \`.env.secrets\`, secret files, and database
+volume in a durable installation directory, merge new template keys, and run
+the new bundle against that existing file. The command preserves or discovers
+the existing Compose project identity and creates a validated PostgreSQL backup
+before pulling or restarting containers:
+
+\`\`\`bash
+NEW_BUNDLE=/opt/safe-online-exam-$version
+EXISTING_ENV=/srv/safe-online-exam/.env.secrets
+"\$NEW_BUNDLE/upgrade.sh" "\$EXISTING_ENV"
+\`\`\`
 
 The published multi-architecture manifest contains \`linux/amd64\` and
 \`linux/arm64\`. The published digest in this section is

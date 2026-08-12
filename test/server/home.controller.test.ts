@@ -30,6 +30,25 @@ describe("HomeController", () => {
     });
   });
 
+  it("publishes provenance only for an explicitly enabled development testbed", () => {
+    const controller = homeController(undefined, {
+      enabled: true,
+      sourceCommitSha: "a".repeat(40),
+      sourceRef: "feature/testbed",
+      sourceWorktreeState: "clean",
+      cloudBuildId: "build-123456",
+      imageDigest: `sha256:${"b".repeat(64)}`
+    });
+
+    expect(controller.testbedStatus()).toMatchObject({
+      enabled: true,
+      environment: "dev",
+      sourceCommitSha: "a".repeat(40),
+      sourceRef: "feature/testbed"
+    });
+    expect(controller.home()).toContain('"enabled":true');
+  });
+
   it("provides the Safe Online Exam icon for browser favicon probes", async () => {
     const response = { type: vi.fn().mockReturnThis(), send: vi.fn() };
 
@@ -40,6 +59,16 @@ describe("HomeController", () => {
   });
 });
 
-function homeController(repository: { assertReady: () => Promise<void> } = { assertReady: async () => undefined }) {
-  return new HomeController({ getRequiredToolUrl: () => "https://tool.example.edu" } as any, repository as any);
+function homeController(
+  repository: { assertReady: () => Promise<void> } = { assertReady: async () => undefined },
+  testbed: Record<string, unknown> = { enabled: false }
+) {
+  return new HomeController(
+    {
+      profile: "dev",
+      value: { testbed, security: { debugEnabled: false, detectorDiagnosticsEnabled: false } },
+      getRequiredToolUrl: () => "https://tool.example.edu"
+    } as any,
+    repository as any
+  );
 }

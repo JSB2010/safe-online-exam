@@ -547,6 +547,42 @@ describe("Safe Online Exam detector script", () => {
     expect(context.document.body.textContent).toContain(message);
   });
 
+  it("cannot redeem an access code when a normal browser spoofs SEB client signals", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: "attacker-controlled" } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": {
+          __status: 403,
+          success: false,
+          error_code: "INVALID_SEB_CONFIG_PROOF"
+        },
+        "/api/seb/access-code/11825/23455": {
+          success: true,
+          accessCode: "must-not-be-disclosed"
+        }
+      },
+      body: `
+        <main>
+          <form id="access_code_form" action="/courses/11825/quizzes/23455/take">
+            <input name="access_code" type="password" />
+            <button type="submit">Submit</button>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_600);
+    await flushPromises();
+
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/access-proof/"))).toBe(true);
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/access-code/"))).toBe(false);
+    expect(context.document.querySelector<HTMLInputElement>('input[name="access_code"]')?.value).toBe("");
+    expect(context.document.body.textContent).not.toContain("must-not-be-disclosed");
+  });
+
   it("does not treat access-code submit buttons as final quiz submissions", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take?debug=true",
@@ -1977,7 +2013,7 @@ describe("Safe Online Exam detector script", () => {
     expect(openWindow).toHaveBeenCalledWith("https://calc.example.edu", expect.stringMatching(/^seb_exam_tool_/u));
   });
 
-  it("emits only structural console markers when server debug mode is enabled", async () => {
+  it("intentionally emits only structural console markers when server debug mode is enabled", async () => {
     const endpointContext = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       debugResponse: { enabled: true },

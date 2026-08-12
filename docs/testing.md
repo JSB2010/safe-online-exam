@@ -12,8 +12,39 @@ that enforce documented deployment invariants.
 Install dependencies once:
 
 ```bash
-npm ci
+npm run verify:dependency-policy
+npm ci --ignore-scripts
+npm run install:trusted
 ```
+
+Run the dependency-policy check before installation because a contributor can
+change `.npmrc`, `package.json`, or `package-lock.json`. The explicit
+`--ignore-scripts` flag then keeps lifecycle scripts disabled even if repository
+configuration changes. The trusted-install command verifies the complete
+lockfile again, then rebuilds and executes only `esbuild`. The policy requires npm 11.19.0, exact direct
+versions, the public npm registry, SHA-512 integrity metadata, no linked/Git/
+URL/file/directory dependencies, and an explicit denial for optional
+`fsevents` native builds. It also checks every locked version against npm
+registry publication metadata and rejects packages published less than three
+days ago. The temporary exact-version exceptions used while this gate was
+introduced have expired and were removed, so every locked registry package now
+follows the same publication-age rule. Review any allowlist or integrity change
+as executable third-party code.
+
+Run the network-backed supply-chain gate when dependencies change and before a
+release:
+
+```bash
+npm run verify:supply-chain
+```
+
+This verifies npm registry signatures and available provenance attestations,
+then rejects production vulnerabilities. The preceding dependency-policy gate
+enforces the three-day minimum release age itself because npm does not provide
+a supported configuration key for that control. An urgent, independently
+reviewed security update may run
+`npm run verify:dependency-policy -- --min-release-age-days 0` for that one
+check; never commit a relaxation to the default policy.
 
 Run individual gates when iterating:
 
@@ -41,7 +72,37 @@ npm run test:e2e
 
 `npm run verify` first checks release metadata consistency, then runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. `npm run verify:postgres` starts PostgreSQL 17, applies migrations in isolated schemas, and runs repository atomicity/concurrency tests. The deploy pipeline runs both layers before promotion.
 
-GitHub Actions runs those two layers plus the Compose smoke test for every pull request and push to `main`. Pull requests also run GitHub's dependency review and reject newly introduced vulnerabilities of moderate severity or higher. CI uses the pinned Ubuntu 24.04 runner and Node 24—the same supported major runtime as the production container—with npm and BuildKit caching. The Compose job builds once through Buildx and passes that image into the smoke script rather than rebuilding it. This CI workflow has no cloud credentials and does not publish images or deploy services. The repository ruleset requires signed commits, its application, PostgreSQL, Compose, dependency-review, and aggregate CodeQL checks before merge. The aggregate check remains available when CodeQL legitimately skips individual language matrices for lockfile-only changes. Dependabot opens independently reviewable weekly update PRs for npm packages and lockfile state, immutable action pins, Dockerfile images, and Compose images. Minor and patch updates are grouped by ecosystem or framework; runtime, Node declarations, TypeScript, and database major upgrades remain explicit migrations.
+GitHub Actions runs those two layers plus the Compose smoke test for every pull request and push to `main`. Pull requests also run GitHub's dependency review and reject newly introduced vulnerabilities of moderate severity or higher. A separate required dependency-integrity job authenticates npm 11.19.0 through Corepack against the committed SHA-512 archive hash, validates the strict repository npm configuration and lockfile, and audits the production graph before install, installs with lifecycle scripts disabled, verifies registry signatures/provenance against that materialized tree, and only then exercises the sole approved rebuild. Application, PostgreSQL, and Compose jobs cannot start until that integrity job succeeds. CI uses the pinned Ubuntu 24.04 runner and Node 24—the same supported major runtime as the production container—with npm and BuildKit caching. The Compose job builds once through Buildx and passes that image into the smoke script rather than rebuilding it. This CI workflow has no cloud credentials and does not publish images or deploy services. The repository ruleset requires signed commits, its application, PostgreSQL, Compose, dependency-review, dependency-integrity, and aggregate CodeQL checks before merge. The aggregate check remains available when CodeQL legitimately skips individual language matrices for lockfile-only changes.
+
+Dependabot's documented npm support includes this repository's npm 11 toolchain,
+but its PRs remain inputs to review rather than merge decisions. The repository
+also owns `.github/workflows/supply-chain-maintenance.yml`. Every Monday that
+read-only job checks lockfile policy, npm signatures, advisories,
+same-major package drift, the npm/Trivy/GitHub CLI tool pins, the Dockerfile
+frontend, and every digest-pinned image hidden in Docker, Compose, and Cloud
+Build configuration. It opens or refreshes one maintenance issue; it never
+changes source, a lockfile, an image pin, or a release. It also scans the
+published `latest` image both for all high/critical findings and for fixable
+findings that should fail the workflow. See GitHub's
+[supported ecosystems](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories).
+
+Dependabot opens independently reviewable weekly update PRs for npm packages
+and lockfile state, immutable action pins, Dockerfile images, and Compose
+images when its ecosystem parser supports the manifest. Security PRs are
+advisory-triggered and are not delayed until the weekly version-update run.
+For every PR, inspect the manifest and lockfile diff, confirm registry/source
+and lifecycle policy, require signatures and advisory checks, review upstream
+release notes, and require the full CI gate. Never merge solely because the PR
+was generated by Dependabot. npm updates are never auto-merged: even a
+correctly signed patch can contain malicious build-time or runtime code. Minor
+and patch updates are grouped by ecosystem or framework; runtime, Node
+declarations, TypeScript, database, and other major upgrades remain explicit
+migrations.
+
+`CODEOWNERS` routes dependency and build-authority changes to the responsible
+maintainer. The repository ruleset intentionally requires no separate approval
+for this solo-maintainer project, but a maintainer must still inspect and
+manually merge each Dependabot pull request after the required checks pass.
 
 Verify the production topology separately:
 
@@ -53,11 +114,53 @@ By default that smoke builds the exact runtime image. CI and release callers can
 
 ## Release Pipeline Checks
 
-Publishing a release requires only pushing a `vX.Y.Z` tag whose version matches the synchronized release metadata and whose commit is on `main`. The workflow waits for that exact commit's already-required application, PostgreSQL, Compose, and CodeQL checks. It then creates or refreshes a draft, builds a staged `linux/amd64` and `linux/arm64` manifest, smokes that exact digest, publishes its SBOM, provenance, and artifact attestation, attaches a digest-pinned Compose bundle and checksum, promotes the final image tags, and publishes the immutable draft.
+Publishing a release requires only pushing a `vX.Y.Z` tag whose version matches the synchronized release metadata and whose commit is on `main`. The workflow waits for that exact commit's already-required application, PostgreSQL, Compose, dependency-integrity, and CodeQL checks. It then creates or refreshes a draft, builds a staged `linux/amd64` and `linux/arm64` manifest, reports all high/critical OS and library findings and blocks fixable ones, smokes that digest, publishes its SBOM, provenance, and artifact attestation, attaches a digest-pinned Compose bundle and checksum, promotes the final image tags, and publishes the immutable draft.
 
 The multi-architecture Docker build runs the full typecheck, lint, format, coverage, and build gate once on BuildKit's native build platform. It installs production dependencies separately for each target platform before assembling the matching distroless runtime image. Persistent BuildKit caches reuse verified dependency layers across CI and release runs without making cache contents a trust decision; BuildKit still invalidates changed inputs and executes uncached gates. Timing-sensitive application tests never run through QEMU emulation.
 
-The workflow verifies both architectures, their source/version OCI labels, every promoted tag, the artifact attestation, and GitHub release immutability before reporting success. Before a Cloud Run promotion, use the release digest with `cloudbuild-release-promote.yaml` against development, then confirm its migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets.
+## Commit Testbed Acceptance
+
+Keep the self-hosted Canvas sandbox stable so results are comparable across
+commits. Use dedicated synthetic accounts only: one root administrator, one
+instructor, and one student. Maintain one published course named
+`Safe Online Exam Commit Testbed` with these fixtures:
+
+- a published two-question Classic Quiz named `Classic Quiz - Baseline`;
+- a published two-question New Quiz named `New Quiz - Baseline` when New
+  Quizzes is enabled;
+- Safe Online Exam enabled for both assessments with a non-production exit
+  password and no real student submissions; and
+- the account-level LTI installation, API Developer Key, course/account
+  navigation placements, and detector theme loader pointed at the stable
+  custom tool origin.
+
+Do not create per-commit Canvas Developer Keys or change redirect URLs. Canvas
+requires exact redirect matching, so the stable custom origin is part of the
+fixture. Change the Canvas registration only when the commit specifically
+tests registration behavior, then restore the baseline values.
+
+For every candidate, first require the automated build, migration execution,
+candidate smoke, and custom-origin smoke to pass. Then check the relevant
+manual layers:
+
+1. Administrator: account launch, connected-course inventory, and operational
+   status load without console errors.
+2. Instructor: course launch, Classic/New Quiz discovery, enable/regenerate/
+   disable behavior, and settings persistence after a cold start.
+3. Student browser: Canvas prompts for Safe Exam Browser only on protected
+   assessments and leaves ordinary Canvas pages alone.
+4. Managed SEB client when SEB/config behavior changed: configuration opens,
+   Config Key proof releases the access code once, submission exits correctly,
+   and approved exam tools remain constrained.
+
+Record the `/api/testbed/status` response with the result so a failure maps to
+one commit/diff, image digest, build, and revision. Detector trace logs are for
+short diagnostic windows; they remain sanitized but should still be treated as
+operational logs. Reset the application database only when a clean-state test
+is intentional, because reset removes OAuth connections and app settings while
+leaving the Canvas fixture in place.
+
+The workflow verifies both architectures, their source/version OCI labels, every promoted tag, the artifact attestation, and GitHub release immutability before reporting success. Cloud Run promotion independently requires the matching release to be published, stable, and immutable and verifies that same GitHub attestation before creating the Google Binary Authorization attestation used at deploy time. Confirm the migration execution, cleanup job, service image, `/health`, `/ready`, JWKS, LTI metadata, and detector assets after promotion.
 
 ## Test Coverage By Layer
 
@@ -87,10 +190,29 @@ It runs Chromium in desktop and mobile projects. It confirms public health/JWKS/
 If Chromium is not installed, add the Playwright-managed browser before retrying:
 
 ```bash
-npx playwright install chromium
+npm exec --offline -- playwright install chromium
 ```
 
-On a disposable Linux CI host that also needs system packages, use `npx playwright install --with-deps chromium`. Keep the e2e command separate from deploy builds unless the CI environment is explicitly configured for browser execution.
+On a disposable Linux CI host that also needs system packages, use `npm exec --offline -- playwright install --with-deps chromium`. `--offline` prevents npm from fetching an undeclared CLI package; Playwright still downloads its version-matched browser from its maintained browser distribution endpoint. Keep the e2e command separate from deploy builds unless the CI environment is explicitly configured for browser execution.
+
+## Dependency Incident Response
+
+If a dependency version is reported as malicious or compromised:
+
+1. Stop dependency merges, release builds, and any source-building deployments.
+2. Record the affected package, versions, lockfile commit, CI runs, image
+   digests, caches, and deployments before changing them.
+3. Determine which CI, build, runtime, and operator credentials were reachable
+   whenever the package executed; rotate reachable credentials rather than
+   every unrelated secret.
+4. Remove or pin away from the affected version, regenerate the lockfile under
+   the normal source/lifecycle policy, and rerun dependency integrity plus the
+   complete verification matrix.
+5. Rebuild from a known-good source commit without reusing suspect dependency
+   or image caches, publish a new immutable patch release, and promote only its
+   verified digest.
+6. Preserve the incident record and notify affected operators. Never move an
+   existing release tag or silently replace a published artifact.
 
 ## Fresh Development Database Test
 

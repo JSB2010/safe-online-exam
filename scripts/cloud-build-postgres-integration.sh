@@ -21,11 +21,15 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 docker network create "$network" >/dev/null
-docker run --detach --name "$database_container" --network "$network" \
+docker pull "$postgres_image" >/dev/null
+if ! database_container_id="$(docker run --detach --pull=never --name "$database_container" --network "$network" \
   -e POSTGRES_DB=canvas_seb_test \
   -e POSTGRES_USER=canvas_seb_test \
   -e POSTGRES_PASSWORD=integration-test-only \
-  "$postgres_image" >/dev/null
+  "$postgres_image" 2>&1)"; then
+  echo "Failed to create the PostgreSQL integration container: $database_container_id" >&2
+  exit 1
+fi
 
 for _ in $(seq 1 60); do
   if docker exec "$database_container" pg_isready -U canvas_seb_test -d canvas_seb_test >/dev/null 2>&1; then
@@ -33,7 +37,11 @@ for _ in $(seq 1 60); do
   fi
   sleep 1
 done
-docker exec "$database_container" pg_isready -U canvas_seb_test -d canvas_seb_test >/dev/null
+if ! docker exec "$database_container" pg_isready -U canvas_seb_test -d canvas_seb_test >/dev/null; then
+  echo "PostgreSQL integration container did not become ready" >&2
+  docker logs "$database_container" >&2 || true
+  exit 1
+fi
 
 DOCKER_BUILDKIT=1 docker build --target postgres-tests --tag "$test_image" .
 docker run --rm --network "$network" \

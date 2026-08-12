@@ -37,20 +37,34 @@ describe("DebugController", () => {
       { origin: "https://canvas.example.edu", includeDetails: true }
     );
   });
+
+  it("rejects traces outside the explicitly enabled testbed and exact Canvas origin", () => {
+    const trace = { recordEvent: vi.fn() } as unknown as DetectorTraceService;
+    const controller = createController({ debugEnabled: true }, trace);
+
+    expect(controller.canvasDetectorTrace({}, "https://attacker.example")).toEqual({ enabled: false });
+    expect(controller.canvasDetectorTrace({}, "https://canvas.example.edu/path")).toEqual({ enabled: false });
+    expect(trace.recordEvent).not.toHaveBeenCalled();
+
+    const disabledTestbed = createController({ debugEnabled: true, testbedEnabled: false }, trace);
+    expect(disabledTestbed.canvasDetectorTrace({}, "https://canvas.example.edu")).toEqual({ enabled: false });
+  });
 });
 
 function createController(
-  security: { debugEnabled: boolean; detectorDiagnosticsEnabled?: boolean },
+  security: { debugEnabled: boolean; detectorDiagnosticsEnabled?: boolean; testbedEnabled?: boolean },
   trace: DetectorTraceService
 ): DebugController {
   const config = {
     profile: "dev",
     value: {
+      testbed: { enabled: security.testbedEnabled ?? true },
       security: {
         debugEnabled: security.debugEnabled,
         detectorDiagnosticsEnabled: security.detectorDiagnosticsEnabled ?? false
       }
-    }
+    },
+    getCanvasDomain: () => "https://canvas.example.edu"
   } as unknown as AppConfig;
 
   return new DebugController(config, trace);

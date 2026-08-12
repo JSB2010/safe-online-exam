@@ -5,6 +5,7 @@ import {
   requiresHardenedRuntimeValidation,
   resolveProfile,
   sanitizeToolUrl,
+  usesSourceKnownLocalOAuthTokenKey,
   validateRuntimeConfig
 } from "../../src/server/config/app-config.js";
 
@@ -26,6 +27,12 @@ describe("AppConfig", () => {
     const config = loadConfigFromEnv({});
     expect(config.canvas.domain).toBe("https://canvas.example.test");
     expect(config.lti.deploymentIdCheckingEnabled).toBe(true);
+    expect(usesSourceKnownLocalOAuthTokenKey(config.security.oauthTokenEncryption)).toBe(true);
+    expect(
+      usesSourceKnownLocalOAuthTokenKey(
+        loadConfigFromEnv(oauthTokenEncryptionRuntimeEnv()).security.oauthTokenEncryption
+      )
+    ).toBe(false);
   });
 
   it("permits a hardened runtime without a deployment allowlist only when checking is explicitly disabled", () => {
@@ -55,6 +62,8 @@ describe("AppConfig", () => {
         "LTI_DEPLOYMENT_ID is required in production",
         "SESSION_SECRET is required in production",
         "STATE_ENCRYPTION_KEY is required in production",
+        "OAUTH_TOKEN_ENCRYPTION_KEYRING is required in production",
+        "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID is required in production",
         "CANVAS_API_CLIENT_ID is required in production",
         "CANVAS_API_CLIENT_SECRET is required in production",
         "DATABASE_HOST is required in production",
@@ -114,12 +123,76 @@ describe("AppConfig", () => {
     );
   });
 
+  it("allows bounded diagnostics only for an explicit, fully identified development testbed", () => {
+    const env = productionRuntimeEnv({
+      APP_ENV: "dev",
+      K_SERVICE: "school-canvas-seb",
+      DEV_TESTBED_ENABLED: "true",
+      APP_DEBUG_ENABLED: "true",
+      APP_DETECTOR_DIAGNOSTICS_ENABLED: "true",
+      SOURCE_COMMIT_SHA: "a".repeat(40),
+      SOURCE_REF: "feature/testbed",
+      SOURCE_WORKTREE_STATE: "dirty",
+      SOURCE_DIFF_SHA: "b".repeat(64),
+      CLOUD_BUILD_ID: "12345678-abcd-1234-abcd-123456789abc",
+      APP_IMAGE_DIGEST: `sha256:${"c".repeat(64)}`
+    });
+
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual([]);
+
+    const production = { ...env, APP_ENV: "prod" };
+    expect(validateRuntimeConfig(loadConfigFromEnv(production), production)).toEqual(
+      expect.arrayContaining([
+        "APP_DEBUG_ENABLED must be false in Cloud Run",
+        "APP_DETECTOR_DIAGNOSTICS_ENABLED must be false in Cloud Run",
+        "DEV_TESTBED_ENABLED may only be true when APP_ENV is dev in Cloud Run"
+      ])
+    );
+  });
+
+  it("requires immutable provenance for Cloud Run development testbeds", () => {
+    const env = productionRuntimeEnv({
+      APP_ENV: "dev",
+      K_SERVICE: "school-canvas-seb",
+      DEV_TESTBED_ENABLED: "true",
+      SOURCE_WORKTREE_STATE: "dirty"
+    });
+
+    expect(validateRuntimeConfig(loadConfigFromEnv(env), env)).toEqual(
+      expect.arrayContaining([
+        "SOURCE_COMMIT_SHA must be a full lowercase Git commit SHA in Cloud Run testbeds",
+        "SOURCE_REF must be a safe Git ref label in Cloud Run testbeds",
+        "SOURCE_DIFF_SHA must be a lowercase SHA-256 digest for dirty Cloud Run testbeds",
+        "CLOUD_BUILD_ID must identify the build in Cloud Run testbeds",
+        "APP_IMAGE_DIGEST must be an immutable sha256 digest in Cloud Run testbeds"
+      ])
+    );
+  });
+
   it("preserves a fully configured non-Cloud production runtime", () => {
     const env = productionRuntimeEnv();
     const config = loadConfigFromEnv(env);
 
     expect(requiresHardenedRuntimeValidation(config, env)).toBe(true);
     expect(validateRuntimeConfig(config, env)).toEqual([]);
+  });
+
+  it("requires a valid OAuth token encryption keyring in hardened runtimes", () => {
+    const missing = productionRuntimeEnv({
+      OAUTH_TOKEN_ENCRYPTION_KEYRING: undefined,
+      OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID: undefined
+    });
+    expect(validateRuntimeConfig(loadConfigFromEnv(missing), missing)).toEqual(
+      expect.arrayContaining([
+        "OAUTH_TOKEN_ENCRYPTION_KEYRING is required in production",
+        "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID is required in production"
+      ])
+    );
+
+    const malformed = productionRuntimeEnv({ OAUTH_TOKEN_ENCRYPTION_KEYRING: '{"primary":"short"}' });
+    expect(validateRuntimeConfig(loadConfigFromEnv(malformed), malformed)).toContain(
+      "Every OAUTH_TOKEN_ENCRYPTION_KEYRING value must be a 32-byte base64url key in production"
+    );
   });
 
   it("rejects the in-memory repository and legacy session-secret alias in hardened runtimes", () => {
@@ -321,6 +394,8 @@ describe("AppConfig", () => {
         "LTI_DEPLOYMENT_ID is required in Cloud Run",
         "SESSION_SECRET is required in Cloud Run",
         "STATE_ENCRYPTION_KEY is required in Cloud Run",
+        "OAUTH_TOKEN_ENCRYPTION_KEYRING is required in Cloud Run",
+        "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID is required in Cloud Run",
         "CANVAS_API_CLIENT_ID is required in Cloud Run",
         "CANVAS_API_CLIENT_SECRET is required in Cloud Run",
         "DATABASE_HOST is required in Cloud Run",
@@ -340,6 +415,7 @@ describe("AppConfig", () => {
       LTI_DEPLOYMENT_ID: "deployment-1",
       SESSION_SECRET: "s".repeat(48),
       STATE_ENCRYPTION_KEY: "k".repeat(48),
+      ...oauthTokenEncryptionRuntimeEnv(),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
       ...databaseRuntimeEnv(),
@@ -387,6 +463,7 @@ describe("AppConfig", () => {
       LTI_DEPLOYMENT_ID: "deployment-1",
       SESSION_SECRET: "s".repeat(48),
       STATE_ENCRYPTION_KEY: "k".repeat(48),
+      ...oauthTokenEncryptionRuntimeEnv(),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
       ...databaseRuntimeEnv(),
@@ -444,6 +521,7 @@ describe("AppConfig", () => {
       LTI_DEPLOYMENT_ID: "deployment-1",
       SESSION_SECRET: "s".repeat(48),
       STATE_ENCRYPTION_KEY: "k".repeat(48),
+      ...oauthTokenEncryptionRuntimeEnv(),
       CANVAS_API_CLIENT_ID: "api-client",
       CANVAS_API_CLIENT_SECRET: "api-secret",
       ...databaseRuntimeEnv(),
@@ -529,6 +607,9 @@ function productionRuntimeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Process
     LTI_DEPLOYMENT_ID: "deployment-1",
     SESSION_SECRET: "s".repeat(48),
     STATE_ENCRYPTION_KEY: "k".repeat(48),
+    OAUTH_TOKEN_ENCRYPTION_KEYRING: JSON.stringify({ primary: Buffer.alloc(32, 11).toString("base64url") }),
+    OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID: "primary",
+    OAUTH_TOKEN_ENCRYPTION_MODE: "enforce",
     CANVAS_API_CLIENT_ID: "api-client",
     CANVAS_API_CLIENT_SECRET: "api-secret",
     ...databaseRuntimeEnv(),
@@ -548,6 +629,14 @@ function databaseRuntimeEnv(): NodeJS.ProcessEnv {
     DATABASE_POOL_MAX: "5",
     DATABASE_CONNECTION_TIMEOUT_MS: "10000",
     DATABASE_STATEMENT_TIMEOUT_MS: "30000"
+  };
+}
+
+function oauthTokenEncryptionRuntimeEnv(): NodeJS.ProcessEnv {
+  return {
+    OAUTH_TOKEN_ENCRYPTION_KEYRING: JSON.stringify({ primary: Buffer.alloc(32, 11).toString("base64url") }),
+    OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID: "primary",
+    OAUTH_TOKEN_ENCRYPTION_MODE: "enforce"
   };
 }
 

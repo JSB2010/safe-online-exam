@@ -34,8 +34,8 @@ production, test, beta, or independent Canvas instances.
 ## What Version 1 Includes
 
 - Canvas LTI 1.3 course navigation and root-account administration placements.
-- Canvas OAuth with separate instructor/student and root-account
-  administrator capabilities.
+- Canvas OAuth with one durable per-user grant that carries the complete
+  application scope set and upgrades in place for root-account administrators.
 - Discovery and management of Classic Quizzes and New Quizzes.
 - Course defaults, assessment overrides, start and exit passwords, URL rules,
   course exam tools, quiz-only tools, and school-managed tool presets.
@@ -163,9 +163,25 @@ Compose is the maintained self-hosted alternative.
 Install the pinned dependency graph and run the complete non-browser gate:
 
 ```bash
-npm ci
+npm run verify:dependency-policy
+npm ci --ignore-scripts
+npm run install:trusted
+npm run verify:supply-chain
 npm run verify
 ```
+
+The committed npm policy accepts only exact, integrity-pinned packages from
+the public npm registry, blocks Git/URL/file/directory dependencies and all
+dependency lifecycle scripts by default, and executes only the reviewed
+`esbuild` rebuild after the lockfile policy passes. The policy checks every
+locked package version against npm registry publication metadata and rejects
+versions published less than three days ago. The supply-chain gate also verifies
+registry signatures/provenance and rejects production advisories.
+Dependabot's supported npm ecosystem opens weekly package and lockfile PRs for
+review. A separate weekly read-only workflow supplements it by checking
+same-major package updates, hidden container/tool digest pins, signatures,
+advisories, and the published image. It maintains one review issue and never
+edits or auto-merges dependency files.
 
 Then run the PostgreSQL and browser layers when relevant:
 

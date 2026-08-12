@@ -1,4 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { constantTimeStringEqual as safeEqual } from "../security/constant-time.js";
 import { Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
@@ -222,10 +223,4 @@ function isConfigGrantRecord(record: TransientStateRecord | null): record is Tra
     !!record.settingsFingerprint &&
     typeof record.requiresSessionHandoff === "boolean"
   );
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }

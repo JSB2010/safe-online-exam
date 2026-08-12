@@ -186,7 +186,7 @@ export function App() {
     case "seb-check":
       return <SebSetupCheckPage data={bootstrap.data} />;
     case "service-status":
-      return <ServiceStatusPage />;
+      return <ServiceStatusPage data={bootstrap.data} />;
     default:
       return <MessagePage icon={<Shield />} title="Safe Online Exam" message="This service is running." />;
   }
@@ -1989,7 +1989,9 @@ function AdminToolPresetDialog({
   );
 }
 
-function ServiceStatusPage() {
+function ServiceStatusPage({ data }: { data: Record<string, any> }) {
+  const commit = typeof data.sourceCommitSha === "string" ? data.sourceCommitSha : "";
+  const diff = typeof data.sourceDiffSha === "string" ? data.sourceDiffSha : "";
   return (
     <main className="app-shell service-shell">
       <header className="topbar">
@@ -2014,6 +2016,29 @@ function ServiceStatusPage() {
           <h2>Safe Online Exam is running</h2>
           <p>Launch from Canvas to manage assessments or open secure exams.</p>
         </div>
+        {data.enabled === true && (
+          <aside className="testbed-status" aria-label="Development testbed build">
+            <span className="section-kicker">Development testbed</span>
+            <dl>
+              <div>
+                <dt>Commit</dt>
+                <dd title={commit}>{commit ? commit.slice(0, 12) : "Unknown"}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{data.sourceWorktreeState === "dirty" ? `working tree ${diff.slice(0, 12)}` : data.sourceRef}</dd>
+              </div>
+              <div>
+                <dt>Revision</dt>
+                <dd>{data.revision || "Pending"}</dd>
+              </div>
+              <div>
+                <dt>Diagnostics</dt>
+                <dd>{data.diagnostics?.detectorTracing === true ? "Detector tracing on" : "Off"}</dd>
+              </div>
+            </dl>
+          </aside>
+        )}
       </section>
     </main>
   );

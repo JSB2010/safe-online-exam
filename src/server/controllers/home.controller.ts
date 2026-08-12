@@ -18,7 +18,8 @@ export class HomeController {
   home(): string {
     return renderAppShell({
       title: "Safe Online Exam",
-      view: "service-status"
+      view: "service-status",
+      initialData: this.testbedStatus()
     });
   }
 
@@ -62,6 +63,29 @@ export class HomeController {
   @Get("/health")
   health(): Record<string, string> {
     return { status: "UP" };
+  }
+
+  @Get("/api/testbed/status")
+  testbedStatus(): Record<string, unknown> {
+    const testbed = this.config.value.testbed;
+    if (!testbed.enabled) {
+      return { enabled: false };
+    }
+    return {
+      enabled: true,
+      environment: this.config.profile,
+      sourceCommitSha: testbed.sourceCommitSha,
+      sourceRef: testbed.sourceRef,
+      sourceWorktreeState: testbed.sourceWorktreeState,
+      sourceDiffSha: testbed.sourceDiffSha,
+      cloudBuildId: testbed.cloudBuildId,
+      imageDigest: testbed.imageDigest,
+      revision: process.env.K_REVISION,
+      diagnostics: {
+        debug: this.config.value.security.debugEnabled,
+        detectorTracing: this.config.value.security.detectorDiagnosticsEnabled
+      }
+    };
   }
 
   @Get("/favicon.ico")
