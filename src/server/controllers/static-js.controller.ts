@@ -22,10 +22,19 @@ export class StaticJsController {
 
     const configuredBaseUrl = this.config?.getApplicationBaseUrl();
     const baseUrl = configuredBaseUrl || requestBaseUrl(request);
+    const ltiClientId = this.config?.value.lti?.clientId || "";
+    const ltiDeploymentIdCheckingEnabled = this.config?.value.lti?.deploymentIdCheckingEnabled ?? true;
+    const ltiDeploymentIds = (this.config?.value.lti?.deploymentId || "")
+      .split(/[,\n]/u)
+      .map((deploymentId) => deploymentId.trim())
+      .filter(Boolean);
     return this.readDetectorResponse(
       debugEnabled,
       diagnosticsEnabled,
       baseUrl,
+      ltiClientId,
+      ltiDeploymentIdCheckingEnabled,
+      ltiDeploymentIds,
       process.env.NODE_ENV === "production" && !!configuredBaseUrl
     );
   }
@@ -79,17 +88,28 @@ export class StaticJsController {
     debugEnabled: boolean,
     diagnosticsEnabled: boolean,
     baseUrl: string,
+    ltiClientId: string,
+    ltiDeploymentIdCheckingEnabled: boolean,
+    ltiDeploymentIds: string[],
     cacheable: boolean
   ): Promise<string> {
     const render = () =>
       this.readDetectorAsset(debugEnabled || diagnosticsEnabled).then((source) =>
-        configureDetectorSource(source, baseUrl, debugEnabled, diagnosticsEnabled)
+        configureDetectorSource(
+          source,
+          baseUrl,
+          ltiClientId,
+          ltiDeploymentIdCheckingEnabled,
+          ltiDeploymentIds,
+          debugEnabled,
+          diagnosticsEnabled
+        )
       );
     if (!cacheable) {
       return render();
     }
 
-    const cacheKey = `${baseUrl}\n${String(debugEnabled)}\n${String(diagnosticsEnabled)}`;
+    const cacheKey = `${baseUrl}\n${ltiClientId}\n${String(ltiDeploymentIdCheckingEnabled)}\n${JSON.stringify(ltiDeploymentIds)}\n${String(debugEnabled)}\n${String(diagnosticsEnabled)}`;
     const cached = this.productionDetectorResponses.get(cacheKey);
     if (cached) {
       return cached;
@@ -109,12 +129,21 @@ export class StaticJsController {
 function configureDetectorSource(
   source: string,
   baseUrl: string,
+  ltiClientId: string,
+  ltiDeploymentIdCheckingEnabled: boolean,
+  ltiDeploymentIds: string[],
   debugEnabled: boolean,
   diagnosticsEnabled: boolean
 ): string {
   return source
     .replaceAll('"__SEB_BASE_URL__"', JSON.stringify(baseUrl))
     .replaceAll("'__SEB_BASE_URL__'", JSON.stringify(baseUrl))
+    .replaceAll('"__LTI_CLIENT_ID__"', JSON.stringify(ltiClientId))
+    .replaceAll("'__LTI_CLIENT_ID__'", JSON.stringify(ltiClientId))
+    .replaceAll('"__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__"', JSON.stringify(ltiDeploymentIdCheckingEnabled))
+    .replaceAll("'__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__'", JSON.stringify(ltiDeploymentIdCheckingEnabled))
+    .replaceAll('"__LTI_DEPLOYMENT_IDS__"', JSON.stringify(ltiDeploymentIds))
+    .replaceAll("'__LTI_DEPLOYMENT_IDS__'", JSON.stringify(ltiDeploymentIds))
     .replaceAll('"__SEB_DEBUG_ENABLED__"', JSON.stringify(debugEnabled))
     .replaceAll("'__SEB_DEBUG_ENABLED__'", JSON.stringify(debugEnabled))
     .replaceAll('"__SEB_DIAGNOSTIC_MODE__"', JSON.stringify(diagnosticsEnabled))

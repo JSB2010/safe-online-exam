@@ -60,7 +60,7 @@
             debugLog('Access code requirement detected, verifying stored Safe Online Exam requirement');
             if (await shouldShowSebLaunchPrompt(quizInfo)) {
                 debugLog('Stored Safe Online Exam requirement confirmed, showing browser launch prompt');
-                redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+                await redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
             } else {
                 debugLog('No stored Safe Online Exam requirement confirmed, allowing normal Canvas access');
             }
@@ -83,6 +83,7 @@
 
         resetAccessCodeAutomation();
         state.dismissedLaunchPromptKey = null;
+        state.launchPromptRequestKey = null;
         state.currentQuizKey = key;
         disconnectAccessCodeObserver();
         state.accessCodeRequestKey = null;
@@ -151,7 +152,7 @@
             debugLog('Verifying stored Safe Online Exam requirement for late-rendered access code challenge');
             if (await shouldShowSebLaunchPrompt(quizInfo)) {
                 debugLog('Stored Safe Online Exam requirement confirmed, showing browser launch prompt');
-                redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
+                await redirectToSebDownload(quizInfo.courseId, quizInfo.quizId);
             } else {
                 debugLog('No stored Safe Online Exam requirement confirmed, allowing normal Canvas access');
             }

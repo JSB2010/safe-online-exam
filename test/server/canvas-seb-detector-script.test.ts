@@ -8,6 +8,8 @@ import { readDetectorSourceSync } from "../../src/server/services/detector-sourc
 const DETECTOR_SOURCE = readDetectorSourceSync(join(process.cwd(), "src/server/assets/detector"));
 const APP_BASE_URL = "https://tool.example.edu";
 const CANVAS_BASE_URL = "https://canvas.example.edu";
+const LTI_CLIENT_ID = "10000000000001";
+const LTI_DEPLOYMENT_ID = "deployment-1";
 const DETECTOR_CONFIG_KEY = new SebConfigKeyService().computeConfigKey(
   Buffer.from(plist.build({ startURL: `${CANVAS_BASE_URL}/courses/11825/quizzes/23455/take` }))
 );
@@ -66,12 +68,195 @@ describe("Safe Online Exam detector script", () => {
     expect(context.document.getElementById("seb-launch-countdown-text")).toBeNull();
     expect(context.document.getElementById("seb-launch-countdown-bar")).toBeNull();
     expect(context.document.getElementById("seb-launch-view-page-button")).toBeNull();
+    expect(
+      context.fetch.mock.calls.some(([input]) => String(input).includes("/api/v1/courses/11825/external_tools"))
+    ).toBe(true);
 
     await vi.advanceTimersByTimeAsync(3_000);
     expect(context.location.href).toBe(`${CANVAS_BASE_URL}/courses/11825/quizzes/23455/take?user_id=7288`);
 
     context.document.querySelector<HTMLButtonElement>("#seb-launch-back-button")?.click();
     expect(context.historyBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the LTI launch from the Canvas API when course navigation is hidden", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      canvasExternalTools: [
+        {
+          id: 12,
+          version: "1.3",
+          developer_key_id: "different-client",
+          deployment_id: LTI_DEPLOYMENT_ID
+        },
+        {
+          id: 44,
+          version: "1.3",
+          developer_key_id: LTI_CLIENT_ID,
+          deployment_id: LTI_DEPLOYMENT_ID
+        }
+      ],
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form">
+            <label>Access Code <input name="access_code" type="password" /></label>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    const directLaunchUrl = new URL(openSebLink!.href);
+    expect(directLaunchUrl.pathname).toBe("/courses/11825/external_tools/44");
+    expect(directLaunchUrl.searchParams.get("launch_url")).toBe(
+      "https://tool.example.edu/seb/launch/classicquiz_23455"
+    );
+
+    const externalToolsCall = context.fetch.mock.calls.find(([input]) =>
+      String(input).includes("/api/v1/courses/11825/external_tools")
+    );
+    expect(externalToolsCall).toBeDefined();
+    const externalToolsUrl = new URL(String(externalToolsCall![0]));
+    expect(externalToolsUrl.origin).toBe(CANVAS_BASE_URL);
+    expect(externalToolsUrl.searchParams.get("include_parents")).toBe("true");
+    expect(externalToolsUrl.searchParams.get("placement")).toBe("course_navigation");
+    expect(externalToolsUrl.searchParams.get("per_page")).toBe("100");
+    expect(externalToolsCall![1]).toEqual(
+      expect.objectContaining({ credentials: "same-origin", method: "GET", cache: "no-store" })
+    );
+  });
+
+  it("uses the configured installation when a visible navigation label belongs to a different tool", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      body: `
+        <nav><a aria-label="Safe Online Exam" href="/courses/11825/external_tools/12">Safe Online Exam</a></nav>
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form"><input name="access_code" type="password" /></form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    expect(new URL(openSebLink!.href).pathname).toBe("/courses/11825/external_tools/44");
+  });
+
+  it("follows Canvas pagination to find the configured installation", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      canvasExternalToolPages: [
+        [{ id: 12, version: "1.3", developer_key_id: "different-client", deployment_id: LTI_DEPLOYMENT_ID }],
+        [{ id: 44, version: "1.3", developer_key_id: LTI_CLIENT_ID, deployment_id: LTI_DEPLOYMENT_ID }]
+      ],
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form"><input name="access_code" type="password" /></form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    const externalToolsCalls = context.fetch.mock.calls.filter(([input]) =>
+      String(input).includes("/api/v1/courses/11825/external_tools")
+    );
+    expect(externalToolsCalls).toHaveLength(2);
+    expect(new URL(String(externalToolsCalls[1][0])).searchParams.get("page")).toBe("2");
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    expect(new URL(openSebLink!.href).pathname).toBe("/courses/11825/external_tools/44");
+  });
+
+  it("accepts a different deployment when server deployment checking is disabled", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      deploymentIdCheckingEnabled: false,
+      canvasExternalTools: [
+        {
+          id: 44,
+          version: "1.3",
+          developer_key_id: LTI_CLIENT_ID,
+          deployment_id: "self-service-deployment"
+        }
+      ],
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form"><input name="access_code" type="password" /></form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    expect(new URL(openSebLink!.href).pathname).toBe("/courses/11825/external_tools/44");
+  });
+
+  it("retains the visible navigation link when the Canvas lookup is unavailable", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      canvasExternalToolsStatus: 503,
+      body: `
+        <nav><a aria-label="Safe Online Exam" href="/courses/11825/external_tools/44">Safe Online Exam</a></nav>
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form"><input name="access_code" type="password" /></form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    expect(new URL(openSebLink!.href).pathname).toBe("/courses/11825/external_tools/44");
+  });
+
+  it("does not send students to the course home when the Canvas installation cannot be resolved", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      canvasExternalTools: [
+        {
+          id: 44,
+          version: "1.3",
+          developer_key_id: LTI_CLIENT_ID,
+          deployment_id: "different-deployment"
+        }
+      ],
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form">
+            <label>Access Code <input name="access_code" type="password" /></label>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    expect(context.document.getElementById("seb-launch-open-link")).toBeNull();
+    expect(context.document.getElementById("seb-launch-retry-button")).not.toBeNull();
+    expect(context.document.body.textContent).toContain("could not locate its Canvas course installation");
+    expect(context.document.querySelector(`a[href="${CANVAS_BASE_URL}/courses/11825"]`)).toBeNull();
   });
 
   it("allows a normal Canvas Classic Quiz access code when the assessment is not configured for SEB", async () => {
@@ -233,7 +418,11 @@ describe("Safe Online Exam detector script", () => {
 
     expect(context.document.body.textContent).toContain("Open Safe Exam Browser");
     const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
-    expect(openSebLink?.href).toBe("https://canvas.example.edu/courses/11825");
+    const directLaunchUrl = new URL(openSebLink!.href);
+    expect(directLaunchUrl.pathname).toBe("/courses/11825/external_tools/44");
+    expect(directLaunchUrl.searchParams.get("launch_url")).toBe(
+      "https://tool.example.edu/seb/launch/newquiz:11825:437577"
+    );
 
     context.document.querySelector("main")?.appendChild(context.document.createElement("span"));
     await flushPromises();
@@ -2068,6 +2257,10 @@ interface DetectorContextOptions {
   debugResponse?: FetchResponse;
   sebRequired?: boolean;
   requirementFetchReject?: boolean;
+  canvasExternalTools?: Array<Record<string, unknown>>;
+  canvasExternalToolPages?: Array<Array<Record<string, unknown>>>;
+  canvasExternalToolsStatus?: number;
+  deploymentIdCheckingEnabled?: boolean;
   fetchResponses?: Record<string, FetchResponse>;
   safeExamBrowser?: unknown;
   openWindow?: ReturnType<typeof vi.fn>;
@@ -2093,7 +2286,7 @@ function createDetectorContext(options: DetectorContextOptions) {
     warn: vi.fn(),
     error: vi.fn()
   };
-  const fetch = vi.fn(async (input: string) => {
+  const fetch = vi.fn(async (input: string, _init?: RequestInit) => {
     const url = new URL(input);
     if (url.pathname === "/api/debug/canvas-detector-trace") {
       return jsonResponse({ enabled: true });
@@ -2103,6 +2296,28 @@ function createDetectorContext(options: DetectorContextOptions) {
         throw new Error("requirement service unavailable");
       }
       return jsonResponse({ success: true, sebRequired: options.sebRequired === true });
+    }
+    if (url.origin === CANVAS_BASE_URL && url.pathname === "/api/v1/courses/11825/external_tools") {
+      const page = Number(url.searchParams.get("page") || "1");
+      const configuredPages = options.canvasExternalToolPages;
+      const pageBody = configuredPages?.[page - 1];
+      const nextPageUrl =
+        configuredPages && page < configuredPages.length
+          ? `${CANVAS_BASE_URL}/api/v1/courses/11825/external_tools?page=${page + 1}`
+          : undefined;
+      return jsonArrayResponse(
+        pageBody ||
+          options.canvasExternalTools || [
+            {
+              id: 44,
+              version: "1.3",
+              developer_key_id: LTI_CLIENT_ID,
+              deployment_id: LTI_DEPLOYMENT_ID
+            }
+          ],
+        options.canvasExternalToolsStatus,
+        nextPageUrl
+      );
     }
     const response = options.fetchResponses?.[url.pathname];
     if (response) {
@@ -2143,10 +2358,14 @@ function createDetectorContext(options: DetectorContextOptions) {
     Event: dom.window.Event,
     async runDetector() {
       const debugEnabled = options.debugResponse?.enabled === true || options.debugResponse?.debugEnabled === true;
-      const source = DETECTOR_SOURCE.replaceAll('"__SEB_BASE_URL__"', JSON.stringify(APP_BASE_URL)).replaceAll(
-        '"__SEB_DEBUG_ENABLED__"',
-        JSON.stringify(debugEnabled)
-      );
+      const source = DETECTOR_SOURCE.replaceAll('"__SEB_BASE_URL__"', JSON.stringify(APP_BASE_URL))
+        .replaceAll('"__LTI_CLIENT_ID__"', JSON.stringify(LTI_CLIENT_ID))
+        .replaceAll(
+          '"__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__"',
+          JSON.stringify(options.deploymentIdCheckingEnabled !== false)
+        )
+        .replaceAll('"__LTI_DEPLOYMENT_IDS__"', JSON.stringify([LTI_DEPLOYMENT_ID]))
+        .replaceAll('"__SEB_DEBUG_ENABLED__"', JSON.stringify(debugEnabled));
       const execute = new Function(
         "window",
         "document",
@@ -2209,6 +2428,25 @@ function jsonResponse(body: FetchResponse) {
     },
     async text() {
       return typeof __text === "string" ? __text : JSON.stringify(payload);
+    }
+  };
+}
+
+function jsonArrayResponse(body: Array<Record<string, unknown>>, status = 200, nextPageUrl?: string) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    url: "",
+    headers: {
+      get(name: string) {
+        return name.toLowerCase() === "link" && nextPageUrl ? `<${nextPageUrl}>; rel="next"` : null;
+      }
+    },
+    async json() {
+      return body;
+    },
+    async text() {
+      return JSON.stringify(body);
     }
   };
 }

@@ -8,6 +8,9 @@
     'use strict';
 
     const SEB_DOWNLOAD_BASE_URL = "__SEB_BASE_URL__";
+    const LTI_CLIENT_ID = "__LTI_CLIENT_ID__";
+    const LTI_DEPLOYMENT_ID_CHECKING_ENABLED = "__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__";
+    const LTI_DEPLOYMENT_IDS = "__LTI_DEPLOYMENT_IDS__";
     const SERVER_DEBUG_ENABLED = "__SEB_DEBUG_ENABLED__";
     const SERVER_DIAGNOSTIC_MODE = "__SEB_DIAGNOSTIC_MODE__";
     // Diagnostic tracing ships event details (sanitized DOM/URL snapshots) to
@@ -20,6 +23,7 @@
     const DETECTOR_TRACE_BATCH_SIZE = 15;
     const LATE_ACCESS_CODE_CHECK_DELAY_MS = 300;
     const SEB_REQUIREMENT_CACHE_TTL_MS = 30 * 1000;
+    const CANVAS_EXTERNAL_TOOLS_MAX_PAGES = 20;
     const PENDING_REDIRECT_TTL_MS = 10 * 60 * 1000;
     const EXAM_SESSION_CAPABILITY_TTL_MS = 12 * 60 * 60 * 1000;
     const REDIRECT_FLAG_KEY = 'seb_pending_redirect';
@@ -156,6 +160,8 @@
         accessCodeSubmitClickKey: null,
         accessCodeChallengeHandledKey: null,
         dismissedLaunchPromptKey: null,
+        launchPromptRequestKey: null,
+        courseNavigationUrlRequests: new Map(),
         newQuizBeginObserver: null,
         newQuizBeginObserverTimer: null,
         newQuizBeginClickKey: null,
@@ -605,4 +611,3 @@
             setTimeout(maybeRedirectAfterSubmission, delay)
         );
     }
-

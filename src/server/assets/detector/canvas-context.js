@@ -400,8 +400,130 @@
         return null;
     }
 
-    function buildAssessmentLtiLaunchUrl(courseId, quizId) {
-        const courseNavigationUrl = findSebCourseNavigationUrl(courseId);
+    function canvasExternalToolUrl(courseId, toolId) {
+        const courseIdValue = String(courseId || '');
+        const toolIdValue = String(toolId || '');
+        if (!/^\d{1,20}$/u.test(courseIdValue) || !/^\d{1,20}$/u.test(toolIdValue)) {
+            return null;
+        }
+        return `${window.location.origin}/courses/${encodeURIComponent(courseIdValue)}/external_tools/${encodeURIComponent(toolIdValue)}`;
+    }
+
+    function matchingCanvasExternalToolUrl(courseId, tools) {
+        if (!Array.isArray(tools) || !String(LTI_CLIENT_ID || '').trim()) {
+            return null;
+        }
+        const clientId = String(LTI_CLIENT_ID);
+        const deploymentIdCheckingEnabled = LTI_DEPLOYMENT_ID_CHECKING_ENABLED === true || LTI_DEPLOYMENT_ID_CHECKING_ENABLED === 'true';
+        const deploymentIds = Array.isArray(LTI_DEPLOYMENT_IDS)
+            ? LTI_DEPLOYMENT_IDS.map(String).filter(Boolean)
+            : [];
+        const matchingTools = tools.filter((tool) => {
+            if (!tool || typeof tool !== 'object' || String(tool.developer_key_id || '') !== clientId) {
+                return false;
+            }
+            if (tool.version && String(tool.version) !== '1.3') {
+                return false;
+            }
+            return !deploymentIdCheckingEnabled || deploymentIds.includes(String(tool.deployment_id || ''));
+        });
+        for (const tool of matchingTools) {
+            const url = canvasExternalToolUrl(courseId, tool.id);
+            if (url) {
+                return url;
+            }
+        }
+        return null;
+    }
+
+    function nextCanvasExternalToolsPageUrl(response, courseId) {
+        const linkHeader = response.headers && typeof response.headers.get === 'function'
+            ? response.headers.get('Link') || response.headers.get('link')
+            : null;
+        if (!linkHeader) {
+            return null;
+        }
+        const expectedPath = `/api/v1/courses/${encodeURIComponent(courseId)}/external_tools`;
+        for (const entry of linkHeader.split(',')) {
+            const urlMatch = entry.match(/<([^>]+)>/u);
+            const relMatch = entry.match(/;\s*rel="?([^";]+)"?/iu);
+            if (!urlMatch || !relMatch || !relMatch[1].split(/\s+/u).includes('next')) {
+                continue;
+            }
+            try {
+                const nextUrl = new URL(urlMatch[1], window.location.origin);
+                if (nextUrl.origin === window.location.origin && nextUrl.pathname === expectedPath) {
+                    return nextUrl.href;
+                }
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    async function resolveSebCourseNavigationUrl(courseId) {
+        const navigationUrl = findSebCourseNavigationUrl(courseId);
+        const courseIdValue = String(courseId || '');
+        if (!/^\d{1,20}$/u.test(courseIdValue) || !String(LTI_CLIENT_ID || '').trim()) {
+            return navigationUrl;
+        }
+        const existingRequest = state.courseNavigationUrlRequests.get(courseIdValue);
+        if (existingRequest) {
+            return existingRequest;
+        }
+
+        const request = (async () => {
+            try {
+                const endpoint = new URL(`/api/v1/courses/${encodeURIComponent(courseIdValue)}/external_tools`, window.location.origin);
+                endpoint.searchParams.set('include_parents', 'true');
+                endpoint.searchParams.set('placement', 'course_navigation');
+                endpoint.searchParams.set('per_page', '100');
+                const tools = [];
+                const visitedPages = new Set();
+                let pageUrl = endpoint.href;
+                while (pageUrl) {
+                    if (visitedPages.has(pageUrl) || visitedPages.size >= CANVAS_EXTERNAL_TOOLS_MAX_PAGES) {
+                        throw new Error('Canvas external-tools pagination exceeded its safe limit');
+                    }
+                    visitedPages.add(pageUrl);
+                    const response = await fetch(pageUrl, {
+                        method: 'GET',
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        headers: { Accept: 'application/json' }
+                    });
+                    if (!response.ok) {
+                        throw new Error('Canvas returned HTTP ' + response.status);
+                    }
+                    const pageTools = await response.json();
+                    if (!Array.isArray(pageTools)) {
+                        throw new Error('Canvas returned an invalid external-tools response');
+                    }
+                    tools.push(...pageTools);
+                    const matchingUrl = matchingCanvasExternalToolUrl(courseIdValue, tools);
+                    if (matchingUrl) {
+                        return matchingUrl;
+                    }
+                    pageUrl = nextCanvasExternalToolsPageUrl(response, courseIdValue);
+                }
+                return null;
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'unknown error';
+                debugLog('Could not resolve the Safe Online Exam Canvas installation: ' + message, 'warn');
+                return navigationUrl;
+            }
+        })();
+        state.courseNavigationUrlRequests.set(courseIdValue, request);
+        const resolvedUrl = await request;
+        if (!resolvedUrl && state.courseNavigationUrlRequests.get(courseIdValue) === request) {
+            state.courseNavigationUrlRequests.delete(courseIdValue);
+        }
+        return resolvedUrl;
+    }
+
+    async function buildAssessmentLtiLaunchUrl(courseId, quizId) {
+        const courseNavigationUrl = await resolveSebCourseNavigationUrl(courseId);
         const rawContentId = String(quizId || '');
         const contentId = /^\d{1,20}$/u.test(rawContentId)
             ? `classicquiz_${rawContentId}`
@@ -427,7 +549,7 @@
         }
     }
 
-    function redirectToSebDownload(courseId, quizId) {
+    async function redirectToSebDownload(courseId, quizId) {
         if (document.getElementById(SEB_LAUNCH_PROMPT_ID)) {
             return;
         }
@@ -444,8 +566,23 @@
             debugLog('New Quiz SEB launch prompt was dismissed for this attempt');
             return;
         }
-        const secureLaunchUrl = buildAssessmentLtiLaunchUrl(courseId, quizId);
-        const fallbackUrl = `${window.location.origin}/courses/${encodeURIComponent(courseId)}`;
+        if (state.launchPromptRequestKey === promptKey) {
+            return;
+        }
+        state.launchPromptRequestKey = promptKey;
+        const secureLaunchUrl = await buildAssessmentLtiLaunchUrl(courseId, quizId);
+        if (state.launchPromptRequestKey === promptKey) {
+            state.launchPromptRequestKey = null;
+        }
+        const currentQuizInfo = extractQuizInfo();
+        if (
+            document.getElementById(SEB_LAUNCH_PROMPT_ID) ||
+            !currentQuizInfo ||
+            quizKey(currentQuizInfo) !== promptKey
+        ) {
+            return;
+        }
+        const launchUnavailableMessage = 'Safe Online Exam could not locate its Canvas course installation. Reload this page, or ask your instructor or Canvas administrator for help.';
 
         const message = document.createElement('div');
         message.id = SEB_LAUNCH_PROMPT_ID;
@@ -479,21 +616,23 @@
                     Safe Online Exam
                 </p>
                 <h2 id="seb-launch-dialog-title" style="color: #182230; margin: 0 0 12px; font-size: 24px; line-height: 1.15; font-weight: 800;">
-                    Open Safe Exam Browser
+                    ${secureLaunchUrl ? 'Open Safe Exam Browser' : 'Safe Online Exam needs attention'}
                 </h2>
                 <p style="margin: 0; font-size: 15px; line-height: 1.45; color: #667085;">
-                    ${isNewQuiz
+                    ${secureLaunchUrl && isNewQuiz
                         ? 'Open this assessment in Safe Exam Browser, or stay here to review previous attempts.'
-                        : 'Open this assessment in Safe Exam Browser.'}
+                        : secureLaunchUrl
+                            ? 'Open this assessment in Safe Exam Browser.'
+                            : escapeHtml(launchUnavailableMessage)}
                 </p>
                 </div>
                 <div style="display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 14px 32px 18px; background: #f8fafc; border-top: 1px solid #dbe2ea; flex-wrap: wrap;">
                         ${isNewQuiz
                             ? '<button id="seb-launch-view-page-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">View quiz page</button>'
                             : '<button id="seb-launch-back-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #cfd7e3; border-radius: 8px; background: #ffffff; color: #344054; font-weight: 800; cursor: pointer;">Back</button>'}
-                        <a id="seb-launch-open-link" href="${escapeHtml(secureLaunchUrl || fallbackUrl)}" rel="noopener noreferrer" referrerpolicy="no-referrer" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">
-                        ${secureLaunchUrl ? 'Open Safe Exam Browser' : 'Open Safe Online Exam'}
-                        </a>
+                        ${secureLaunchUrl
+                            ? `<a id="seb-launch-open-link" href="${escapeHtml(secureLaunchUrl)}" rel="noopener noreferrer" referrerpolicy="no-referrer" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; border-radius: 8px; background: #0b63ce; color: #ffffff; text-decoration: none; font-weight: 800;">Open Safe Exam Browser</a>`
+                            : '<button id="seb-launch-retry-button" type="button" style="min-height: 38px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 0; border-radius: 8px; background: #0b63ce; color: #ffffff; font-weight: 800; cursor: pointer;">Reload page</button>'}
                 </div>
             </div>
         `;
@@ -512,6 +651,7 @@
         const backButton = document.getElementById('seb-launch-back-button');
         const viewPageButton = document.getElementById('seb-launch-view-page-button');
         const openLink = document.getElementById('seb-launch-open-link');
+        const retryButton = document.getElementById('seb-launch-retry-button');
         if (backButton) {
             backButton.addEventListener('click', () => {
                 if (window.history && typeof window.history.back === 'function') {
@@ -528,6 +668,11 @@
                 dismissPrompt(true);
             });
         }
+        if (retryButton) {
+            retryButton.addEventListener('click', () => {
+                window.location.reload();
+            });
+        }
         message.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 dismissPrompt(isNewQuiz);
@@ -535,6 +680,7 @@
         });
         if (openLink) {
             openLink.focus();
+        } else if (retryButton) {
+            retryButton.focus();
         }
     }
-
