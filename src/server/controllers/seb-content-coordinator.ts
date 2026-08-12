@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, scryptSync } from "node:crypto";
 import type { Response } from "express";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
 import {
@@ -52,6 +52,7 @@ const SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES = 5_000;
 export class SebContentCoordinator {
   private readonly configDownloadCache = new Map<string, { expiresAt: number; value: Promise<Buffer> }>();
   private readonly requirementStatusCache = new Map<string, { expiresAt: number; value: Promise<boolean> }>();
+  private managedQuitPolicyDigestValue?: string;
 
   constructor(
     private readonly config: AppConfig,
@@ -342,9 +343,14 @@ export class SebContentCoordinator {
   }
 
   managedQuitPolicyDigest(): string {
-    return createHmac("sha256", this.config.value.security.sessionSecret)
-      .update(`managed-quit-policy-v1\0${this.config.value.seb.defaultQuitPassword || ""}`, "utf8")
-      .digest("base64url");
+    if (!this.managedQuitPolicyDigestValue) {
+      this.managedQuitPolicyDigestValue = scryptSync(
+        this.config.value.seb.defaultQuitPassword || "",
+        `managed-quit-policy-v2\0${this.config.value.security.sessionSecret}`,
+        32
+      ).toString("base64url");
+    }
+    return this.managedQuitPolicyDigestValue;
   }
 
   async generateConfigUncached(
