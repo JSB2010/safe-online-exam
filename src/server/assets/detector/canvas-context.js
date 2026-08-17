@@ -409,6 +409,40 @@
         return `${window.location.origin}/courses/${encodeURIComponent(courseIdValue)}/external_tools/${encodeURIComponent(toolIdValue)}`;
     }
 
+    function matchingCanvasDeveloperKeyId(developerKeyId, clientId) {
+        const developerKeyIdValue = String(developerKeyId || '').replace(/^0+(?=\d)/u, '');
+        const clientIdValue = String(clientId || '').replace(/^0+(?=\d)/u, '');
+        if (developerKeyIdValue && developerKeyIdValue !== '0' && developerKeyIdValue === clientIdValue) {
+            return true;
+        }
+        if (
+            !/^\d{1,20}$/u.test(developerKeyIdValue) ||
+            !/^\d{1,20}$/u.test(clientIdValue) ||
+            developerKeyIdValue === '0' ||
+            clientIdValue === '0'
+        ) {
+            return false;
+        }
+
+        // Canvas (through Switchman) reserves ten trillion IDs per shard. Its
+        // LTI client ID can therefore be globally qualified while the External
+        // Tools API returns the same DeveloperKey as a shard-local ID.
+        const canvasShardIdWidth = 13;
+        const developerKeyIsGlobal = developerKeyIdValue.length > canvasShardIdWidth;
+        const clientIdIsGlobal = clientIdValue.length > canvasShardIdWidth;
+        if (developerKeyIsGlobal === clientIdIsGlobal) {
+            return false;
+        }
+
+        const localDeveloperKeyId = developerKeyIsGlobal
+            ? developerKeyIdValue.slice(-canvasShardIdWidth).replace(/^0+(?=\d)/u, '')
+            : developerKeyIdValue;
+        const localClientId = clientIdIsGlobal
+            ? clientIdValue.slice(-canvasShardIdWidth).replace(/^0+(?=\d)/u, '')
+            : clientIdValue;
+        return localDeveloperKeyId !== '0' && localDeveloperKeyId === localClientId;
+    }
+
     function matchingCanvasExternalToolUrl(courseId, tools) {
         if (!Array.isArray(tools) || !String(LTI_CLIENT_ID || '').trim()) {
             return null;
@@ -419,7 +453,7 @@
             ? LTI_DEPLOYMENT_IDS.map(String).filter(Boolean)
             : [];
         const matchingTools = tools.filter((tool) => {
-            if (!tool || typeof tool !== 'object' || String(tool.developer_key_id || '') !== clientId) {
+            if (!tool || typeof tool !== 'object' || !matchingCanvasDeveloperKeyId(tool.developer_key_id, clientId)) {
                 return false;
             }
             if (tool.version && String(tool.version) !== '1.3') {
