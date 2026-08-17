@@ -30,7 +30,7 @@ substitutions:
   _SERVICE_ACCOUNT: seb-canvas-prod
 
 steps:
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"
     args:
       - "$PROJECT_ID"
@@ -38,7 +38,7 @@ steps:
       - "${_LOCATION}"
       - "${_OAUTH_TOKEN_ENCRYPTION_MODE}"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/verify-github-release-attestation.sh"
     secretEnv: ["GH_TOKEN"]
     args:
@@ -48,7 +48,7 @@ steps:
       - "${_SOURCE_DIGEST}"
       - "${_RELEASE_TAG}"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/create-binary-authorization-attestation.sh"
     args:
       - "$PROJECT_ID"
@@ -60,13 +60,13 @@ steps:
       - "${_BINAUTHZ_KMS_KEY}"
       - "${_BINAUTHZ_KMS_KEY_VERSION}"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/write-image-digest.sh"
     args:
       - "${_IMAGE_DIGEST}"
       - "/workspace/safe-online-exam-release.digest"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_IMAGE_REPOSITORY}"
@@ -84,11 +84,11 @@ steps:
       - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=${_SECRET_PREFIX}_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "gcloud"
     args: ["run", "jobs", "execute", "${_SERVICE}-migrate", "--region=${_LOCATION}", "--wait"]
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_IMAGE_REPOSITORY}"
@@ -106,7 +106,7 @@ steps:
       - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=${_SECRET_PREFIX}_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:38b6345faa0554a3bfae9a79f175379cc8e95d2290dd7070848e2f8497e62428"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_IMAGE_REPOSITORY}"

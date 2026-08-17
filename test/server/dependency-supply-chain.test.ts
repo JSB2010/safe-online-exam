@@ -143,7 +143,7 @@ describe("dependency supply-chain policy", () => {
       "npm run verify:dependency-policy:offline && npm rebuild esbuild --ignore-scripts=false && node scripts/verify-esbuild.mjs"
     );
     expect(canonicalPackage.allowScripts).toEqual({
-      "esbuild@0.28.1": true,
+      "esbuild@0.28.2": true,
       fsevents: false
     });
   });
