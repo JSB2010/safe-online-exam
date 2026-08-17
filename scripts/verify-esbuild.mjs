@@ -1,6 +1,6 @@
 import { transformSync, version } from "esbuild";
 
-if (version !== "0.28.1") {
+if (version !== "0.28.2") {
   throw new Error(`Unexpected esbuild version after trusted rebuild: ${version}`);
 }
 

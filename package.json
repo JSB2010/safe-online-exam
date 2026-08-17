@@ -71,7 +71,8 @@
     "reflect-metadata": "0.2.2"
   },
   "overrides": {
-    "multer": "2.2.0"
+    "multer": "2.2.0",
+    "nanoid": "3.3.18"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -97,7 +98,7 @@
     "vitest": "4.1.10"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true,
+    "esbuild@0.28.2": true,
     "fsevents": false
   }
 }
