@@ -15,15 +15,15 @@ const APPROVED_LIFECYCLE_ENTRIES = new Map([
   [
     "node_modules/esbuild",
     {
-      version: "0.28.1",
-      resolved: "https://registry.npmjs.org/esbuild/-/esbuild-0.28.1.tgz",
-      integrity: "sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw=="
+      version: "0.28.2",
+      resolved: "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+      integrity: "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA=="
     }
   ]
 ]);
 const EXPLICITLY_DENIED_LIFECYCLE_PACKAGES = new Set(["fsevents"]);
 const EXPECTED_SCRIPT_POLICY = {
-  "esbuild@0.28.1": true,
+  "esbuild@0.28.2": true,
   fsevents: false
 };
 const EXPECTED_NPM_CONFIG = new Map([
@@ -259,7 +259,7 @@ if (lockfile.lockfileVersion !== 3) {
 
 const actualPolicy = packageJson.allowScripts || {};
 if (JSON.stringify(actualPolicy) !== JSON.stringify(EXPECTED_SCRIPT_POLICY)) {
-  failures.push("package.json allowScripts must approve only esbuild@0.28.1 and explicitly deny fsevents");
+  failures.push("package.json allowScripts must approve only esbuild@0.28.2 and explicitly deny fsevents");
 }
 
 for (const section of ["dependencies", "devDependencies"]) {
