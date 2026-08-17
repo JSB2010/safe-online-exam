@@ -1,11 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import type { CanvasOAuthGrantType, ContentItem, OAuthToken, Quiz } from "../../shared/models.js";
-import {
-  CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES,
-  CANVAS_OAUTH_SCOPE_VERSION,
-  CANVAS_REQUIRED_OAUTH_SCOPES,
-  newQuizContentId
-} from "../../shared/models.js";
+import { newQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import {
@@ -15,145 +10,64 @@ import {
   UpstreamResponseTooLargeError
 } from "../http/bounded-response.js";
 import { isUpstreamRequestTimeout, withUpstreamDeadline } from "../http/upstream-deadline.js";
+import {
+  canvasAccountSummary,
+  canvasAdminCourse,
+  expiresAtFromSeconds,
+  hasCurrentRequiredScopes,
+  hasRequiredAdminScopes,
+  isCanvasOAuthTokenResponse,
+  isJsonObject,
+  isNewQuizAssignment,
+  isSafeReadMethod,
+  normalizedCanvasCourseCode,
+  normalizedCanvasCourseName,
+  normalizedIdentityValue,
+  normalizeStoreAccessTokenOptions,
+  oauthTokenId,
+  shouldRefreshToken,
+  withCanvasPage
+} from "./canvas-api-helpers.js";
+import {
+  CanvasApiAuthorizationError,
+  CanvasApiPermissionError,
+  CanvasApiRequestError,
+  type CanvasAccountResponse,
+  type CanvasAccountSummary,
+  type CanvasAdminCourse,
+  type CanvasAdminCourseResponse,
+  type CanvasAssignmentResponse,
+  type CanvasEnrollmentTerm,
+  type CanvasEnrollmentTermResponse,
+  type CanvasInstructorCourse,
+  type CanvasInstructorCourseResponse,
+  type CanvasNewQuizResponse,
+  type CanvasOAuthTokenResponse,
+  type CanvasQuizResponse,
+  type StoreAccessTokenOptions
+} from "./canvas-api-types.js";
 
-interface CanvasQuizResponse {
-  id: number | string;
-  title?: string;
-  description?: string;
-  html_url?: string;
-  quiz_type?: string;
-  published?: boolean;
-  unlock_at?: string | null;
-  lock_at?: string | null;
-  access_code?: string | null;
-}
-
-interface CanvasAssignmentResponse {
-  id: number | string;
-  name?: string;
-  description?: string;
-  html_url?: string;
-  url?: string;
-  external_tool_tag_attributes?: {
-    url?: string;
-    content_id?: string | number;
-  };
-  is_quiz_assignment?: boolean;
-  quiz_lti?: boolean;
-  published?: boolean;
-  unlock_at?: string | null;
-  lock_at?: string | null;
-}
-
-interface CanvasNewQuizResponse {
-  title?: string;
-  instructions?: string | null;
-  description?: string | null;
-  canvas_launch_url?: string | null;
-  launch_url?: string | null;
-  resource_link_uuid?: string | null;
-  lookup_uuid?: string | null;
-  quiz_settings?: {
-    require_student_access_code?: boolean;
-    student_access_code?: string | null;
-  };
-}
-
-export interface CanvasAdminCourse {
-  id: string;
-  name: string;
-  courseCode: string | null;
-  accountId: string;
-  rootAccountId: string | null;
-  workflowState: string | null;
-  concluded: boolean;
-  termId: string | null;
-  termName: string | null;
-  teacherNames: string[];
-}
-
-/** A Canvas course in which the current OAuth user has a teacher enrollment. */
-export interface CanvasInstructorCourse {
-  id: string;
-  name: string;
-  courseCode: string | null;
-}
-
-interface CanvasInstructorCourseResponse {
-  id: number | string;
-  name?: string;
-  course_code?: string;
-}
-
-interface CanvasAdminCourseResponse {
-  id: number | string;
-  name?: string;
-  course_code?: string;
-  account_id?: number | string;
-  root_account_id?: number | string;
-  workflow_state?: string;
-  concluded?: boolean;
-  enrollment_term_id?: number | string;
-  term?: { id?: number | string; name?: string };
-  teachers?: Array<{ display_name?: string; name?: string }>;
-}
-
-export interface CanvasEnrollmentTerm {
-  id: string;
-  name: string;
-  startAt: string | null;
-  endAt: string | null;
-  workflowState: string | null;
-}
-
-interface CanvasEnrollmentTermResponse {
-  id: number | string;
-  name?: string;
-  start_at?: string | null;
-  end_at?: string | null;
-  workflow_state?: string;
-}
-
-export interface CanvasAccountSummary {
-  id: string;
-  name: string;
-  parentAccountId: string | null;
-  rootAccountId: string;
-}
-
-interface CanvasAccountResponse {
-  id: number | string;
-  name?: string;
-  parent_account_id?: number | string | null;
-  root_account_id?: number | string | null;
-}
-
-interface CanvasOAuthTokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-}
-
-interface StoreAccessTokenOptions {
-  grantType?: CanvasOAuthGrantType;
-  refreshToken?: string | null;
-  scope?: string | null;
-  expiresIn?: number | null;
-  expiresAt?: string | null;
-  requestedScopes?: string[] | null;
-  oauthScopeVersion?: number | null;
-  displayName?: string | null;
-  email?: string | null;
-}
-
-const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 const CANVAS_DISCOVERY_PAGE_SIZE = 100;
 const CANVAS_DISCOVERY_MAX_PAGES = 100;
 export const CANVAS_API_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 export const CANVAS_OAUTH_RESPONSE_MAX_BYTES = 64 * 1024;
 export const CANVAS_API_USER_AGENT = "SafeOnlineExam/1.0";
 export const CANVAS_SESSION_TOKEN_SCOPE = "url:GET|/api/v1/login/session_token";
+
+export {
+  CanvasApiAuthorizationError,
+  CanvasApiPermissionError,
+  CanvasApiRequestError,
+  isCanvasApiAuthorizationError,
+  isCanvasApiPermissionError,
+  isCanvasApiRequestError
+} from "./canvas-api-types.js";
+export type {
+  CanvasAccountSummary,
+  CanvasAdminCourse,
+  CanvasEnrollmentTerm,
+  CanvasInstructorCourse
+} from "./canvas-api-types.js";
 
 @Injectable()
 export class CanvasApiService {
@@ -265,7 +179,7 @@ export class CanvasApiService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<string | null> {
-    const url = `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}`;
+    const url = this.classicQuizUrl(courseId, quizId);
     const response = await this.request<unknown>(userId, url, {}, grantType);
     if (!isJsonObject(response)) {
       throw new CanvasApiRequestError("Canvas did not return a valid Classic Quiz response.", userId, url, 502);
@@ -289,7 +203,7 @@ export class CanvasApiService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<string | null> {
-    const url = `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`;
+    const url = this.newQuizUrl(courseId, assignmentId);
     const response = await this.request<unknown>(userId, url, {}, grantType);
     if (!isJsonObject(response)) {
       throw new CanvasApiRequestError("Canvas did not return a valid New Quiz response.", userId, url, 502);
@@ -320,9 +234,47 @@ export class CanvasApiService {
     userId: string,
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<boolean> {
+    return this.updateClassicQuizAccessCode(courseId, quizId, accessCode, userId, grantType);
+  }
+
+  async removeQuizAccessCode(
+    courseId: string,
+    quizId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<boolean> {
+    return this.updateClassicQuizAccessCode(courseId, quizId, "", userId, grantType);
+  }
+
+  async setNewQuizAccessCode(
+    courseId: string,
+    assignmentId: string,
+    accessCode: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<boolean> {
+    return this.updateNewQuizAccessCode(courseId, assignmentId, accessCode, userId, grantType);
+  }
+
+  async removeNewQuizAccessCode(
+    courseId: string,
+    assignmentId: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType = "instructor"
+  ): Promise<boolean> {
+    return this.updateNewQuizAccessCode(courseId, assignmentId, null, userId, grantType);
+  }
+
+  private async updateClassicQuizAccessCode(
+    courseId: string,
+    quizId: string,
+    accessCode: string,
+    userId: string,
+    grantType: CanvasOAuthGrantType
+  ): Promise<boolean> {
     await this.request(
       userId,
-      `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}`,
+      this.classicQuizUrl(courseId, quizId),
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -333,62 +285,20 @@ export class CanvasApiService {
     return true;
   }
 
-  async removeQuizAccessCode(
-    courseId: string,
-    quizId: string,
-    userId: string,
-    grantType: CanvasOAuthGrantType = "instructor"
-  ): Promise<boolean> {
-    await this.request(
-      userId,
-      `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}`,
-      {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ quiz: { access_code: "" } })
-      },
-      grantType
-    );
-    return true;
-  }
-
-  async setNewQuizAccessCode(
+  private async updateNewQuizAccessCode(
     courseId: string,
     assignmentId: string,
-    accessCode: string,
+    accessCode: string | null,
     userId: string,
-    grantType: CanvasOAuthGrantType = "instructor"
+    grantType: CanvasOAuthGrantType
   ): Promise<boolean> {
     const body = new URLSearchParams({
-      "quiz[quiz_settings][require_student_access_code]": "true",
-      "quiz[quiz_settings][student_access_code]": accessCode
+      "quiz[quiz_settings][require_student_access_code]": String(accessCode !== null),
+      "quiz[quiz_settings][student_access_code]": accessCode || ""
     });
     await this.request(
       userId,
-      `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body
-      },
-      grantType
-    );
-    return true;
-  }
-
-  async removeNewQuizAccessCode(
-    courseId: string,
-    assignmentId: string,
-    userId: string,
-    grantType: CanvasOAuthGrantType = "instructor"
-  ): Promise<boolean> {
-    const body = new URLSearchParams({
-      "quiz[quiz_settings][require_student_access_code]": "false",
-      "quiz[quiz_settings][student_access_code]": ""
-    });
-    await this.request(
-      userId,
-      `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`,
+      this.newQuizUrl(courseId, assignmentId),
       {
         method: "PATCH",
         headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -932,6 +842,14 @@ export class CanvasApiService {
     return url.toString();
   }
 
+  private classicQuizUrl(courseId: string, quizId: string): string {
+    return `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}`;
+  }
+
+  private newQuizUrl(courseId: string, assignmentId: string): string {
+    return `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`;
+  }
+
   private async hydrateNewQuiz(
     courseId: string,
     assignmentId: string,
@@ -942,7 +860,7 @@ export class CanvasApiService {
     try {
       const detail = await this.request<CanvasNewQuizResponse>(
         userId,
-        `${this.getNewQuizApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(assignmentId)}`,
+        this.newQuizUrl(courseId, assignmentId),
         {},
         grantType
       );
@@ -958,195 +876,4 @@ export class CanvasApiService {
       return fallback;
     }
   }
-}
-
-export class CanvasApiAuthorizationError extends Error {
-  readonly responseBody = "";
-
-  constructor(
-    message: string,
-    readonly userId: string,
-    readonly status?: number
-  ) {
-    super(message);
-    this.name = "CanvasApiAuthorizationError";
-  }
-}
-
-export function isCanvasApiAuthorizationError(error: unknown): error is CanvasApiAuthorizationError {
-  return error instanceof CanvasApiAuthorizationError;
-}
-
-export class CanvasApiPermissionError extends Error {
-  readonly responseBody = "";
-
-  constructor(
-    message: string,
-    readonly userId: string,
-    readonly url: string,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "CanvasApiPermissionError";
-  }
-}
-
-export function isCanvasApiPermissionError(error: unknown): error is CanvasApiPermissionError {
-  return error instanceof CanvasApiPermissionError;
-}
-
-export class CanvasApiRequestError extends Error {
-  readonly responseBody = "";
-
-  constructor(
-    message: string,
-    readonly userId: string,
-    readonly url: string,
-    readonly status: number
-  ) {
-    super(message);
-    this.name = "CanvasApiRequestError";
-  }
-}
-
-export function isCanvasApiRequestError(error: unknown): error is CanvasApiRequestError {
-  return error instanceof CanvasApiRequestError;
-}
-
-function normalizeStoreAccessTokenOptions(
-  scopeOrOptions?: string | StoreAccessTokenOptions | null
-): StoreAccessTokenOptions {
-  if (!scopeOrOptions) {
-    return {};
-  }
-  if (typeof scopeOrOptions === "string") {
-    return { scope: scopeOrOptions };
-  }
-  return scopeOrOptions;
-}
-
-function oauthTokenId(userId: string, grantType: CanvasOAuthGrantType): string {
-  void grantType;
-  return userId;
-}
-
-function canvasAdminCourse(course: CanvasAdminCourseResponse): CanvasAdminCourse {
-  const id = String(course.id || "");
-  const accountId = String(course.account_id || "");
-  if (!/^\d+$/u.test(id) || !/^\d+$/u.test(accountId)) {
-    throw new Error("Canvas returned an invalid administrative course record");
-  }
-  const rootAccountId = course.root_account_id === undefined ? null : String(course.root_account_id);
-  return {
-    id,
-    name: course.name || "Unnamed course",
-    courseCode: course.course_code || null,
-    accountId,
-    rootAccountId: rootAccountId && /^\d+$/u.test(rootAccountId) ? rootAccountId : null,
-    workflowState: course.workflow_state || null,
-    concluded: course.concluded === true,
-    termId: String(course.term?.id || course.enrollment_term_id || "") || null,
-    termName: course.term?.name || null,
-    teacherNames: (course.teachers || []).map((teacher) => teacher.display_name || teacher.name || "").filter(Boolean)
-  };
-}
-
-function normalizedCanvasCourseName(value: string | undefined, courseId: string): string {
-  const normalized = value?.trim().replace(/\s+/gu, " ");
-  return normalized || `Course ${courseId}`;
-}
-
-function normalizedCanvasCourseCode(value: string | undefined): string | null {
-  const normalized = value?.trim().replace(/\s+/gu, " ");
-  return normalized || null;
-}
-
-function canvasAccountSummary(account: CanvasAccountResponse): CanvasAccountSummary {
-  const id = String(account.id || "");
-  const parentAccountId = account.parent_account_id === null ? null : String(account.parent_account_id || "");
-  const rootAccountId = account.root_account_id === null ? id : String(account.root_account_id || id);
-  if (!/^\d+$/u.test(id) || !/^\d+$/u.test(rootAccountId)) {
-    throw new Error("Canvas returned an invalid administrative account record");
-  }
-  return {
-    id,
-    name: account.name || "Canvas account",
-    parentAccountId: parentAccountId && /^\d+$/u.test(parentAccountId) ? parentAccountId : null,
-    rootAccountId
-  };
-}
-
-function expiresAtFromSeconds(expiresIn?: number | null): string | null {
-  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
-    return null;
-  }
-  return new Date(Date.now() + expiresIn * 1000).toISOString();
-}
-
-function shouldRefreshToken(token: OAuthToken): boolean {
-  if (!token.refreshToken || !token.expiresAt) {
-    return false;
-  }
-  const expiresAt = Date.parse(token.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt - TOKEN_REFRESH_SKEW_MS <= Date.now();
-}
-
-function hasCurrentRequiredScopes(token: OAuthToken | null | undefined, grantType: CanvasOAuthGrantType): boolean {
-  if (token?.oauthScopeVersion !== CANVAS_OAUTH_SCOPE_VERSION || !token.requestedScopes) {
-    return false;
-  }
-  const requiredScopes =
-    grantType === "account_admin"
-      ? [...CANVAS_REQUIRED_OAUTH_SCOPES, ...CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES]
-      : CANVAS_REQUIRED_OAUTH_SCOPES;
-  return requiredScopes.every((scope) => token.requestedScopes!.includes(scope));
-}
-
-function hasRequiredAdminScopes(scopes: readonly string[] | null | undefined): boolean {
-  return !!scopes && CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES.every((scope) => scopes.includes(scope));
-}
-
-function normalizedIdentityValue(value: string | null | undefined, maximumLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().replace(/\s+/gu, " ");
-  return normalized && normalized.length <= maximumLength ? normalized : undefined;
-}
-
-function isSafeReadMethod(method?: string): boolean {
-  const normalized = (method || "GET").toUpperCase();
-  return normalized === "GET" || normalized === "HEAD";
-}
-
-function withCanvasPage(firstPageUrl: string, page: number): string {
-  const url = new URL(firstPageUrl);
-  url.searchParams.set("page", String(page));
-  return url.toString();
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isCanvasOAuthTokenResponse(value: unknown): value is CanvasOAuthTokenResponse {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const token = value as Record<string, unknown>;
-  return (
-    typeof token.access_token === "string" &&
-    token.access_token.length > 0 &&
-    (token.refresh_token === undefined || typeof token.refresh_token === "string") &&
-    (token.scope === undefined || typeof token.scope === "string") &&
-    (token.expires_in === undefined || (typeof token.expires_in === "number" && Number.isFinite(token.expires_in)))
-  );
-}
-
-function isNewQuizAssignment(assignment: CanvasAssignmentResponse): boolean {
-  if (assignment.quiz_lti || assignment.is_quiz_assignment) {
-    return true;
-  }
-  const url = assignment.external_tool_tag_attributes?.url || "";
-  return url.includes("new_quizzes") || url.includes("quiz-lti") || url.includes("external_tools");
 }

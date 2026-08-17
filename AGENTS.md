@@ -181,16 +181,16 @@ Important variables:
 
 ```text
 src/
-  client/              React UI and styles
+  client/              React router, role-focused features, shared UI/helpers, and ordered styles
   server/
-    assets/            Canvas detector script
+    assets/            Ordered Canvas detector source fragments
     config/            environment config
-    controllers/       HTTP controllers
-    data/              PostgreSQL migrations/repositories and in-memory test repositories
-    http/              app shell, CORS, URL, and API error helpers
-    services/          Canvas, LTI, quiz, content, SEB behavior
+    controllers/       HTTP route controllers plus route-specific coordinators/helpers
+    data/              PostgreSQL migrations/modular stores and in-memory test repositories
+    http/              app shell, static-asset delivery, CORS, URL, and API error helpers
+    services/          Canvas, LTI, assessment, content, and SEB behavior modules
     types/             Express/session type augmentation
-  shared/              shared domain models
+  shared/              Shared domain model modules and compatibility barrel
 test/
   e2e/                 Playwright browser tests
   server/              Vitest unit/service tests

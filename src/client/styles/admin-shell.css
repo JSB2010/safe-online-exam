@@ -1,0 +1,127 @@
+/* Root-account administrator workspace */
+.admin-shell {
+  width: min(1440px, calc(100vw - 32px));
+}
+
+.admin-summary-pills {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.admin-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 5px;
+  background: #eef2f6;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.admin-tab {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 8px 10px;
+  color: #475467;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.admin-tab:hover {
+  color: #1d2939;
+  background: rgb(255 255 255 / 58%);
+}
+
+.admin-tab.active {
+  color: #175cd3;
+  background: #ffffff;
+  border-color: #dbe2ea;
+  box-shadow: 0 1px 3px rgb(16 24 40 / 10%);
+}
+
+.admin-tab:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 24%);
+  outline-offset: 1px;
+}
+
+.admin-tab-icon,
+.admin-settings-icon,
+.admin-preset-icon,
+.admin-course-preset-icon {
+  display: grid;
+  place-items: center;
+  color: #475467;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.admin-tab-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.admin-tab.active .admin-tab-icon {
+  color: #175cd3;
+  background: #eff8ff;
+  border-color: #b2ddff;
+}
+
+.admin-tab > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-tab strong,
+.admin-tab small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-tab strong {
+  font-size: 13px;
+}
+
+.admin-tab small {
+  color: #667085;
+  font-size: 11px;
+}
+
+.admin-tab-count {
+  min-width: 24px;
+  padding: 3px 6px;
+  color: #475467;
+  text-align: center;
+  background: #ffffff;
+  border: 1px solid #dbe2ea;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-page-heading,
+.admin-settings-section-heading,
+.admin-preset-card-header,
+.admin-preset-card footer,
+.admin-course-presets-heading,
+.admin-assessment-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}

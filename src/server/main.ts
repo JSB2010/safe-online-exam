@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { join } from "node:path";
 import cookieParser from "cookie-parser";
+import compression from "compression";
 import express from "express";
 import session from "express-session";
 import { NestFactory } from "@nestjs/core";
@@ -11,6 +12,7 @@ import { RepositoryProvider } from "./data/repositories.js";
 import { RepositorySessionStore } from "./data/session-store.js";
 import { corsOptionsForRequest } from "./http/cors.js";
 import { applySecurityHeaders } from "./http/security-headers.js";
+import { setClientAssetCacheHeaders } from "./http/static-assets.js";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
@@ -46,14 +48,24 @@ async function bootstrap(): Promise<void> {
     })
   );
 
+  // Compress only public code assets. Dynamic application and API responses
+  // can contain user-specific data, while these files are identical for every
+  // caller and account for most browser transfer bytes.
+  const compressPublicCode = compression({ threshold: 1024 });
+  expressApp.use(
+    ["/js/canvas-seb-detector.js", "/api/seb/canvas-detector.js", "/js/canvas-seb-theme-loader.js"],
+    compressPublicCode
+  );
+
   expressApp.use(
     "/assets",
+    compressPublicCode,
     express.static(join(process.cwd(), "dist/client/assets"), {
       etag: true,
       lastModified: true,
       maxAge: 0,
-      setHeaders(response) {
-        response.setHeader("cache-control", "no-cache");
+      setHeaders(response, assetPath) {
+        setClientAssetCacheHeaders(response, assetPath);
       }
     })
   );

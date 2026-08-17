@@ -104,8 +104,12 @@ the executable contract:
   `src/server/config/app-config.ts`;
 - public routes: `src/server/controllers/`;
 - data schema: `src/server/data/migrations/`;
-- Canvas OAuth scopes and content IDs: `src/shared/models.ts`;
-- generated SEB policy: `src/server/services/seb-configuration.service.ts`;
+- Canvas OAuth scopes and content IDs: `src/shared/models/` through the stable `src/shared/models.ts` barrel;
+- generated SEB policy: `src/server/services/seb-configuration.service.ts` and `seb-configuration-policy.ts`;
+- Canvas detector source and assembly: `src/server/assets/detector/` and `src/server/services/detector-source.ts`;
+- client route loading and static delivery: `vite.config.ts`,
+  `src/client/app.tsx`, `src/server/http/app-shell.ts`,
+  `src/server/http/static-assets.ts`, and `src/server/main.ts`;
 - maintained deployment behavior: `Dockerfile`, `compose*.yaml`,
   `cloudbuild*.yaml`, `deploy/`, and `scripts/`;
 - verification: `package.json`, `test/`, and `.github/workflows/`.

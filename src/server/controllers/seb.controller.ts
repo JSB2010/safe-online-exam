@@ -1,18 +1,8 @@
-import { createHash } from "node:crypto";
 import { Controller, Get, Head, Post, Param, Query, Req, Res, Body, Headers } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { regenerateSession, saveSession } from "../http/session-lifecycle.js";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
-import {
-  allowlistEntriesForExternalTools,
-  classicQuizContentId,
-  enabledExternalTools,
-  extractClassicQuizId,
-  isYouTubeVideoTool,
-  parseNewQuizContentId,
-  youtubeVideoId,
-  urlRulesToAllowedEntries
-} from "../../shared/models.js";
+import { parseNewQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { apiError } from "../http/api-error.js";
 import { createSebConfigGrantActionToken } from "../http/action-token.js";
@@ -20,11 +10,11 @@ import { absoluteUrl, sebSchemeUrl } from "../http/request-url.js";
 import { requireSebConfigGrantRequestIntegrity } from "../http/request-integrity.js";
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 import {
-  createVerifiedLtiPrincipal,
-  isVerifiedInstructor,
-  isVerifiedStudent,
-  verifiedLtiPrincipal
-} from "../security/verified-lti-principal.js";
+  setPrivateNoStoreResponseHeaders,
+  setSebDownloadResponseHeaders,
+  setSensitiveSebResponseHeaders
+} from "../http/response-headers.js";
+import { createVerifiedLtiPrincipal, verifiedLtiPrincipal } from "../security/verified-lti-principal.js";
 import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
 import { consumePublicBudget } from "../security/public-admission.js";
 import { DistributedAdmissionService, hasBoundedLtiValidationEnvelope } from "../security/distributed-admission.js";
@@ -32,7 +22,7 @@ import {
   clearLtiOidcBrowserTransactionCookie,
   matchingLtiOidcBrowserTransactionCookie
 } from "../security/lti-oidc-browser-binding.js";
-import { AssessmentService, CourseResetInProgressError } from "../services/assessment.service.js";
+import { AssessmentService } from "../services/assessment.service.js";
 import { LtiService } from "../services/lti.service.js";
 import { LtiStateService } from "../services/lti-state.service.js";
 import { SebAccessProofService } from "../services/seb-access-proof.service.js";
@@ -40,8 +30,7 @@ import {
   canonicalSebConfigContentId,
   sameSebConfigSettingsFingerprint,
   SebConfigGrantRateLimitError,
-  SebConfigGrantService,
-  sebConfigSettingsFingerprint
+  SebConfigGrantService
 } from "../services/seb-config-grant.service.js";
 import { SebConfigKeyService } from "../services/seb-config-key.service.js";
 import { SebConfigurationService } from "../services/seb-configuration.service.js";
@@ -52,31 +41,32 @@ import {
   CanvasApiService
 } from "../services/canvas-api.service.js";
 import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
-
-interface SebLaunchContentView {
-  id: string;
-  courseId: string;
-  canvasId: string;
-  assignmentId?: string | null;
-  contentType: "CLASSIC_QUIZ" | "NEW_QUIZ";
-  title: string;
-  htmlUrl?: string | null;
-  canvasLaunchUrl?: string | null;
-}
-
-interface SebConfigGrantTarget {
-  canonicalContentId: string;
-  setting: QuizSebSetting | ContentSebSetting;
-  settingsFingerprint: string;
-}
-
-const SEB_REQUIREMENT_STATUS_CACHE_TTL_MS = 5_000;
-const SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES = 5_000;
+import {
+  configGrantEndpoint,
+  consumePendingSebLaunch,
+  firstHeader,
+  isConfiguredCanvasUrl,
+  isDirectLtiLaunchReplay,
+  isExpectedQuizUrl,
+  isExpectedSetupCheckUrl,
+  isSafeConfigNavigation,
+  normalizedPublicSebContentId,
+  proofGenerationDigest,
+  renderYouTubeToolPage,
+  requiresStudentSessionHandoff,
+  resolveClassicCanvasUrl,
+  sanitizeFileToken,
+  sebConfigPath
+} from "./seb-controller-helpers.js";
+import {
+  SebContentCoordinator,
+  type SebConfigGrantTarget,
+  type SebLaunchContentView
+} from "./seb-content-coordinator.js";
 
 @Controller()
 export class SebController {
-  private readonly configDownloadCache = new Map<string, { expiresAt: number; value: Promise<Buffer> }>();
-  private readonly requirementStatusCache = new Map<string, { expiresAt: number; value: Promise<boolean> }>();
+  private readonly contentCoordinator: SebContentCoordinator;
   private setupCheckConfigCache?: Promise<Buffer>;
   constructor(
     private readonly config: AppConfig,
@@ -91,7 +81,16 @@ export class SebController {
     private readonly distributedAdmission: DistributedAdmissionService,
     private readonly canvasApi?: CanvasApiService,
     private readonly sessionHandoff?: SebSessionHandoffService
-  ) {}
+  ) {
+    this.contentCoordinator = new SebContentCoordinator(
+      config,
+      assessments,
+      sebConfig,
+      configKey,
+      canvasApi,
+      sessionHandoff
+    );
+  }
 
   @Get("/seb/quiz/:courseId/:quizId")
   async enforceQuiz(
@@ -281,6 +280,7 @@ export class SebController {
       // Certificate validity may change while a configuration is in the short
       // single-flight cache. Recheck it before serving encrypted output.
       this.sebConfig.assertConfigurationDownloadReady();
+      setSebDownloadResponseHeaders(response);
       response
         .status(200)
         .type("application/octet-stream")
@@ -289,10 +289,6 @@ export class SebController {
           `attachment; filename="quiz_${sanitizeFileToken(courseId)}_${sanitizeFileToken(canonicalContentId)}.seb"`
         )
         .setHeader("content-description", "Safe Online Exam Configuration")
-        .setHeader("x-content-type-options", "nosniff")
-        .setHeader("cache-control", "private, no-store")
-        .setHeader("referrer-policy", "no-referrer")
-        .setHeader("content-transfer-encoding", "binary")
         .send(generated.buffer);
     } catch (error) {
       if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
@@ -326,12 +322,8 @@ export class SebController {
     // Windows SEB validates a configuration URL with HEAD before its single
     // GET download. Do not consume the grant here: only downloadConfig may
     // mint the assessment's session handoff and release encrypted bytes.
-    response
-      .status(200)
-      .type("application/octet-stream")
-      .setHeader("cache-control", "private, no-store")
-      .setHeader("referrer-policy", "no-referrer")
-      .send();
+    setPrivateNoStoreResponseHeaders(response);
+    response.status(200).type("application/octet-stream").send();
   }
 
   @Get("/seb/config-encryption-certificate.pem")
@@ -381,15 +373,12 @@ export class SebController {
       // The setup settings are stable, but certificate readiness is not. Check
       // it on every response even when the encrypted bytes are cached.
       this.sebConfig.assertConfigurationDownloadReady();
+      setSebDownloadResponseHeaders(response);
       response
         .status(200)
         .type("application/octet-stream")
         .setHeader("content-disposition", 'attachment; filename="seb-setup-check.seb"')
         .setHeader("content-description", "Safe Online Exam Setup Check Configuration")
-        .setHeader("x-content-type-options", "nosniff")
-        .setHeader("cache-control", "private, no-store")
-        .setHeader("referrer-policy", "no-referrer")
-        .setHeader("content-transfer-encoding", "binary")
         .send(generated);
     } catch {
       this.setupCheckConfigCache = undefined;
@@ -485,16 +474,14 @@ export class SebController {
 
   @Get("/seb/launch-handoff")
   launchHandoff(@Res() response: Response): void {
-    response
-      .setHeader("cache-control", "private, no-store")
-      .setHeader("referrer-policy", "no-referrer")
-      .send(
-        renderAppShell({
-          title: "Opening Safe Exam Browser",
-          view: "seb-launching-handoff",
-          initialData: {}
-        })
-      );
+    setPrivateNoStoreResponseHeaders(response);
+    response.send(
+      renderAppShell({
+        title: "Opening Safe Exam Browser",
+        view: "seb-launching-handoff",
+        initialData: {}
+      })
+    );
   }
 
   @Get("/seb/launch/:contentId")
@@ -615,7 +602,7 @@ export class SebController {
     @Body() body?: { configKeyHash?: string; url?: string },
     @Res({ passthrough: true }) response?: Response
   ): Promise<Record<string, unknown>> {
-    setSensitiveResponseHeaders(response);
+    setSensitiveSebResponseHeaders(response);
     const normalizedContentId = normalizedPublicSebContentId(quizId);
     if (!normalizedContentId) {
       return apiError(404, "No Safe Online Exam setting found for this quiz");
@@ -637,7 +624,7 @@ export class SebController {
     @Req() request?: Request,
     @Res({ passthrough: true }) response?: Response
   ): Promise<Record<string, unknown>> {
-    setSensitiveResponseHeaders(response);
+    setSensitiveSebResponseHeaders(response);
     const normalizedContentId = normalizedPublicSebContentId(quizId);
     if (!normalizedContentId || !proofToken || !/^[A-Za-z0-9_-]{43}$/u.test(proofToken) || !request) {
       return apiError(403, "Invalid or expired Safe Online Exam access proof");
@@ -964,10 +951,8 @@ export class SebController {
     }
     const directLaunch = consumePendingSebLaunch(request, principal, resolved.content.courseId, canonicalContentId);
     if (!directLaunch && isDirectLtiLaunchReplay(request, this.config, resolved.content.courseId, canonicalContentId)) {
-      response
-        .setHeader("cache-control", "private, no-store")
-        .setHeader("referrer-policy", "no-referrer")
-        .redirect(303, this.canvasCourseHomeUrl(resolved.content.courseId));
+      setPrivateNoStoreResponseHeaders(response);
+      response.redirect(303, this.canvasCourseHomeUrl(resolved.content.courseId));
       return;
     }
     if (!resolved.setting?.sebRequired || this.sebDetector.isRequestFromSeb(request, resolved.setting)) {
@@ -1017,19 +1002,17 @@ export class SebController {
         };
         await saveSession(request);
         const configPath = sebConfigPath(resolved.content.courseId, target.canonicalContentId, grant);
-        response
-          .setHeader("cache-control", "private, no-store")
-          .setHeader("referrer-policy", "no-referrer")
-          .send(
-            renderAppShell({
-              title: "Opening Safe Exam Browser",
-              view: "seb-launching",
-              initialData: {
-                sebLaunchUrl: sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl()),
-                browserReturnUrl: this.canvasCourseHomeUrl(resolved.content.courseId)
-              }
-            })
-          );
+        setPrivateNoStoreResponseHeaders(response);
+        response.send(
+          renderAppShell({
+            title: "Opening Safe Exam Browser",
+            view: "seb-launching",
+            initialData: {
+              sebLaunchUrl: sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl()),
+              browserReturnUrl: this.canvasCourseHomeUrl(resolved.content.courseId)
+            }
+          })
+        );
         return;
       } catch (error) {
         if (error instanceof SebConfigGrantRateLimitError) {
@@ -1064,86 +1047,20 @@ export class SebController {
     );
   }
 
-  private async generateConfig(
-    courseId: string,
-    contentId: string,
-    canvasUrl?: string,
-    startUrlOverride?: string
-  ): Promise<Buffer> {
-    if (startUrlOverride) {
-      return this.generateConfigUncached(courseId, contentId, canvasUrl, startUrlOverride);
-    }
-    const record = await this.assessments.getAssessmentRecord(contentId);
-    if (!record || record.courseId !== courseId) {
-      throw new Error("Assessment not found");
-    }
-    const key = createHash("sha256")
-      .update(
-        JSON.stringify({
-          courseId,
-          contentId,
-          canvas: record.canvas,
-          seb: record.seb,
-          managedQuitPolicyDigest: this.managedQuitPolicyDigest()
-        }),
-        "utf8"
-      )
-      .digest("base64url");
-    const now = Date.now();
-    const cached = this.configDownloadCache.get(key);
-    if (cached && cached.expiresAt > now) {
-      return cached.value;
-    }
-    const value = this.generateConfigUncached(courseId, contentId, canvasUrl);
-    this.configDownloadCache.set(key, { expiresAt: now + 120_000, value });
-    while (this.configDownloadCache.size > 64) {
-      const oldest = this.configDownloadCache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.configDownloadCache.delete(oldest);
-    }
-    try {
-      return await value;
-    } catch (error) {
-      this.configDownloadCache.delete(key);
-      throw error;
-    }
-  }
-
-  private async generateConfigForGrant(
+  private generateConfigForGrant(
     courseId: string,
     contentId: string,
     target: { setting: QuizSebSetting | ContentSebSetting; settingsFingerprint: string },
     canvasUserId: string,
     requiresSessionHandoff: boolean
   ): Promise<{ buffer: Buffer; handoffDocumentIds: string[] }> {
-    if (!requiresSessionHandoff) {
-      return { buffer: await this.generateConfig(courseId, contentId), handoffDocumentIds: [] };
-    }
-    if (!this.canvasApi || !this.sessionHandoff) {
-      throw new Error("Canvas session handoff services are unavailable");
-    }
-    const returnTo = await this.resolveCanvasStartUrl(courseId, contentId);
-    const sessionUrl = await this.canvasApi.getSessionToken(canvasUserId, returnTo);
-    const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, sessionUrl);
-    const dynamicConfigKey = this.configKey.computeConfigKey(plain);
-    const handoffDocumentIds = await this.sessionHandoff.registerConfig(
+    return this.contentCoordinator.generateConfigForGrant(
       courseId,
       contentId,
-      target.settingsFingerprint,
-      dynamicConfigKey,
-      returnTo
+      target,
+      canvasUserId,
+      requiresSessionHandoff
     );
-    try {
-      return {
-        buffer: this.sebConfig.prepareSebConfigurationDownload(plain, {
-          startPassword: target.setting.startPassword
-        }),
-        handoffDocumentIds
-      };
-    } catch (error) {
-      await this.sessionHandoff.revokeConfigs(handoffDocumentIds);
-      throw error;
-    }
   }
 
   private configGrantActionToken(request: Request, principal: VerifiedLtiPrincipal): string {
@@ -1164,24 +1081,22 @@ export class SebController {
     courseId: string,
     contentId: string
   ): void {
-    response
-      .setHeader("cache-control", "private, no-store")
-      .setHeader("referrer-policy", "no-referrer")
-      .send(
-        renderAppShell({
-          title: "Safe Exam Browser Required",
-          view: "seb-download",
-          initialData: {
-            courseId,
-            contentId,
-            browserReturnUrl: this.canvasCourseHomeUrl(courseId),
-            configGrantUrl: configGrantEndpoint(courseId, contentId),
-            configGrantToken: this.configGrantActionToken(request, principal),
-            setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
-            sessionReadinessUrl: "/api/seb/session-readiness"
-          }
-        })
-      );
+    setPrivateNoStoreResponseHeaders(response);
+    response.send(
+      renderAppShell({
+        title: "Safe Exam Browser Required",
+        view: "seb-download",
+        initialData: {
+          courseId,
+          contentId,
+          browserReturnUrl: this.canvasCourseHomeUrl(courseId),
+          configGrantUrl: configGrantEndpoint(courseId, contentId),
+          configGrantToken: this.configGrantActionToken(request, principal),
+          setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+          sessionReadinessUrl: "/api/seb/session-readiness"
+        }
+      })
+    );
   }
 
   private async createAccessProofForCurrentCourseState(
@@ -1307,119 +1222,28 @@ export class SebController {
     };
   }
 
-  private async resolveCurrentConfigGrantTarget(
-    courseId: string,
-    contentId: string
-  ): Promise<SebConfigGrantTarget | null> {
-    if (await this.assessments.isCourseResetInProgress(courseId)) {
-      throw new CourseResetInProgressError();
-    }
-    const target = await this.resolveConfigGrantTarget(courseId, contentId);
-    if (await this.assessments.isCourseResetInProgress(courseId)) {
-      throw new CourseResetInProgressError();
-    }
-    return target;
+  private resolveCurrentConfigGrantTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
+    return this.contentCoordinator.resolveCurrentConfigGrantTarget(courseId, contentId);
   }
 
-  private async finalizeCourseScopedGrant(
+  resolveConfigGrantTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
+    return this.contentCoordinator.resolveConfigGrantTarget(courseId, contentId);
+  }
+
+  private finalizeCourseScopedGrant(
     courseId: string,
     target: SebConfigGrantTarget,
     revoke: () => Promise<void>
   ): Promise<SebConfigGrantTarget | null> {
-    let resetInProgress: boolean;
-    let current: SebConfigGrantTarget | null;
-    try {
-      resetInProgress = await this.assessments.isCourseResetInProgress(courseId);
-      current = resetInProgress ? null : await this.resolveConfigGrantTarget(courseId, target.canonicalContentId);
-      resetInProgress = resetInProgress || (await this.assessments.isCourseResetInProgress(courseId));
-    } catch (error) {
-      await revoke();
-      throw error;
-    }
-    if (
-      resetInProgress ||
-      !current ||
-      !sameSebConfigSettingsFingerprint(current.settingsFingerprint, target.settingsFingerprint)
-    ) {
-      await revoke();
-      if (resetInProgress) {
-        throw new CourseResetInProgressError();
-      }
-      return null;
-    }
-    return current;
+    return this.contentCoordinator.finalizeCourseScopedGrant(courseId, target, revoke);
   }
 
-  private async resolveConfigGrantTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
-    const canonicalContentId = canonicalSebConfigContentId(contentId);
-    if (!canonicalContentId) {
-      return null;
-    }
-    const parsed = parseNewQuizContentId(canonicalContentId);
-    if (parsed && parsed.courseId !== courseId) {
-      return null;
-    }
-    const setting = await this.resolveSebSetting(courseId, canonicalContentId);
-    if (
-      !setting?.sebRequired ||
-      !setting.enabled ||
-      !setting.accessCode ||
-      setting.courseId !== courseId ||
-      !this.effectiveQuitPassword(setting) ||
-      (setting.startPassword && !setting.configKeySalt) ||
-      !(await this.matchesAssessmentObject(courseId, canonicalContentId))
-    ) {
-      return null;
-    }
-    return {
-      canonicalContentId,
-      setting,
-      settingsFingerprint: createHash("sha256")
-        .update(
-          `${sebConfigSettingsFingerprint(courseId, canonicalContentId, setting)}\0${this.managedQuitPolicyDigest()}`,
-          "utf8"
-        )
-        .digest("base64url")
-    };
-  }
-
-  private async isSebRequirementConfigured(courseId: string, contentId: string): Promise<boolean> {
-    const setting = await this.resolveSebSetting(courseId, contentId);
-    if (
-      !setting ||
-      setting.courseId !== courseId ||
-      !setting.sebRequired ||
-      !setting.enabled ||
-      !setting.accessCode ||
-      !this.effectiveQuitPassword(setting) ||
-      (setting.startPassword && !setting.configKeySalt)
-    ) {
-      return false;
-    }
-
-    const parsed = parseNewQuizContentId(contentId);
-    if (parsed) {
-      return (
-        parsed.courseId === courseId &&
-        "contentId" in setting &&
-        setting.contentId === contentId &&
-        setting.assignmentId === parsed.assignmentId &&
-        setting.contentType === "NEW_QUIZ"
-      );
-    }
-
-    const classicId = extractClassicQuizId(contentId);
-    return !!classicId && "quizId" in setting && setting.quizId === classicId;
+  private isSebRequirementConfigured(courseId: string, contentId: string): Promise<boolean> {
+    return this.contentCoordinator.isSebRequirementConfigured(courseId, contentId);
   }
 
   private cachedSebRequirementStatus(courseId: string, contentId: string): Promise<boolean> | null {
-    const key = `${courseId}:${contentId}`;
-    const cached = this.requirementStatusCache.get(key);
-    if (!cached || cached.expiresAt <= Date.now()) {
-      this.requirementStatusCache.delete(key);
-      return null;
-    }
-    return cached.value;
+    return this.contentCoordinator.cachedSebRequirementStatus(courseId, contentId);
   }
 
   private cacheSebRequirementStatus(
@@ -1427,618 +1251,54 @@ export class SebController {
     contentId: string,
     load: () => Promise<boolean>
   ): Promise<boolean> {
-    const key = `${courseId}:${contentId}`;
-    const now = Date.now();
-    for (const [cachedKey, cached] of this.requirementStatusCache) {
-      if (cached.expiresAt <= now) {
-        this.requirementStatusCache.delete(cachedKey);
-      }
-    }
-    while (this.requirementStatusCache.size >= SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES) {
-      const oldestKey = this.requirementStatusCache.keys().next().value as string | undefined;
-      if (!oldestKey) {
-        break;
-      }
-      this.requirementStatusCache.delete(oldestKey);
-    }
-
-    const value = load().catch((error: unknown) => {
-      const current = this.requirementStatusCache.get(key);
-      if (current?.value === value) {
-        this.requirementStatusCache.delete(key);
-      }
-      throw error;
-    });
-    this.requirementStatusCache.set(key, {
-      expiresAt: now + SEB_REQUIREMENT_STATUS_CACHE_TTL_MS,
-      value
-    });
-    return value;
+    return this.contentCoordinator.cacheSebRequirementStatus(courseId, contentId, load);
   }
 
   private canvasCourseHomeUrl(courseId: string): string {
-    return new URL(`/courses/${encodeURIComponent(courseId)}`, this.config.getCanvasDomain()).toString();
+    return this.contentCoordinator.canvasCourseHomeUrl(courseId);
   }
 
   private applicationBaseUrl(): string {
-    const baseUrl = this.config.getApplicationBaseUrl() || this.config.toolUrl;
-    if (!baseUrl) {
-      throw new Error("Application base URL is required for exam tools");
-    }
-    return baseUrl;
+    return this.contentCoordinator.applicationBaseUrl();
   }
 
   private examToolPayloads(tools?: ExternalToolConfig[] | null): Array<{ id: string; label: string; url: string }> {
-    return enabledExternalTools(tools).map((tool) => ({
-      id: tool.id,
-      label: tool.label,
-      url: this.examToolLaunchUrl(tool)
-    }));
+    return this.contentCoordinator.examToolPayloads(tools);
   }
 
-  private examToolLaunchUrl(tool: ExternalToolConfig): string {
-    const appBaseUrl = this.applicationBaseUrl();
-    const videoId = isYouTubeVideoTool(tool) ? youtubeVideoId(tool) : null;
-    if (videoId) {
-      return new URL(`/seb/tool/youtube/${videoId}`, appBaseUrl).toString();
-    }
-    return tool.url;
-  }
-
-  private async redirectStaleSebLaunchToCanvas(response: Response, contentId: string): Promise<boolean> {
-    const canonicalContentId = canonicalSebConfigContentId(contentId);
-    if (!canonicalContentId) {
-      return false;
-    }
-    try {
-      const resolved = await this.resolveContentForLaunch(canonicalContentId);
-      if (!resolved?.content.courseId) {
-        return false;
-      }
-      response
-        .setHeader("cache-control", "private, no-store")
-        .setHeader("referrer-policy", "no-referrer")
-        .redirect(303, this.canvasCourseHomeUrl(resolved.content.courseId));
-      return true;
-    } catch {
-      return false;
-    }
+  private redirectStaleSebLaunchToCanvas(response: Response, contentId: string): Promise<boolean> {
+    return this.contentCoordinator.redirectStaleSebLaunchToCanvas(response, contentId);
   }
 
   private effectiveQuitPassword(setting: QuizSebSetting | ContentSebSetting): string | null {
-    return setting.quitPassword?.trim() || this.config.value.seb.defaultQuitPassword?.trim() || null;
-  }
-
-  private managedQuitPolicyDigest(): string {
-    return createHash("sha256")
-      .update(`managed-quit-policy-v1\0${this.config.value.seb.defaultQuitPassword || ""}`, "utf8")
-      .digest("base64url");
-  }
-
-  private async generateConfigUncached(
-    courseId: string,
-    contentId: string,
-    canvasUrl?: string,
-    startUrlOverride?: string
-  ): Promise<Buffer> {
-    const plain = await this.generatePlainConfigUncached(courseId, contentId, canvasUrl, startUrlOverride);
-    const setting = await this.resolveSebSetting(courseId, contentId);
-    return this.sebConfig.prepareSebConfigurationDownload(plain, {
-      startPassword: setting?.startPassword
-    });
-  }
-
-  private async generatePlainConfigUncached(
-    courseId: string,
-    contentId: string,
-    canvasUrl?: string,
-    startUrlOverride?: string
-  ): Promise<Buffer> {
-    const classicId = extractClassicQuizId(contentId);
-    if (classicId) {
-      const setting = await this.assessments.getSebSettingForQuiz(classicId);
-      if (!setting?.sebRequired || !setting.enabled || !setting.accessCode || setting.courseId !== courseId) {
-        throw new Error("SEB not enabled or access code missing");
-      }
-      if (setting.startPassword && !setting.configKeySalt) {
-        throw new Error("SEB start-password settings must be saved again before generating a configuration");
-      }
-      const accessCode = setting.accessCode;
-      if (!accessCode) {
-        throw new Error("SEB not enabled or access code missing");
-      }
-      const quiz = await this.assessments.getQuiz(classicId);
-      if (!quiz || quiz.courseId !== courseId) {
-        throw new Error("Assessment not found");
-      }
-      const startUrl =
-        startUrlOverride || resolveClassicCanvasUrl(this.config, courseId, classicId, canvasUrl, quiz?.htmlUrl);
-      return this.sebConfig.generateSebConfiguration({
-        courseId,
-        contentId: contentId.startsWith("classicquiz_") ? contentId : classicQuizContentId(classicId),
-        startUrl,
-        accessCode,
-        allowedDomains: allowedDomains(setting),
-        quitPassword: setting.quitPassword,
-        startPassword: setting.startPassword,
-        configKeySalt: setting.configKeySalt
-      });
-    }
-
-    const setting = await this.assessments.getContentSebSetting(contentId);
-    const parsedContentId = parseNewQuizContentId(contentId);
-    if (
-      !parsedContentId ||
-      parsedContentId.courseId !== courseId ||
-      !setting?.sebRequired ||
-      !setting.enabled ||
-      !setting.accessCode ||
-      setting.courseId !== courseId ||
-      setting.assignmentId !== parsedContentId.assignmentId
-    ) {
-      throw new Error("SEB not enabled or access code missing");
-    }
-    if (setting.startPassword && !setting.configKeySalt) {
-      throw new Error("SEB start-password settings must be saved again before generating a configuration");
-    }
-    const accessCode = setting.accessCode;
-    if (!accessCode) {
-      throw new Error("SEB not enabled or access code missing");
-    }
-    const startUrl = startUrlOverride || (await this.resolveNewQuizStartUrl(courseId, contentId, setting));
-    return this.sebConfig.generateSebConfiguration({
-      courseId,
-      contentId,
-      startUrl,
-      accessCode,
-      allowedDomains: allowedDomains(setting),
-      quitPassword: setting.quitPassword,
-      startPassword: setting.startPassword,
-      configKeySalt: setting.configKeySalt
-    });
-  }
-
-  private async resolveCanvasStartUrl(courseId: string, contentId: string): Promise<string> {
-    const classicId = extractClassicQuizId(contentId);
-    if (classicId) {
-      const quiz = await this.assessments.getQuiz(classicId);
-      return resolveClassicCanvasUrl(this.config, courseId, classicId, undefined, quiz?.htmlUrl);
-    }
-    const setting = await this.assessments.getContentSebSetting(contentId);
-    if (!setting) {
-      throw new Error("Assessment not found");
-    }
-    return this.resolveNewQuizStartUrl(courseId, contentId, setting);
+    return this.contentCoordinator.effectiveQuitPassword(setting);
   }
 
   private generateSetupCheckConfig(): Buffer {
-    const plain = this.generatePlainSetupCheckConfig();
-    return this.sebConfig.prepareSebConfigurationDownload(plain);
+    return this.contentCoordinator.generateSetupCheckConfig();
   }
 
   private currentSetupCheckConfigKey(): string {
-    return this.configKey.computeConfigKey(this.generatePlainSetupCheckConfig());
+    return this.contentCoordinator.currentSetupCheckConfigKey();
   }
 
-  private generatePlainSetupCheckConfig(): Buffer {
-    const configuredBaseUrl = this.config.getApplicationBaseUrl() || this.config.toolUrl;
-    if (!configuredBaseUrl) {
-      throw new Error("Application base URL is required to generate SEB setup check configuration");
-    }
-    const baseUrl = configuredBaseUrl.replace(/\/+$/u, "");
-    return this.sebConfig.generateSebSetupCheckConfiguration({
-      startUrl: `${baseUrl}/seb/check`,
-      quitUrl: `${baseUrl}/seb/check/quit`
-    });
-  }
-
-  private async currentConfigKey(
+  private currentConfigKey(
     courseId: string,
     contentId: string,
     setting: QuizSebSetting | ContentSebSetting
   ): Promise<string> {
-    const classicId = extractClassicQuizId(contentId);
-    if (classicId) {
-      const quiz = await this.assessments.getQuiz(classicId);
-      const startUrl = resolveClassicCanvasUrl(this.config, courseId, classicId, undefined, quiz?.htmlUrl);
-      const generated = this.sebConfig.generateSebConfiguration({
-        courseId,
-        contentId: contentId.startsWith("classicquiz_") ? contentId : classicQuizContentId(classicId),
-        startUrl,
-        accessCode: setting.accessCode || "",
-        allowedDomains: allowedDomains(setting),
-        quitPassword: setting.quitPassword,
-        startPassword: setting.startPassword,
-        configKeySalt: setting.configKeySalt
-      });
-      return this.configKey.computeConfigKey(generated);
-    }
-
-    const startUrl = await this.resolveNewQuizStartUrl(courseId, contentId, setting as ContentSebSetting);
-    const generated = this.sebConfig.generateSebConfiguration({
-      courseId,
-      contentId,
-      startUrl,
-      accessCode: setting.accessCode || "",
-      allowedDomains: allowedDomains(setting),
-      quitPassword: setting.quitPassword,
-      startPassword: setting.startPassword,
-      configKeySalt: setting.configKeySalt
-    });
-    return this.configKey.computeConfigKey(generated);
+    return this.contentCoordinator.currentConfigKey(courseId, contentId, setting);
   }
 
-  private async resolveContentForLaunch(contentId: string): Promise<{
+  private resolveContentForLaunch(contentId: string): Promise<{
     content: SebLaunchContentView;
     setting: QuizSebSetting | ContentSebSetting | null;
     launchTarget: string;
   } | null> {
-    const classicId = extractClassicQuizId(contentId);
-    if (classicId) {
-      const quiz = await this.assessments.getQuiz(classicId);
-      if (!quiz?.courseId) {
-        return null;
-      }
-      return {
-        content: {
-          id: classicQuizContentId(classicId),
-          courseId: quiz.courseId,
-          canvasId: classicId,
-          contentType: "CLASSIC_QUIZ",
-          title: quiz.title,
-          htmlUrl: quiz.htmlUrl
-        },
-        setting: await this.assessments.getSebSettingForQuiz(classicId),
-        launchTarget: resolveClassicCanvasUrl(this.config, quiz.courseId, classicId)
-      };
-    }
-    const parsedContentId = parseNewQuizContentId(contentId);
-    if (!parsedContentId) {
-      return null;
-    }
-    const content = await this.assessments.getContentItem(contentId);
-    const setting = await this.assessments.getContentSebSetting(contentId);
-    if (!content && !setting) {
-      return null;
-    }
-    const resolvedCourseId = content?.courseId || setting?.courseId;
-    const assignmentId =
-      setting?.assignmentId || content?.assignmentId || content?.canvasId || parsedContentId?.assignmentId;
-    if (!resolvedCourseId || !assignmentId) {
-      return null;
-    }
-    const contentView: SebLaunchContentView | null = content
-      ? {
-          id: content.id,
-          courseId: content.courseId,
-          canvasId: content.canvasId,
-          assignmentId: content.assignmentId,
-          contentType: "NEW_QUIZ",
-          title: content.title,
-          htmlUrl: content.htmlUrl,
-          canvasLaunchUrl: content.canvasLaunchUrl
-        }
-      : null;
-    return {
-      content: contentView || {
-        id: contentId,
-        courseId: resolvedCourseId,
-        canvasId: setting?.canvasId || assignmentId,
-        assignmentId,
-        contentType: "NEW_QUIZ",
-        title: "New Quiz",
-        htmlUrl: setting?.htmlUrl,
-        canvasLaunchUrl: setting?.canvasLaunchUrl
-      },
-      setting,
-      launchTarget: canvasAssignmentUrl(this.config, resolvedCourseId, assignmentId)
-    };
+    return this.contentCoordinator.resolveContentForLaunch(contentId);
   }
 
-  private async resolveNewQuizStartUrl(
-    courseId: string,
-    contentId: string,
-    setting: ContentSebSetting
-  ): Promise<string> {
-    const content = await this.assessments.getContentItem(contentId);
-    const assignmentId = setting.assignmentId || setting.canvasId || parseNewQuizContentId(contentId)?.assignmentId;
-    if (!assignmentId) {
-      throw new Error("Unable to determine Canvas start URL");
-    }
-    const candidates = [content?.htmlUrl, setting.htmlUrl, content?.canvasLaunchUrl, setting.canvasLaunchUrl];
-    for (const candidate of candidates) {
-      if (candidate && isConfiguredCanvasUrl(this.config, candidate)) {
-        const canonical = canonicalCanvasAssignmentUrl(this.config, courseId, assignmentId, candidate);
-        if (canonical) {
-          return canonical;
-        }
-      }
-    }
-    return canvasAssignmentUrl(this.config, courseId, assignmentId);
-  }
-
-  private async resolveSebSetting(
-    courseId: string,
-    quizId: string
-  ): Promise<(QuizSebSetting | ContentSebSetting) | null> {
-    const parsed = parseNewQuizContentId(quizId);
-    if (parsed) {
-      if (parsed.courseId !== courseId) {
-        return null;
-      }
-      const setting = await this.assessments.getContentSebSetting(quizId);
-      return setting?.courseId === courseId && setting.assignmentId === parsed.assignmentId ? setting : null;
-    }
-    if (quizId.startsWith("newquiz:")) {
-      return null;
-    }
-    const setting = await this.assessments.getSebSettingForQuiz(quizId);
-    return setting?.courseId === courseId ? setting : null;
-  }
-
-  private async matchesAssessmentObject(courseId: string, contentId: string): Promise<boolean> {
-    const canonicalContentId = canonicalSebConfigContentId(contentId);
-    if (!canonicalContentId) {
-      return false;
-    }
-    if (!(await this.assessments.isAssessmentAvailableForLearner(courseId, canonicalContentId))) {
-      return false;
-    }
-    const parsed = parseNewQuizContentId(canonicalContentId);
-    if (parsed) {
-      if (parsed.courseId !== courseId) {
-        return false;
-      }
-      const content = await this.assessments.getContentItem(canonicalContentId);
-      return (
-        content?.id === canonicalContentId &&
-        content.courseId === courseId &&
-        content.contentType === "NEW_QUIZ" &&
-        content.assignmentId === parsed.assignmentId
-      );
-    }
-    const quizId = extractClassicQuizId(canonicalContentId);
-    if (!quizId) {
-      return false;
-    }
-    const quiz = await this.assessments.getQuiz(quizId);
-    return quiz?.id === quizId && quiz.courseId === courseId;
-  }
-}
-
-function resolveClassicCanvasUrl(
-  config: AppConfig,
-  courseId: string,
-  quizId: string,
-  _canvasUrl?: string,
-  _storedUrl?: string | null
-): string {
-  return `${config.getCanvasDomain()}/courses/${encodeURIComponent(courseId)}/quizzes/${encodeURIComponent(quizId)}/take`;
-}
-
-function canonicalCanvasAssignmentUrl(
-  config: AppConfig,
-  courseId: string,
-  assignmentId: string,
-  value: string
-): string | null {
-  const url = new URL(value);
-  const assignmentMatch = url.pathname.match(/^\/courses\/([^/]+)\/assignments\/([^/?#]+)(?:\/.*)?$/u);
-  if (
-    !assignmentMatch ||
-    decodeUrlSegment(assignmentMatch[1]) !== courseId ||
-    decodeUrlSegment(assignmentMatch[2]) !== assignmentId
-  ) {
-    return null;
-  }
-  return canvasAssignmentUrl(config, courseId, assignmentId);
-}
-
-function canvasAssignmentUrl(config: AppConfig, courseId: string, assignmentId: string): string {
-  return `${config.getCanvasDomain()}/courses/${encodeURIComponent(courseId)}/assignments/${encodeURIComponent(assignmentId)}`;
-}
-
-function decodeUrlSegment(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
-function isConfiguredCanvasUrl(config: AppConfig, value: string): boolean {
-  try {
-    const candidate = new URL(value);
-    const canvas = new URL(config.getCanvasDomain());
-    return (
-      candidate.protocol === "https:" &&
-      !candidate.username &&
-      !candidate.password &&
-      candidate.origin.toLowerCase() === canvas.origin.toLowerCase()
-    );
-  } catch {
-    return false;
-  }
-}
-
-function allowedDomains(setting: QuizSebSetting | ContentSebSetting): string[] {
-  const customEntries = urlRulesToAllowedEntries(setting.urlRules);
-  return Array.from(
-    new Set([
-      // Legacy SSO entries are intentionally excluded. Student Canvas session
-      // handoff starts the assessment without granting the identity provider
-      // access inside the locked SEB session.
-      ...(setting.educationalToolDomains || []),
-      ...customEntries,
-      ...allowlistEntriesForExternalTools(setting.externalTools)
-    ])
-  );
-}
-
-function renderYouTubeToolPage(playerUrl: string): string {
-  const src = escapeHtmlAttribute(playerUrl);
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="referrer" content="strict-origin-when-cross-origin">
-    <title>YouTube video</title>
-    <style>html,body,iframe{width:100%;height:100%;margin:0;border:0;background:#000}iframe{display:block}</style>
-  </head>
-  <body>
-    <iframe title="YouTube video" src="${src}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
-  </body>
-</html>`;
-}
-
-function escapeHtmlAttribute(value: string): string {
-  return value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
-}
-
-function proofGenerationDigest(courseId: string, contentId: string, configKey: string, accessCode: string): string {
-  return createHash("sha256")
-    .update(`seb-proof-v2\0${courseId}\0${contentId}\0${configKey}\0${accessCode}`, "utf8")
-    .digest("base64url");
-}
-
-function firstHeader(request: Request, names: string[]): string | undefined {
-  for (const name of names) {
-    const value = request.header(name);
-    if (value) {
-      return Array.isArray(value) ? value[0] : value;
-    }
-  }
-  return undefined;
-}
-
-function isExpectedQuizUrl(config: AppConfig, value: string, courseId: string, quizId: string): boolean {
-  try {
-    if (!isConfiguredCanvasUrl(config, value)) {
-      return false;
-    }
-    const url = new URL(value);
-    const path = url.pathname.replace(/\/+$/u, "");
-    if (quizId.startsWith("newquiz:")) {
-      const parsed = parseNewQuizContentId(quizId);
-      return !!parsed && matchesPathFamily(path, `/courses/${courseId}/assignments/${parsed.assignmentId}`);
-    }
-    return matchesPathFamily(path, `/courses/${courseId}/quizzes/${quizId}`);
-  } catch {
-    return false;
-  }
-}
-
-function matchesPathFamily(path: string, root: string): boolean {
-  return path === root || path.startsWith(`${root}/`);
-}
-
-function isExpectedSetupCheckUrl(config: AppConfig, value: string): boolean {
-  try {
-    const configuredBaseUrl = config.getApplicationBaseUrl() || config.toolUrl;
-    if (!configuredBaseUrl) {
-      return false;
-    }
-    const url = new URL(value);
-    const expectedBaseUrl = new URL(configuredBaseUrl);
-    return (
-      url.protocol === expectedBaseUrl.protocol &&
-      url.host.toLowerCase() === expectedBaseUrl.host.toLowerCase() &&
-      url.pathname.replace(/\/+$/u, "") === "/seb/check"
-    );
-  } catch {
-    return false;
-  }
-}
-
-function sanitizeFileToken(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/gu, "_");
-}
-
-function sebConfigPath(courseId: string, contentId: string, grant: string): string {
-  const params = new URLSearchParams();
-  params.set("grant", grant);
-  return `/seb/config/${encodeURIComponent(courseId)}/${encodeURIComponent(contentId)}.seb?${params.toString()}`;
-}
-
-function configGrantEndpoint(courseId: string, contentId: string): string {
-  return `/api/seb/config-grant/${encodeURIComponent(courseId)}/${encodeURIComponent(contentId)}`;
-}
-
-function normalizedPublicSebContentId(contentId: string | undefined | null): string | null {
-  const canonicalContentId = canonicalSebConfigContentId(contentId);
-  if (!canonicalContentId) {
-    return null;
-  }
-  if (parseNewQuizContentId(canonicalContentId)) {
-    return canonicalContentId;
-  }
-  return extractClassicQuizId(canonicalContentId);
-}
-
-function requiresStudentSessionHandoff(principal: VerifiedLtiPrincipal): boolean {
-  return isVerifiedStudent(principal) && !isVerifiedInstructor(principal);
-}
-
-function isSafeConfigNavigation(request: Request): boolean {
-  const fetchSite = request.header("sec-fetch-site")?.toLowerCase();
-  return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
-}
-
-function setSensitiveResponseHeaders(response?: Response): void {
-  if (!response) {
-    return;
-  }
-  response
-    .setHeader("cache-control", "private, no-store, max-age=0")
-    .setHeader("pragma", "no-cache")
-    .setHeader("expires", "0")
-    .setHeader("referrer-policy", "no-referrer");
-  response.vary("Origin, X-SEB-Proof-Token");
-}
-
-function consumePendingSebLaunch(
-  request: Request,
-  principal: VerifiedLtiPrincipal,
-  courseId: string,
-  contentId: string
-): boolean {
-  const pending = request.session?.pendingSebLaunch;
-  if (request.session) {
-    delete request.session.pendingSebLaunch;
-  }
-  return (
-    !!pending &&
-    Date.now() - pending.issuedAt >= 0 &&
-    Date.now() - pending.issuedAt <= 120_000 &&
-    pending.courseId === courseId &&
-    pending.contentId === contentId &&
-    pending.subject === principal.subject &&
-    pending.deploymentId === principal.deploymentId
-  );
-}
-
-function isDirectLtiLaunchReplay(request: Request, config: AppConfig, courseId: string, contentId: string): boolean {
-  const completed = request.session?.completedSebLaunch;
-  if (
-    !completed ||
-    completed.courseId !== courseId ||
-    completed.contentId !== contentId ||
-    Date.now() - completed.issuedAt < 0 ||
-    Date.now() - completed.issuedAt > 86_400_000
-  ) {
-    return false;
-  }
-  const targetLinkUri = request.session?.launchData?.targetLinkUri;
-  try {
-    const target = new URL(targetLinkUri || "");
-    const tool = new URL(config.getRequiredToolUrl());
-    if (target.origin !== tool.origin || target.search || target.hash) {
-      return false;
-    }
-    const match = target.pathname.match(/^\/seb\/launch\/([^/]{1,300})$/u);
-    return !!match && canonicalSebConfigContentId(decodeURIComponent(match[1])) === contentId;
-  } catch {
-    return false;
+  private resolveSebSetting(courseId: string, quizId: string): Promise<(QuizSebSetting | ContentSebSetting) | null> {
+    return this.contentCoordinator.resolveSebSetting(courseId, quizId);
   }
 }

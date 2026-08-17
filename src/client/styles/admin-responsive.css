@@ -1,0 +1,160 @@
+/* Responsive administrator workspace adaptations */
+@media (max-width: 980px) {
+  .admin-surface {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-course-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  .admin-course-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: 260px;
+  }
+
+  .admin-assessment-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-assessment-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .admin-shell {
+    width: min(100vw - 20px, 100%);
+  }
+
+  .admin-summary-pills,
+  .admin-page-heading,
+  .admin-detail-header,
+  .admin-detail-actions,
+  .admin-course-presets-heading,
+  .admin-assessment-heading,
+  .admin-preset-card footer {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-tab {
+    gap: 7px;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+
+  .admin-course-list {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-preset-grid,
+  .admin-course-preset-list {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-settings-surface {
+    padding: 16px;
+  }
+
+  .admin-course-detail {
+    padding: 16px;
+  }
+
+  .admin-course-preset-option {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  .admin-assignment-state {
+    display: none;
+  }
+
+  .admin-assessment-actions .button {
+    flex: 1 1 120px;
+    justify-content: center;
+  }
+
+  .admin-connect-filters,
+  .admin-direct-connect > div {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-rollout-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-preset-card-footer > div {
+    justify-content: flex-start;
+  }
+
+  .admin-preset-card-footer .button {
+    flex: 1;
+  }
+
+  .admin-preset-actions .button:first-child {
+    margin-right: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .admin-shell .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .admin-shell .admin-summary-pills {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    gap: 6px;
+  }
+
+  .admin-summary-pills .stat-pill {
+    min-width: 0;
+    gap: 4px;
+    padding-inline: 7px;
+  }
+
+  .admin-summary-pills .stat-pill span {
+    font-size: 10px;
+  }
+
+  .admin-tab small {
+    display: none;
+  }
+
+  .admin-tab {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    min-height: 48px;
+    text-align: center;
+  }
+
+  .admin-tab-icon {
+    display: none;
+  }
+
+  .admin-tab-count {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-tab,
+  .admin-course-row,
+  .admin-course-preset-option,
+  .admin-assessment-row {
+    transition: none;
+  }
+
+  .spin {
+    animation: none;
+  }
+}

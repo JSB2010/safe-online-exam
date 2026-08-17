@@ -6,6 +6,7 @@ import { renderAppShell, renderFallbackHtml } from "../../src/server/http/app-sh
 import { corsOptionsForRequest, isAllowedCorsOrigin, isBrowserDocumentNavigation } from "../../src/server/http/cors.js";
 import { absoluteUrl, requestBaseUrl, sebSchemeUrl } from "../../src/server/http/request-url.js";
 import { securityHeaders } from "../../src/server/http/security-headers.js";
+import { parseClientEntryModulePreloads, setClientAssetCacheHeaders } from "../../src/server/http/static-assets.js";
 
 describe("HTTP helpers", () => {
   it("builds forwarded Cloud Run base URLs without default ports", () => {
@@ -80,6 +81,42 @@ describe("HTTP helpers", () => {
         process.env.K_REVISION = previousRevision;
       }
     }
+  });
+
+  it("allows immutable caching only for content-addressed client chunks", () => {
+    const headers = new Map<string, string>();
+    const response = {
+      setHeader(name: string, value: string) {
+        headers.set(name.toLowerCase(), value);
+      }
+    } as any;
+
+    setClientAssetCacheHeaders(response, "/dist/client/assets/dashboard-BvyaXW_g.js");
+    expect(headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+
+    setClientAssetCacheHeaders(response, "/dist/client/assets/index.js");
+    expect(headers.get("cache-control")).toBe("no-cache");
+
+    setClientAssetCacheHeaders(response, "/dist/client/assets/index.css");
+    expect(headers.get("cache-control")).toBe("no-cache");
+  });
+
+  it("reads only safe static imports from the Vite client entry manifest", () => {
+    expect(
+      parseClientEntryModulePreloads(
+        JSON.stringify({
+          "index.html": {
+            file: "assets/index.js",
+            isEntry: true,
+            imports: ["_runtime.js", "_vendor.js", "_unsafe.js", 42]
+          },
+          "_runtime.js": { file: "assets/rolldown-runtime-abcdefgh.js" },
+          "_vendor.js": { file: "assets/react-vendor-12345678.js" },
+          "_unsafe.js": { file: "../outside.js" }
+        })
+      )
+    ).toEqual(["/assets/rolldown-runtime-abcdefgh.js", "/assets/react-vendor-12345678.js"]);
+    expect(parseClientEntryModulePreloads("[]")).toEqual([]);
   });
 
   it("allows only the exact configured Canvas and tool CORS origins", () => {

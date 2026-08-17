@@ -1,0 +1,367 @@
+/* Connected-course administrator workspace */
+.admin-surface {
+  display: grid;
+  grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
+  min-height: 620px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-course-sidebar {
+  min-width: 0;
+  padding: 18px;
+  background: #f8fafc;
+  border-right: 1px solid #e2e8f0;
+}
+
+.admin-sidebar-heading,
+.admin-detail-header,
+.admin-detail-actions,
+.admin-assessment-main,
+.admin-assessment-actions,
+.admin-secret-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-sidebar-heading,
+.admin-detail-header {
+  justify-content: space-between;
+}
+
+.admin-sidebar-heading > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-search {
+  width: 100%;
+  margin: 14px 0 10px;
+}
+
+.admin-course-scope-controls {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 11px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+}
+
+.admin-course-scope-controls > label:first-child {
+  display: grid;
+  gap: 5px;
+  color: #344054;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.admin-course-scope-controls select {
+  min-height: 34px;
+  padding-block: 6px;
+  font-size: 12px;
+}
+
+.admin-course-scope-controls .checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.admin-course-scope-controls .checkbox-line input {
+  width: 15px;
+  min-width: 15px;
+  min-height: 15px;
+  margin: 0;
+}
+
+.admin-course-list {
+  display: grid;
+  gap: 5px;
+  max-height: 690px;
+  overflow-y: auto;
+}
+
+.admin-course-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  color: #344054;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.admin-course-row:hover {
+  background: #ffffff;
+  border-color: #dbe2ea;
+}
+
+.admin-course-row.selected {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.admin-course-row:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 24%);
+  outline-offset: 1px;
+}
+
+.admin-course-row > span:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.admin-course-row strong,
+.admin-course-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-course-row strong {
+  font-size: 13px;
+}
+
+.admin-course-row small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.admin-count {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  color: #667085;
+  background: #eef2f6;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-count.active {
+  color: #027a48;
+  background: #ecfdf3;
+}
+
+.admin-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 8px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.admin-course-detail {
+  min-width: 0;
+  padding: 22px;
+}
+
+.admin-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.admin-detail-header p {
+  font-size: 13px;
+}
+
+.admin-detail-actions {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.admin-course-reset-dialog {
+  max-width: 650px;
+}
+
+.admin-course-reset-warning {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  color: #7a271a;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+}
+
+.admin-course-reset-warning > svg {
+  margin-top: 1px;
+}
+
+.admin-course-reset-warning p {
+  margin-top: 5px;
+  color: #9a3412;
+  font-size: 13px;
+}
+
+.admin-course-reset-warning ol {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding-left: 20px;
+  color: #7c2d12;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.admin-course-reset-preserved {
+  margin-top: 14px;
+  color: #475467;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.admin-course-reset-confirmation {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-assessment-heading {
+  align-items: flex-end;
+  margin-top: 20px;
+}
+
+.admin-assessment-heading h3 {
+  font-size: 15px;
+}
+
+.admin-assessment-heading p {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.admin-assessment-heading > span {
+  color: #475467;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-assessment-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.admin-assessment-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 12px 18px;
+  padding: 13px 14px;
+  background: #fcfcfd;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.admin-assessment-row.enabled {
+  background: #ffffff;
+  border-color: #cfe8dc;
+  box-shadow: inset 3px 0 #12b76a;
+}
+
+.admin-assessment-main > div {
+  display: grid;
+  min-width: 0;
+}
+
+.admin-assessment-main strong {
+  overflow: hidden;
+  color: #344054;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-assessment-main small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.admin-assessment-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.admin-secret-panel {
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 11px 13px;
+  color: #344054;
+  background: #fffaeb;
+  border: 1px solid #fedf89;
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.admin-secret-panel.compact {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
+.admin-secret-panel > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-secret-panel code {
+  padding: 3px 6px;
+  color: #7a2e0e;
+  background: #ffffff;
+  border: 1px solid #fedf89;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 800;
+  user-select: all;
+}
+
+.admin-secret-panel em {
+  color: #667085;
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.admin-secret-expiry {
+  margin-left: auto;
+  color: #93370d;
+}
+
+.admin-load-more {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
