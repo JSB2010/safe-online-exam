@@ -15,6 +15,7 @@ license files, in `/app/node_modules`.
 | --------------------------------------------------------------------- | ---------- |
 | NestJS (`@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express`) | MIT        |
 | `clsx`                                                                | MIT        |
+| `compression`                                                         | MIT        |
 | `cookie-parser`                                                       | MIT        |
 | `express`, `express-session`                                          | MIT        |
 | `jose`                                                                | MIT        |

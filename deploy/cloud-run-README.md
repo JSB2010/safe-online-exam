@@ -13,11 +13,12 @@ JWKS endpoint succeed.
 ## Requirements
 
 - a Google Cloud project with billing enabled;
-- the current `gcloud` and GitHub (`gh`) CLIs, Docker, `jq`, OpenSSL, and
-  `curl`;
+- the current `gcloud` and GitHub (`gh`) CLIs, Docker, `jq`, OpenSSL, `cmp`,
+  and `curl`;
 - a public GHCR release image reachable from Google Cloud;
 - permission to enable APIs and administer Cloud Run, Cloud SQL, IAM, Secret
-  Manager, and Cloud Scheduler.
+  Manager, and Cloud Scheduler, including access to compare each exact pinned
+  Secret Manager version during an upgrade.
 
 The bundle can create the reviewed Cloud SQL baseline below, or validate an
 institution-supplied PostgreSQL 17 Cloud SQL instance in the same region.
@@ -317,24 +318,65 @@ needs permission to invoke candidate revisions for readiness verification.
 
 ## Upgrade
 
-Download and checksum the new bundle. Preserve the prior protected
-`cloudrun.env`, bootstrap directory, state directory, and client identity.
-Merge any new keys from `cloudrun.env.example`, then replace only
-`APP_VERSION` and `APP_IMAGE` with the new bundle's values:
+Treat the directory containing the protected `cloudrun.env` as the durable
+installation home. Its relative bootstrap, state, and client-identity paths
+remain anchored there even when a command is run from a newly extracted
+bundle. Download and checksum the new bundle, preserve that installation home,
+merge any new keys from `cloudrun.env.example`, then replace only `APP_VERSION`
+and `APP_IMAGE` with the new bundle's values:
 
 ```bash
-./upgrade.sh cloudrun.env
+NEW_BUNDLE=/opt/safe-online-exam-X.Y.Z-cloud-run
+EXISTING_ENV=/srv/safe-online-exam/cloudrun.env
+"$NEW_BUNDLE/upgrade.sh" "$EXISTING_ENV"
+```
+
+Do not copy `.bootstrap`, `.state`, or `.client-identity` into each versioned
+bundle. Absolute paths remain absolute; relative protected paths resolve from
+the existing environment file, not from the new bundle or current directory.
+
+The upgrade refuses to continue unless `OAUTH_TOKEN_ENCRYPTION_MODE` is
+assigned explicitly in `cloudrun.env`. Use `compat` for the first deployment
+to an existing installation; do not let a default opt the installation into
+encrypted writes.
+
+For the first upgrade from a release without OAuth-token encryption,
+`upgrade.sh` generates only the missing protected
+`oauth_token_encryption_keyring` file. It never reruns bootstrap, overwrites an
+existing keyring, or rotates any established secret. The normal version check
+then uploads and records the new keyring as its own numbered Secret Manager
+version. If the local file is missing after a keyring version has been recorded
+locally or created in Secret Manager, the upgrade stops and requires the
+protected file to be restored instead of silently generating replacement key
+bytes. The upgrade also rejects `enforce` until the existing traffic-serving
+revision has completed a `compat` deployment.
+
+Before reusing a recorded secret version, the helper byte-compares that exact
+enabled Secret Manager version with its protected bootstrap file. The
+comparison uses a mode-`0600` temporary file under the protected state
+directory and removes it immediately. Changed bootstrap values receive a new
+numbered version; a deployer that cannot access the pinned version is stopped
+before backup or deployment rather than silently reusing it.
+
+When introducing or rotating OAuth-token encryption keys, follow the staged
+`compat` then `enforce` deployment documented in `docs/deployment.md` and run:
+
+```bash
+./encrypt-oauth-tokens.sh cloudrun.env
 ```
 
 The command:
 
-1. validates the existing service and jobs;
+1. validates the complete current environment and bootstrap contract, creates
+   any newly required numbered secrets, and grants the runtime identity access;
 2. creates an on-demand backup of `SQL_INSTANCE`, waits for the Cloud SQL
    operation to finish, and requires the backup status to be `SUCCESSFUL`;
 3. records the previous traffic revision;
 4. updates and executes the migration job;
-5. updates the cleanup job;
-6. deploys the application image to a tagged revision with no traffic;
+5. updates the cleanup job and applies the current environment and numbered
+   secret bindings to both jobs;
+6. deploys the application image with those same bindings to a tagged revision
+   with no traffic;
 7. when the generated URL was disabled, verifies the custom origin and
    temporarily enables the generated URL for the tagged candidate;
 8. verifies `/ready` and `/.well-known/jwks.json`;

@@ -96,15 +96,20 @@ if (packageLock.version !== version || packageLock.packages?.[""]?.version !== v
   fail("package-lock.json root versions do not match package.json");
 }
 
-const packageManagerVersion = packageJson.packageManager?.match(/^npm@(.+)$/u)?.[1];
-const dockerfilePackageManagerVersion = readText("Dockerfile").match(/npm install -g npm@([^\s]+)/u)?.[1];
+const packageManagerVersion = packageJson.packageManager?.match(/^npm@(\d+\.\d+\.\d+)\+sha512\.[0-9a-f]{128}$/u)?.[1];
+const dockerfilePackageManagerVersions = [
+  ...readText("Dockerfile").matchAll(/npm --version \| grep -Fx "(\d+\.\d+\.\d+)"/gu)
+].map((match) => match[1]);
 if (!packageManagerVersion) {
-  fail("package.json must pin npm with packageManager");
+  fail("package.json must pin npm with an integrity-authenticated packageManager entry");
 }
-if (dockerfilePackageManagerVersion !== packageManagerVersion) {
+if (
+  dockerfilePackageManagerVersions.length !== 2 ||
+  dockerfilePackageManagerVersions.some((candidate) => candidate !== packageManagerVersion)
+) {
   fail(
-    `Dockerfile npm version must match packageManager npm@${packageManagerVersion}, found ${
-      dockerfilePackageManagerVersion ?? "none"
+    `Both Dockerfile npm versions must match packageManager npm@${packageManagerVersion}, found ${
+      dockerfilePackageManagerVersions.length ? dockerfilePackageManagerVersions.join(", ") : "none"
     }`
   );
 }
@@ -119,6 +124,11 @@ const composeEnvironment = readText(".env.compose.example");
 const composeVersion = composeEnvironment.match(/^APP_IMAGE=ghcr\.io\/jsb2010\/safe-online-exam:([^\s]+)$/mu)?.[1];
 if (composeVersion !== version) {
   fail(`.env.compose.example image version must be ${version}, found ${composeVersion ?? "none"}`);
+}
+
+const composeSecretsEnvironment = readText(".env.compose.secrets.example");
+if (!/^COMPOSE_PROJECT_NAME=$/mu.test(composeSecretsEnvironment)) {
+  fail(".env.compose.secrets.example must let setup record a stable new or discovered legacy project name");
 }
 
 const cloudRunEnvironment = readText("deploy/cloudrun.env.example");
@@ -148,12 +158,7 @@ for (const configuredName of [...requiredCloudRunEnvironment, ...canvasEndpointE
   }
 }
 
-for (const configPath of [
-  "cloudbuild-dev.yaml",
-  "cloudbuild-prod.yaml",
-  "cloudbuild-school.yaml",
-  "cloudbuild-release-promote.yaml"
-]) {
+for (const configPath of ["cloudbuild-dev.yaml", "cloudbuild-prod.yaml", "cloudbuild-school.yaml"]) {
   const config = readText(configPath);
   const rawEnvironmentBindings = [...config.matchAll(/"--set-env-vars=([^"]+)"/gu)].map((match) => match[1]);
   const rawSecretBindings = [...config.matchAll(/"--set-secrets=([^"]+)"/gu)].map((match) => match[1]);

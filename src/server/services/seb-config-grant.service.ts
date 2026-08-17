@@ -1,4 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { constantTimeStringEqual as safeEqual } from "../security/constant-time.js";
 import { Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
@@ -167,13 +168,17 @@ export function canonicalSebConfigContentId(contentId: string | undefined | null
 export function sebConfigSettingsFingerprint(
   courseId: string,
   contentId: string,
-  setting: QuizSebSetting | ContentSebSetting
+  setting: QuizSebSetting | ContentSebSetting,
+  secret: string
 ): string {
   const canonicalContentId = canonicalSebConfigContentId(contentId);
   if (!canonicalContentId) {
     throw new Error("Invalid SEB configuration content ID");
   }
-  return createHash("sha256")
+  if (!secret) {
+    throw new Error("SEB configuration fingerprint secret is required");
+  }
+  return createHmac("sha256", secret)
     .update(`seb-config-settings-v1\0${courseId}\0${canonicalContentId}\0${sebConfigFingerprint(setting)}`, "utf8")
     .digest("base64url");
 }
@@ -222,10 +227,4 @@ function isConfigGrantRecord(record: TransientStateRecord | null): record is Tra
     !!record.settingsFingerprint &&
     typeof record.requiresSessionHandoff === "boolean"
   );
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }

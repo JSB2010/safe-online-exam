@@ -28,9 +28,10 @@ test("preserves a New Quiz content ID on the nonterminal exit page", async ({ pa
 
 test("serves detector scripts from stable and Canvas-theme paths", async ({ request }) => {
   for (const path of ["/js/canvas-seb-detector.js", "/api/seb/canvas-detector.js"]) {
-    const response = await request.get(path);
+    const response = await request.get(path, { headers: { "Accept-Encoding": "gzip" } });
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toContain("application/javascript");
+    expect(response.headers()["content-encoding"]).toBe("gzip");
     expect(await response.text()).toContain("Safe Online Exam detector");
   }
 
@@ -566,7 +567,11 @@ test("renders the responsive root-account administrator workspace and controlled
     pendingAssignmentCount: 0,
     failedAssignmentCount: 0
   };
+  let summaryRequests = 0;
+  let courseListRequests = 0;
+  let courseDetailRequests = 0;
   await page.route("**/api/admin/summary", async (route) => {
+    summaryRequests += 1;
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -583,6 +588,7 @@ test("renders the responsive root-account administrator workspace and controlled
     });
   });
   await page.route("**/api/admin/courses?*", async (route) => {
+    courseListRequests += 1;
     const includePast = new URL(route.request().url()).searchParams.get("includePast") === "true";
     await route.fulfill({
       contentType: "application/json",
@@ -609,6 +615,7 @@ test("renders the responsive root-account administrator workspace and controlled
     });
   });
   await page.route("**/api/admin/courses/101", async (route) => {
+    courseDetailRequests += 1;
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({ success: true, course: adminCourse })
@@ -706,6 +713,9 @@ test("renders the responsive root-account administrator workspace and controlled
   await expect(coursesTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
   await expect(page.getByLabel("Operational term")).toHaveValue("22");
+  expect(summaryRequests).toBe(1);
+  expect(courseListRequests).toBe(1);
+  expect(courseDetailRequests).toBe(1);
   await page.getByLabel("Show past and other courses").check();
   await expect(page.getByRole("button", { name: /Archived Biology/u })).toBeVisible();
   await page.getByLabel("Show past and other courses").uncheck();
@@ -990,13 +1000,29 @@ test("lets an instructor duplicate a saved exam tool into selected Canvas teache
 test("serves built app assets before API CORS restrictions", async ({ request }) => {
   const response = await request.get("/assets/index.js", {
     headers: {
+      "Accept-Encoding": "br",
       Origin: "https://alternate-cloud-run-host.example"
     }
   });
 
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("text/javascript");
-  expect(await response.text()).toContain("createRoot");
+  expect(response.headers()["content-encoding"]).toBe("br");
+  expect(response.headers()["cache-control"]).toBe("no-cache");
+  const entrySource = await response.text();
+  expect(entrySource).toContain("createRoot");
+
+  const vendorName = entrySource.match(/react-vendor-[A-Za-z0-9_-]{8}\.js/u)?.[0];
+  const routeChunkName = entrySource.match(/dashboard-[A-Za-z0-9_-]{8}\.js/u)?.[0];
+  expect(vendorName).toBeTruthy();
+  expect(routeChunkName).toBeTruthy();
+
+  for (const assetName of [vendorName, routeChunkName]) {
+    const chunk = await request.get(`/assets/${assetName}`, { headers: { "Accept-Encoding": "br" } });
+    expect(chunk.status()).toBe(200);
+    expect(chunk.headers()["content-encoding"]).toBe("br");
+    expect(chunk.headers()["cache-control"]).toBe("public, max-age=31536000, immutable");
+  }
 });
 
 test("keeps SEB config and proof endpoints defensive without seeded assessment data", async ({ request }) => {

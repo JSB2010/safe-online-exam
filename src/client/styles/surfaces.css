@@ -1,0 +1,332 @@
+.work-surface,
+.message-panel,
+.dialog {
+  background: #ffffff;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  box-shadow: 0 16px 34px rgba(24, 36, 56, 0.08);
+}
+
+.work-surface {
+  overflow: visible;
+}
+
+.service-status-panel {
+  padding: 28px;
+  display: grid;
+  gap: 24px;
+}
+
+.service-status-main {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.service-status-main .message-icon {
+  margin-bottom: 6px;
+}
+
+.service-status-main h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.testbed-status {
+  padding-top: 20px;
+  border-top: 1px solid #dbe2ea;
+}
+
+.testbed-status dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 0;
+}
+
+.testbed-status dl div {
+  min-width: 0;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+}
+
+.testbed-status dt {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.testbed-status dd {
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: #182230;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .testbed-status dl {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.onboarding-card {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 18px;
+  background: #f8fbff;
+  border: 1px solid #b9d7f7;
+  border-radius: 10px;
+}
+
+.onboarding-card h2,
+.setup-role-card h2,
+.setup-guide-detail h2 {
+  margin-bottom: 5px;
+}
+
+.student-onboarding-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.student-onboarding-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-center {
+  width: min(1080px, calc(100vw - 32px));
+}
+
+.admin-intro {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.setup-link-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.setup-role-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.setup-role-card,
+.setup-guide-detail {
+  padding: 18px;
+}
+
+.setup-role-card code,
+.setup-guide-detail code {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 5px 7px;
+  overflow-wrap: anywhere;
+  color: #344054;
+  background: #f2f4f7;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.setup-guide-detail {
+  margin-top: 14px;
+}
+
+.setup-guide-detail ol {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 0;
+  padding-left: 22px;
+  color: #475467;
+  line-height: 1.5;
+}
+
+.list-header {
+  padding: 16px;
+  border-bottom: 1px solid #e7ecf2;
+}
+
+.search {
+  width: min(360px, 100%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  color: #667085;
+  background: #ffffff;
+  border: 1px solid #cfd6e4;
+  border-radius: 8px;
+}
+
+.search input {
+  width: 100%;
+  height: 38px;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+}
+
+.content-list {
+  display: grid;
+}
+
+.content-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto minmax(250px, auto);
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e7ecf2;
+}
+
+.content-row:last-child {
+  border-bottom: 0;
+}
+
+.teacher-row {
+  grid-template-columns: minmax(240px, 1fr) minmax(250px, auto);
+}
+
+.content-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.content-main h3 {
+  overflow-wrap: anywhere;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.row-actions {
+  justify-content: flex-end;
+}
+
+.student-row {
+  grid-template-columns: minmax(240px, 1fr) auto auto;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #98a2b3;
+}
+
+.status-dot.on {
+  background: #12b76a;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status-pill.enabled {
+  color: #05603a;
+  background: #ecfdf3;
+}
+
+.status-pill.disabled {
+  color: #475467;
+  background: #f2f4f7;
+}
+
+.saved-password-reveal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  color: #344054;
+  background: #f8fafc;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+}
+
+.saved-password-reveal > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.saved-password-reveal small {
+  color: #667085;
+}
+
+.saved-password-values {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.saved-password-value {
+  display: grid;
+  min-width: 140px;
+  gap: 1px;
+}
+
+.saved-password-value > span {
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.saved-password-value > strong,
+.saved-password-value > small {
+  font-size: 11px;
+}
+
+@media (max-width: 700px) {
+  .saved-password-reveal,
+  .saved-password-values {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .saved-password-value {
+    min-width: 0;
+  }
+
+  .student-onboarding-card,
+  .admin-intro,
+  .setup-role-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-wizard-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .setup-link-list {
+    justify-content: flex-start;
+  }
+}

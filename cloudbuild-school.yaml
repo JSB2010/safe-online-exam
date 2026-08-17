@@ -14,7 +14,10 @@ substitutions:
   _LTI_AUTH_URL: https://sso.canvaslms.com/api/lti/authorize_redirect
   _SECRET_PREFIX: safe_online_exam
   _SECRET_VERSION: "1"
+  _OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION: "1"
   _LTI_DEPLOYMENT_ID_CHECKING_ENABLED: "true"
+  _OAUTH_TOKEN_ENCRYPTION_MODE: REPLACE_WITH_COMPAT_OR_ENFORCE
+  _OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID: "primary"
   _SEB_CONFIG_ENCRYPTION_ENABLED: "true"
   _DATABASE_PASSWORD_SECRET_VERSION: "1"
   _SERVICE_ACCOUNT: safe-online-exam
@@ -22,11 +25,15 @@ substitutions:
   _MAX_INSTANCES: "10"
 
 steps:
-  - name: "gcr.io/cloud-builders/docker"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
+    entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"
+    args: ["$PROJECT_ID", "${_SERVICE}", "${_LOCATION}", "${_OAUTH_TOKEN_ENCRYPTION_MODE}"]
+
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:661e95acd923514f71f47ce7b390e06a8d31b15febecf772e506babf62960528"
     args: ["pull", "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"]
     allowFailure: true
 
-  - name: "gcr.io/cloud-builders/docker"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:661e95acd923514f71f47ce7b390e06a8d31b15febecf772e506babf62960528"
     env:
       - "DOCKER_BUILDKIT=1"
     args:
@@ -41,19 +48,19 @@ steps:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
       - "."
 
-  - name: "gcr.io/cloud-builders/docker"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:661e95acd923514f71f47ce7b390e06a8d31b15febecf772e506babf62960528"
     entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"
 
-  - name: "gcr.io/cloud-builders/docker"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:661e95acd923514f71f47ce7b390e06a8d31b15febecf772e506babf62960528"
     entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
       - "/workspace/canvas-seb-school.digest"
 
-  - name: "gcr.io/cloud-builders/docker"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:661e95acd923514f71f47ce7b390e06a8d31b15febecf772e506babf62960528"
     args: ["push", "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"]
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
@@ -66,15 +73,15 @@ steps:
       - "--max-retries=0"
       - "--task-timeout=10m"
       - "--set-cloudsql-instances=$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE}"
-      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,LTI_ISSUER=${_LTI_ISSUER},LTI_KEY_SET_URL=${_LTI_KEY_SET_URL},LTI_AUTH_URL=${_LTI_AUTH_URL},LTI_DEPLOYMENT_ID_CHECKING_ENABLED=${_LTI_DEPLOYMENT_ID_CHECKING_ENABLED},SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED},DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
-      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,LTI_ISSUER=${_LTI_ISSUER},LTI_KEY_SET_URL=${_LTI_KEY_SET_URL},LTI_AUTH_URL=${_LTI_AUTH_URL},LTI_DEPLOYMENT_ID_CHECKING_ENABLED=${_LTI_DEPLOYMENT_ID_CHECKING_ENABLED},OAUTH_TOKEN_ENCRYPTION_MODE=${_OAUTH_TOKEN_ENCRYPTION_MODE},OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=${_OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID},SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED},DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
+      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=${_SECRET_PREFIX}_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "gcloud"
     args: ["run", "jobs", "execute", "${_SERVICE}-migrate", "--region=${_LOCATION}", "--wait"]
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
@@ -87,11 +94,11 @@ steps:
       - "--max-retries=1"
       - "--task-timeout=10m"
       - "--set-cloudsql-instances=$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE}"
-      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,LTI_ISSUER=${_LTI_ISSUER},LTI_KEY_SET_URL=${_LTI_KEY_SET_URL},LTI_AUTH_URL=${_LTI_AUTH_URL},LTI_DEPLOYMENT_ID_CHECKING_ENABLED=${_LTI_DEPLOYMENT_ID_CHECKING_ENABLED},SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED},DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
-      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,LTI_ISSUER=${_LTI_ISSUER},LTI_KEY_SET_URL=${_LTI_KEY_SET_URL},LTI_AUTH_URL=${_LTI_AUTH_URL},LTI_DEPLOYMENT_ID_CHECKING_ENABLED=${_LTI_DEPLOYMENT_ID_CHECKING_ENABLED},OAUTH_TOKEN_ENCRYPTION_MODE=${_OAUTH_TOKEN_ENCRYPTION_MODE},OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=${_OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID},SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED},DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
+      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=${_SECRET_PREFIX}_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
@@ -102,8 +109,8 @@ steps:
       - "--execution-environment=gen2"
       - "--platform=managed"
       - "--add-cloudsql-instances=$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE}"
-      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,LTI_ISSUER=${_LTI_ISSUER},LTI_KEY_SET_URL=${_LTI_KEY_SET_URL},LTI_AUTH_URL=${_LTI_AUTH_URL},LTI_DEPLOYMENT_ID_CHECKING_ENABLED=${_LTI_DEPLOYMENT_ID_CHECKING_ENABLED},SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED},DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
-      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
+      - "--set-env-vars=NODE_ENV=production,APP_ENV=${_APP_ENV},APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false,LTI_ISSUER=${_LTI_ISSUER},LTI_KEY_SET_URL=${_LTI_KEY_SET_URL},LTI_AUTH_URL=${_LTI_AUTH_URL},LTI_DEPLOYMENT_ID_CHECKING_ENABLED=${_LTI_DEPLOYMENT_ID_CHECKING_ENABLED},OAUTH_TOKEN_ENCRYPTION_MODE=${_OAUTH_TOKEN_ENCRYPTION_MODE},OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=${_OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID},SEB_CONFIG_ENCRYPTION_ENABLED=${_SEB_CONFIG_ENCRYPTION_ENABLED},DATABASE_HOST=/cloudsql/$PROJECT_ID:${_LOCATION}:${_CLOUD_SQL_INSTANCE},DATABASE_PORT=5432,DATABASE_NAME=${_DATABASE_NAME},DATABASE_USER=${_DATABASE_USER},DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=${_DATABASE_POOL_MAX}"
+      - "--set-secrets=CANVAS_DOMAIN=${_SECRET_PREFIX}_canvas_domain:${_SECRET_VERSION},LTI_CLIENT_ID=${_SECRET_PREFIX}_lti_client_id:${_SECRET_VERSION},LTI_DEPLOYMENT_ID=${_SECRET_PREFIX}_lti_deployment_id:${_SECRET_VERSION},TOOL_URL=${_SECRET_PREFIX}_tool_url:${_SECRET_VERSION},LTI_PRIVATE_KEY=${_SECRET_PREFIX}_lti_private_key:${_SECRET_VERSION},SESSION_SECRET=${_SECRET_PREFIX}_session_secret:${_SECRET_VERSION},STATE_ENCRYPTION_KEY=${_SECRET_PREFIX}_state_encryption_key:${_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=${_SECRET_PREFIX}_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=${_SECRET_PREFIX}_api_client_id:${_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=${_SECRET_PREFIX}_api_client_secret:${_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=${_SECRET_PREFIX}_seb_config_encryption_cert_pem:${_SECRET_VERSION},DATABASE_PASSWORD=${_SECRET_PREFIX}_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--memory=2Gi"
       - "--cpu=2"
       - "--min-instances=${_MIN_INSTANCES}"

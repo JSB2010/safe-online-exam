@@ -1,4 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { constantTimeStringEqual as safeEqual } from "../security/constant-time.js";
 import { Injectable } from "@nestjs/common";
 import { isExpired } from "../data/document-values.js";
 import { RepositoryProvider } from "../data/repositories.js";
@@ -149,10 +150,4 @@ export function proofDocumentId(token: string): string {
 
 export function exitGrantDocumentId(token: string): string {
   return createHash("sha256").update(`seb-exit-grant:${token}`, "utf8").digest("hex");
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }

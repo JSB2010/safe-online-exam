@@ -204,31 +204,13 @@ after `prepare.sh`. It writes an upload-ready `canvas-theme-loader.js` containin
 the exact configured public origin; upload that file rather than manually
 transcribing the loader URL. The generated file contains no secret material.
 
-Create a small JavaScript loader, replacing `${TOOL_URL}` before upload:
-
-```javascript
-(function () {
-  "use strict";
-
-  const detectorUrl = "${TOOL_URL}/js/canvas-seb-detector.js";
-  const assessmentPath = /^\/courses\/\d+\/(?:quizzes\/\d+\/take|assignments\/\d+)(?:\/|$)/;
-
-  if (!assessmentPath.test(window.location.pathname)) {
-    return;
-  }
-  if (document.querySelector('script[data-canvas-seb-detector="true"]')) {
-    return;
-  }
-
-  const script = document.createElement("script");
-  script.src = detectorUrl;
-  script.async = true;
-  script.dataset.canvasSebDetector = "true";
-  document.head.appendChild(script);
-})();
-```
-
-The pattern includes Classic Quiz `/take` pages and New Quiz assignment routes, including their Canvas-generated descendants. `script.src` must be a plain JavaScript URL string, not a Markdown link.
+Use the generated loader rather than maintaining a copied snippet. Its small
+bootstrap recognizes Classic Quiz `/take` and New Quiz assignment routes, asks
+the public requirement endpoint for the canonical assessment, and downloads
+the full detector only when the authoritative response is exactly
+`{ success: true, sebRequired: true }`. Failed, malformed, rate-limited, and
+ordinary-assignment checks do not load the full detector. The requirement
+check contains no credentials or secret material.
 
 From **Admin**, select the intended account, open **Themes**, edit or create the
 active theme, and upload the loader as its desktop JavaScript. Preview, save,
@@ -247,7 +229,7 @@ When the browser console shows that `422`, do **not** disable Canvas CSRF protec
 ${TOOL_URL}/js/canvas-seb-theme-loader.js
 ```
 
-The hosted loader keeps the same quiz-route scope as the uploaded file and loads the full detector only on Canvas Classic Quiz `/take` pages and New Quiz assignment routes. Canvas's Theme Editor does not provide a direct URL field, so set this value through your Canvas provisioning or administration path and preserve it on future theme saves. For a one-off root-account recovery, run this inside the Canvas web container after replacing the account ID and URL:
+The hosted loader keeps the same route and authoritative-requirement checks as the uploaded file. Canvas's Theme Editor does not provide a direct URL field, so set this value through your Canvas provisioning or administration path and preserve it on future theme saves. For a one-off root-account recovery, run this inside the Canvas web container after replacing the account ID and URL:
 
 ```bash
 bundle exec rails runner '

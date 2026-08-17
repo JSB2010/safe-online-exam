@@ -8,10 +8,12 @@ import {
   sebConfigSettingsFingerprint
 } from "../../src/server/services/seb-config-grant.service.js";
 
+const FINGERPRINT_SECRET = "test-seb-config-fingerprint-secret";
+
 describe("SebConfigGrantService", () => {
   it("mints one-time grants bound to the verified principal and canonical target", async () => {
     const service = grantService();
-    const fingerprint = sebConfigSettingsFingerprint("course-1", "101", classicSetting());
+    const fingerprint = sebConfigSettingsFingerprint("course-1", "101", classicSetting(), FINGERPRINT_SECRET);
     const token = await service.mintGrant(requestDouble(), principal(), "course-1", "101", fingerprint);
 
     await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toMatchObject({
@@ -34,7 +36,7 @@ describe("SebConfigGrantService", () => {
       principal(),
       "course-1",
       "101",
-      sebConfigSettingsFingerprint("course-1", "101", classicSetting())
+      sebConfigSettingsFingerprint("course-1", "101", classicSetting(), FINGERPRINT_SECRET)
     );
 
     await expect(service.consumeGrant(token, "course-1", "classicquiz_102")).resolves.toBeNull();
@@ -48,7 +50,7 @@ describe("SebConfigGrantService", () => {
       principal(),
       "course-1",
       "101",
-      sebConfigSettingsFingerprint("course-1", "101", classicSetting())
+      sebConfigSettingsFingerprint("course-1", "101", classicSetting(), FINGERPRINT_SECRET)
     );
 
     await service.revokeGrant(token);
@@ -63,7 +65,7 @@ describe("SebConfigGrantService", () => {
       principal(),
       "course-1",
       "101",
-      sebConfigSettingsFingerprint("course-1", "101", classicSetting())
+      sebConfigSettingsFingerprint("course-1", "101", classicSetting(), FINGERPRINT_SECRET)
     );
 
     await expect(service.validateGrant(token, "course-1", "classicquiz_101")).resolves.toBe(true);
@@ -79,6 +81,18 @@ describe("SebConfigGrantService", () => {
     await expect(service.mintGrant(requestDouble(), principal(), "course-2", "101", "fingerprint")).rejects.toThrow(
       /principal does not match/u
     );
+  });
+
+  it("keys settings fingerprints with a server secret", () => {
+    const setting = classicSetting();
+    const fingerprint = sebConfigSettingsFingerprint("course-1", "101", setting, FINGERPRINT_SECRET);
+
+    expect(fingerprint).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(sebConfigSettingsFingerprint("course-1", "101", setting, FINGERPRINT_SECRET)).toBe(fingerprint);
+    expect(sebConfigSettingsFingerprint("course-1", "101", setting, `${FINGERPRINT_SECRET}-rotated`)).not.toBe(
+      fingerprint
+    );
+    expect(() => sebConfigSettingsFingerprint("course-1", "101", setting, "")).toThrow(/secret is required/u);
   });
 
   it.each([

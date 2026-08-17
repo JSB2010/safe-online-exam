@@ -1,5 +1,6 @@
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { transform } from "esbuild";
 
 const source = join(process.cwd(), "src/server/assets");
@@ -13,7 +14,11 @@ await mkdir(migrationsDestination, { recursive: true });
 await cp(migrationsSource, migrationsDestination, { recursive: true });
 
 const detectorPath = join(destination, "canvas-seb-detector.js");
-const detectorSource = await readFile(detectorPath, "utf8");
+const detectorDirectory = join(source, "detector");
+const detectorSourceModuleUrl = pathToFileURL(join(process.cwd(), "dist/server/server/services/detector-source.js"));
+const { readDetectorSource } = await import(detectorSourceModuleUrl.href);
+const detectorSource = await readDetectorSource(detectorDirectory);
+await writeFile(detectorPath, detectorSource);
 const minified = await transform(detectorSource, {
   format: "iife",
   legalComments: "none",

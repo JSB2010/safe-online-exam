@@ -21,21 +21,52 @@ cloudrun_require_commands() {
   done
 }
 
+cloudrun_require_explicit_oauth_token_encryption_mode() {
+  local environment_file="$1"
+  local line
+  local found_assignment=false
+  local assignment_pattern
+  local key_pattern
+  [[ -f "$environment_file" && ! -L "$environment_file" ]] ||
+    cloudrun_usage_error "configuration file must be a regular file: $environment_file"
+  assignment_pattern="^[[:space:]]*(export[[:space:]]+)?OAUTH_TOKEN_ENCRYPTION_MODE[[:space:]]*=[[:space:]]*(compat|enforce|\"compat\"|\"enforce\"|'compat'|'enforce')[[:space:]]*(#.*)?$"
+  key_pattern='^[[:space:]]*(export[[:space:]]+)?OAUTH_TOKEN_ENCRYPTION_MODE[[:space:]]*='
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ $assignment_pattern ]]; then
+      [[ "$found_assignment" == "false" ]] ||
+        cloudrun_usage_error "OAUTH_TOKEN_ENCRYPTION_MODE must be assigned exactly once in $environment_file"
+      found_assignment=true
+    elif [[ "$line" =~ $key_pattern ]]; then
+      cloudrun_usage_error \
+        "OAUTH_TOKEN_ENCRYPTION_MODE must be assigned literally to compat or enforce in $environment_file"
+    fi
+  done <"$environment_file"
+  [[ "$found_assignment" == "true" ]] && return 0
+  cloudrun_usage_error \
+    "OAUTH_TOKEN_ENCRYPTION_MODE must be set explicitly in $environment_file before an upgrade"
+}
+
 cloudrun_script_directory() {
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 }
 
 cloudrun_load_environment() {
   local environment_file="${1:-cloudrun.env}"
+  local environment_directory environment_name
   [[ -f "$environment_file" && ! -L "$environment_file" ]] ||
     cloudrun_usage_error "configuration file must be a regular file: $environment_file"
+
+  environment_directory="$(cd "$(dirname "$environment_file")" && pwd -P)"
+  environment_name="$(basename "$environment_file")"
+  CLOUDRUN_ENVIRONMENT_FILE="$environment_directory/$environment_name"
+  CLOUDRUN_DEPLOYMENT_DIRECTORY="$environment_directory"
 
   # The operator owns this protected configuration file. Shell syntax keeps the
   # downloaded bundle usable in macOS, Linux, and Cloud Shell without another
   # parser dependency.
   set -a
   # shellcheck disable=SC1090
-  source "$environment_file"
+  source "$CLOUDRUN_ENVIRONMENT_FILE"
   set +a
 
   : "${RESOURCE_NAME:=safe-online-exam}"
@@ -58,6 +89,8 @@ cloudrun_load_environment() {
   : "${CLOUD_SQL_MAINTENANCE_DAY:=SUN}"
   : "${CLOUD_SQL_MAINTENANCE_HOUR:=9}"
   : "${LTI_DEPLOYMENT_ID_CHECKING_ENABLED:=true}"
+  : "${OAUTH_TOKEN_ENCRYPTION_MODE:=enforce}"
+  : "${OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID:=primary}"
   : "${SEB_CONFIG_ENCRYPTION_ENABLED:=true}"
   : "${LTI_ISSUER:=https://canvas.instructure.com}"
   : "${LTI_KEY_SET_URL:=https://sso.canvaslms.com/api/lti/security/jwks}"
@@ -82,6 +115,16 @@ cloudrun_load_environment() {
   : "${CANVAS_DOMAIN:=}"
   : "${CANVAS_API_CLIENT_ID:=}"
 
+  # Relative protected paths belong to the durable directory containing the
+  # operator's cloudrun.env, not to whichever new release bundle invokes the
+  # upgrade command.
+  [[ "$BOOTSTRAP_DIRECTORY" == /* ]] ||
+    BOOTSTRAP_DIRECTORY="$CLOUDRUN_DEPLOYMENT_DIRECTORY/$BOOTSTRAP_DIRECTORY"
+  [[ "$CLIENT_IDENTITY_DIRECTORY" == /* ]] ||
+    CLIENT_IDENTITY_DIRECTORY="$CLOUDRUN_DEPLOYMENT_DIRECTORY/$CLIENT_IDENTITY_DIRECTORY"
+  [[ "$STATE_DIRECTORY" == /* ]] ||
+    STATE_DIRECTORY="$CLOUDRUN_DEPLOYMENT_DIRECTORY/$STATE_DIRECTORY"
+
   # Keep the original release-candidate profile names compatible without
   # changing the resources they describe.
   case "$CLOUD_SQL_PROFILE" in
@@ -102,6 +145,8 @@ cloudrun_load_environment() {
   CLOUDRUN_MIGRATE_JOB="${SERVICE:-invalid}-migrate"
   # shellcheck disable=SC2034
   CLOUDRUN_CLEANUP_JOB="${SERVICE:-invalid}-cleanup"
+  # shellcheck disable=SC2034
+  CLOUDRUN_OAUTH_TOKEN_ENCRYPTION_JOB="${SERVICE:-invalid}-encrypt-oauth-tokens"
   # shellcheck disable=SC2034
   CLOUDRUN_SCHEDULER_JOB="${SERVICE:-invalid}-cleanup"
 }
@@ -311,6 +356,10 @@ cloudrun_validate_base() {
   cloudrun_validate_boolean PUBLIC_ACCESS "$PUBLIC_ACCESS"
   cloudrun_validate_boolean DISABLE_DEFAULT_URL_AFTER_FINALIZE "$DISABLE_DEFAULT_URL_AFTER_FINALIZE"
   cloudrun_validate_boolean LTI_DEPLOYMENT_ID_CHECKING_ENABLED "$LTI_DEPLOYMENT_ID_CHECKING_ENABLED"
+  [[ "$OAUTH_TOKEN_ENCRYPTION_MODE" == "compat" || "$OAUTH_TOKEN_ENCRYPTION_MODE" == "enforce" ]] ||
+    cloudrun_usage_error "OAUTH_TOKEN_ENCRYPTION_MODE must be compat or enforce"
+  [[ "$OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] ||
+    cloudrun_usage_error "OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID is invalid"
   cloudrun_validate_boolean SEB_CONFIG_ENCRYPTION_ENABLED "$SEB_CONFIG_ENCRYPTION_ENABLED"
   cloudrun_validate_boolean ALLOW_EXISTING_DATABASE_USER "$ALLOW_EXISTING_DATABASE_USER"
   [[ "$CLOUD_SQL_API_READY_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
@@ -449,6 +498,68 @@ cloudrun_write_random_secret() {
   printf '%s' "$value" >"$output_path"
 }
 
+cloudrun_ensure_oauth_token_encryption_bootstrap() (
+  local keyring_path="$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"
+  local temporary_file oauth_token_key
+
+  [[ -d "$BOOTSTRAP_DIRECTORY" && ! -L "$BOOTSTRAP_DIRECTORY" ]] ||
+    cloudrun_die "bootstrap directory is missing: $BOOTSTRAP_DIRECTORY"
+
+  # Existing installations keep every previously protected value. The 1.1
+  # transition adds only this new file; never replace it once it exists, even
+  # when the existing path is malformed (cloudrun_assert_bootstrap reports that
+  # condition without destroying operator-managed material).
+  if [[ -e "$keyring_path" || -L "$keyring_path" ]]; then
+    return 0
+  fi
+
+  oauth_token_key="$(openssl rand -base64 32 | tr '/+' '_-' | tr -d '=\n')" ||
+    cloudrun_die "OpenSSL could not generate the OAuth token encryption key"
+  [[ "$oauth_token_key" =~ ^[A-Za-z0-9_-]{43}$ ]] ||
+    cloudrun_die "OpenSSL generated an invalid OAuth token encryption key"
+
+  temporary_file="$(mktemp "$BOOTSTRAP_DIRECTORY/.oauth-token-encryption-keyring.XXXXXX")"
+  trap 'rm -f -- "$temporary_file"' EXIT
+  jq -cn \
+    --arg key_id "$OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID" \
+    --arg key "$oauth_token_key" \
+    '{($key_id): $key}' >"$temporary_file"
+  chmod 600 "$temporary_file"
+  mv "$temporary_file" "$keyring_path"
+  trap - EXIT
+
+  echo "Generated the new protected OAuth token encryption keyring without changing existing bootstrap values." >&2
+)
+
+cloudrun_assert_oauth_token_encryption_keyring_not_established() {
+  local keyring_path="$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring"
+  local describe_error recorded_version secret_name versions
+
+  [[ ! -e "$keyring_path" && ! -L "$keyring_path" ]] || return 0
+
+  recorded_version=""
+  if [[ -f "$CLOUDRUN_SECRET_VERSION_STATE" ]]; then
+    recorded_version="$(awk -F= -v key=OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION \
+      '$1 == key { value=$2 } END { print value }' "$CLOUDRUN_SECRET_VERSION_STATE")"
+  fi
+  [[ ! "$recorded_version" =~ ^[1-9][0-9]*$ ]] ||
+    cloudrun_die "the local OAuth token encryption keyring is missing but Secret Manager version $recorded_version is already recorded; restore the protected bootstrap file instead of replacing its encryption key"
+
+  secret_name="${SECRET_PREFIX}_oauth_token_encryption_keyring"
+  if describe_error="$(gcloud secrets describe "$secret_name" --project="$PROJECT_ID" 2>&1 >/dev/null)"; then
+    versions="$(gcloud secrets versions list \
+      --secret="$secret_name" \
+      --project="$PROJECT_ID" \
+      --limit=1 \
+      --format='value(name)')" ||
+      cloudrun_die "could not inspect existing versions of $secret_name"
+    [[ -z "$versions" ]] ||
+      cloudrun_die "the local OAuth token encryption keyring is missing but $secret_name already has a Secret Manager version; restore the protected bootstrap file instead of replacing its encryption key"
+  elif ! grep -qE '(^|[[:space:]])NOT_FOUND:' <<<"$describe_error"; then
+    cloudrun_die "could not determine whether $secret_name already exists; Secret Manager inspection failed: $describe_error"
+  fi
+}
+
 cloudrun_require_single_line_secret() {
   local name="$1"
   local file_path="$2"
@@ -564,6 +675,75 @@ cloudrun_set_secret_version() {
   mv "$temporary_file" "$state_file"
 }
 
+cloudrun_secret_version_matches_bootstrap() (
+  local version="$1"
+  local secret_name="$2"
+  local bootstrap_file="$3"
+  local temporary_file
+  temporary_file="$(mktemp "${CLOUDRUN_SECRET_VERSION_STATE}.compare.XXXXXX")"
+  chmod 600 "$temporary_file"
+  trap 'rm -f "$temporary_file"' EXIT
+
+  if ! gcloud secrets versions access "$version" \
+    --secret="$secret_name" \
+    --project="$PROJECT_ID" \
+    --out-file="$temporary_file" \
+    --quiet >/dev/null 2>&1; then
+    return 2
+  fi
+  cmp -s "$bootstrap_file" "$temporary_file"
+)
+
+cloudrun_ensure_secret_versions() {
+  local _environment_name suffix file_name version_key secret_name bootstrap_file existing_version
+  local comparison_status version_resource version
+  while IFS=$'\t' read -r _environment_name suffix file_name version_key; do
+    secret_name="${SECRET_PREFIX}_${suffix}"
+    bootstrap_file="$BOOTSTRAP_DIRECTORY/$file_name"
+    if ! gcloud secrets describe "$secret_name" \
+      --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud secrets create "$secret_name" \
+        --project="$PROJECT_ID" \
+        --replication-policy=automatic \
+        --quiet
+    fi
+    gcloud secrets add-iam-policy-binding "$secret_name" \
+      --project="$PROJECT_ID" \
+      --member="serviceAccount:$CLOUDRUN_RUNTIME_SERVICE_ACCOUNT" \
+      --role=roles/secretmanager.secretAccessor \
+      --condition=None \
+      --quiet >/dev/null
+
+    existing_version=""
+    if [[ -f "$CLOUDRUN_SECRET_VERSION_STATE" ]]; then
+      existing_version="$(awk -F= -v key="$version_key" '$1 == key { value=$2 } END { print value }' "$CLOUDRUN_SECRET_VERSION_STATE")"
+    fi
+    if [[ "$existing_version" =~ ^[1-9][0-9]*$ ]] &&
+      [[ "$(gcloud secrets versions describe "$existing_version" \
+        --secret="$secret_name" \
+        --project="$PROJECT_ID" \
+        --format='value(state)' 2>/dev/null || true)" == "ENABLED" ]]; then
+      if cloudrun_secret_version_matches_bootstrap \
+        "$existing_version" "$secret_name" "$bootstrap_file"; then
+        continue
+      else
+        comparison_status=$?
+      fi
+      [[ "$comparison_status" -eq 1 ]] ||
+        cloudrun_die "could not compare the protected bootstrap value with $secret_name version $existing_version; grant the deployer access to that exact secret version"
+    fi
+
+    version_resource="$(gcloud secrets versions add "$secret_name" \
+      --project="$PROJECT_ID" \
+      --data-file="$bootstrap_file" \
+      --format='value(name)')"
+    version="${version_resource##*/}"
+    [[ "$version" =~ ^[1-9][0-9]*$ ]] ||
+      cloudrun_die "Secret Manager did not return a numeric version for $secret_name"
+    cloudrun_set_secret_version "$version_key" "$version"
+  done < <(cloudrun_secret_specs)
+}
+
 cloudrun_environment_csv() {
   printf '%s' \
     "NODE_ENV=production" \
@@ -571,6 +751,8 @@ cloudrun_environment_csv() {
     ",APP_DEBUG_ENABLED=false" \
     ",APP_DETECTOR_DIAGNOSTICS_ENABLED=false" \
     ",LTI_DEPLOYMENT_ID_CHECKING_ENABLED=$LTI_DEPLOYMENT_ID_CHECKING_ENABLED" \
+    ",OAUTH_TOKEN_ENCRYPTION_MODE=$OAUTH_TOKEN_ENCRYPTION_MODE" \
+    ",OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=$OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID" \
     ",SEB_CONFIG_ENCRYPTION_ENABLED=$SEB_CONFIG_ENCRYPTION_ENABLED" \
     ",DATABASE_HOST=/cloudsql/$CLOUDRUN_CONNECTION_NAME" \
     ",DATABASE_PORT=5432" \
@@ -614,6 +796,11 @@ cloudrun_assert_bootstrap() {
     (.d | type == "string" and length > 0)
   ' "$BOOTSTRAP_DIRECTORY/lti_private_key" >/dev/null ||
     cloudrun_die "LTI private key is not a valid private RSA JWK with a key ID"
+  jq -e --arg key_id "$OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID" '
+    type == "object" and
+    (.[$key_id] | type == "string" and test("^[A-Za-z0-9_-]{43}$"))
+  ' "$BOOTSTRAP_DIRECTORY/oauth_token_encryption_keyring" >/dev/null ||
+    cloudrun_die "OAuth token encryption keyring does not contain the configured 32-byte base64url key"
   openssl x509 -in "$BOOTSTRAP_DIRECTORY/seb-config-encryption.crt.pem" -noout -checkend 86400 >/dev/null ||
     cloudrun_die "SEB configuration-encryption certificate is invalid or expires within one day"
   ! cmp -s "$BOOTSTRAP_DIRECTORY/session_secret" "$BOOTSTRAP_DIRECTORY/state_encryption_key" ||

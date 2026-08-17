@@ -24,7 +24,9 @@ Preserve behavior before refactoring. Canvas LTI URLs, Cloud Run service names, 
 Install:
 
 ```bash
-npm ci
+npm run verify:dependency-policy
+npm ci --ignore-scripts
+npm run install:trusted
 ```
 
 Local verification:
@@ -66,9 +68,15 @@ npm start
 Deploy through Cloud Build:
 
 ```bash
-gcloud builds submit --config=cloudbuild-dev.yaml
-gcloud builds submit --config=cloudbuild-prod.yaml
+gcloud builds submit --config=cloudbuild-dev.yaml \
+  --substitutions=_OAUTH_TOKEN_ENCRYPTION_MODE=compat
+gcloud builds submit --config=cloudbuild-prod.yaml \
+  --substitutions=_IMAGE_DIGEST=sha256:RELEASE_DIGEST,_RELEASE_TAG=vX.Y.Z,_SOURCE_DIGEST=40_CHARACTER_GIT_SHA,_GITHUB_ATTESTATION_TOKEN_SECRET_VERSION=SECRET_VERSION,_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION=KEYRING_VERSION,_OAUTH_TOKEN_ENCRYPTION_MODE=compat
 ```
+
+Use `compat` for the first deployment to an existing installation. Use
+`enforce` only for a fresh installation or the subsequent staged deployment
+after the compatibility revision is verified.
 
 Public releases are tag-driven. After synchronized version metadata is merged
 to `main`, push one annotated `vX.Y.Z` tag. The GitHub workflow owns the draft,
@@ -90,9 +98,12 @@ Canvas points at the Cloud Run service URLs. Changing service URLs is a Canvas i
 
 ## Build and CI
 
-Cloud Build should behave as the deployment CI gate. The Dockerfile owns install, typecheck, lint, format check, coverage tests, build, production prune, and runtime assembly. A separate Cloud Build step runs real PostgreSQL migration/concurrency tests. Deploy the migration job and wait for it before deploying the service.
+Cloud Build should behave as the deployment CI gate. Development and named-school source builds use the Dockerfile for install, typecheck, lint, format check, coverage tests, build, production prune, and runtime assembly, plus a separate real-PostgreSQL migration/concurrency step. Production Cloud Build accepts only a published immutable release digest so dependency code never executes under the production deploy identity. Deploy the migration job and wait for it before deploying the service.
 
-The Cloud Build configs pull the previous Artifact Registry image and pass `--cache-from` to Docker. This keeps the deterministic Docker build while allowing dependency and build layers to be reused when possible.
+The development and named-school source-build configs pull the previous
+Artifact Registry image and pass `--cache-from` to Docker. This keeps their
+deterministic Docker builds while allowing dependency and build layers to be
+reused when possible. Production promotion does not rebuild source.
 
 Playwright e2e tests are available through `npm run test:e2e`. They are not part of the default deploy Cloud Build because browser installation materially increases deploy time. Use them locally and in a separate PR/nightly CI path if this repository later gets one.
 
@@ -170,16 +181,16 @@ Important variables:
 
 ```text
 src/
-  client/              React UI and styles
+  client/              React router, role-focused features, shared UI/helpers, and ordered styles
   server/
-    assets/            Canvas detector script
+    assets/            Ordered Canvas detector source fragments
     config/            environment config
-    controllers/       HTTP controllers
-    data/              PostgreSQL migrations/repositories and in-memory test repositories
-    http/              app shell, CORS, URL, and API error helpers
-    services/          Canvas, LTI, quiz, content, SEB behavior
+    controllers/       HTTP route controllers plus route-specific coordinators/helpers
+    data/              PostgreSQL migrations/modular stores and in-memory test repositories
+    http/              app shell, static-asset delivery, CORS, URL, and API error helpers
+    services/          Canvas, LTI, assessment, content, and SEB behavior modules
     types/             Express/session type augmentation
-  shared/              shared domain models
+  shared/              Shared domain model modules and compatibility barrel
 test/
   e2e/                 Playwright browser tests
   server/              Vitest unit/service tests

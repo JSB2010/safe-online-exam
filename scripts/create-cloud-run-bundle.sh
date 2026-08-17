@@ -55,6 +55,8 @@ cp deploy/jamf/org.safeonlineexam.seb-identity-installer.plist \
 cp scripts/install-cloud-run.sh "$bundle_directory/install.sh"
 cp scripts/finalize-cloud-run-lti.sh "$bundle_directory/finalize-lti.sh"
 cp scripts/upgrade-cloud-run.sh "$bundle_directory/upgrade.sh"
+cp scripts/validate-oauth-encryption-rollout.sh "$bundle_directory/validate-oauth-encryption-rollout.sh"
+cp scripts/encrypt-cloud-run-oauth-tokens.sh "$bundle_directory/encrypt-oauth-tokens.sh"
 cp scripts/rollback-cloud-run.sh "$bundle_directory/rollback.sh"
 chmod 0755 \
   "$bundle_directory/setup.sh" \
@@ -70,6 +72,8 @@ chmod 0755 \
   "$bundle_directory/install.sh" \
   "$bundle_directory/finalize-lti.sh" \
   "$bundle_directory/upgrade.sh" \
+  "$bundle_directory/validate-oauth-encryption-rollout.sh" \
+  "$bundle_directory/encrypt-oauth-tokens.sh" \
   "$bundle_directory/rollback.sh"
 chmod 0644 \
   "$bundle_directory/cloudrun.env.example" \

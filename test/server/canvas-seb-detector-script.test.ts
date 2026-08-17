@@ -1,11 +1,11 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
 import * as plist from "plist";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
+import { readDetectorSourceSync } from "../../src/server/services/detector-source.js";
 
-const DETECTOR_PATH = join(process.cwd(), "src/server/assets/canvas-seb-detector.js");
+const DETECTOR_SOURCE = readDetectorSourceSync(join(process.cwd(), "src/server/assets/detector"));
 const APP_BASE_URL = "https://tool.example.edu";
 const CANVAS_BASE_URL = "https://canvas.example.edu";
 const LTI_CLIENT_ID = "10000000000001";
@@ -696,6 +696,42 @@ describe("Safe Online Exam detector script", () => {
 
     expect(context.document.body.textContent).toContain("Something went wrong");
     expect(context.document.body.textContent).toContain(message);
+  });
+
+  it("cannot redeem an access code when a normal browser spoofs SEB client signals", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      userAgent: "Mozilla/5.0 SafeExamBrowser",
+      safeExamBrowser: { security: { configKey: "attacker-controlled" } },
+      fetchResponses: {
+        "/api/seb/access-proof/11825/23455": {
+          __status: 403,
+          success: false,
+          error_code: "INVALID_SEB_CONFIG_PROOF"
+        },
+        "/api/seb/access-code/11825/23455": {
+          success: true,
+          accessCode: "must-not-be-disclosed"
+        }
+      },
+      body: `
+        <main>
+          <form id="access_code_form" action="/courses/11825/quizzes/23455/take">
+            <input name="access_code" type="password" />
+            <button type="submit">Submit</button>
+          </form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await vi.advanceTimersByTimeAsync(2_600);
+    await flushPromises();
+
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/access-proof/"))).toBe(true);
+    expect(context.fetch.mock.calls.some(([input]) => String(input).includes("/api/seb/access-code/"))).toBe(false);
+    expect(context.document.querySelector<HTMLInputElement>('input[name="access_code"]')?.value).toBe("");
+    expect(context.document.body.textContent).not.toContain("must-not-be-disclosed");
   });
 
   it("does not treat access-code submit buttons as final quiz submissions", async () => {
@@ -2128,7 +2164,7 @@ describe("Safe Online Exam detector script", () => {
     expect(openWindow).toHaveBeenCalledWith("https://calc.example.edu", expect.stringMatching(/^seb_exam_tool_/u));
   });
 
-  it("emits only structural console markers when server debug mode is enabled", async () => {
+  it("intentionally emits only structural console markers when server debug mode is enabled", async () => {
     const endpointContext = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
       debugResponse: { enabled: true },
@@ -2376,8 +2412,7 @@ function createDetectorContext(options: DetectorContextOptions) {
     Event: dom.window.Event,
     async runDetector() {
       const debugEnabled = options.debugResponse?.enabled === true || options.debugResponse?.debugEnabled === true;
-      const source = readFileSync(DETECTOR_PATH, "utf8")
-        .replaceAll('"__SEB_BASE_URL__"', JSON.stringify(APP_BASE_URL))
+      const source = DETECTOR_SOURCE.replaceAll('"__SEB_BASE_URL__"', JSON.stringify(APP_BASE_URL))
         .replaceAll('"__LTI_CLIENT_ID__"', JSON.stringify(LTI_CLIENT_ID))
         .replaceAll(
           '"__LTI_DEPLOYMENT_ID_CHECKING_ENABLED__"',
