@@ -5,6 +5,20 @@ release.
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-08-17
+
+Safe Online Exam 1.0.7 is a backward-compatible Canvas detector compatibility
+hotfix. It adds no database migration, OAuth scope, LTI registration URL, or
+public compatibility endpoint.
+
+### Sharded Canvas installations
+
+- Recognize a Canvas External Tools API Developer Key ID when Canvas returns
+  the shard-local form of the globally qualified LTI client ID.
+- Preserve exact client-ID matching and continue rejecting malformed, zero,
+  or unrelated IDs while retaining the existing LTI version and deployment-ID
+  checks.
+
 ## [1.0.6] - 2026-08-12
 
 Safe Online Exam 1.0.6 is a backward-compatible Canvas detector hotfix. It
@@ -355,7 +369,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.7
 [1.0.6]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.6
 [1.0.5]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.5
 [1.0.4]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.4

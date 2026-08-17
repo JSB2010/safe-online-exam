@@ -131,6 +131,60 @@ describe("Safe Online Exam detector script", () => {
     );
   });
 
+  it("matches a shard-local Canvas developer key ID to the globally qualified LTI client ID", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      canvasExternalTools: [
+        {
+          id: 44,
+          version: "1.3",
+          developer_key_id: 1,
+          deployment_id: LTI_DEPLOYMENT_ID
+        }
+      ],
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form"><input name="access_code" type="password" /></form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    const openSebLink = context.document.querySelector<HTMLAnchorElement>("#seb-launch-open-link");
+    expect(new URL(openSebLink!.href).pathname).toBe("/courses/11825/external_tools/44");
+  });
+
+  it("rejects a different shard-local Canvas developer key ID", async () => {
+    const context = createDetectorContext({
+      path: "/courses/11825/quizzes/23455/take",
+      sebRequired: true,
+      canvasExternalTools: [
+        {
+          id: 44,
+          version: "1.3",
+          developer_key_id: 2,
+          deployment_id: LTI_DEPLOYMENT_ID
+        }
+      ],
+      body: `
+        <main>
+          <h1 id="quiz_title">Midterm Quiz</h1>
+          <form id="access_code_form"><input name="access_code" type="password" /></form>
+        </main>
+      `
+    });
+
+    await context.runDetector();
+    await flushPromises();
+
+    expect(context.document.getElementById("seb-launch-open-link")).toBeNull();
+    expect(context.document.body.textContent).toContain("could not locate its Canvas course installation");
+  });
+
   it("uses the configured installation when a visible navigation label belongs to a different tool", async () => {
     const context = createDetectorContext({
       path: "/courses/11825/quizzes/23455/take",
