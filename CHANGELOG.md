@@ -13,8 +13,9 @@ public compatibility endpoint.
 
 ### Sharded Canvas installations
 
-- Recognize a Canvas External Tools API Developer Key ID when Canvas returns
-  the shard-local form of the globally qualified LTI client ID.
+- Keep hidden-course-navigation launches working when Canvas's External Tools
+  API returns a shard-local Developer Key ID for the globally qualified LTI
+  client ID.
 - Preserve exact client-ID matching and continue rejecting malformed, zero,
   or unrelated IDs while retaining the existing LTI version and deployment-ID
   checks.
