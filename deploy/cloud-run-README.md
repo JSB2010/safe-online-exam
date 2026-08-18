@@ -110,6 +110,12 @@ cp cloudrun.env.example cloudrun.env
 chmod 600 cloudrun.env
 ```
 
+Set `LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS=false` in `cloudrun.env` when
+students should reach Safe Online Exam only from protected quiz pages. The
+install and upgrade scripts pass this value to every Cloud Run job and service;
+after deployment, refresh the Canvas LTI Developer Key from `/lti/config` so
+Canvas stores the `admins` course-navigation visibility.
+
 Do not extract a release bundle or keep `BOOTSTRAP_DIRECTORY`,
 `CLIENT_IDENTITY_DIRECTORY`, or `STATE_DIRECTORY` under `/tmp`, `/private/tmp`,
 or `TMPDIR`. `bootstrap-secrets.sh` rejects those locations because automatic

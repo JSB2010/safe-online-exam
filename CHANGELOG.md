@@ -5,6 +5,37 @@ release.
 
 ## [Unreleased]
 
+### Configurable student navigation
+
+- Add `LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS`; only an explicit `false`
+  changes the Canvas course-navigation placement from `members` to `admins`,
+  while the protected-quiz student launch path remains available.
+- Carry the setting through Docker, Cloud Run, named-school, and testbed
+  deployment configuration.
+
+### Optional setup check
+
+- Stop automatically opening the setup-check dialog after Canvas connection.
+- Offer the unfinished setup check as a recommended action beside **Return to
+  course** and **Open Safe Exam Browser**, and return it to the ordinary action
+  after the reminder is dismissed or the check starts.
+- Keep setup-check launch independent from reminder persistence so a temporary
+  preference-save failure cannot block the check.
+
+### Browser launch handoff
+
+- Keep assessment and setup-check launches available across Canvas iframe and
+  browser storage-context transitions by exchanging a short-lived,
+  server-backed one-time handoff instead of relying only on `sessionStorage`.
+- Retain the browser-storage handoff as a compatibility fallback and consume it
+  after the launcher page commits so React rerenders cannot discard a valid
+  launch.
+- Derive every browser return target from the verified Canvas course instead of
+  accepting the SEB-required page URL from the browser.
+- Make **Return to course** the primary post-handoff action and replace the
+  launcher history entry. Reused, expired, and invalid handoffs now leave for
+  Canvas instead of navigating back into the assessment-launch prompt.
+
 ## [1.0.7] - 2026-08-17
 
 Safe Online Exam 1.0.7 is a backward-compatible Canvas detector compatibility

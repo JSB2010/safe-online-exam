@@ -71,6 +71,7 @@ export interface TransientStateRecord extends Record<string, any> {
     | "seb-proof-v2"
     | "seb-exit-grant"
     | "seb-config-grant"
+    | "seb-browser-launch-handoff"
     | "seb-session-handoff-config"
     | "admission-budget";
   payload?: Record<string, string>;

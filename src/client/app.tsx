@@ -76,7 +76,7 @@ function renderView() {
     case "seb-launching":
       return <SebLaunchingPage data={bootstrap.data} />;
     case "seb-launching-handoff":
-      return <SebLaunchingHandoffPage />;
+      return <SebLaunchingHandoffPage data={bootstrap.data} />;
     case "seb-exit":
       return <SebExitPage data={bootstrap.data} />;
     case "seb-quit":

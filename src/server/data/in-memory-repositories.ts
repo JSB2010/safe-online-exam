@@ -195,7 +195,7 @@ export class InMemoryTransientStateStore
   async consume(id: string): Promise<TransientStateRecord | null> {
     const existing = await this.get(id);
     if (!existing || existing.consumedAt || isExpired(existing.expiresAt)) {
-      if (existing) {
+      if (existing && isExpired(existing.expiresAt)) {
         await this.delete(id);
       }
       return null;

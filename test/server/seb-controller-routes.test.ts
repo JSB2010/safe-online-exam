@@ -14,17 +14,58 @@ import { SebConfigurationService } from "../../src/server/services/seb-configura
 const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
 describe("SebController route contracts", () => {
-  it("renders a no-store same-tab SEB handoff shell without placing a configuration URL in the response", () => {
+  it("renders a no-store same-tab SEB handoff shell without placing a configuration URL in an invalid response", async () => {
     const response = responseDouble();
     const { controller } = controllerWith({});
 
-    controller.launchHandoff(response);
+    await controller.launchHandoff(response, "invalid");
 
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store");
     expect(response.setHeader).toHaveBeenCalledWith("referrer-policy", "no-referrer");
     const html = response.send.mock.calls[0][0] as string;
     expect(html).toContain('"view":"seb-launching-handoff"');
     expect(html).not.toContain("sebs://");
+    expect(html).toContain('"browserReturnUrl":"https://canvas.example.edu/"');
+  });
+
+  it("keeps only the Canvas course return action when a one-time handoff is reused", async () => {
+    const response = responseDouble();
+    const { controller, configGrants } = controllerWith({
+      configGrants: {
+        consumeBrowserLaunchHandoff: vi.fn().mockResolvedValue(null),
+        getBrowserLaunchHandoffReturnUrl: vi.fn().mockResolvedValue("https://canvas.example.edu/courses/course-1")
+      }
+    });
+
+    await controller.launchHandoff(response, "h".repeat(43));
+
+    expect(configGrants.consumeBrowserLaunchHandoff).toHaveBeenCalledWith("h".repeat(43));
+    expect(configGrants.getBrowserLaunchHandoffReturnUrl).toHaveBeenCalledWith("h".repeat(43));
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).toContain('"browserReturnUrl":"https://canvas.example.edu/courses/course-1"');
+    expect(html).not.toContain("sebs://");
+  });
+
+  it("consumes a server-backed browser handoff into the no-store launcher shell", async () => {
+    const response = responseDouble();
+    const { controller, configGrants } = controllerWith({
+      configGrants: {
+        consumeBrowserLaunchHandoff: vi.fn().mockResolvedValue({
+          sebLaunchUrl: "sebs://tool.example.edu/seb/config/course-1/classicquiz_23455.seb?grant=opaque",
+          browserReturnUrl: "https://tool.example.edu/seb/launch/classicquiz_23455",
+          launchPurpose: "assessment"
+        })
+      }
+    });
+
+    await controller.launchHandoff(response, "h".repeat(43));
+
+    expect(configGrants.consumeBrowserLaunchHandoff).toHaveBeenCalledWith("h".repeat(43));
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store");
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).toContain('"view":"seb-launching-handoff"');
+    expect(html).toContain("sebs://tool.example.edu/seb/config/course-1/classicquiz_23455.seb?grant=opaque");
+    expect(html).toContain('"launchPurpose":"assessment"');
   });
 
   it("redirects Classic Quiz enforcement when SEB is not required", async () => {
@@ -431,16 +472,28 @@ describe("SebController route contracts", () => {
       controller.issueConfigGrant(
         requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
         "course-1",
-        "classicquiz_23455"
+        "classicquiz_23455",
+        {
+          handoffPurpose: "assessment",
+          returnUrl: "https://tool.example.edu/seb/launch/classicquiz_23455?connected=1"
+        }
       )
     ).resolves.toMatchObject({
       success: true,
       sebLaunchUrl: expect.stringMatching(
         /^sebs:\/\/tool\.example\.edu\/seb\/config\/course-1\/classicquiz_23455\.seb\?grant=/u
       ),
+      handoffUrl: `/seb/launch-handoff?key=${"h".repeat(43)}`,
       expiresInSeconds: 120
     });
     expect(configGrants.mintGrant).toHaveBeenCalledTimes(1);
+    expect(configGrants.mintBrowserLaunchHandoff).toHaveBeenCalledWith({
+      sebLaunchUrl: expect.stringMatching(
+        /^sebs:\/\/tool\.example\.edu\/seb\/config\/course-1\/classicquiz_23455\.seb\?grant=/u
+      ),
+      browserReturnUrl: "https://canvas.example.edu/courses/course-1",
+      launchPurpose: "assessment"
+    });
     expect(assessments.isCourseResetInProgress).toHaveBeenCalledWith("course-1");
 
     await expect(
@@ -585,7 +638,7 @@ describe("SebController route contracts", () => {
   });
 
   it("uses the same scoped Canvas session request in the student readiness check", async () => {
-    const { controller, canvasApi } = controllerWith();
+    const { controller, canvasApi, configGrants } = controllerWith();
     const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
       subject: "opaque-student-1",
       deploymentId: "deployment-1",
@@ -593,9 +646,20 @@ describe("SebController route contracts", () => {
     });
 
     await expect(
-      controller.verifyStudentSessionReadiness(requestDouble("/api/seb/session-readiness", token))
-    ).resolves.toEqual({ success: true, checks: { canvasSessionAuthorization: true } });
+      controller.verifyStudentSessionReadiness(requestDouble("/api/seb/session-readiness", token), {
+        returnUrl: "https://tool.example.edu/seb/launch/classicquiz_23455?connected=1"
+      })
+    ).resolves.toEqual({
+      success: true,
+      checks: { canvasSessionAuthorization: true },
+      handoffUrl: `/seb/launch-handoff?key=${"h".repeat(43)}`
+    });
     expect(canvasApi.getSessionToken).toHaveBeenCalledWith("student-1", "https://canvas.example.edu/courses/course-1");
+    expect(configGrants.mintBrowserLaunchHandoff).toHaveBeenCalledWith({
+      sebLaunchUrl: "sebs://tool.example.edu/seb/check/config.seb",
+      browserReturnUrl: "https://canvas.example.edu/courses/course-1",
+      launchPurpose: "setup-check"
+    });
   });
 
   it("persists only a student's setup-check reminder dismissal", async () => {
@@ -996,6 +1060,7 @@ describe("SebController route contracts", () => {
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store");
     expect(response.redirect).not.toHaveBeenCalled();
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-launching"'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"launchPurpose":"assessment"'));
     expect(response.send).toHaveBeenCalledWith(
       expect.stringContaining(
         `sebs://tool.example.edu/seb/config/course-1/classicquiz_23455.seb?grant=${"g".repeat(43)}`
@@ -1059,7 +1124,32 @@ describe("SebController route contracts", () => {
 
     expect(configGrants.mintGrant).not.toHaveBeenCalled();
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-download"'));
-    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"showReadinessPrompt":true'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"readinessRecommended":true'));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"showReadinessPrompt"'));
+  });
+
+  it("uses the settled setup-check action after the student dismissed the reminder", async () => {
+    const setting = {
+      quizId: "23455",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      urlRules: [],
+      externalTools: []
+    };
+    const { controller } = controllerWith({
+      assessments: {
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" }),
+        getSebSettingForQuiz: vi.fn().mockResolvedValue(setting)
+      },
+      canvasApi: { hasDismissedStudentReadinessPrompt: vi.fn().mockResolvedValue(true) }
+    });
+    const response = responseDouble();
+
+    await controller.launchGet(requestDouble("/seb/launch/classicquiz_23455"), response, "classicquiz_23455");
+
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"readinessRecommended":false'));
   });
 
   it("keeps compatibility GETs non-mutating and rejects cross-site navigation", async () => {
@@ -1121,6 +1211,9 @@ function controllerWith(options: Record<string, any> = {}) {
   const configGrants = {
     mintGrant: vi.fn().mockResolvedValue("g".repeat(43)),
     revokeGrant: vi.fn().mockResolvedValue(undefined),
+    mintBrowserLaunchHandoff: vi.fn().mockResolvedValue("h".repeat(43)),
+    consumeBrowserLaunchHandoff: vi.fn().mockResolvedValue(null),
+    getBrowserLaunchHandoffReturnUrl: vi.fn().mockResolvedValue(null),
     consumeGrant: vi.fn(),
     validateGrant: vi.fn().mockResolvedValue(false),
     getTokenTtlSeconds: vi.fn().mockReturnValue(120),

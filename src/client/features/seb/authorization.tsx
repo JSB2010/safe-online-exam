@@ -46,7 +46,7 @@ function oauthPopupAcknowledgementType(messageType: string): string {
 export function StudentSessionAuthorizationPage({ data }: { data: Record<string, any> }) {
   const authUrl = safeSameOriginNavigationTarget(data.authUrl, "/api/student-session-authorize");
   const onConnected = useCallback((payload: Record<string, unknown>) => {
-    window.location.assign(safeSameOriginNavigationTarget(payload.returnUrl, "/lti/launch?connected=1"));
+    window.location.replace(safeSameOriginNavigationTarget(payload.returnUrl, "/lti/launch?connected=1"));
   }, []);
 
   return (

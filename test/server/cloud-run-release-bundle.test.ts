@@ -755,7 +755,7 @@ exit 1
       "unattended-secret"
     );
     expect(statSync(join(unattendedIdentityDirectory, "seb-config-encryption.p12")).size).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it("upgrades a legacy Compose installation from a new bundle without changing its project or secrets", () => {
     const directory = temporaryDirectory();

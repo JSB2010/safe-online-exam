@@ -6,12 +6,12 @@ supported client with Safe Exam Browser installed.
 
 ## Roles At A Glance
 
-| Role                        | Opens Safe Online Exam from                       | Primary responsibility                                                                        |
-| --------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Root-account administrator  | **Safe Online Exam Admin** in account navigation  | Connect courses, recover settings, and manage school tool presets                             |
-| Instructor                  | **Safe Online Exam** in course navigation         | Configure course policy and choose which assessments require SEB                              |
-| Student                     | **Safe Online Exam** in course navigation or quiz | Connect Canvas, run the optional setup check, and launch protected assessments                |
-| Infrastructure/device admin | Outside Canvas                                    | Operate the service and deliver the SEB configuration-encryption identity to approved clients |
+| Role                        | Opens Safe Online Exam from                                                      | Primary responsibility                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Root-account administrator  | **Safe Online Exam Admin** in account navigation                                 | Connect courses, recover settings, and manage school tool presets                             |
+| Instructor                  | **Safe Online Exam** in course navigation                                        | Configure course policy and choose which assessments require SEB                              |
+| Student                     | **Safe Online Exam** in course navigation when enabled, or from a protected quiz | Connect Canvas, run the optional setup check, and launch protected assessments                |
+| Infrastructure/device admin | Outside Canvas                                                                   | Operate the service and deliver the SEB configuration-encryption identity to approved clients |
 
 Canvas LTI identity and Canvas API authorization are separate. The first time
 a user needs Canvas API access, the application displays **Connect Canvas**.
@@ -262,6 +262,14 @@ The check exercises configuration download, certificate decryption, SEB
 runtime detection, storage, connectivity, and Config Key proof. It does not
 release an assessment access code, prove the device is institution-managed, or
 guarantee that a future network and assessment will be unchanged.
+
+Until the reminder is dismissed or the check is started, protected quiz launch
+pages show **Setup check (recommended)** beside **Return to course** and **Open
+Safe Exam Browser**. The dialog opens only when the student selects that button;
+it never interrupts or blocks the normal assessment launch. After dismissal or
+starting the check, the ordinary **Setup check** action remains available
+without the recommendation. This reminder preference is not a device-trust or
+setup-completion record.
 
 ### Open An Assessment
 

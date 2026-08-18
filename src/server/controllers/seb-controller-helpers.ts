@@ -173,6 +173,10 @@ export function configGrantEndpoint(courseId: string, contentId: string): string
   return `/api/seb/config-grant/${encodeURIComponent(courseId)}/${encodeURIComponent(contentId)}`;
 }
 
+export function browserLaunchHandoffPath(token: string): string {
+  return `/seb/launch-handoff?key=${encodeURIComponent(token)}`;
+}
+
 export function normalizedPublicSebContentId(contentId: string | undefined | null): string | null {
   const canonicalContentId = canonicalSebConfigContentId(contentId);
   if (!canonicalContentId) {

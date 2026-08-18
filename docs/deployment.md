@@ -332,6 +332,13 @@ After the project, Artifact Registry, Cloud SQL, runtime identity, secrets,
 service URL, and Canvas registrations already exist, source-build only
 development or a deliberately named school environment:
 
+All maintained Cloud Build files expose
+`_LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS` and default it to `true`. Override
+that substitution with `false` to publish Canvas `admins` visibility in
+`/lti/config`. Refresh the existing Canvas LTI Developer Key registration after
+the revision is live; Cloud Run configuration alone cannot rewrite metadata
+Canvas already stored.
+
 Development:
 
 ```bash

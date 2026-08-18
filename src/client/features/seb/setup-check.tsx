@@ -1,7 +1,14 @@
 import { KeyRound, LogOut, PlayCircle, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { actionHeaders, apiErrorDetail, clientRequestError, errorMessage, requestJson } from "../../lib/api.js";
+import {
+  actionHeaders,
+  apiErrorDetail,
+  clientRequestError,
+  errorMessage,
+  requestJson,
+  safeSameOriginNavigationTarget
+} from "../../lib/api.js";
 import { useDialogInitialFocus, useEscapeToClose } from "../../hooks/dialog.js";
 import { queueSebLaunchHandoff } from "./launch.js";
 import { detectSebRuntime, readSebConfigKeyHash } from "../../lib/seb-runtime.js";
@@ -11,6 +18,7 @@ export function SebSetupCheckDialog({
   launchUrl,
   readinessUrl,
   authToken,
+  browserReturnUrl,
   reconnectUrl = "/api/student-session-authorize",
   onClose,
   onCompleted
@@ -18,6 +26,7 @@ export function SebSetupCheckDialog({
   launchUrl: string;
   readinessUrl: string;
   authToken?: string;
+  browserReturnUrl?: string;
   reconnectUrl?: string;
   onClose: () => void;
   onCompleted?: () => Promise<void>;
@@ -40,7 +49,8 @@ export function SebSetupCheckDialog({
     try {
       const result = await requestJson(readinessUrl, {
         method: "POST",
-        headers: actionHeaders(authToken)
+        headers: { ...actionHeaders(authToken), "content-type": "application/json" },
+        body: JSON.stringify({})
       });
       if (!result.success) {
         throw clientRequestError(
@@ -49,9 +59,19 @@ export function SebSetupCheckDialog({
           apiErrorDetail(result.message)
         );
       }
-      await onCompleted?.();
+      try {
+        await onCompleted?.();
+      } catch {
+        // Reminder persistence is independent from the setup check and must
+        // never prevent a student from opening it.
+      }
       setOpeningHandoff(true);
-      queueSebLaunchHandoff(launchUrl, window.location.href, "setup-check");
+      const serverHandoffUrl = safeSameOriginNavigationTarget(result.handoffUrl, "");
+      if (serverHandoffUrl) {
+        window.location.assign(serverHandoffUrl);
+      } else {
+        queueSebLaunchHandoff(launchUrl, browserReturnUrl || "/", "setup-check");
+      }
       handoffStarted = true;
     } catch (launchError) {
       if ((launchError as { code?: unknown }).code === "CANVAS_SESSION_AUTHORIZATION_REQUIRED") {

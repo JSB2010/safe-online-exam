@@ -57,6 +57,7 @@ export interface AppConfigSnapshot {
     clientId?: string;
     deploymentId?: string;
     deploymentIdCheckingEnabled: boolean;
+    courseNavigationVisibleToStudents: boolean;
     toolUrl?: string;
     privateKey?: string;
   };
@@ -189,6 +190,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       clientId: firstPresent(env.LTI_CLIENT_ID, env.DEV_LTI_CLIENT_ID, env.PROD_LTI_CLIENT_ID, env.lti_client_id),
       deploymentId: firstPresent(env.LTI_DEPLOYMENT_ID, env.DEPLOYMENT_ID),
       deploymentIdCheckingEnabled: parseBoolean(firstPresent(env.LTI_DEPLOYMENT_ID_CHECKING_ENABLED), true),
+      courseNavigationVisibleToStudents: !isExplicitlyFalse(env.LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS),
       toolUrl: sanitizeToolUrl(
         firstPresent(env.TOOL_URL, env.DEV_TOOL_URL, env.PROD_TOOL_URL, env.SERVICE_URL, env.APP_BASE_URL)
       ),
@@ -646,6 +648,10 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
     return fallback;
   }
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function isExplicitlyFalse(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "false";
 }
 
 function parseDatabaseSslMode(value: string | undefined): DatabaseSslMode {

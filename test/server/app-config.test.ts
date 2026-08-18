@@ -27,12 +27,28 @@ describe("AppConfig", () => {
     const config = loadConfigFromEnv({});
     expect(config.canvas.domain).toBe("https://canvas.example.test");
     expect(config.lti.deploymentIdCheckingEnabled).toBe(true);
+    expect(config.lti.courseNavigationVisibleToStudents).toBe(true);
     expect(usesSourceKnownLocalOAuthTokenKey(config.security.oauthTokenEncryption)).toBe(true);
     expect(
       usesSourceKnownLocalOAuthTokenKey(
         loadConfigFromEnv(oauthTokenEncryptionRuntimeEnv()).security.oauthTokenEncryption
       )
     ).toBe(false);
+  });
+
+  it("hides course navigation from students only for an explicit false value", () => {
+    expect(
+      loadConfigFromEnv({ LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS: "false" }).lti.courseNavigationVisibleToStudents
+    ).toBe(false);
+    expect(
+      loadConfigFromEnv({ LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS: " FALSE " }).lti.courseNavigationVisibleToStudents
+    ).toBe(false);
+
+    for (const value of [undefined, "", "0", "off", "no", "unexpected"]) {
+      expect(
+        loadConfigFromEnv({ LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS: value }).lti.courseNavigationVisibleToStudents
+      ).toBe(true);
+    }
   });
 
   it("permits a hardened runtime without a deployment allowlist only when checking is explicitly disabled", () => {

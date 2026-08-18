@@ -4,6 +4,7 @@ substitutions:
   _SOURCE_WORKTREE_STATE: clean
   _SOURCE_DIFF_SHA: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   _CREATE_BACKUP: "false"
+  _LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS: "false"
 
 steps:
   - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:f7da3ad701fbd41656fcf8ed3a14e69a95d9bc2c15f3425462e67d9dc914abaf"
@@ -63,6 +64,7 @@ steps:
       - "${_SOURCE_WORKTREE_STATE}"
       - "${_SOURCE_DIFF_SHA}"
       - "$BUILD_ID"
+      - "${_LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS}"
 
 images:
   - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:$BUILD_ID"

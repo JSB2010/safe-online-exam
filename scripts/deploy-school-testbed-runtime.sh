@@ -16,7 +16,7 @@ readonly DIGEST_FILE="/workspace/school-canvas-testbed.digest"
 readonly CLOUDSDK_PYTHON="/usr/lib/google-cloud-sdk/platform/bundledpythonunix/bin/python3.14"
 
 usage() {
-  echo "usage: $0 seb-for-canvas SOURCE_COMMIT_SHA SOURCE_REF clean|dirty SOURCE_DIFF_SHA CLOUD_BUILD_ID" >&2
+  echo "usage: $0 seb-for-canvas SOURCE_COMMIT_SHA SOURCE_REF clean|dirty SOURCE_DIFF_SHA CLOUD_BUILD_ID STUDENT_VISIBILITY" >&2
 }
 
 fail() {
@@ -24,7 +24,7 @@ fail() {
   exit 1
 }
 
-[[ $# -eq 6 ]] || {
+[[ $# -eq 7 ]] || {
   usage
   exit 64
 }
@@ -34,6 +34,7 @@ readonly SOURCE_REF="$3"
 readonly SOURCE_WORKTREE_STATE="$4"
 readonly SOURCE_DIFF_SHA="$5"
 readonly CLOUD_BUILD_ID="$6"
+readonly LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS="$7"
 readonly SOURCE_SHORT_SHA="${SOURCE_COMMIT_SHA:0:12}"
 readonly CANDIDATE_TAG="testbed-$SOURCE_SHORT_SHA"
 
@@ -43,12 +44,14 @@ readonly CANDIDATE_TAG="testbed-$SOURCE_SHORT_SHA"
   fail "invalid source worktree state"
 [[ "$SOURCE_DIFF_SHA" =~ ^[0-9a-f]{64}$ ]] || fail "invalid source diff SHA"
 [[ "$CLOUD_BUILD_ID" =~ ^[A-Za-z0-9-]{8,64}$ ]] || fail "invalid Cloud Build ID"
+[[ "$LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS" =~ ^[A-Za-z0-9._-]+$ ]] ||
+  fail "invalid student visibility value"
 [[ -f "$DIGEST_FILE" && ! -L "$DIGEST_FILE" ]] || fail "image digest artifact is missing"
 [[ -x "$CLOUDSDK_PYTHON" ]] || fail "pinned Cloud SDK Python runtime is unavailable"
 IFS= read -r IMAGE_DIGEST < "$DIGEST_FILE"
 [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "image digest artifact is invalid"
 
-readonly BASE_ENV="NODE_ENV=production,APP_ENV=dev,LTI_ISSUER=https://canvas.instructure.com,LTI_KEY_SET_URL=https://canvas-test.apps.jacobbarkin.com/api/lti/security/jwks,LTI_AUTH_URL=https://canvas-test.apps.jacobbarkin.com/api/lti/authorize_redirect,LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,OAUTH_TOKEN_ENCRYPTION_MODE=enforce,OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary,SEB_CONFIG_ENCRYPTION_ENABLED=true,DATABASE_HOST=/cloudsql/$PROJECT_ID:$REGION:$INSTANCE,DATABASE_PORT=5432,DATABASE_NAME=$DATABASE_NAME,DATABASE_USER=$DATABASE_USER,DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=2"
+readonly BASE_ENV="NODE_ENV=production,APP_ENV=dev,LTI_ISSUER=https://canvas.instructure.com,LTI_KEY_SET_URL=https://canvas-test.apps.jacobbarkin.com/api/lti/security/jwks,LTI_AUTH_URL=https://canvas-test.apps.jacobbarkin.com/api/lti/authorize_redirect,LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS=$LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS,OAUTH_TOKEN_ENCRYPTION_MODE=enforce,OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary,SEB_CONFIG_ENCRYPTION_ENABLED=true,DATABASE_HOST=/cloudsql/$PROJECT_ID:$REGION:$INSTANCE,DATABASE_PORT=5432,DATABASE_NAME=$DATABASE_NAME,DATABASE_USER=$DATABASE_USER,DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=2"
 readonly JOB_ENV="$BASE_ENV,DEV_TESTBED_ENABLED=false,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false"
 readonly SERVICE_ENV="$BASE_ENV,DEV_TESTBED_ENABLED=true,APP_DEBUG_ENABLED=true,APP_DETECTOR_DIAGNOSTICS_ENABLED=true,SOURCE_COMMIT_SHA=$SOURCE_COMMIT_SHA,SOURCE_REF=$SOURCE_REF,SOURCE_WORKTREE_STATE=$SOURCE_WORKTREE_STATE,SOURCE_DIFF_SHA=$SOURCE_DIFF_SHA,CLOUD_BUILD_ID=$CLOUD_BUILD_ID,APP_IMAGE_DIGEST=$IMAGE_DIGEST,APP_ASSET_VERSION=$SOURCE_SHORT_SHA"
 readonly SECRETS="CANVAS_DOMAIN=school_canvas_seb_canvas_domain:6,LTI_CLIENT_ID=school_canvas_seb_lti_client_id:6,LTI_DEPLOYMENT_ID=school_canvas_seb_lti_deployment_id:6,TOOL_URL=school_canvas_seb_tool_url:6,LTI_PRIVATE_KEY=school_canvas_seb_lti_private_key:6,SESSION_SECRET=school_canvas_seb_session_secret:6,STATE_ENCRYPTION_KEY=school_canvas_seb_state_encryption_key:6,OAUTH_TOKEN_ENCRYPTION_KEYRING=school_canvas_seb_oauth_token_encryption_keyring:1,CANVAS_API_CLIENT_ID=school_canvas_seb_api_client_id:6,CANVAS_API_CLIENT_SECRET=school_canvas_seb_api_client_secret:6,SEB_CONFIG_ENCRYPTION_CERT_PEM=school_canvas_seb_seb_config_encryption_cert_pem:6,DATABASE_PASSWORD=school_canvas_seb_database_password:1"

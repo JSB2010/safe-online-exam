@@ -10,7 +10,7 @@ import { OnboardingContext, StudentQuizView } from "../../types.js";
 export function StudentDashboard({ data }: { data: Record<string, any> }) {
   const quizzes: StudentQuizView[] = data.quizzes || [];
   const onboarding = (data.onboarding || {}) as OnboardingContext;
-  const [showSetupCheck, setShowSetupCheck] = useState(onboarding.showReadinessPrompt === true);
+  const [showSetupCheck, setShowSetupCheck] = useState(false);
   const [showReadinessBanner, setShowReadinessBanner] = useState(onboarding.readinessRecommended !== false);
   const [dismissingReadinessBanner, setDismissingReadinessBanner] = useState(false);
   const [readinessBannerError, setReadinessBannerError] = useState("");
@@ -105,6 +105,7 @@ export function StudentDashboard({ data }: { data: Record<string, any> }) {
                 grantUrl={quiz.configGrantUrl || quiz.configUrl}
                 token={data.configGrantToken}
                 label="Launch"
+                browserReturnUrl={data.browserReturnUrl}
                 handoffPurpose="student-list"
               />
             </article>
@@ -122,6 +123,7 @@ export function StudentDashboard({ data }: { data: Record<string, any> }) {
           launchUrl={data.setupCheckLaunchUrl || data.setupCheckConfigUrl || "/seb/check/config.seb"}
           readinessUrl={data.sessionReadinessUrl || "/api/seb/session-readiness"}
           authToken={data.configGrantToken}
+          browserReturnUrl={data.browserReturnUrl}
           onClose={() => setShowSetupCheck(false)}
           onCompleted={dismissReadinessBanner}
         />

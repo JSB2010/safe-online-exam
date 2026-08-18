@@ -173,7 +173,7 @@ The workflow verifies both architectures, their source/version OCI labels, every
 | Persistence and concurrency            | repository/session/assessment and PostgreSQL tests          | Atomic claims, one-time consumption, cleanup, session storage, distributed locks, and Canvas/database consistency.                                                                                                                                   |
 | SEB configuration and proof            | `seb-*.test.ts`                                             | Plist generation, encryption, Config Key validation, configuration grants, proof redemption, handoff records, exit grants, and password rules.                                                                                                       |
 | Detector                               | `canvas-seb-detector-script.test.ts`, static-asset tests    | Loading, Canvas route handling, access-code flow, approved tools, completion detection, exit behavior, and stable detector/theme-loader paths.                                                                                                       |
-| Browser app shell                      | `test/e2e/app-shell.spec.ts`                                | Built server startup, public metadata routes, lazy React routes, compressed assets, content-hashed chunk caching, desktop/mobile rendering, and browser console errors.                                                                              |
+| Browser app shell                      | `test/e2e/app-shell.spec.ts`                                | Built server startup, public metadata routes, lazy React routes, server-backed and compatibility browser handoffs, compressed assets, content-hashed chunk caching, desktop/mobile rendering, and browser console errors.                            |
 
 Do not rely on a high coverage percentage alone. The most sensitive assurance is that a test exercises the same trust boundary it claims to protect: signed LTI data for identity, server proof for access-code release, and Canvas-authored completion for exit behavior.
 
@@ -276,11 +276,14 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 
 ### Student In A Normal Browser
 
-1. Launch the course-navigation placement and complete the one-time Canvas connection.
-2. Run the optional setup check. Test a missing/revoked scope path and confirm the recovery path requests a new Canvas connection.
-3. Open each enabled assessment. Confirm the ordinary browser presents the protected launch/download flow rather than an access-code value.
-4. Confirm the detector’s launch UI is available on the Canvas assessment route and approved tools are not exposed before a valid SEB proof.
-5. Configure a separate Classic Quiz and New Quiz with ordinary Canvas access codes but do not enable them in Safe Online Exam. Confirm both retain their normal Canvas access-code flow and never show the SEB-required prompt.
+1. With `LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS` unset or set to `true`, confirm `/lti/config` reports `members` course-navigation visibility, then launch that placement and complete the one-time Canvas connection.
+2. With the variable set to `false` and the Canvas registration refreshed, confirm `/lti/config` reports `admins`, the navigation item is absent for a student, and both Classic Quiz and New Quiz protected-page launches still work.
+3. Before acknowledging readiness, confirm the SEB-required page shows **Setup check (recommended)** beside **Return to course** and **Open Safe Exam Browser**, but does not open the setup dialog automatically. Run the optional check. Test a missing/revoked scope path and confirm the recovery path requests a new Canvas connection.
+4. After dismissing the reminder or starting the setup check, confirm the setup action remains available without the recommendation and still does not open automatically. Confirm a failed reminder-preference request does not block the setup-check handoff.
+5. Open each enabled assessment. Confirm the ordinary browser presents the protected launch/download flow rather than an access-code value.
+6. After the handoff opens SEB, quit SEB and select **Return to course** in the ordinary browser. Confirm it opens the Canvas course rather than the SEB-required page. Reload or reuse a consumed handoff and confirm its ended state also returns to the course without a browser-back loop.
+7. Confirm the detector’s launch UI is available on the Canvas assessment route and approved tools are not exposed before a valid SEB proof.
+8. Configure a separate Classic Quiz and New Quiz with ordinary Canvas access codes but do not enable them in Safe Online Exam. Confirm both retain their normal Canvas access-code flow and never show the SEB-required prompt.
 
 ### Student In SEB
 

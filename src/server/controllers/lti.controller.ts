@@ -251,7 +251,7 @@ export class LtiController {
     @Res() response: Response,
     @Query("course_id") courseId?: string,
     @Query("user_id") userId?: string,
-    @Query("connected") connected?: string
+    @Query("connected") _connected?: string
   ): Promise<void> {
     const principal = verifiedLtiPrincipal(request);
     const launchData = sessionValue<LtiLaunchData>(request, "launchData");
@@ -294,7 +294,7 @@ export class LtiController {
       return;
     }
     if (isStudent(resolvedLaunchData)) {
-      response.send(await this.renderStudentLaunch(request, resolvedLaunchData, connected === "1"));
+      response.send(await this.renderStudentLaunch(request, resolvedLaunchData));
       return;
     }
     response.send(
@@ -345,7 +345,7 @@ export class LtiController {
                 placement: "course_navigation",
                 message_type: "LtiResourceLinkRequest",
                 target_link_uri: `${toolUrl}/lti/launch`,
-                visibility: "members",
+                visibility: this.config.value.lti.courseNavigationVisibleToStudents === false ? "admins" : "members",
                 default: "enabled",
                 enabled: true,
                 custom_fields: { ...courseCustomFields }
@@ -590,11 +590,7 @@ export class LtiController {
     });
   }
 
-  private async renderStudentLaunch(
-    request: Request,
-    launchData: LtiLaunchData,
-    showReadinessPrompt = false
-  ): Promise<string> {
+  private async renderStudentLaunch(request: Request, launchData: LtiLaunchData): Promise<string> {
     const courseId = launchData.courseId || "";
     const principal = verifiedLtiPrincipal(request);
     if (!principal || principal.courseId !== courseId) {
@@ -625,7 +621,11 @@ export class LtiController {
           courseId,
           quizId: target.id,
           configGrantUrl: target.configGrantUrl,
-          configGrantToken
+          configGrantToken,
+          setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+          sessionReadinessUrl: "/api/seb/session-readiness",
+          browserReturnUrl: this.canvasCourseHomeUrl(courseId),
+          readinessRecommended: !readinessPromptDismissed
         }
       });
     }
@@ -640,11 +640,11 @@ export class LtiController {
         setupCheckConfigUrl: "/seb/check/config.seb",
         setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
         sessionReadinessUrl: "/api/seb/session-readiness",
+        browserReturnUrl: this.canvasCourseHomeUrl(courseId),
         configGrantToken,
         onboarding: {
           connection: "connected",
-          readinessRecommended: !readinessPromptDismissed,
-          showReadinessPrompt: showReadinessPrompt && !readinessPromptDismissed
+          readinessRecommended: !readinessPromptDismissed
         },
         quizzes: courseId ? await this.enabledStudentQuizzes(courseId, request, principal) : []
       }
@@ -663,6 +663,10 @@ export class LtiController {
         }
       }
     });
+  }
+
+  private canvasCourseHomeUrl(courseId: string): string {
+    return new URL(`/courses/${encodeURIComponent(courseId)}`, this.config.getCanvasDomain()).toString();
   }
 
   private async enabledStudentQuizzes(

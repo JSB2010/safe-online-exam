@@ -16,6 +16,7 @@ const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
 describe("LtiController role routing", () => {
   let controller: LtiController;
+  let appConfig: any;
   let canvasApi: {
     hasAccessToken: ReturnType<typeof vi.fn>;
     hasSessionTokenAccess: ReturnType<typeof vi.fn>;
@@ -77,21 +78,23 @@ describe("LtiController role routing", () => {
       getQuiz: vi.fn().mockResolvedValue(null),
       isAssessmentAvailableForLearner: vi.fn().mockResolvedValue(true)
     };
+    appConfig = {
+      getApplicationBaseUrl: () => "https://tool.example.test",
+      getRequiredToolUrl: () => "https://tool.example.test",
+      getCanvasDomain: () => "https://canvas.example.test",
+      value: {
+        lti: {
+          authUrl: "https://canvas.example.test/api/lti/authorize_redirect",
+          clientId: "client-1",
+          issuer: "https://canvas.example.test",
+          deploymentId: "deployment-1"
+        },
+        security: { sessionSecret: "test-secret" },
+        seb: { defaultQuitPassword: "managed-server-exit" }
+      }
+    };
     controller = new LtiController(
-      {
-        getApplicationBaseUrl: () => "https://tool.example.test",
-        getRequiredToolUrl: () => "https://tool.example.test",
-        value: {
-          lti: {
-            authUrl: "https://canvas.example.test/api/lti/authorize_redirect",
-            clientId: "client-1",
-            issuer: "https://canvas.example.test",
-            deploymentId: "deployment-1"
-          },
-          security: { sessionSecret: "test-secret" },
-          seb: { defaultQuitPassword: "managed-server-exit" }
-        }
-      } as any,
+      appConfig,
       ltiService as any,
       ltiState as any,
       assessments as any,
@@ -238,7 +241,7 @@ describe("LtiController role routing", () => {
     );
 
     expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"readinessRecommended":false'));
-    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"showReadinessPrompt":false'));
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"showReadinessPrompt"'));
   });
 
   it("redirects valid OIDC login requests to Canvas authorization", async () => {
@@ -497,6 +500,17 @@ describe("LtiController role routing", () => {
     );
     expect(adminPlacement.custom_fields).not.toHaveProperty("canvas_membership_roles");
     expect(adminPlacement.custom_fields).not.toHaveProperty("canvas_lis_membership_roles");
+  });
+
+  it("limits course navigation to course admins when student visibility is explicitly disabled", () => {
+    appConfig.value.lti.courseNavigationVisibleToStudents = false;
+
+    const metadata = controller.ltiConfig() as any;
+
+    expect(metadata.extensions[0].settings.placements[0]).toMatchObject({
+      placement: "course_navigation",
+      visibility: "admins"
+    });
   });
 
   it("accepts a cross-site signed POST and returns removed deep-linking guidance", async () => {
@@ -1064,6 +1078,12 @@ describe("LtiController role routing", () => {
     expect(response.send).toHaveBeenCalledWith(
       expect.stringContaining("/api/seb/config-grant/course-1/classicquiz_23455")
     );
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"readinessRecommended":true'));
+    expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"setupCheckLaunchUrl":"sebs://'));
+    expect(response.send).toHaveBeenCalledWith(
+      expect.stringContaining('"browserReturnUrl":"https://canvas.example.test/courses/course-1"')
+    );
+    expect(response.send).not.toHaveBeenCalledWith(expect.stringContaining('"showReadinessPrompt"'));
   });
 });
 

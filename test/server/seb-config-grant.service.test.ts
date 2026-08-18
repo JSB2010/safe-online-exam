@@ -43,6 +43,34 @@ describe("SebConfigGrantService", () => {
     await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toBeNull();
   });
 
+  it("stores browser launch details behind an opaque one-time handoff", async () => {
+    const service = grantService();
+    const handoff = {
+      sebLaunchUrl: "sebs://tool.example.edu/seb/config/course-1/classicquiz_101.seb?grant=opaque",
+      browserReturnUrl: "https://tool.example.edu/seb/launch/classicquiz_101",
+      launchPurpose: "assessment" as const
+    };
+
+    const token = await service.mintBrowserLaunchHandoff(handoff);
+
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    await expect(service.consumeBrowserLaunchHandoff(token)).resolves.toEqual(handoff);
+    await expect(service.consumeBrowserLaunchHandoff(token)).resolves.toBeNull();
+    await expect(service.getBrowserLaunchHandoffReturnUrl(token)).resolves.toBe(handoff.browserReturnUrl);
+  });
+
+  it("rejects unsafe browser launch handoff URLs", async () => {
+    const service = grantService();
+
+    await expect(
+      service.mintBrowserLaunchHandoff({
+        sebLaunchUrl: "https://tool.example.edu/seb/config/course-1/classicquiz_101.seb",
+        browserReturnUrl: "https://tool.example.edu/seb/launch/classicquiz_101",
+        launchPurpose: "assessment"
+      })
+    ).rejects.toThrow(/Invalid SEB browser launch handoff/u);
+  });
+
   it("revokes an issued grant when the course state changes before release", async () => {
     const service = grantService();
     const token = await service.mintGrant(

@@ -7,7 +7,8 @@ import {
   errorMessage,
   onboardingRecovery,
   persistStudentReadinessPromptDismissal,
-  requestJson
+  requestJson,
+  safeSameOriginNavigationTarget
 } from "../../lib/api.js";
 import { MessagePage } from "../../components/feedback.js";
 import { SebSetupCheckDialog } from "./setup-check.js";
@@ -20,29 +21,32 @@ const SEB_LAUNCH_RECOVERY_DELAY_MS = 5_000;
 const SEB_LAUNCH_HANDOFF_STORAGE_PREFIX = "safe-online-exam:seb-launch:";
 
 export function SebDownloadPage({ data }: { data: Record<string, any> }) {
-  const [showSetupCheck, setShowSetupCheck] = useState(data.showReadinessPrompt === true);
+  const [showSetupCheck, setShowSetupCheck] = useState(false);
+  const [readinessRecommended, setReadinessRecommended] = useState(
+    data.readinessRecommended === true || data.showReadinessPrompt === true
+  );
+  const courseReturnUrl = safeBrowserReturnUrl(data.browserReturnUrl) || "/";
   return (
     <>
       <MessagePage
         icon={<Shield />}
         title="Safe Exam Browser Required"
         message={
-          data.showReadinessPrompt
-            ? "Canvas is connected. You can optionally check this computer before opening your quiz."
+          readinessRecommended
+            ? "Before opening this assessment, you can run the optional setup check on this computer."
             : "Open this assessment in Safe Exam Browser when you are ready. If prompted, allow Safe Exam Browser to open."
         }
         action={
           <>
-            <button className="button secondary" type="button" onClick={() => window.history.back()}>
-              <ArrowLeft size={16} /> Back
-            </button>
+            <ReturnToCourseButton returnUrl={courseReturnUrl} />
             <button className="button secondary" type="button" onClick={() => setShowSetupCheck(true)}>
-              <ShieldCheck size={16} /> Setup check
+              <ShieldCheck size={16} /> {readinessRecommended ? "Setup check (recommended)" : "Setup check"}
             </button>
             <SebLaunchButton
               grantUrl={data.configGrantUrl}
               token={data.configGrantToken}
               label="Open Safe Exam Browser"
+              browserReturnUrl={courseReturnUrl}
             />
           </>
         }
@@ -52,8 +56,12 @@ export function SebDownloadPage({ data }: { data: Record<string, any> }) {
           launchUrl={data.setupCheckLaunchUrl || "/seb/check/config.seb"}
           readinessUrl={data.sessionReadinessUrl || "/api/seb/session-readiness"}
           authToken={data.configGrantToken}
+          browserReturnUrl={courseReturnUrl}
           onClose={() => setShowSetupCheck(false)}
-          onCompleted={() => persistStudentReadinessPromptDismissal(data.configGrantToken).catch(() => undefined)}
+          onCompleted={async () => {
+            await persistStudentReadinessPromptDismissal(data.configGrantToken).catch(() => undefined);
+            setReadinessRecommended(false);
+          }}
         />
       )}
     </>
@@ -64,11 +72,13 @@ export function SebLaunchButton({
   grantUrl,
   token,
   label,
+  browserReturnUrl,
   handoffPurpose = "assessment"
 }: {
   grantUrl?: string;
   token?: string;
   label: string;
+  browserReturnUrl?: string;
   handoffPurpose?: SebLaunchHandoffPurpose;
 }) {
   const [launching, setLaunching] = useState(false);
@@ -88,7 +98,8 @@ export function SebLaunchButton({
       const payload = await requestJson(grantUrl, {
         method: "POST",
         credentials: "same-origin",
-        headers: { accept: "application/json", "x-auth-token": token }
+        headers: { accept: "application/json", "content-type": "application/json", "x-auth-token": token },
+        body: JSON.stringify({ handoffPurpose })
       });
       if (typeof payload.sebLaunchUrl !== "string" || !/^sebs?:\/\//iu.test(payload.sebLaunchUrl)) {
         throw clientRequestError(
@@ -98,7 +109,12 @@ export function SebLaunchButton({
         );
       }
       setOpeningHandoff(true);
-      queueSebLaunchHandoff(payload.sebLaunchUrl, window.location.href, handoffPurpose);
+      const serverHandoffUrl = safeSameOriginNavigationTarget(payload.handoffUrl, "");
+      if (serverHandoffUrl) {
+        window.location.assign(serverHandoffUrl);
+      } else {
+        queueSebLaunchHandoff(payload.sebLaunchUrl, safeBrowserReturnUrl(browserReturnUrl) || "/", handoffPurpose);
+      }
       handoffStarted = true;
     } catch (launchError) {
       const recovery = onboardingRecovery(launchError, "student");
@@ -142,46 +158,73 @@ export function queueSebLaunchHandoff(
   window.location.assign(`/seb/launch-handoff?key=${encodeURIComponent(handoffKey)}`);
 }
 
-export function SebLaunchingHandoffPage() {
-  const handoffKey = new URLSearchParams(window.location.search).get("key");
-  if (!handoffKey) {
-    return <SebLaunchHandoffUnavailablePage />;
+export function SebLaunchingHandoffPage({ data = {} }: { data?: Record<string, any> }) {
+  const [handoff] = useState(() => resolveSebLaunchHandoff(data));
+
+  useEffect(() => {
+    if (!handoff.storageKey) return;
+    try {
+      window.sessionStorage.removeItem(handoff.storageKey);
+    } catch {
+      // The launch data is already stable in component state. Storage cleanup
+      // is best-effort and must not replace a valid one-time handoff with the
+      // unavailable page.
+    }
+  }, [handoff.storageKey]);
+
+  if (!handoff.launch) {
+    return <SebLaunchHandoffUnavailablePage returnUrl={safeBrowserReturnUrl(data.browserReturnUrl) || "/"} />;
   }
+
+  return <SebLaunchingPage data={handoff.launch} />;
+}
+
+function resolveSebLaunchHandoff(data: Record<string, any>): {
+  storageKey: string | null;
+  launch: { sebLaunchUrl: string; browserReturnUrl: string; launchPurpose: SebLaunchHandoffPurpose } | null;
+} {
+  if (typeof data.sebLaunchUrl === "string" && /^sebs?:\/\//iu.test(data.sebLaunchUrl)) {
+    return {
+      storageKey: null,
+      launch: {
+        sebLaunchUrl: data.sebLaunchUrl,
+        browserReturnUrl: typeof data.browserReturnUrl === "string" ? data.browserReturnUrl : "",
+        launchPurpose: isSebLaunchHandoffPurpose(data.launchPurpose) ? data.launchPurpose : "assessment"
+      }
+    };
+  }
+
+  const handoffKey = new URLSearchParams(window.location.search).get("key");
+  if (!handoffKey) return { storageKey: null, launch: null };
+  const storageKey = `${SEB_LAUNCH_HANDOFF_STORAGE_PREFIX}${handoffKey}`;
   try {
-    const storageKey = `${SEB_LAUNCH_HANDOFF_STORAGE_PREFIX}${handoffKey}`;
     const stored = window.sessionStorage.getItem(storageKey);
-    window.sessionStorage.removeItem(storageKey);
     const launch = stored
       ? (JSON.parse(stored) as { sebLaunchUrl?: unknown; returnUrl?: unknown; purpose?: unknown })
       : null;
     if (typeof launch?.sebLaunchUrl !== "string" || !/^sebs?:\/\//iu.test(launch.sebLaunchUrl)) {
-      return <SebLaunchHandoffUnavailablePage />;
+      return { storageKey, launch: null };
     }
-    return (
-      <SebLaunchingPage
-        data={{
-          sebLaunchUrl: launch.sebLaunchUrl,
-          browserReturnUrl: typeof launch.returnUrl === "string" ? launch.returnUrl : "",
-          launchPurpose: isSebLaunchHandoffPurpose(launch.purpose) ? launch.purpose : "assessment"
-        }}
-      />
-    );
+    return {
+      storageKey,
+      launch: {
+        sebLaunchUrl: launch.sebLaunchUrl,
+        browserReturnUrl: typeof launch.returnUrl === "string" ? launch.returnUrl : "",
+        launchPurpose: isSebLaunchHandoffPurpose(launch.purpose) ? launch.purpose : "assessment"
+      }
+    };
   } catch {
-    return <SebLaunchHandoffUnavailablePage />;
+    return { storageKey, launch: null };
   }
 }
 
-function SebLaunchHandoffUnavailablePage() {
+function SebLaunchHandoffUnavailablePage({ returnUrl }: { returnUrl: string }) {
   return (
     <MessagePage
       icon={<AlertCircle />}
-      title="Safe Exam Browser could not be prepared"
-      message="Return to your course and open the assessment again."
-      action={
-        <button className="button primary" type="button" onClick={() => window.history.back()}>
-          <ArrowLeft size={16} /> Return to course
-        </button>
-      }
+      title="This Safe Exam Browser launch has ended"
+      message="Each launch link can be used only once. Return to your Canvas course and reopen the assessment if you still need it."
+      action={<ReturnToCourseButton returnUrl={returnUrl} primary />}
     />
   );
 }
@@ -206,14 +249,10 @@ export function SebLaunchingPage({ data }: { data: Record<string, any> }) {
       action={
         <div className="seb-launch-action-stack">
           <div className="seb-launch-action-buttons">
+            {returnUrl && <ReturnToCourseButton returnUrl={returnUrl} primary />}
             {sebLaunchUrl && (
-              <a className="button primary" href={sebLaunchUrl} onClick={startLaunchRecovery}>
-                <ExternalLink size={16} /> Open Safe Exam Browser
-              </a>
-            )}
-            {returnUrl && (
-              <a className="button secondary" href={returnUrl}>
-                <ArrowLeft size={16} /> {presentation.returnLabel}
+              <a className="button secondary" href={sebLaunchUrl} onClick={startLaunchRecovery}>
+                <ExternalLink size={16} /> Try opening again
               </a>
             )}
           </div>
@@ -235,15 +274,13 @@ function isSebLaunchHandoffPurpose(value: unknown): value is SebLaunchHandoffPur
 function sebLaunchPresentation(purpose: unknown): {
   title: string;
   message: string;
-  returnLabel: string;
   recoveryNextStep: string;
 } {
   if (purpose === "student-list") {
     return {
       title: "Opening your quiz",
       message: "Safe Exam Browser is opening your selected quiz. If your browser asks, select Open Safe Exam Browser.",
-      returnLabel: "Back to all quizzes",
-      recoveryNextStep: "download it, then return to all quizzes and select Launch again."
+      recoveryNextStep: "download it, then return to your Canvas course and open the quiz again."
     };
   }
   if (purpose === "setup-check") {
@@ -251,7 +288,6 @@ function sebLaunchPresentation(purpose: unknown): {
       title: "Opening Safe Exam Browser",
       message:
         "We’re opening your setup check in Safe Exam Browser. If your browser asks, select Open Safe Exam Browser.",
-      returnLabel: "Return to setup check",
       recoveryNextStep: "download it, then return to your course and run the setup check again."
     };
   }
@@ -260,16 +296,39 @@ function sebLaunchPresentation(purpose: unknown): {
       title: "Opening Safe Exam Browser",
       message:
         "We’re opening your assessment in Safe Exam Browser. If your browser asks, select Open Safe Exam Browser.",
-      returnLabel: "Back to assessment",
-      recoveryNextStep: "download it, then return to this assessment and try again."
+      recoveryNextStep: "download it, then return to your Canvas course and open the assessment again."
     };
   }
   return {
     title: "Opening Safe Exam Browser",
     message: "We’re opening Safe Exam Browser. If your browser asks, select Open Safe Exam Browser.",
-    returnLabel: "Return to course",
     recoveryNextStep: "download it, then return to your Canvas course and reopen the assessment."
   };
+}
+
+function ReturnToCourseButton({ returnUrl, primary = false }: { returnUrl: string; primary?: boolean }) {
+  const safeReturnUrl = safeBrowserReturnUrl(returnUrl) || "/";
+  return (
+    <button
+      className={clsx("button", primary ? "primary" : "secondary")}
+      type="button"
+      onClick={() => window.location.replace(safeReturnUrl)}
+    >
+      <ArrowLeft size={16} /> Return to course
+    </button>
+  );
+}
+
+function safeBrowserReturnUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 4_096) return null;
+  try {
+    const url = new URL(value, window.location.origin);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function useSebLaunchRecovery() {

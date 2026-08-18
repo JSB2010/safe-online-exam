@@ -43,6 +43,12 @@ After the stack is ready and HTTPS works:
 4. Confirm `/ready`, then complete the Canvas theme loader and role-based
    acceptance tests.
 
+To hide course navigation from students, set
+`LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS=false` in the protected Compose
+environment before recreating the application container. Then refresh the
+Canvas LTI Developer Key from `${TOOL_URL}/lti/config`; students retain the
+protected-quiz launch path supplied by the Canvas detector.
+
 `bootstrap-pending` is only a registration bootstrap value. Signed launches
 will not work until the real IDs are saved and the app container is recreated.
 

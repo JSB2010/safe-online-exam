@@ -92,6 +92,306 @@ test("serves health, JWKS, and Canvas LTI registration metadata", async ({ reque
   expect(favicon.headers()["content-type"]).toContain("image/x-icon");
 });
 
+test("offers the recommended setup check without opening it automatically", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/seb-readiness-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "seb-download",
+          data: {
+            browserReturnUrl: "https://canvas.example.edu/courses/course-1",
+            configGrantUrl: "/api/seb/config-grant/course-1/classicquiz_quiz-1",
+            configGrantToken: "preview-token",
+            setupCheckLaunchUrl: "sebs://tool.example.test/seb/check/config.seb",
+            sessionReadinessUrl: "/api/seb/session-readiness",
+            readinessRecommended: true
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/seb-readiness-preview");
+
+  await expect(page.getByRole("heading", { name: "Safe Exam Browser Required" })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Return to course" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Setup check (recommended)" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Safe Exam Browser" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Setup check (recommended)" }).click();
+  await expect(page.getByRole("dialog", { name: "Safe Exam Browser setup check" })).toBeVisible();
+  await page.getByRole("button", { name: "Close setup check" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(browserErrors).toEqual([]);
+});
+
+test("shows the settled setup-check action after dismissal or completion", async ({ page }) => {
+  await page.route("**/seb-readiness-settled-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "seb-required",
+          data: {
+            configGrantUrl: "/api/seb/config-grant/course-1/classicquiz_quiz-1",
+            configGrantToken: "preview-token",
+            readinessRecommended: false
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/seb-readiness-settled-preview");
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Setup check", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Setup check (recommended)" })).toHaveCount(0);
+});
+
+test("starts an assessment handoff without sending the browser prompt URL back to the server", async ({ page }) => {
+  let grantBody: Record<string, unknown> | undefined;
+  await page.route("**/seb-assessment-handoff-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "seb-required",
+          data: {
+            browserReturnUrl: "https://canvas.example.edu/courses/course-1",
+            configGrantUrl: "/api/seb/config-grant/course-1/classicquiz_quiz-1",
+            configGrantToken: "preview-token",
+            readinessRecommended: true
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await page.route("**/api/seb/config-grant/course-1/classicquiz_quiz-1", async (route) => {
+    grantBody = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        sebLaunchUrl: "sebs://tool.example.test/seb/config/course-1/classicquiz_quiz-1.seb?grant=opaque",
+        handoffUrl: "/assessment-handoff-destination"
+      })
+    });
+  });
+  await page.route("**/assessment-handoff-destination", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Assessment handoff destination</h1></body></html>"
+    });
+  });
+
+  await page.goto("/seb-assessment-handoff-preview");
+  await page.getByRole("button", { name: "Open Safe Exam Browser" }).click();
+
+  await expect(page).toHaveURL(/\/assessment-handoff-destination$/u);
+  await expect(page.getByRole("heading", { name: "Assessment handoff destination" })).toBeVisible();
+  expect(grantBody).toEqual({ handoffPurpose: "assessment" });
+});
+
+test("returns an ended handoff to the Canvas course without adding the handoff back to history", async ({ page }) => {
+  await page.route("**/before-ended-handoff", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Page before handoff</h1></body></html>"
+    });
+  });
+  await page.route("**/ended-handoff-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "seb-launching-handoff",
+          data: { browserReturnUrl: "https://canvas.example.edu/courses/course-1" }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await page.route("https://canvas.example.edu/courses/course-1", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Canvas course home</h1></body></html>"
+    });
+  });
+
+  await page.goto("/before-ended-handoff");
+  await page.goto("/ended-handoff-preview");
+  await expect(page.getByRole("heading", { name: "This Safe Exam Browser launch has ended" })).toBeVisible();
+  await page.getByRole("button", { name: "Return to course" }).click();
+
+  await expect(page).toHaveURL("https://canvas.example.edu/courses/course-1");
+  await expect(page.getByRole("heading", { name: "Canvas course home" })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Page before handoff" })).toBeVisible();
+  await expect(page).not.toHaveURL(/ended-handoff-preview/u);
+});
+
+for (const handoff of [
+  {
+    name: "assessment",
+    purpose: "assessment",
+    launchUrl: "sebs://tool.example.test/seb/config/course-1/classicquiz_quiz-1.seb?grant=assessment",
+    message: "We’re opening your assessment in Safe Exam Browser.",
+    returnLabel: "Return to course"
+  },
+  {
+    name: "setup check",
+    purpose: "setup-check",
+    launchUrl: "sebs://tool.example.test/seb/check/config.seb",
+    message: "We’re opening your setup check in Safe Exam Browser.",
+    returnLabel: "Return to course"
+  }
+]) {
+  test(`opens the server-backed ${handoff.name} browser handoff without browser storage`, async ({ page }) => {
+    const previewPath = `/server-backed-${handoff.purpose}-handoff-preview`;
+    const returnUrl = "https://canvas.example.edu/courses/course-1";
+    await page.route(`**${previewPath}`, async (route) => {
+      await route.fulfill({
+        contentType: "text/html",
+        body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+          {
+            view: "seb-launching-handoff",
+            data: {
+              sebLaunchUrl: handoff.launchUrl,
+              browserReturnUrl: returnUrl,
+              launchPurpose: handoff.purpose
+            }
+          }
+        )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+      });
+    });
+
+    await page.goto(previewPath);
+
+    await expect(page.getByRole("heading", { name: "Opening Safe Exam Browser" })).toBeVisible();
+    await expect(page.getByText(handoff.message, { exact: false })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Try opening again" })).toHaveAttribute("href", handoff.launchUrl);
+    await expect(page.getByRole("button", { name: handoff.returnLabel })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "This Safe Exam Browser launch has ended" })).toHaveCount(0);
+  });
+
+  test(`consumes the ${handoff.name} browser handoff only after its page commits`, async ({ page }) => {
+    const handoffKey = `00000000-0000-4000-8000-${handoff.purpose === "assessment" ? "000000000001" : "000000000002"}`;
+    const storageKey = `safe-online-exam:seb-launch:${handoffKey}`;
+    const returnUrl = "https://canvas.example.edu/courses/course-1";
+
+    await page.goto("/health");
+    await page.evaluate(
+      ({ key, launchUrl, returnTo, purpose }) => {
+        window.sessionStorage.setItem(key, JSON.stringify({ sebLaunchUrl: launchUrl, returnUrl: returnTo, purpose }));
+      },
+      { key: storageKey, launchUrl: handoff.launchUrl, returnTo: returnUrl, purpose: handoff.purpose }
+    );
+
+    await page.goto(`/seb/launch-handoff?key=${encodeURIComponent(handoffKey)}`);
+
+    await expect(page.getByRole("heading", { name: "Opening Safe Exam Browser" })).toBeVisible();
+    await expect(page.getByText(handoff.message, { exact: false })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Try opening again" })).toHaveAttribute("href", handoff.launchUrl);
+    await expect(page.getByRole("button", { name: handoff.returnLabel })).toBeVisible();
+    await expect.poll(() => page.evaluate((key) => window.sessionStorage.getItem(key), storageKey)).toBeNull();
+
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "This Safe Exam Browser launch has ended" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Return to course" })).toBeVisible();
+  });
+}
+
+test("keeps the student dashboard setup reminder optional and user initiated", async ({ page }) => {
+  await page.route("**/student-readiness-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "student",
+          data: {
+            courseId: "course-1",
+            courseName: "Example Course",
+            configGrantToken: "preview-token",
+            onboarding: {
+              connection: "connected",
+              readinessRecommended: true,
+              showReadinessPrompt: true
+            },
+            quizzes: []
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/student-readiness-preview");
+
+  await expect(page.getByRole("heading", { name: "Check this computer when you have a few minutes" })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Run setup check" }).click();
+  await expect(page.getByRole("dialog", { name: "Safe Exam Browser setup check" })).toBeVisible();
+});
+
+test("opens the setup-check handoff even when saving the optional reminder preference fails", async ({ page }) => {
+  await page.route("**/student-readiness-failure-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "student",
+          data: {
+            courseId: "course-1",
+            courseName: "Example Course",
+            browserReturnUrl: "https://canvas.example.edu/courses/course-1",
+            configGrantToken: "preview-token",
+            setupCheckLaunchUrl: "sebs://tool.example.test/seb/check/config.seb",
+            sessionReadinessUrl: "/api/seb/session-readiness",
+            onboarding: { connection: "connected", readinessRecommended: true },
+            quizzes: []
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+  await page.route("**/api/seb/session-readiness", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        checks: { canvasSessionAuthorization: true },
+        handoffUrl: "/setup-check-handoff-destination"
+      })
+    });
+  });
+  await page.route("**/api/seb/session-readiness/dismiss", async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error_code: "TEMPORARILY_UNAVAILABLE" })
+    });
+  });
+  await page.route("**/setup-check-handoff-destination", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body><h1>Setup-check handoff destination</h1></body></html>"
+    });
+  });
+
+  await page.goto("/student-readiness-failure-preview");
+  await page.getByRole("button", { name: "Run setup check" }).click();
+  await page.getByRole("button", { name: "Launch Safe Exam Browser check" }).click();
+
+  await expect(page).toHaveURL(/\/setup-check-handoff-destination$/u);
+  await expect(page.getByRole("heading", { name: "Setup-check handoff destination" })).toBeVisible();
+});
+
 test("renders OAuth completion without resuming privileged management UI", async ({ page }) => {
   const browserErrors: string[] = [];
   page.on("console", (message) => {

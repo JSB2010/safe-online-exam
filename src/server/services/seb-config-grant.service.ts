@@ -15,8 +15,17 @@ import {
 import { sebConfigFingerprint } from "./seb-setting-fingerprint.js";
 
 const GRANT_TTL_SECONDS = 120;
+const BROWSER_LAUNCH_HANDOFF_TTL_SECONDS = 120;
 const PRINCIPAL_GRANT_LIMIT_PER_MINUTE = 60;
 const IP_GRANT_LIMIT_PER_MINUTE = 1_200;
+
+export type SebBrowserLaunchPurpose = "assessment" | "setup-check" | "student-list";
+
+export interface SebBrowserLaunchHandoff extends Record<string, unknown> {
+  sebLaunchUrl: string;
+  browserReturnUrl: string;
+  launchPurpose: SebBrowserLaunchPurpose;
+}
 
 export interface ConsumedSebConfigGrant {
   issuer: string;
@@ -98,6 +107,50 @@ export class SebConfigGrantService {
     if (/^[A-Za-z0-9_-]{43}$/u.test(token)) {
       await this.repositories.value.transientStates.delete(grantDocumentId(token));
     }
+  }
+
+  async mintBrowserLaunchHandoff(handoff: SebBrowserLaunchHandoff): Promise<string> {
+    if (!isValidBrowserLaunchHandoff(handoff)) {
+      throw new Error("Invalid SEB browser launch handoff");
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const token = randomBytes(32).toString("base64url");
+      const claimed = await this.repositories.value.transientStates.claim(browserLaunchHandoffDocumentId(token), {
+        kind: "seb-browser-launch-handoff",
+        version: 1,
+        audience: "seb-browser-launch",
+        action: "open",
+        ...handoff,
+        expiresAt: new Date(Date.now() + BROWSER_LAUNCH_HANDOFF_TTL_SECONDS * 1000)
+      });
+      if (claimed) {
+        return token;
+      }
+    }
+    throw new Error("Unable to mint a unique SEB browser launch handoff");
+  }
+
+  async consumeBrowserLaunchHandoff(token: string | undefined | null): Promise<SebBrowserLaunchHandoff | null> {
+    if (!token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      return null;
+    }
+    const record = await this.repositories.value.transientStates.consume(browserLaunchHandoffDocumentId(token));
+    if (!isBrowserLaunchHandoffRecord(record)) {
+      return null;
+    }
+    return {
+      sebLaunchUrl: record.sebLaunchUrl,
+      browserReturnUrl: record.browserReturnUrl,
+      launchPurpose: record.launchPurpose
+    };
+  }
+
+  async getBrowserLaunchHandoffReturnUrl(token: string | undefined | null): Promise<string | null> {
+    if (!token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+      return null;
+    }
+    const record = await this.repositories.value.transientStates.get(browserLaunchHandoffDocumentId(token));
+    return isBrowserLaunchHandoffRecord(record) ? record.browserReturnUrl : null;
   }
 
   async consumeGrant(
@@ -191,6 +244,10 @@ function grantDocumentId(token: string): string {
   return createHash("sha256").update(`seb-config-grant:${token}`, "utf8").digest("hex");
 }
 
+function browserLaunchHandoffDocumentId(token: string): string {
+  return createHash("sha256").update(`seb-browser-launch-handoff:${token}`, "utf8").digest("hex");
+}
+
 function isExpired(expiresAt: Date | string): boolean {
   const timestamp = new Date(expiresAt).getTime();
   return !Number.isFinite(timestamp) || timestamp <= Date.now();
@@ -227,4 +284,48 @@ function isConfigGrantRecord(record: TransientStateRecord | null): record is Tra
     !!record.settingsFingerprint &&
     typeof record.requiresSessionHandoff === "boolean"
   );
+}
+
+function isBrowserLaunchHandoffRecord(record: TransientStateRecord | null): record is TransientStateRecord & {
+  sebLaunchUrl: string;
+  browserReturnUrl: string;
+  launchPurpose: SebBrowserLaunchPurpose;
+} {
+  return (
+    record?.kind === "seb-browser-launch-handoff" &&
+    record.version === 1 &&
+    record.audience === "seb-browser-launch" &&
+    record.action === "open" &&
+    isValidBrowserLaunchHandoff(record)
+  );
+}
+
+function isValidBrowserLaunchHandoff(value: Record<string, unknown>): value is SebBrowserLaunchHandoff {
+  return (
+    isSafeSebLaunchUrl(value.sebLaunchUrl) &&
+    isSafeBrowserReturnUrl(value.browserReturnUrl) &&
+    (value.launchPurpose === "assessment" ||
+      value.launchPurpose === "setup-check" ||
+      value.launchPurpose === "student-list")
+  );
+}
+
+function isSafeSebLaunchUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 4_096) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "seb:" || url.protocol === "sebs:") && !url.username && !url.password && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+function isSafeBrowserReturnUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 4_096) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }

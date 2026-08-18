@@ -191,6 +191,16 @@ LTI 1.3 tool by the configured client and deployment IDs. Keep the external app
 installed in the course or an inherited account even when its navigation tab is
 hidden.
 
+To make this the registration default, set
+`LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS=false` in the application
+environment before deploying. The generated `/lti/config` then uses Canvas
+`admins` visibility for course navigation, so instructors and other course
+staff retain the navigation workspace while students enter through protected
+quiz pages. Unset the variable, or set any value other than `false`, to preserve
+the existing `members` visibility. After changing it, refresh the Canvas LTI
+Developer Key configuration from `/lti/config`; deploying the service does not
+make Canvas re-read metadata it already stored.
+
 ## 4. Load the Detector Script Through the Canvas Theme
 
 The detector runs on Canvas quiz-taking pages. It treats a Canvas access-code field only as a challenge signal and verifies the exact course/assessment against the service before showing the protected SEB flow. It fills an access code only after Config Key proof, shows approved web tools, and detects Canvas-confirmed completion. The stable script URL is:

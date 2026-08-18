@@ -29,6 +29,7 @@ import { SebAccessProofService } from "../services/seb-access-proof.service.js";
 import {
   canonicalSebConfigContentId,
   sameSebConfigSettingsFingerprint,
+  type SebBrowserLaunchPurpose,
   SebConfigGrantRateLimitError,
   SebConfigGrantService
 } from "../services/seb-config-grant.service.js";
@@ -42,6 +43,7 @@ import {
 } from "../services/canvas-api.service.js";
 import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
 import {
+  browserLaunchHandoffPath,
   configGrantEndpoint,
   consumePendingSebLaunch,
   firstHeader,
@@ -120,6 +122,7 @@ export class SebController {
       return;
     }
     const configPath = configGrantEndpoint(courseId, canonicalContentId);
+    const readinessRecommended = await this.studentReadinessRecommended(principal);
     response.send(
       renderAppShell({
         title: "Safe Exam Browser Required",
@@ -131,7 +134,10 @@ export class SebController {
           canvasUrl,
           browserReturnUrl: this.canvasCourseHomeUrl(courseId),
           configGrantUrl: configPath,
-          configGrantToken: this.configGrantActionToken(request, principal)
+          configGrantToken: this.configGrantActionToken(request, principal),
+          setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+          sessionReadinessUrl: "/api/seb/session-readiness",
+          readinessRecommended
         }
       })
     );
@@ -141,7 +147,8 @@ export class SebController {
   async issueConfigGrant(
     @Req() request: Request,
     @Param("courseId") courseId: string,
-    @Param("contentId") contentId: string
+    @Param("contentId") contentId: string,
+    @Body() body: Record<string, unknown> = {}
   ): Promise<Record<string, unknown>> {
     const principal = verifiedLtiPrincipal(request);
     if (!principal || principal.courseId !== courseId) {
@@ -171,9 +178,25 @@ export class SebController {
         return apiError(404, "Safe Online Exam configuration is unavailable");
       }
       const configPath = sebConfigPath(courseId, target.canonicalContentId, grant);
+      const sebLaunchUrl = sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl());
+      const launchPurpose: SebBrowserLaunchPurpose =
+        body.handoffPurpose === "student-list" ? "student-list" : "assessment";
+      const browserReturnUrl = this.canvasCourseHomeUrl(courseId);
+      let handoffToken: string;
+      try {
+        handoffToken = await this.configGrants.mintBrowserLaunchHandoff({
+          sebLaunchUrl,
+          browserReturnUrl,
+          launchPurpose
+        });
+      } catch (error) {
+        await this.configGrants.revokeGrant(grant);
+        throw error;
+      }
       return {
         success: true,
-        sebLaunchUrl: sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl()),
+        sebLaunchUrl,
+        handoffUrl: browserLaunchHandoffPath(handoffToken),
         expiresInSeconds: this.configGrants.getTokenTtlSeconds()
       };
     } catch (error) {
@@ -185,7 +208,10 @@ export class SebController {
   }
 
   @Post("/api/seb/session-readiness")
-  async verifyStudentSessionReadiness(@Req() request: Request): Promise<Record<string, unknown>> {
+  async verifyStudentSessionReadiness(
+    @Req() request: Request,
+    @Body() _body: Record<string, unknown> = {}
+  ): Promise<Record<string, unknown>> {
     const principal = verifiedLtiPrincipal(request);
     if (!principal || !requiresStudentSessionHandoff(principal)) {
       return apiError(403, "Verified student Canvas launch required", { error_code: "LTI_STUDENT_REQUIRED" });
@@ -199,7 +225,16 @@ export class SebController {
       // the student token can create the same Canvas session link used at exam
       // configuration download time.
       await this.canvasApi.getSessionToken(principal.canvasUserId, this.canvasCourseHomeUrl(principal.courseId));
-      return { success: true, checks: { canvasSessionAuthorization: true } };
+      const handoffToken = await this.configGrants.mintBrowserLaunchHandoff({
+        sebLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
+        browserReturnUrl: this.canvasCourseHomeUrl(principal.courseId),
+        launchPurpose: "setup-check"
+      });
+      return {
+        success: true,
+        checks: { canvasSessionAuthorization: true },
+        handoffUrl: browserLaunchHandoffPath(handoffToken)
+      };
     } catch (error) {
       if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
         return apiError(403, "Canvas connection must be completed again before using Safe Online Exam.", {
@@ -459,7 +494,7 @@ export class SebController {
       response.status(403).setHeader("cache-control", "no-store").send("Launch this assessment from Canvas.");
       return;
     }
-    this.renderConfigGrantPage(request, response, principal, courseId, canonicalContentId);
+    await this.renderConfigGrantPage(request, response, principal, courseId, canonicalContentId);
   }
 
   @Post("/seb/launch/:contentId")
@@ -473,13 +508,18 @@ export class SebController {
   }
 
   @Get("/seb/launch-handoff")
-  launchHandoff(@Res() response: Response): void {
+  async launchHandoff(@Res() response: Response, @Query("key") key?: string): Promise<void> {
+    const handoff = await this.configGrants.consumeBrowserLaunchHandoff(key);
+    const browserReturnUrl =
+      handoff?.browserReturnUrl ||
+      (await this.configGrants.getBrowserLaunchHandoffReturnUrl(key)) ||
+      new URL("/", this.config.getCanvasDomain()).toString();
     setPrivateNoStoreResponseHeaders(response);
     response.send(
       renderAppShell({
         title: "Opening Safe Exam Browser",
         view: "seb-launching-handoff",
-        initialData: {}
+        initialData: handoff || { browserReturnUrl }
       })
     );
   }
@@ -489,9 +529,9 @@ export class SebController {
     @Req() request: Request,
     @Res() response: Response,
     @Param("contentId") contentId: string,
-    @Query("connected") connected?: string
+    @Query("connected") _connected?: string
   ): Promise<void> {
-    await this.handleSebLaunch(request, response, contentId, undefined, undefined, connected === "1");
+    await this.handleSebLaunch(request, response, contentId);
   }
 
   @Get("/seb/launch/:contentId/login")
@@ -530,7 +570,7 @@ export class SebController {
       response.status(404).setHeader("cache-control", "no-store").send("Assessment not found");
       return;
     }
-    this.renderConfigGrantPage(request, response, principal, quiz.courseId, canonicalContentId);
+    await this.renderConfigGrantPage(request, response, principal, quiz.courseId, canonicalContentId);
   }
 
   @Get("/api/seb/tools/:courseId/:quizId")
@@ -850,8 +890,7 @@ export class SebController {
     response: Response,
     contentId: string,
     idToken?: string,
-    state?: string,
-    showReadinessPrompt = false
+    state?: string
   ): Promise<void> {
     if (idToken) {
       if (!hasBoundedLtiValidationEnvelope(state, idToken)) {
@@ -1009,7 +1048,8 @@ export class SebController {
             view: "seb-launching",
             initialData: {
               sebLaunchUrl: sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl()),
-              browserReturnUrl: this.canvasCourseHomeUrl(resolved.content.courseId)
+              browserReturnUrl: this.canvasCourseHomeUrl(resolved.content.courseId),
+              launchPurpose: "assessment"
             }
           })
         );
@@ -1022,10 +1062,7 @@ export class SebController {
         throw error;
       }
     }
-    const readinessPromptDismissed =
-      showReadinessPrompt && this.canvasApi
-        ? await this.canvasApi.hasDismissedStudentReadinessPrompt(principal.canvasUserId)
-        : false;
+    const readinessRecommended = await this.studentReadinessRecommended(principal);
     response.send(
       renderAppShell({
         title: "Safe Exam Browser Required",
@@ -1041,7 +1078,7 @@ export class SebController {
           configGrantToken: this.configGrantActionToken(request, principal),
           setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
           sessionReadinessUrl: "/api/seb/session-readiness",
-          showReadinessPrompt: showReadinessPrompt && !readinessPromptDismissed
+          readinessRecommended
         }
       })
     );
@@ -1074,13 +1111,14 @@ export class SebController {
     });
   }
 
-  private renderConfigGrantPage(
+  private async renderConfigGrantPage(
     request: Request,
     response: Response,
     principal: VerifiedLtiPrincipal,
     courseId: string,
     contentId: string
-  ): void {
+  ): Promise<void> {
+    const readinessRecommended = await this.studentReadinessRecommended(principal);
     setPrivateNoStoreResponseHeaders(response);
     response.send(
       renderAppShell({
@@ -1093,10 +1131,18 @@ export class SebController {
           configGrantUrl: configGrantEndpoint(courseId, contentId),
           configGrantToken: this.configGrantActionToken(request, principal),
           setupCheckLaunchUrl: sebSchemeUrl(request, "/seb/check/config.seb", this.config.getApplicationBaseUrl()),
-          sessionReadinessUrl: "/api/seb/session-readiness"
+          sessionReadinessUrl: "/api/seb/session-readiness",
+          readinessRecommended
         }
       })
     );
+  }
+
+  private async studentReadinessRecommended(principal: VerifiedLtiPrincipal): Promise<boolean> {
+    if (!requiresStudentSessionHandoff(principal) || !this.canvasApi) {
+      return false;
+    }
+    return !(await this.canvasApi.hasDismissedStudentReadinessPrompt(principal.canvasUserId));
   }
 
   private async createAccessProofForCurrentCourseState(
