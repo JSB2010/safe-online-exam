@@ -54,7 +54,7 @@ RUN --network=none npm run format:check
 RUN --network=none npm run test:coverage
 RUN --network=none npm run build
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:fbbdda866ea71aef98c4abece17e3d61fbf820cc2ef3961522caa2478716171a AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:ffab599740d4aaa66029d02b9e6d3de4f622fefb7410081c5ef69c86430f364d AS runtime
 
 STOPSIGNAL SIGTERM
 
