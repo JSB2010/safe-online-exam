@@ -40,7 +40,7 @@ function supplyChainFixture(
     '{"packageManager":"npm@11.19.0+sha512.48377f8478372aa1c4e47b763475b135836da82436a5700f2e5e8eb5084fc840f93c7b117eb3ad3b5f7d3194c81b6710a10d59448f6ddbcb21ac3fb672bdc003"}\n'
   );
   writeFileSync(join(directory, ".github", "workflows", "publish-release-image.yml"), "with:\n  version: v0.73.0\n");
-  writeFileSync(join(directory, "scripts", "verify-github-release-attestation.sh"), 'GH_CLI_VERSION="2.97.0"\n');
+  writeFileSync(join(directory, "scripts", "verify-github-release-attestation.sh"), 'GH_CLI_VERSION="2.98.0"\n');
   writeFileSync(
     join(directory, "fixtures.json"),
     JSON.stringify({
@@ -49,7 +49,7 @@ function supplyChainFixture(
         "node:24-bookworm-slim": imageDigest,
         "gcr.io/cloud-builders/docker:latest": imageDigest
       },
-      tools: { npm: "11.19.0", trivy: "v0.73.0", githubCli: "v2.97.0" },
+      tools: { npm: "11.19.0", trivy: "v0.73.0", githubCli: "v2.98.0" },
       npmEligible,
       outdated
     })
@@ -200,13 +200,13 @@ while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-C" ]]; then destination="$2"; break; fi
   shift
 done
-mkdir -p "$destination/gh_2.97.0_linux_amd64/bin"
+mkdir -p "$destination/gh_2.98.0_linux_amd64/bin"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\\n" "$*" >>"$GH_TEST_LOG"' \
   'if [[ "\${1:-}" == "api" ]]; then printf "%b\\n" "$GH_TEST_RELEASE_STATE"; fi' \
-  >"$destination/gh_2.97.0_linux_amd64/bin/gh"
-chmod +x "$destination/gh_2.97.0_linux_amd64/bin/gh"
+  >"$destination/gh_2.98.0_linux_amd64/bin/gh"
+chmod +x "$destination/gh_2.98.0_linux_amd64/bin/gh"
 `
     );
 
