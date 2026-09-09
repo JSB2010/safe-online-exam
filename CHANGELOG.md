@@ -5,6 +5,27 @@ release.
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-09-08
+
+Safe Online Exam 1.0.8 is a backward-compatible maintenance and reliability
+release. It adds no database migration, OAuth scope, LTI registration URL, or
+public compatibility endpoint.
+
+### Reliability and security
+
+- Keep certificate-encrypted SEB configuration generation compatible with
+  Node 24.20's native RSA key encoder while preserving the required PKCS#1
+  public-key bytes and SHA-1 configuration-key hash.
+- Update the runtime, test, workflow, and immutable build-image dependencies,
+  including the patched distroless runtime base used by the published image.
+- Keep the ESLint update within the dependency maturity policy by explicitly
+  tracking its compatible, mature `ignore` dependency; the weekly monitor will
+  surface the newer transitive patch when it becomes eligible.
+- Refresh the npm CLI and GitHub Release attestation verifier through their
+  committed integrity and checksum pins.
+- Split production and development security-update groups so a transitive test
+  tool update cannot be coupled to a runtime vulnerability remediation.
+
 ### Configurable student navigation
 
 - Add `LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS`; only an explicit `false`
@@ -401,7 +422,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.7...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.8
 [1.0.7]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.7
 [1.0.6]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.6
 [1.0.5]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.5

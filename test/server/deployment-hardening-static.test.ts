@@ -32,7 +32,7 @@ describe("deployment hardening artifacts", () => {
     expect(dockerfile.indexOf("npm audit signatures")).toBeLessThan(dockerfile.indexOf("npm run install:trusted"));
     expect(dockerfile).toContain("npm run install:trusted");
     expect(dockerfile.match(/corepack enable npm --install-directory \/opt\/corepack-shims/gu)).toHaveLength(2);
-    expect(dockerfile.match(/npm --version \| grep -Fx "11\.19\.0"/gu)).toHaveLength(2);
+    expect(dockerfile.match(/npm --version \| grep -Fx "11\.19\.1"/gu)).toHaveLength(2);
     expect(dockerfile).not.toContain("npm install -g npm@");
     expect(dockerfile).toContain("RUN --network=none npm run typecheck");
     expect(dockerfile).toContain("RUN --network=none npm run build");
@@ -74,7 +74,7 @@ describe("deployment hardening artifacts", () => {
     expect(npmConfig).toContain("allow-file=none");
     expect(npmConfig).toContain("allow-directory=none");
     expect(npmConfig).not.toContain("min-release-age");
-    expect(packageJson).toMatch(/"packageManager": "npm@11\.19\.0\+sha512\.[0-9a-f]{128}"/u);
+    expect(packageJson).toMatch(/"packageManager": "npm@11\.19\.1\+sha512\.[0-9a-f]{128}"/u);
     expect(npmConfig).not.toContain("strict-npmrc");
     expect(packageJson).toContain(
       '"install:trusted": "npm run verify:dependency-policy:offline && npm rebuild esbuild --ignore-scripts=false'
@@ -427,6 +427,10 @@ describe("deployment hardening artifacts", () => {
     expect(dependabot.match(/interval: weekly/gu)).toHaveLength(4);
     expect(dependabot).toContain("versioning-strategy: increase-if-necessary");
     expect(dependabot).toContain("applies-to: security-updates");
+    expect(dependabot).toContain("npm-production-security:");
+    expect(dependabot).toContain("npm-development-security:");
+    expect(dependabot).toContain("dependency-type: production");
+    expect(dependabot).toContain("dependency-type: development");
     expect(dependabot).toContain("cooldown:");
     expect(dependabot).toContain("pinned-actions:");
     expect(dependabot).toContain("production-minor-and-patch:");

@@ -23,8 +23,16 @@ updates:
       semver-minor-days: 7
       semver-patch-days: 3
     groups:
-      npm-security:
+      # Separate runtime and test-only security resolution. This keeps a
+      # transitive development-tool major from being bundled with a runtime
+      # remediation, so each can be validated and rolled back independently.
+      npm-production-security:
         applies-to: security-updates
+        dependency-type: production
+        patterns: ["*"]
+      npm-development-security:
+        applies-to: security-updates
+        dependency-type: development
         patterns: ["*"]
       nestjs:
         applies-to: version-updates

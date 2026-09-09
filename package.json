@@ -1,6 +1,6 @@
 {
   "name": "safe-online-exam",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {
@@ -12,7 +12,7 @@
     "url": "https://github.com/JSB2010/safe-online-exam/issues"
   },
   "type": "module",
-  "packageManager": "npm@11.19.0+sha512.48377f8478372aa1c4e47b763475b135836da82436a5700f2e5e8eb5084fc840f93c7b117eb3ad3b5f7d3194c81b6710a10d59448f6ddbcb21ac3fb672bdc003",
+  "packageManager": "npm@11.19.1+sha512.cedb312b1b7f92421a02cfb68b4194e88f8346651dacd6acc5364a25ef5309d4a32b19616a1ff8aff865e7280c0fa5c0835a99f5cd93368991e2a80ec9da75d2",
   "engines": {
     "node": ">=24.15.0 <25",
     "npm": ">=11.19.0 <12"
@@ -91,12 +91,13 @@
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
     "esbuild": "0.28.2",
-    "eslint": "10.8.1",
+    "eslint": "10.9.1",
+    "ignore": "7.0.8",
     "jsdom": "30.0.1",
     "prettier": "3.9.6",
     "tsx": "4.23.13",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.67.0",
+    "typescript-eslint": "8.69.0",
     "vite": "8.2.2",
     "vitest": "4.1.11"
   },

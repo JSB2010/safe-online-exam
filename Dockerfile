@@ -10,7 +10,7 @@ COPY package.json ./
 ENV PATH="/opt/corepack-shims:${PATH}"
 RUN mkdir -p /opt/corepack-shims \
     && corepack enable npm --install-directory /opt/corepack-shims \
-    && npm --version | grep -Fx "11.19.0"
+    && npm --version | grep -Fx "11.19.1"
 
 FROM base AS deps
 
@@ -35,7 +35,7 @@ COPY package*.json .npmrc ./
 ENV PATH="/opt/corepack-shims:${PATH}"
 RUN mkdir -p /opt/corepack-shims \
     && corepack enable npm --install-directory /opt/corepack-shims \
-    && npm --version | grep -Fx "11.19.0"
+    && npm --version | grep -Fx "11.19.1"
 RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev --ignore-scripts
 
 FROM deps AS verify
