@@ -316,8 +316,34 @@ function parseCertificate(pem: string): X509Certificate | null {
 }
 
 function exportRsaPublicKeyDer(publicKey: KeyObject): Buffer {
-  const exported = publicKey.export({ format: "der", type: "pkcs1" });
-  return Buffer.isBuffer(exported) ? exported : Buffer.from(exported);
+  // Node 24.20 can fail while re-encoding a parsed RSA key directly as PKCS#1
+  // on some OpenSSL builds ("Failed to encode public key"). The required SEB
+  // value is the RSA PKCS#1 structure already carried inside the stable SPKI
+  // representation, so extract that exact DER payload instead of asking
+  // OpenSSL to encode it a second time.
+  const exported = publicKey.export({ format: "der", type: "spki" });
+  const spki = Buffer.isBuffer(exported) ? exported : Buffer.from(exported);
+  const root = readDerNode(spki, 0, spki.length);
+  const bitString = root?.children.at(-1);
+  if (
+    !root ||
+    root.tag !== 0x30 ||
+    root.end !== spki.length ||
+    root.children.length !== 2 ||
+    !bitString ||
+    bitString.tag !== 0x03 ||
+    bitString.valueStart >= bitString.end ||
+    bitString.source[bitString.valueStart] !== 0
+  ) {
+    throw new Error("SEB config encryption could not read the RSA public key from SPKI");
+  }
+
+  const pkcs1 = bitString.source.subarray(bitString.valueStart + 1, bitString.end);
+  const rsaPublicKey = readDerNode(pkcs1, 0, pkcs1.length);
+  if (!rsaPublicKey || rsaPublicKey.tag !== 0x30 || rsaPublicKey.end !== pkcs1.length) {
+    throw new Error("SEB config encryption SPKI does not contain an RSA PKCS#1 public key");
+  }
+  return Buffer.from(pkcs1);
 }
 
 function certificatePemFromDer(certificateDer: Buffer): string {
