@@ -56,6 +56,7 @@ import {
   sessionValue,
   storeLaunchData
 } from "./lti-controller-helpers.js";
+import { ASSESSMENT_READINESS_CONCURRENCY, mapWithConcurrency } from "./quiz-controller-helpers.js";
 
 @Controller()
 export class LtiController {
@@ -494,16 +495,18 @@ export class LtiController {
     try {
       const { classicQuizzes, contentItems: content } = await this.assessments.refreshCourseContent(courseId, userId);
       const newQuizzes = content.filter((item) => item.contentType === "NEW_QUIZ");
-      const quizzes = await Promise.all([
-        ...classicQuizzes.map(async (quiz) => ({
-          ...quizView(quiz),
-          readiness: await this.assessments.getAssessmentReadiness(courseId, quiz.id)
-        })),
-        ...newQuizzes.map(async (item) => ({
-          ...contentView(item),
-          readiness: await this.assessments.getAssessmentReadiness(courseId, item.id)
-        }))
-      ]);
+      const assessmentViews = [
+        ...classicQuizzes.map((quiz) => ({ id: quiz.id, view: quizView(quiz) })),
+        ...newQuizzes.map((item) => ({ id: item.id, view: contentView(item) }))
+      ];
+      const quizzes = await mapWithConcurrency(
+        assessmentViews,
+        ASSESSMENT_READINESS_CONCURRENCY,
+        async ({ id, view }) => ({
+          ...view,
+          readiness: await this.assessments.getAssessmentReadiness(courseId, id)
+        })
+      );
       const quizSebSettings: Record<string, unknown> = {};
       for (const quiz of classicQuizzes) {
         const setting = await this.assessments.getSebSettingForQuiz(quiz.id);

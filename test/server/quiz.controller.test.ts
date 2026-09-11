@@ -316,10 +316,11 @@ describe("QuizController", () => {
     assessments.refreshCourseContent.mockResolvedValue({ classicQuizzes: quizzes });
     let active = 0;
     let maximumActive = 0;
-    assessments.getAssessmentReadiness.mockImplementation(async () => {
+    assessments.getAssessmentReadiness.mockImplementation(async (_courseId: string, id: string) => {
       active += 1;
       maximumActive = Math.max(maximumActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 2));
+      const index = Number(id.replace("classicquiz_", ""));
+      await new Promise((resolve) => setTimeout(resolve, 21 - index));
       active -= 1;
       return {
         status: "ready",
@@ -338,6 +339,9 @@ describe("QuizController", () => {
 
     expect(maximumActive).toBeLessThanOrEqual(8);
     expect(maximumActive).toBeGreaterThan(1);
+    expect((result.readiness as Array<{ id: string }>).map((assessment) => assessment.id)).toEqual(
+      quizzes.map((quiz) => quiz.id)
+    );
     expect((result.assessments as Array<{ id: string }>).map((assessment) => assessment.id)).toEqual(
       quizzes.map((quiz) => quiz.id)
     );

@@ -28,6 +28,7 @@ import { CourseSettingsService } from "../services/course-settings.service.js";
 import { hasEffectiveSebQuitPassword } from "../services/seb-quit-password.js";
 import {
   assertSafePolicyInput,
+  ASSESSMENT_READINESS_CONCURRENCY,
   canvasAuthorizationRequired,
   canvasPermissionDenied,
   COURSE_TOOL_COPY_CONCURRENCY,
@@ -43,8 +44,6 @@ import {
   secretUpdate
 } from "./quiz-controller-helpers.js";
 import { contentView, quizView } from "./lti-controller-helpers.js";
-
-const ASSESSMENT_READINESS_CONCURRENCY = 8;
 
 @Controller("/api/quizzes")
 export class QuizController {

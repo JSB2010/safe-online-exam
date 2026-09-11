@@ -40,6 +40,7 @@ describe("LtiController role routing", () => {
     getCachedContentForCourse: ReturnType<typeof vi.fn>;
     getSebSettingForQuiz: ReturnType<typeof vi.fn>;
     getContentSebSetting: ReturnType<typeof vi.fn>;
+    getAssessmentReadiness: ReturnType<typeof vi.fn>;
     getQuiz: ReturnType<typeof vi.fn>;
     isAssessmentAvailableForLearner: ReturnType<typeof vi.fn>;
   };
@@ -75,6 +76,7 @@ describe("LtiController role routing", () => {
       getCachedContentForCourse: vi.fn().mockResolvedValue([]),
       getSebSettingForQuiz: vi.fn().mockResolvedValue(null),
       getContentSebSetting: vi.fn().mockResolvedValue(null),
+      getAssessmentReadiness: vi.fn().mockResolvedValue(null),
       getQuiz: vi.fn().mockResolvedValue(null),
       isAssessmentAvailableForLearner: vi.fn().mockResolvedValue(true)
     };
@@ -958,6 +960,42 @@ describe("LtiController role routing", () => {
     expect(html).toContain('"hasEffectiveQuitPassword":true');
     expect(html).not.toContain("managed-server-exit");
     expect(canvasApi.hasAccessToken).toHaveBeenCalledWith("teacher-1");
+  });
+
+  it("bounds readiness reads while rendering the initial teacher view", async () => {
+    const response = responseDouble();
+    const request = requestDouble({
+      userId: "teacher-1",
+      courseId: "course-1",
+      roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"]
+    });
+    const quizzes = Array.from({ length: 20 }, (_, index) => ({
+      id: `classicquiz_${index + 1}`,
+      courseId: "course-1",
+      title: `Quiz ${index + 1}`,
+      canvasQuizId: String(index + 1),
+      published: true
+    }));
+    assessments.refreshCourseContent.mockResolvedValue({ classicQuizzes: quizzes, contentItems: [] });
+    let active = 0;
+    let maximumActive = 0;
+    assessments.getAssessmentReadiness.mockImplementation(async (_courseId: string, id: string) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      const index = Number(id.replace("classicquiz_", ""));
+      await new Promise((resolve) => setTimeout(resolve, 21 - index));
+      active -= 1;
+      return { status: "ready" };
+    });
+
+    await controller.launchGet(request, response);
+
+    expect(maximumActive).toBeLessThanOrEqual(8);
+    expect(maximumActive).toBeGreaterThan(1);
+    const html = response.send.mock.calls[0][0] as string;
+    const positions = quizzes.map((quiz) => html.indexOf(`"id":"${quiz.id}"`));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
   });
 
   it("renders only enabled SEB assessments for student course launches", async () => {

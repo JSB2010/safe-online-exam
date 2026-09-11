@@ -174,6 +174,8 @@ export function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined;
 }
 
+export const ASSESSMENT_READINESS_CONCURRENCY = 8;
+
 export async function mapWithConcurrency<T, U>(
   values: readonly T[],
   concurrency: number,
