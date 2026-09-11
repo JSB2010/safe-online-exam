@@ -28,6 +28,7 @@ import { CourseSettingsService } from "../services/course-settings.service.js";
 import { hasEffectiveSebQuitPassword } from "../services/seb-quit-password.js";
 import {
   assertSafePolicyInput,
+  ASSESSMENT_READINESS_CONCURRENCY,
   canvasAuthorizationRequired,
   canvasPermissionDenied,
   COURSE_TOOL_COPY_CONCURRENCY,
@@ -67,12 +68,10 @@ export class QuizController {
         ...contentItems.map((item) => ({ id: item.id, view: contentView(item) }))
       ];
       const readiness = (
-        await Promise.all(
-          assessmentViews.map(async ({ id }) => {
-            const result = await this.assessments.getAssessmentReadiness(courseId, id);
-            return result ? { id, ...result } : null;
-          })
-        )
+        await mapWithConcurrency(assessmentViews, ASSESSMENT_READINESS_CONCURRENCY, async ({ id }) => {
+          const result = await this.assessments.getAssessmentReadiness(courseId, id);
+          return result ? { id, ...result } : null;
+        })
       ).filter((value) => value !== null);
       const readinessById = new Map(readiness.map((value) => [value.id, value]));
       const recordsById = new Map((refreshed.assessments || []).map((record) => [record.id, record]));

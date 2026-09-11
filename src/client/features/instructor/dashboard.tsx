@@ -51,8 +51,8 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
   }, [items, query]);
 
   const configuredCount = useMemo(
-    () => Object.values(settings).filter((setting: any) => setting?.sebRequired).length,
-    [settings]
+    () => items.filter((item) => settings[item.id]?.sebRequired).length,
+    [items, settings]
   );
   const readyCount = useMemo(
     () => items.filter((item) => settings[item.id]?.sebRequired && item.readiness?.status === "ready").length,
