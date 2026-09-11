@@ -286,7 +286,7 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
             const setting = settings[item.id] || {};
             const enabled = !!setting.sebRequired;
             const canEnable = enabled || canEnableSebAssessment(setting, courseDefaults);
-            const ready = enabled && item.readiness?.globallyReady === true;
+            const ready = enabled && item.readiness?.status === "ready";
             return (
               <article className="content-row teacher-row" key={item.id}>
                 <div className="content-main">
