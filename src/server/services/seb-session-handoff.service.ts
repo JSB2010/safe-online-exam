@@ -4,8 +4,15 @@ import { isExpired } from "../data/document-values.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import type { TransientStateRecord } from "../data/repository-contracts.js";
 import { SebConfigKeyService } from "./seb-config-key.service.js";
+import { isCurrentLaunchAdmission, type SebLaunchAdmission } from "./seb-config-grant.service.js";
 
 const HANDOFF_CONFIG_TTL_SECONDS = 12 * 60 * 60;
+
+export interface SebConfigProofContext {
+  configKey: string;
+  launchAdmission: SebLaunchAdmission | null;
+  launchAdmissionRequired: boolean;
+}
 
 @Injectable()
 export class SebSessionHandoffService {
@@ -19,7 +26,8 @@ export class SebSessionHandoffService {
     contentId: string,
     settingsFingerprint: string,
     configKey: string,
-    returnTo: string
+    returnTo: string,
+    launchAdmission?: SebLaunchAdmission | null
   ): Promise<string[]> {
     const urls = configProofUrls(returnTo);
     const proofUrl = canonicalProofUrl(returnTo);
@@ -48,6 +56,8 @@ export class SebSessionHandoffService {
           settingsFingerprint,
           configKey,
           proofUrl,
+          launchAdmissionRequired: !!launchAdmission,
+          ...(launchAdmission ? { launchAdmission } : {}),
           expiresAt
         });
         return { claimed, id };
@@ -84,6 +94,19 @@ export class SebSessionHandoffService {
     configKeyHash: string | undefined | null,
     url: string | undefined | null
   ): Promise<string | null> {
+    return (
+      (await this.resolveConfigProofContext(courseId, contentId, settingsFingerprint, configKeyHash, url))?.configKey ||
+      null
+    );
+  }
+
+  async resolveConfigProofContext(
+    courseId: string,
+    contentId: string,
+    settingsFingerprint: string,
+    configKeyHash: string | undefined | null,
+    url: string | undefined | null
+  ): Promise<SebConfigProofContext | null> {
     if (!configKeyHash || !url || !/^[a-f0-9]{64}$/u.test(configKeyHash)) {
       return null;
     }
@@ -99,7 +122,11 @@ export class SebSessionHandoffService {
       false
     );
     if (directConfigKey) {
-      return directConfigKey;
+      return {
+        configKey: directConfigKey,
+        launchAdmission: isCurrentLaunchAdmission(directRecord?.launchAdmission) ? directRecord.launchAdmission : null,
+        launchAdmissionRequired: directRecord?.launchAdmissionRequired === true
+      };
     }
 
     // New Quiz routes include a Canvas-generated attempt ID, so the Config Key
@@ -121,7 +148,11 @@ export class SebSessionHandoffService {
         true
       );
       if (configKey) {
-        return configKey;
+        return {
+          configKey,
+          launchAdmission: isCurrentLaunchAdmission(record.launchAdmission) ? record.launchAdmission : null,
+          launchAdmissionRequired: record.launchAdmissionRequired === true
+        };
       }
     }
     return null;

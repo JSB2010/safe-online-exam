@@ -121,7 +121,7 @@ describe("SEB access proof validation", () => {
           configKeyHash: configKey.hashForUrl(url, storedConfigKey),
           url
         }),
-        404
+        409
       );
       expect(mintProof).toHaveBeenCalledOnce();
       expect(revokeProof).toHaveBeenCalledWith(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u));
@@ -154,7 +154,7 @@ describe("SEB access proof validation", () => {
 
       await expectApiError(
         controller.accessCode("11825", "23455", proof.proofToken as string, requestWithHeaders()),
-        404
+        409
       );
       expect(mintExitGrant).toHaveBeenCalledOnce();
       expect(revokeExitGrant).toHaveBeenCalledWith(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u));

@@ -6,6 +6,29 @@ import { AssessmentAccessCodeConsistencyError } from "./assessment-errors.js";
 export const ASSESSMENT_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const ASSESSMENT_VERIFICATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
+export type AssessmentReadinessStatus =
+  | "ready"
+  | "configured_unpublished"
+  | "not_yet_open"
+  | "closed"
+  | "publication_conflict"
+  | "publication_unknown"
+  | "canvas_stale"
+  | "canvas_missing"
+  | "settings_incomplete";
+
+export interface AssessmentReadiness {
+  status: AssessmentReadinessStatus;
+  configured: boolean;
+  globallyReady: boolean;
+  studentLaunchAuthorized: boolean | null;
+  publicationStatus: "published" | "unpublished" | "conflict" | "unknown";
+  publicationConfidence: "complete" | "single_source" | "unavailable";
+  verifiedAt: string | null;
+  unlockAt: string | null;
+  lockAt: string | null;
+}
+
 export type AccessCodeSetting = Pick<
   QuizSebSetting | ContentSebSetting,
   "sebRequired" | "enabled" | "accessCode" | "configKey"
@@ -47,23 +70,63 @@ export function courseWriteLockId(courseId: string): string {
 }
 
 export function isCanvasAssessmentCurrentlyAvailable(record: AssessmentRecord): boolean {
-  if (record.canvas.published !== true) {
-    return false;
+  return evaluateAssessmentReadiness(record).globallyReady;
+}
+
+export function evaluateAssessmentReadiness(
+  record: AssessmentRecord,
+  options: { hasEffectiveQuitPassword?: boolean } = {}
+): AssessmentReadiness {
+  const configured =
+    record.seb.required === true &&
+    record.seb.enabled === true &&
+    !!record.seb.accessCode &&
+    (!record.seb.startPassword || !!record.seb.configKeySalt) &&
+    options.hasEffectiveQuitPassword !== false;
+  // Boolean-only legacy rows cannot tell whether Canvas returned an explicit
+  // value or the old normalizer collapsed missing/malformed data to false.
+  // Keep them unknown until the next complete Canvas refresh records evidence.
+  const publicationStatus = record.canvas.publication?.status || "unknown";
+  const result = (status: AssessmentReadinessStatus, globallyReady = false): AssessmentReadiness => ({
+    status: !configured && status === "ready" ? "settings_incomplete" : status,
+    configured,
+    globallyReady,
+    studentLaunchAuthorized: null,
+    publicationStatus,
+    publicationConfidence: record.canvas.publication?.confidence || "unavailable",
+    verifiedAt: record.canvasVerification?.lastVerifiedAt || record.canvasVerification?.checkedAt || null,
+    unlockAt: record.canvas.unlockAt || null,
+    lockAt: record.canvas.lockAt || null
+  });
+  if (record.canvasVerification?.status === "missing") {
+    return result("canvas_missing");
+  }
+  if (record.canvasVerification?.status !== "verified" || !isFreshCanvasVerification(record)) {
+    return result("canvas_stale");
+  }
+  if (publicationStatus === "conflict") {
+    return result("publication_conflict");
+  }
+  if (publicationStatus === "unknown") {
+    return result("publication_unknown");
+  }
+  if (publicationStatus === "unpublished" || record.canvas.published !== true) {
+    return result("configured_unpublished");
   }
   const now = Date.now();
   if (record.canvas.unlockAt) {
     const unlockAt = Date.parse(record.canvas.unlockAt);
     if (!Number.isFinite(unlockAt) || now < unlockAt) {
-      return false;
+      return result(Number.isFinite(unlockAt) ? "not_yet_open" : "publication_unknown");
     }
   }
   if (record.canvas.lockAt) {
     const lockAt = Date.parse(record.canvas.lockAt);
     if (!Number.isFinite(lockAt) || now >= lockAt) {
-      return false;
+      return result(Number.isFinite(lockAt) ? "closed" : "publication_unknown");
     }
   }
-  return true;
+  return result("ready", true);
 }
 
 export function isFreshCanvasVerification(record: AssessmentRecord): boolean {

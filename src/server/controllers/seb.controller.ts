@@ -39,6 +39,7 @@ import { SebDetector } from "../services/seb-detector.service.js";
 import {
   CanvasApiAuthorizationError,
   CanvasApiPermissionError,
+  CanvasApiRequestError,
   CanvasApiService
 } from "../services/canvas-api.service.js";
 import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
@@ -61,9 +62,11 @@ import {
   sebConfigPath
 } from "./seb-controller-helpers.js";
 import {
+  AssessmentNotAvailableError,
   SebContentCoordinator,
   type SebConfigGrantTarget,
-  type SebLaunchContentView
+  type SebLaunchContentView,
+  type SebRequirementStatus
 } from "./seb-content-coordinator.js";
 
 @Controller()
@@ -163,19 +166,32 @@ export class SebController {
       }
     }
     try {
-      const target = await this.resolveCurrentConfigGrantTarget(courseId, contentId);
+      const target = await this.resolveCurrentConfiguredTarget(courseId, contentId);
       if (!target) {
-        return apiError(404, "Safe Online Exam configuration is unavailable");
+        return apiError(409, "Safe Online Exam is not fully configured for this assessment.", {
+          error_code: "SEB_CONFIGURATION_UNAVAILABLE"
+        });
       }
+      const launchAdmission = await this.contentCoordinator.authorizeLaunch(principal, target);
       const grant = await this.configGrants.mintGrant(
         request,
         principal,
         courseId,
         target.canonicalContentId,
-        target.settingsFingerprint
+        target.settingsFingerprint,
+        launchAdmission
       );
-      if (!(await this.finalizeCourseScopedGrant(courseId, target, () => this.configGrants.revokeGrant(grant)))) {
-        return apiError(404, "Safe Online Exam configuration is unavailable");
+      if (
+        !(await this.finalizeCourseScopedGrant(
+          courseId,
+          target,
+          () => this.configGrants.revokeGrant(grant),
+          !launchAdmission
+        ))
+      ) {
+        return apiError(409, "Safe Online Exam configuration changed while this launch was being prepared.", {
+          error_code: "SEB_CONFIGURATION_UNAVAILABLE"
+        });
       }
       const configPath = sebConfigPath(courseId, target.canonicalContentId, grant);
       const sebLaunchUrl = sebSchemeUrl(request, configPath, this.config.getApplicationBaseUrl());
@@ -193,6 +209,12 @@ export class SebController {
         await this.configGrants.revokeGrant(grant);
         throw error;
       }
+      console.info(
+        JSON.stringify({
+          event: "seb_config_grant_authorized",
+          ...(launchAdmission ? { attemptId: launchAdmission.attemptId, method: launchAdmission.method } : {})
+        })
+      );
       return {
         success: true,
         sebLaunchUrl,
@@ -202,6 +224,33 @@ export class SebController {
     } catch (error) {
       if (error instanceof SebConfigGrantRateLimitError) {
         return apiError(429, "Too many configuration requests", { error_code: "RATE_LIMITED" });
+      }
+      if (error instanceof AssessmentNotAvailableError) {
+        const invalidCanvasResponse = error.reason === "invalid_availability";
+        const status = invalidCanvasResponse ? 503 : 409;
+        logConfigGrantDenial(error.attemptId, error.reason, status);
+        return apiError(
+          status,
+          invalidCanvasResponse
+            ? "Canvas availability could not be verified right now."
+            : "Canvas is not making this assessment available to your account.",
+          {
+            error_code: invalidCanvasResponse ? "CANVAS_AVAILABILITY_UNVERIFIED" : "ASSESSMENT_NOT_AVAILABLE",
+            reason: error.reason
+          }
+        );
+      }
+      if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
+        logConfigGrantDenial(launchAttemptIdFromError(error), "canvas_authorization", 403);
+        return apiError(403, "Canvas authorization is required before opening this assessment.", {
+          error_code: "CANVAS_SESSION_AUTHORIZATION_REQUIRED"
+        });
+      }
+      if (error instanceof CanvasApiRequestError) {
+        logConfigGrantDenial(launchAttemptIdFromError(error), "canvas_unverified", error.status);
+        return apiError(error.status === 429 ? 429 : 503, "Canvas availability could not be verified right now.", {
+          error_code: "CANVAS_AVAILABILITY_UNVERIFIED"
+        });
       }
       throw error;
     }
@@ -292,9 +341,31 @@ export class SebController {
       response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
       return;
     }
+    if (consumedGrant.launchAdmissionRequired && consumedGrant.launchAdmission === null) {
+      console.warn(
+        JSON.stringify({
+          event: "seb_launch_admission_expired",
+          ...(consumedGrant.launchAttemptId ? { attemptId: consumedGrant.launchAttemptId } : {})
+        })
+      );
+      response
+        .status(403)
+        .setHeader("cache-control", "no-store")
+        .send("Canvas learner availability expired. Return to Canvas and reopen the assessment.");
+      return;
+    }
     try {
-      const target = await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId);
+      const target = consumedGrant.launchAdmission
+        ? await this.resolveCurrentConfiguredTarget(courseId, canonicalContentId)
+        : await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId);
       if (!target || !sameSebConfigSettingsFingerprint(consumedGrant.settingsFingerprint, target.settingsFingerprint)) {
+        console.warn(
+          JSON.stringify({
+            event: "seb_configuration_invalidated",
+            ...(consumedGrant.launchAttemptId ? { attemptId: consumedGrant.launchAttemptId } : {}),
+            reason: "settings_fingerprint"
+          })
+        );
         response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
         return;
       }
@@ -303,11 +374,17 @@ export class SebController {
         canonicalContentId,
         target,
         consumedGrant.canvasUserId,
-        consumedGrant.requiresSessionHandoff
+        consumedGrant.requiresSessionHandoff,
+        consumedGrant.launchAdmission
       );
-      const current = await this.finalizeCourseScopedGrant(courseId, target, async () => {
-        await this.sessionHandoff?.revokeConfigs(generated.handoffDocumentIds);
-      });
+      const current = await this.finalizeCourseScopedGrant(
+        courseId,
+        target,
+        async () => {
+          await this.sessionHandoff?.revokeConfigs(generated.handoffDocumentIds);
+        },
+        !consumedGrant.launchAdmission
+      );
       if (!current) {
         response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
         return;
@@ -325,12 +402,25 @@ export class SebController {
         )
         .setHeader("content-description", "Safe Online Exam Configuration")
         .send(generated.buffer);
+      console.info(
+        JSON.stringify({
+          event: "seb_config_downloaded",
+          ...(consumedGrant.launchAdmission ? { attemptId: consumedGrant.launchAdmission.attemptId } : {})
+        })
+      );
     } catch (error) {
       if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
         response
           .status(403)
           .setHeader("cache-control", "no-store")
           .send("Canvas connection is no longer available. Reopen Safe Online Exam from Canvas to continue.");
+        return;
+      }
+      if (error instanceof CanvasApiRequestError) {
+        response
+          .status(error.status === 429 ? 429 : 503)
+          .setHeader("cache-control", "no-store")
+          .send("Canvas session creation is temporarily unavailable. Return to Canvas and try again.");
         return;
       }
       response
@@ -609,29 +699,31 @@ export class SebController {
   ): Promise<Record<string, unknown>> {
     response?.setHeader("cache-control", "private, no-store, max-age=0");
     if (!/^[a-z0-9_-]{1,128}$/iu.test(courseId)) {
-      return { success: true, sebRequired: false };
+      return { success: true, sebRequired: false, globallyReady: false };
     }
     const canonicalContentId = canonicalSebConfigContentId(quizId);
     const parsed = parseNewQuizContentId(canonicalContentId);
     if (!canonicalContentId || (parsed && parsed.courseId !== courseId)) {
-      return { success: true, sebRequired: false };
+      return { success: true, sebRequired: false, globallyReady: false };
     }
     const cached = this.cachedSebRequirementStatus(courseId, canonicalContentId);
     if (cached) {
-      return { success: true, sebRequired: await cached };
+      return { success: true, ...(await cached) };
     }
-    return {
-      success: true,
-      sebRequired: await this.cacheSebRequirementStatus(courseId, canonicalContentId, async () => {
-        if (
-          !consumePublicBudget(request, "seb-requirement", 12_000) ||
-          !(await this.distributedAdmission.consumeRequestIp(request, "seb-requirement-ip", 24_000))
-        ) {
-          return apiError(429, "Too many Safe Online Exam requirement checks", { error_code: "RATE_LIMITED" });
-        }
-        return this.isSebRequirementConfigured(courseId, canonicalContentId);
-      })
-    };
+    const status = await this.cacheSebRequirementStatus(courseId, canonicalContentId, async () => {
+      if (
+        !consumePublicBudget(request, "seb-requirement", 12_000) ||
+        !(await this.distributedAdmission.consumeRequestIp(request, "seb-requirement-ip", 24_000))
+      ) {
+        return apiError(429, "Too many Safe Online Exam requirement checks", { error_code: "RATE_LIMITED" });
+      }
+      const sebRequired = await this.isSebRequirementConfigured(courseId, canonicalContentId);
+      return {
+        sebRequired,
+        globallyReady: await this.globalReadinessDiagnostic(sebRequired, courseId, canonicalContentId)
+      };
+    });
+    return { success: true, ...status };
   }
 
   @Post("/api/seb/access-proof/:courseId/:quizId")
@@ -1005,33 +1097,35 @@ export class SebController {
     }
     if (directLaunch) {
       try {
-        const target = await this.resolveCurrentConfigGrantTarget(
-          resolved.content.courseId,
-          resolvedCanonicalContentId
-        );
+        const target = await this.resolveCurrentConfiguredTarget(resolved.content.courseId, resolvedCanonicalContentId);
         if (!target) {
           response
-            .status(404)
+            .status(409)
             .setHeader("cache-control", "no-store")
-            .send("Safe Online Exam configuration is unavailable");
+            .send("Safe Online Exam is not fully configured for this assessment");
           return;
         }
+        const launchAdmission = await this.contentCoordinator.authorizeLaunch(principal, target);
         const grant = await this.configGrants.mintGrant(
           request,
           principal,
           resolved.content.courseId,
           target.canonicalContentId,
-          target.settingsFingerprint
+          target.settingsFingerprint,
+          launchAdmission
         );
         if (
-          !(await this.finalizeCourseScopedGrant(resolved.content.courseId, target, () =>
-            this.configGrants.revokeGrant(grant)
+          !(await this.finalizeCourseScopedGrant(
+            resolved.content.courseId,
+            target,
+            () => this.configGrants.revokeGrant(grant),
+            !launchAdmission
           ))
         ) {
           response
-            .status(404)
+            .status(409)
             .setHeader("cache-control", "no-store")
-            .send("Safe Online Exam configuration is unavailable");
+            .send("Safe Online Exam configuration changed while this launch was being prepared");
           return;
         }
         request.session!.completedSebLaunch = {
@@ -1057,6 +1151,45 @@ export class SebController {
       } catch (error) {
         if (error instanceof SebConfigGrantRateLimitError) {
           response.status(429).setHeader("retry-after", "60").send("Too many configuration requests");
+          return;
+        }
+        if (error instanceof AssessmentNotAvailableError) {
+          logConfigGrantDenial(error.attemptId, error.reason, 409);
+          response
+            .status(409)
+            .setHeader("cache-control", "no-store")
+            .send(
+              renderFallbackHtml(
+                "Assessment Not Available",
+                "<h1>Canvas is not making this assessment available to your account.</h1><p>Return to Canvas or ask your instructor to check publication and availability dates.</p>"
+              )
+            );
+          return;
+        }
+        if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
+          logConfigGrantDenial(launchAttemptIdFromError(error), "canvas_authorization", 403);
+          response
+            .status(403)
+            .setHeader("cache-control", "no-store")
+            .send(
+              renderFallbackHtml(
+                "Reconnect Canvas",
+                "<h1>Canvas connection is required.</h1><p>Return to Canvas, reconnect Safe Online Exam, and launch this assessment again.</p>"
+              )
+            );
+          return;
+        }
+        if (error instanceof CanvasApiRequestError) {
+          logConfigGrantDenial(launchAttemptIdFromError(error), "canvas_unverified", error.status);
+          response
+            .status(error.status === 429 ? 429 : 503)
+            .setHeader("cache-control", "no-store")
+            .send(
+              renderFallbackHtml(
+                "Canvas Availability Unverified",
+                "<h1>Canvas availability could not be verified.</h1><p>Wait a moment, return to Canvas, and try again.</p>"
+              )
+            );
           return;
         }
         throw error;
@@ -1089,14 +1222,16 @@ export class SebController {
     contentId: string,
     target: { setting: QuizSebSetting | ContentSebSetting; settingsFingerprint: string },
     canvasUserId: string,
-    requiresSessionHandoff: boolean
+    requiresSessionHandoff: boolean,
+    launchAdmission?: import("../services/seb-config-grant.service.js").SebLaunchAdmission | null
   ): Promise<{ buffer: Buffer; handoffDocumentIds: string[] }> {
     return this.contentCoordinator.generateConfigForGrant(
       courseId,
       contentId,
       target,
       canvasUserId,
-      requiresSessionHandoff
+      requiresSessionHandoff,
+      launchAdmission
     );
   }
 
@@ -1152,7 +1287,7 @@ export class SebController {
     body?: { configKeyHash?: string; url?: string }
   ): Promise<Record<string, unknown>> {
     const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
-    const target = canonicalContentId ? await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId) : null;
+    const target = canonicalContentId ? await this.resolveCurrentConfiguredTarget(courseId, canonicalContentId) : null;
     const setting = target?.setting || null;
     if (
       !target ||
@@ -1171,17 +1306,29 @@ export class SebController {
     const staticValid =
       (validBodyUrl && this.configKey.validateConfigKeyHashForUrl(body?.configKeyHash, body?.url, expectedConfigKey)) ||
       this.configKey.validateConfigKeyHash(request, expectedConfigKey);
-    const handoffConfigKey =
+    const handoffContext =
       validBodyUrl && this.sessionHandoff
-        ? await this.sessionHandoff.resolveConfigKey(
-            courseId,
-            canonicalContentId,
-            target.settingsFingerprint,
-            body?.configKeyHash,
-            body?.url
-          )
+        ? typeof this.sessionHandoff.resolveConfigProofContext === "function"
+          ? await this.sessionHandoff.resolveConfigProofContext(
+              courseId,
+              canonicalContentId,
+              target.settingsFingerprint,
+              body?.configKeyHash,
+              body?.url
+            )
+          : {
+              configKey: await this.sessionHandoff.resolveConfigKey(
+                courseId,
+                canonicalContentId,
+                target.settingsFingerprint,
+                body?.configKeyHash,
+                body?.url
+              ),
+              launchAdmission: null,
+              launchAdmissionRequired: false
+            }
         : null;
-    const configKey = staticValid ? expectedConfigKey : handoffConfigKey;
+    const configKey = staticValid ? expectedConfigKey : handoffContext?.configKey || null;
     if (!configKey) {
       console.warn(
         "SEB access proof rejected",
@@ -1206,19 +1353,46 @@ export class SebController {
         { error_code: "INVALID_SEB_CONFIG_PROOF" }
       );
     }
+    const learnerAdmission = handoffContext?.launchAdmission || null;
+    if (handoffContext?.launchAdmissionRequired && !learnerAdmission) {
+      return apiError(403, "Canvas learner availability expired. Return to Canvas and reopen the assessment.", {
+        error_code: "CANVAS_LAUNCH_ADMISSION_EXPIRED"
+      });
+    }
+    if (!learnerAdmission && !(await this.assessments.isAssessmentAvailableForLearner(courseId, canonicalContentId))) {
+      return apiError(409, "Canvas availability for this assessment is no longer verified.", {
+        error_code: "ASSESSMENT_NOT_AVAILABLE"
+      });
+    }
     const proofToken = await this.proofService.mintProof(
       courseId,
       normalizedContentId,
       proofGenerationDigest(courseId, normalizedContentId, configKey, setting.accessCode),
-      target.settingsFingerprint
+      target.settingsFingerprint,
+      learnerAdmission
     );
-    if (!(await this.finalizeCourseScopedGrant(courseId, target, () => this.proofService.revokeProof(proofToken)))) {
-      return apiError(404, "No Safe Online Exam setting found for this quiz");
+    if (
+      !(await this.finalizeCourseScopedGrant(
+        courseId,
+        target,
+        () => this.proofService.revokeProof(proofToken),
+        !learnerAdmission
+      ))
+    ) {
+      return apiError(409, "Safe Online Exam settings changed while this proof was being prepared.", {
+        error_code: "SEB_CONFIGURATION_UNAVAILABLE"
+      });
     }
+    console.info(
+      JSON.stringify({
+        event: "seb_access_proof_minted",
+        ...(learnerAdmission ? { attemptId: learnerAdmission.attemptId } : {})
+      })
+    );
     return {
       success: true,
       proofToken,
-      expiresInSeconds: this.proofService.getTokenTtlSeconds()
+      expiresInSeconds: this.proofService.getTokenTtlSeconds(learnerAdmission)
     };
   }
 
@@ -1228,7 +1402,7 @@ export class SebController {
     proofToken: string
   ): Promise<Record<string, unknown>> {
     const canonicalContentId = canonicalSebConfigContentId(normalizedContentId);
-    const target = canonicalContentId ? await this.resolveCurrentConfigGrantTarget(courseId, canonicalContentId) : null;
+    const target = canonicalContentId ? await this.resolveCurrentConfiguredTarget(courseId, canonicalContentId) : null;
     const setting = target?.setting || null;
     if (
       !target ||
@@ -1246,19 +1420,35 @@ export class SebController {
     if (!setting.accessCode) {
       return { success: false, message: "No access code configured for this quiz" };
     }
-    const digest = await this.proofService.consumeProof(
+    const proof = await this.proofService.consumeProofContext(
       proofToken,
       courseId,
       normalizedContentId,
       target.settingsFingerprint
     );
-    if (!digest) {
+    if (!proof) {
       return apiError(403, "Invalid or expired Safe Online Exam access proof");
     }
-    const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, digest);
-    if (!(await this.finalizeCourseScopedGrant(courseId, target, () => this.proofService.revokeExitGrant(exitGrant)))) {
-      return apiError(404, "No Safe Online Exam setting found for this quiz");
+    const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, proof.generationDigest);
+    if (
+      !(await this.finalizeCourseScopedGrant(
+        courseId,
+        target,
+        () => this.proofService.revokeExitGrant(exitGrant),
+        !proof.launchAdmission
+      ))
+    ) {
+      return apiError(409, "Safe Online Exam settings changed before the access code could be released.", {
+        error_code: "SEB_CONFIGURATION_UNAVAILABLE"
+      });
     }
+    console.info(
+      JSON.stringify({
+        event: "seb_access_code_released",
+        ...(proof.attemptId ? { attemptId: proof.attemptId } : {}),
+        contentType: parseNewQuizContentId(normalizedContentId) ? "NEW_QUIZ" : "CLASSIC_QUIZ"
+      })
+    );
     return {
       success: true,
       accessCode: setting.accessCode,
@@ -1272,6 +1462,10 @@ export class SebController {
     return this.contentCoordinator.resolveCurrentConfigGrantTarget(courseId, contentId);
   }
 
+  private resolveCurrentConfiguredTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
+    return this.contentCoordinator.resolveCurrentConfiguredTarget(courseId, contentId);
+  }
+
   resolveConfigGrantTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
     return this.contentCoordinator.resolveConfigGrantTarget(courseId, contentId);
   }
@@ -1279,24 +1473,35 @@ export class SebController {
   private finalizeCourseScopedGrant(
     courseId: string,
     target: SebConfigGrantTarget,
-    revoke: () => Promise<void>
+    revoke: () => Promise<void>,
+    requireCanvasAvailability = true
   ): Promise<SebConfigGrantTarget | null> {
-    return this.contentCoordinator.finalizeCourseScopedGrant(courseId, target, revoke);
+    return this.contentCoordinator.finalizeCourseScopedGrant(courseId, target, revoke, requireCanvasAvailability);
   }
 
   private isSebRequirementConfigured(courseId: string, contentId: string): Promise<boolean> {
     return this.contentCoordinator.isSebRequirementConfigured(courseId, contentId);
   }
 
-  private cachedSebRequirementStatus(courseId: string, contentId: string): Promise<boolean> | null {
+  private async globalReadinessDiagnostic(sebRequired: boolean, courseId: string, contentId: string): Promise<boolean> {
+    if (!sebRequired) return false;
+    try {
+      return await this.assessments.isAssessmentAvailableForLearner(courseId, contentId);
+    } catch {
+      console.warn(JSON.stringify({ event: "seb_global_readiness_diagnostic_unavailable" }));
+      return false;
+    }
+  }
+
+  private cachedSebRequirementStatus(courseId: string, contentId: string): Promise<SebRequirementStatus> | null {
     return this.contentCoordinator.cachedSebRequirementStatus(courseId, contentId);
   }
 
   private cacheSebRequirementStatus(
     courseId: string,
     contentId: string,
-    load: () => Promise<boolean>
-  ): Promise<boolean> {
+    load: () => Promise<SebRequirementStatus>
+  ): Promise<SebRequirementStatus> {
     return this.contentCoordinator.cacheSebRequirementStatus(courseId, contentId, load);
   }
 
@@ -1347,4 +1552,21 @@ export class SebController {
   private resolveSebSetting(courseId: string, quizId: string): Promise<(QuizSebSetting | ContentSebSetting) | null> {
     return this.contentCoordinator.resolveSebSetting(courseId, quizId);
   }
+}
+
+function launchAttemptIdFromError(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const attemptId = (error as { launchAttemptId?: unknown }).launchAttemptId;
+  return typeof attemptId === "string" ? attemptId : undefined;
+}
+
+function logConfigGrantDenial(attemptId: string | undefined, reason: string, status: number): void {
+  console.warn(
+    JSON.stringify({
+      event: "seb_config_grant_denied",
+      ...(attemptId ? { attemptId } : {}),
+      reason,
+      status
+    })
+  );
 }

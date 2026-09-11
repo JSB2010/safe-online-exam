@@ -1021,7 +1021,7 @@ describe("LtiController role routing", () => {
     expect(html).not.toContain("?grant=");
   });
 
-  it("does not list enabled settings whose Canvas presence is stale or unavailable", async () => {
+  it("keeps configured assessments discoverable until learner-scoped launch authorization", async () => {
     assessments.getQuizzesForCourse.mockResolvedValue([{ id: "101", courseId: "course-1", title: "Stale Classic" }]);
     assessments.getSebSettingForQuiz.mockResolvedValue({
       quizId: "101",
@@ -1044,8 +1044,9 @@ describe("LtiController role routing", () => {
 
     const html = response.send.mock.calls[0][0] as string;
     expect(html).toContain('"view":"student"');
-    expect(html).not.toContain("Stale Classic");
-    expect(assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
+    expect(html).toContain("Stale Classic");
+    expect(assessments.getSebSettingForQuiz).toHaveBeenCalledWith("101");
+    expect(assessments.isAssessmentAvailableForLearner).not.toHaveBeenCalled();
   });
 
   it("renders the SEB-required screen for targeted student launches outside SEB", async () => {

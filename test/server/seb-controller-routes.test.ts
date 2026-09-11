@@ -10,6 +10,7 @@ import {
 import { SebAccessProofService } from "../../src/server/services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
+import { CanvasApiRequestError } from "../../src/server/services/canvas-api.service.js";
 
 const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
@@ -156,16 +157,41 @@ describe("SebController route contracts", () => {
         controller.requirementStatus(requestDouble("/api/seb/requirement/course-1/23455"), "course-1", "23455")
       ])
     ).resolves.toEqual([
-      { success: true, sebRequired: true },
-      { success: true, sebRequired: true }
+      { success: true, sebRequired: true, globallyReady: true },
+      { success: true, sebRequired: true, globallyReady: true }
     ]);
 
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
     expect(assessments.getSebSettingForQuiz).toHaveBeenCalledTimes(1);
     expect(assessments.getSebSettingForQuiz).toHaveBeenCalledWith("classicquiz_23455");
+    expect(assessments.isAssessmentAvailableForLearner).toHaveBeenCalledTimes(1);
     expect(assessments.getContentSebSetting).not.toHaveBeenCalled();
     expect(distributedAdmission.consumeRequestIp).toHaveBeenCalledTimes(1);
     expect(distributedAdmission.consumeRequestIp).toHaveBeenCalledWith(expect.anything(), "seb-requirement-ip", 24_000);
+  });
+
+  it("keeps a configured requirement launchable when the global readiness diagnostic fails", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { controller } = controllerWith({
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS"
+        }),
+        isAssessmentAvailableForLearner: vi.fn().mockRejectedValue(new Error("database unavailable"))
+      }
+    });
+
+    await expect(controller.requirementStatus(requestDouble(), "course-1", "23455")).resolves.toEqual({
+      success: true,
+      sebRequired: true,
+      globallyReady: false
+    });
+    expect(warning).toHaveBeenCalledWith(JSON.stringify({ event: "seb_global_readiness_diagnostic_unavailable" }));
+    warning.mockRestore();
   });
 
   it("returns an authoritative New Quiz requirement using its canonical assessment id", async () => {
@@ -190,7 +216,7 @@ describe("SebController route contracts", () => {
         "11825",
         contentId
       )
-    ).resolves.toEqual({ success: true, sebRequired: true });
+    ).resolves.toEqual({ success: true, sebRequired: true, globallyReady: true });
 
     expect(assessments.getContentSebSetting).toHaveBeenCalledTimes(1);
     expect(assessments.getContentSebSetting).toHaveBeenCalledWith(contentId);
@@ -201,7 +227,8 @@ describe("SebController route contracts", () => {
     const absent = controllerWith();
     await expect(absent.controller.requirementStatus(requestDouble(), "course-1", "23455")).resolves.toEqual({
       success: true,
-      sebRequired: false
+      sebRequired: false,
+      globallyReady: false
     });
 
     const disabled = controllerWith({
@@ -217,7 +244,8 @@ describe("SebController route contracts", () => {
     });
     await expect(disabled.controller.requirementStatus(requestDouble(), "course-1", "23455")).resolves.toEqual({
       success: true,
-      sebRequired: false
+      sebRequired: false,
+      globallyReady: false
     });
 
     const mismatchedNewQuiz = controllerWith({
@@ -235,12 +263,12 @@ describe("SebController route contracts", () => {
     });
     await expect(
       mismatchedNewQuiz.controller.requirementStatus(requestDouble(), "11825", "newquiz:11825:437577")
-    ).resolves.toEqual({ success: true, sebRequired: false });
+    ).resolves.toEqual({ success: true, sebRequired: false, globallyReady: false });
 
     const malformed = controllerWith();
     await expect(
       malformed.controller.requirementStatus(requestDouble(), "../../course", "not-a-quiz")
-    ).resolves.toEqual({ success: true, sebRequired: false });
+    ).resolves.toEqual({ success: true, sebRequired: false, globallyReady: false });
     expect(malformed.assessments.getSebSettingForQuiz).not.toHaveBeenCalled();
     expect(malformed.distributedAdmission.consumeRequestIp).not.toHaveBeenCalled();
   });
@@ -315,7 +343,7 @@ describe("SebController route contracts", () => {
 
   it("gates access-code retrieval with one-time proof tokens", async () => {
     const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
-    const { controller } = controllerWith({
+    const { controller, assessments } = controllerWith({
       proofService,
       assessments: {
         getSebSettingForQuiz: vi.fn().mockResolvedValue({
@@ -371,6 +399,7 @@ describe("SebController route contracts", () => {
     );
     expect(secretResponse.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
     expect(secretResponse.vary).toHaveBeenCalledWith("Origin, X-SEB-Proof-Token");
+    expect(assessments.isAssessmentAvailableForLearner).toHaveBeenCalledTimes(3);
     await expect(controller.accessCode("course-1", "23455", proofToken, requestDouble())).rejects.toMatchObject({
       status: 403
     });
@@ -409,6 +438,53 @@ describe("SebController route contracts", () => {
     );
     expect(completeResponse.setHeader).toHaveBeenCalledWith("x-seb-quit", "true");
     expect(completeResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-quit"'));
+  });
+
+  it("rechecks global Canvas readiness before releasing a non-admitted access code", async () => {
+    const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
+    const availability = vi.fn().mockResolvedValue(true);
+    const { controller } = controllerWith({
+      proofService,
+      assessments: {
+        isAssessmentAvailableForLearner: availability,
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS-CODE",
+          ssoDomains: [],
+          educationalToolDomains: [],
+          urlRules: [],
+          externalTools: []
+        }),
+        getQuiz: vi.fn().mockResolvedValue({
+          id: "23455",
+          courseId: "course-1",
+          htmlUrl: "https://canvas.example.edu/courses/course-1/quizzes/23455"
+        })
+      }
+    });
+    const quizUrl = "https://canvas.example.edu/courses/course-1/quizzes/23455/take";
+    const configKeyService = new SebConfigKeyService();
+    const currentConfigKey = configKeyService.computeConfigKey(
+      new SebConfigurationService(configDouble() as any).generateSebConfiguration({
+        courseId: "course-1",
+        contentId: "classicquiz_23455",
+        startUrl: quizUrl,
+        accessCode: "ACCESS-CODE",
+        allowedDomains: []
+      })
+    );
+    const proof = await controller.createAccessProof(requestDouble(), "course-1", "23455", {
+      configKeyHash: configKeyService.hashForUrl(quizUrl, currentConfigKey),
+      url: quizUrl
+    });
+
+    availability.mockResolvedValue(false);
+    await expect(
+      controller.accessCode("course-1", "23455", proof.proofToken as string, requestDouble())
+    ).rejects.toMatchObject({ status: 409 });
   });
 
   it("does not mint a proof from a stale setting after the Canvas assessment object is gone", async () => {
@@ -533,7 +609,7 @@ describe("SebController route contracts", () => {
         "course-1",
         "classicquiz_23455"
       )
-    ).rejects.toMatchObject({ status: 404 });
+    ).rejects.toMatchObject({ status: 409 });
     expect(configGrants.mintGrant).toHaveBeenCalledOnce();
     expect(configGrants.revokeGrant).toHaveBeenCalledWith("g".repeat(43));
   });
@@ -676,7 +752,7 @@ describe("SebController route contracts", () => {
     expect(canvasApi.dismissStudentReadinessPrompt).toHaveBeenCalledWith("student-1");
   });
 
-  it("does not mint a learner config grant for stale or missing cached Canvas state", async () => {
+  it("recovers a learner config grant from stale global state using learner-scoped Canvas visibility", async () => {
     const { controller, configGrants } = controllerWith({
       assessments: {
         isAssessmentAvailableForLearner: vi.fn().mockResolvedValue(false),
@@ -704,8 +780,204 @@ describe("SebController route contracts", () => {
         "course-1",
         "classicquiz_23455"
       )
-    ).rejects.toMatchObject({ status: 404 });
+    ).resolves.toMatchObject({ success: true });
+    expect(configGrants.mintGrant).toHaveBeenCalledOnce();
+    expect(configGrants.mintGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "course-1",
+      "classicquiz_23455",
+      expect.any(String),
+      expect.objectContaining({ method: "learner_canvas", expiresAt: expect.any(String) })
+    );
+  });
+
+  it("returns an actionable conflict when Canvas does not expose the assessment to the learner", async () => {
+    const { controller, configGrants } = controllerWith({
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS",
+          urlRules: [],
+          externalTools: []
+        }),
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" })
+      },
+      canvasApi: {
+        getLearnerAssessmentAvailability: vi.fn().mockResolvedValue({
+          available: false,
+          reason: "unpublished",
+          checkedAt: "2026-09-10T20:10:58.887Z"
+        })
+      }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error_code: "ASSESSMENT_NOT_AVAILABLE", reason: "unpublished" })
+    });
     expect(configGrants.mintGrant).not.toHaveBeenCalled();
+  });
+
+  it("returns a retryable Canvas verification error without logging learner identity", async () => {
+    const { controller } = controllerWith({
+      canvasApi: {
+        getLearnerAssessmentAvailability: vi
+          .fn()
+          .mockRejectedValue(new CanvasApiRequestError("Canvas timed out", "student-1", "https://canvas.invalid", 504))
+      },
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS",
+          urlRules: [],
+          externalTools: []
+        }),
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" })
+      }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({
+      status: 503,
+      response: expect.objectContaining({ error_code: "CANVAS_AVAILABILITY_UNVERIFIED" })
+    });
+    const serializedLogs = JSON.stringify(warn.mock.calls);
+    expect(serializedLogs).toContain("seb_config_grant_denied");
+    expect(serializedLogs).not.toContain("student-1");
+    expect(serializedLogs).not.toContain("opaque-student-1");
+    expect(serializedLogs).not.toContain("canvas.invalid");
+    warn.mockRestore();
+  });
+
+  it("never reuses one learner's Canvas visibility result for another learner", async () => {
+    const getLearnerAssessmentAvailability = vi.fn(async (_courseId, _contentId, userId: string) => ({
+      available: userId === "student-1",
+      reason: userId === "student-1" ? "available" : "not_found",
+      checkedAt: "2026-09-10T20:10:58.887Z"
+    }));
+    const { controller, assessments } = controllerWith({ canvasApi: { getLearnerAssessmentAvailability } });
+    const setting = {
+      quizId: "23455",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      urlRules: [],
+      externalTools: []
+    };
+    assessments.getSebSettingForQuiz.mockResolvedValue(setting);
+    assessments.getQuiz.mockResolvedValue({
+      id: "23455",
+      courseId: "course-1",
+      title: "Midterm"
+    });
+    const firstRequest = requestDouble(
+      "/api/seb/config-grant/course-1/classicquiz_23455",
+      createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+        subject: "opaque-student-1",
+        deploymentId: "deployment-1",
+        sessionId: "session-1"
+      })
+    );
+    const secondRequest = requestDouble();
+    secondRequest.session.verifiedLtiPrincipal.canvasUserId = "student-2";
+    secondRequest.session.verifiedLtiPrincipal.subject = "opaque-student-2";
+    const secondToken = createSebConfigGrantActionToken(configDouble() as any, "student-2", "course-1", {
+      subject: "opaque-student-2",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    await expect(controller.issueConfigGrant(firstRequest, "course-1", "classicquiz_23455")).resolves.toMatchObject({
+      success: true
+    });
+    await expect(
+      controller.issueConfigGrant(
+        { ...secondRequest, header: (name: string) => requestDouble("", secondToken).header(name) },
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({ status: 409 });
+    expect(getLearnerAssessmentAvailability).toHaveBeenNthCalledWith(1, "course-1", "classicquiz_23455", "student-1");
+    expect(getLearnerAssessmentAvailability).toHaveBeenNthCalledWith(2, "course-1", "classicquiz_23455", "student-2");
+    info.mockRestore();
+  });
+
+  it("bounds Canvas work while admitting an 80-student concurrent launch burst", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const getLearnerAssessmentAvailability = vi.fn(async () => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return { available: true, reason: "available", checkedAt: "2026-09-10T20:10:58.887Z" };
+    });
+    const { controller, assessments } = controllerWith({ canvasApi: { getLearnerAssessmentAvailability } });
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "23455",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS",
+      urlRules: [],
+      externalTools: []
+    });
+    assessments.getQuiz.mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" });
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const requests = Array.from({ length: 80 }, (_, index) => {
+      const request = requestDouble();
+      const userId = `student-${index}`;
+      const subject = `opaque-${userId}`;
+      request.session.verifiedLtiPrincipal.canvasUserId = userId;
+      request.session.verifiedLtiPrincipal.subject = subject;
+      const token = createSebConfigGrantActionToken(configDouble() as any, userId, "course-1", {
+        subject,
+        deploymentId: "deployment-1",
+        sessionId: "session-1"
+      });
+      request.header = (name: string) => requestDouble("", token).header(name);
+      return request;
+    });
+
+    const results = await Promise.all(
+      requests.map((request) => controller.issueConfigGrant(request, "course-1", "classicquiz_23455"))
+    );
+    expect(results).toHaveLength(80);
+    expect(results.every((result) => result.success === true)).toBe(true);
+    expect(getLearnerAssessmentAvailability).toHaveBeenCalledTimes(80);
+    expect(maximumActive).toBeLessThanOrEqual(16);
+    info.mockRestore();
   });
 
   it("keeps public exit and quit endpoints nonterminal", async () => {
@@ -1054,7 +1326,8 @@ describe("SebController route contracts", () => {
       expect.objectContaining({ subject: "opaque-student-1", courseId: "course-1" }),
       "course-1",
       "classicquiz_23455",
-      expect.any(String)
+      expect.any(String),
+      expect.objectContaining({ method: "learner_canvas", expiresAt: expect.any(String) })
     );
     expect(assessments.isCourseResetInProgress).toHaveBeenCalledWith("course-1");
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store");
@@ -1231,6 +1504,11 @@ function controllerWith(options: Record<string, any> = {}) {
     hasDismissedStudentReadinessPrompt: vi.fn().mockResolvedValue(false),
     dismissStudentReadinessPrompt: vi.fn().mockResolvedValue(undefined),
     getSessionToken: vi.fn().mockResolvedValue("https://canvas.example.edu/login/session_token?opaque=secret"),
+    getLearnerAssessmentAvailability: vi.fn().mockResolvedValue({
+      available: true,
+      reason: "available",
+      checkedAt: "2026-09-10T20:10:58.887Z"
+    }),
     ...options.canvasApi
   };
   const ltiService = {

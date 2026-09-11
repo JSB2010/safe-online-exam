@@ -1,6 +1,12 @@
-import { Injectable } from "@nestjs/common";
-import type { CanvasOAuthGrantType, ContentItem, OAuthToken, Quiz } from "../../shared/models.js";
-import { newQuizContentId } from "../../shared/models.js";
+import { Injectable, Logger } from "@nestjs/common";
+import type {
+  CanvasOAuthGrantType,
+  CanvasPublicationEvidence,
+  ContentItem,
+  OAuthToken,
+  Quiz
+} from "../../shared/models.js";
+import { extractClassicQuizId, newQuizContentId, parseNewQuizContentId } from "../../shared/models.js";
 import { AppConfig } from "../config/app-config.js";
 import { RepositoryProvider } from "../data/repositories.js";
 import {
@@ -54,6 +60,58 @@ export const CANVAS_OAUTH_RESPONSE_MAX_BYTES = 64 * 1024;
 export const CANVAS_API_USER_AGENT = "SafeOnlineExam/1.0";
 export const CANVAS_SESSION_TOKEN_SCOPE = "url:GET|/api/v1/login/session_token";
 
+export type LearnerAssessmentAvailabilityReason =
+  "available" | "not_found" | "unpublished" | "not_yet_open" | "closed" | "invalid_availability";
+
+export interface LearnerAssessmentAvailability {
+  available: boolean;
+  reason: LearnerAssessmentAvailabilityReason;
+  checkedAt: string;
+}
+
+export function canvasPublicationBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+export function classicQuizPublicationEvidence(value: unknown, checkedAt: string): CanvasPublicationEvidence {
+  const quizPublished = canvasPublicationBoolean(value);
+  return {
+    status: quizPublished === null ? "unknown" : quizPublished ? "published" : "unpublished",
+    confidence: quizPublished === null ? "unavailable" : "complete",
+    checkedAt,
+    quizPublished
+  };
+}
+
+export function newQuizPublicationEvidence(
+  assignmentValue: unknown,
+  newQuizValue: unknown,
+  checkedAt: string
+): CanvasPublicationEvidence {
+  const assignmentPublished = canvasPublicationBoolean(assignmentValue);
+  const newQuizPublished = canvasPublicationBoolean(newQuizValue);
+  const values = [assignmentPublished, newQuizPublished].filter((value): value is boolean => value !== null);
+  const status =
+    values.length === 0
+      ? "unknown"
+      : values.some(Boolean) && values.some((value) => !value)
+        ? "conflict"
+        : values[0]
+          ? "published"
+          : "unpublished";
+  return {
+    status,
+    confidence: values.length === 2 ? "complete" : values.length === 1 ? "single_source" : "unavailable",
+    checkedAt,
+    assignmentPublished,
+    newQuizPublished
+  };
+}
+
+function projectedPublication(evidence: CanvasPublicationEvidence): boolean | null {
+  return evidence.status === "published" ? true : evidence.status === "unpublished" ? false : null;
+}
+
 export {
   CanvasApiAuthorizationError,
   CanvasApiPermissionError,
@@ -71,6 +129,8 @@ export type {
 
 @Injectable()
 export class CanvasApiService {
+  private readonly logger = new Logger(CanvasApiService.name);
+
   constructor(
     private readonly config: AppConfig,
     private readonly repositories: RepositoryProvider
@@ -97,20 +157,33 @@ export class CanvasApiService {
       `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes` +
       `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}`;
     const json = await this.requestCompleteCanvasCollection<CanvasQuizResponse>(userId, url, grantType);
-    return json.map((quiz) => ({
-      id: String(quiz.id),
-      canvasQuizId: String(quiz.id),
-      courseId,
-      title: quiz.title || "Untitled Quiz",
-      description: quiz.description || null,
-      htmlUrl: quiz.html_url || `${this.getCanvasDomain()}/courses/${courseId}/quizzes/${quiz.id}`,
-      quizEngine: "classic",
-      quizTypeDisplay: "Classic Quiz",
-      contentType: "CLASSIC_QUIZ",
-      published: quiz.published === true,
-      unlockAt: quiz.unlock_at || null,
-      lockAt: quiz.lock_at || null
-    }));
+    return json.map((quiz) => {
+      const publication = classicQuizPublicationEvidence(quiz.published, new Date().toISOString());
+      if (publication.status === "unknown") {
+        this.logger.warn(
+          JSON.stringify({
+            event: "canvas_publication_degraded",
+            contentType: "CLASSIC_QUIZ",
+            status: publication.status
+          })
+        );
+      }
+      return {
+        id: String(quiz.id),
+        canvasQuizId: String(quiz.id),
+        courseId,
+        title: quiz.title || "Untitled Quiz",
+        description: quiz.description || null,
+        htmlUrl: quiz.html_url || `${this.getCanvasDomain()}/courses/${courseId}/quizzes/${quiz.id}`,
+        quizEngine: "classic",
+        quizTypeDisplay: "Classic Quiz",
+        contentType: "CLASSIC_QUIZ",
+        published: projectedPublication(publication),
+        publication,
+        unlockAt: quiz.unlock_at || null,
+        lockAt: quiz.lock_at || null
+      };
+    });
   }
 
   /**
@@ -151,6 +224,8 @@ export class CanvasApiService {
     const hydrated: ContentItem[] = [];
     for (const assignment of candidates) {
       const assignmentId = String(assignment.id);
+      const checkedAt = new Date().toISOString();
+      const publication = newQuizPublicationEvidence(assignment.published, undefined, checkedAt);
       const fallback: ContentItem = {
         id: newQuizContentId(courseId, assignmentId),
         courseId,
@@ -164,13 +239,48 @@ export class CanvasApiService {
         canvasLaunchUrl: assignment.external_tool_tag_attributes?.url || null,
         quizEngine: "new_quiz",
         quizTypeDisplay: "New Quiz",
-        published: assignment.published === true,
+        published: projectedPublication(publication),
+        publication,
         unlockAt: assignment.unlock_at || null,
         lockAt: assignment.lock_at || null
       };
       hydrated.push(await this.hydrateNewQuiz(courseId, assignmentId, userId, fallback, grantType));
     }
     return hydrated;
+  }
+
+  async getLearnerAssessmentAvailability(
+    courseId: string,
+    contentId: string,
+    userId: string
+  ): Promise<LearnerAssessmentAvailability> {
+    const checkedAt = new Date().toISOString();
+    const parsed = parseNewQuizContentId(contentId);
+    if (parsed) {
+      if (parsed.courseId !== courseId) {
+        return { available: false, reason: "not_found", checkedAt };
+      }
+      const url =
+        `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/assignments` +
+        `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}&new_quizzes=true`;
+      const assignments = await this.requestCompleteCanvasCollection<CanvasAssignmentResponse>(
+        userId,
+        url,
+        "student_session"
+      );
+      const assignment = assignments.find((candidate) => String(candidate.id) === parsed.assignmentId);
+      return learnerAvailabilityFromCanvasObject(assignment, checkedAt);
+    }
+    const quizId = extractClassicQuizId(contentId);
+    if (!quizId) {
+      return { available: false, reason: "not_found", checkedAt };
+    }
+    const url =
+      `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes` +
+      `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}`;
+    const quizzes = await this.requestCompleteCanvasCollection<CanvasQuizResponse>(userId, url, "student_session");
+    const quiz = quizzes.find((candidate) => String(candidate.id) === quizId);
+    return learnerAvailabilityFromCanvasObject(quiz, checkedAt);
   }
 
   async getQuizAccessCode(
@@ -857,23 +967,109 @@ export class CanvasApiService {
     fallback: ContentItem,
     grantType: CanvasOAuthGrantType
   ): Promise<ContentItem> {
-    try {
-      const detail = await this.request<CanvasNewQuizResponse>(
-        userId,
-        this.newQuizUrl(courseId, assignmentId),
-        {},
-        grantType
-      );
-      return {
-        ...fallback,
-        title: detail.title || fallback.title,
-        description: detail.instructions || detail.description || fallback.description,
-        canvasLaunchUrl: detail.canvas_launch_url || detail.launch_url || fallback.canvasLaunchUrl,
-        resourceLinkUuid: detail.resource_link_uuid || fallback.resourceLinkUuid,
-        lookupUuid: detail.lookup_uuid || fallback.lookupUuid
-      };
-    } catch {
-      return fallback;
+    let lastError: unknown;
+    let lastHydrated: ContentItem | null = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const detail = await this.request<CanvasNewQuizResponse>(
+          userId,
+          this.newQuizUrl(courseId, assignmentId),
+          {},
+          grantType
+        );
+        const publication = newQuizPublicationEvidence(
+          fallback.publication?.assignmentPublished,
+          detail.published,
+          new Date().toISOString()
+        );
+        this.logger.log(
+          JSON.stringify({
+            event: "canvas_publication_reconciled",
+            contentType: "NEW_QUIZ",
+            status: publication.status,
+            confidence: publication.confidence
+          })
+        );
+        const hydrated: ContentItem = {
+          ...fallback,
+          title: detail.title || fallback.title,
+          description: detail.instructions || detail.description || fallback.description,
+          canvasLaunchUrl: detail.canvas_launch_url || detail.launch_url || fallback.canvasLaunchUrl,
+          resourceLinkUuid: detail.resource_link_uuid || fallback.resourceLinkUuid,
+          lookupUuid: detail.lookup_uuid || fallback.lookupUuid,
+          published: projectedPublication(publication),
+          publication
+        };
+        lastHydrated = hydrated;
+        const detailPublished = canvasPublicationBoolean(detail.published);
+        if (detailPublished !== null && publication.status !== "conflict") {
+          return hydrated;
+        }
+        if (attempt === 2) {
+          this.logger.warn(
+            JSON.stringify({
+              event: "canvas_publication_degraded",
+              contentType: "NEW_QUIZ",
+              status: publication.status
+            })
+          );
+          return hydrated;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    this.logger.warn(
+      JSON.stringify({
+        event: "canvas_publication_degraded",
+        contentType: "NEW_QUIZ",
+        status: fallback.publication?.status || "unknown",
+        detailStatus: canvasErrorStatus(lastError)
+      })
+    );
+    return lastHydrated || fallback;
+  }
+}
+
+function canvasErrorStatus(error: unknown): number | null {
+  return error && typeof error === "object" && "status" in error && typeof error.status === "number"
+    ? error.status
+    : null;
+}
+
+function learnerAvailabilityFromCanvasObject(
+  value: CanvasAssignmentResponse | CanvasQuizResponse | undefined,
+  checkedAt: string
+): LearnerAssessmentAvailability {
+  if (!value) {
+    return { available: false, reason: "not_found", checkedAt };
+  }
+  const hasPublished = Object.hasOwn(value, "published");
+  const published = canvasPublicationBoolean(value.published);
+  if (hasPublished && published === null) {
+    return { available: false, reason: "invalid_availability", checkedAt };
+  }
+  if (published === false) {
+    return { available: false, reason: "unpublished", checkedAt };
+  }
+  const now = Date.now();
+  if (value.unlock_at != null) {
+    const unlockAt = typeof value.unlock_at === "string" ? Date.parse(value.unlock_at) : Number.NaN;
+    if (!Number.isFinite(unlockAt)) {
+      return { available: false, reason: "invalid_availability", checkedAt };
+    }
+    if (now < unlockAt) {
+      return { available: false, reason: "not_yet_open", checkedAt };
     }
   }
+  if (value.lock_at != null) {
+    const lockAt = typeof value.lock_at === "string" ? Date.parse(value.lock_at) : Number.NaN;
+    if (!Number.isFinite(lockAt)) {
+      return { available: false, reason: "invalid_availability", checkedAt };
+    }
+    if (now >= lockAt) {
+      return { available: false, reason: "closed", checkedAt };
+    }
+  }
+  return { available: true, reason: "available", checkedAt };
 }

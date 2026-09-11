@@ -153,7 +153,11 @@ export function quizView(quiz: Quiz): Record<string, unknown> {
     htmlUrl: quiz.htmlUrl,
     updatedAt: quiz.updatedAt,
     contentType: "CLASSIC_QUIZ",
-    quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz"
+    quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz",
+    published: quiz.published ?? null,
+    publication: quiz.publication || null,
+    unlockAt: quiz.unlockAt || null,
+    lockAt: quiz.lockAt || null
   };
 }
 
@@ -167,7 +171,11 @@ export function contentView(item: ContentItem): Record<string, unknown> {
     description: item.description,
     htmlUrl: item.htmlUrl,
     contentType: item.contentType,
-    quizTypeDisplay: item.quizTypeDisplay || (item.contentType === "NEW_QUIZ" ? "New Quiz" : item.contentType)
+    quizTypeDisplay: item.quizTypeDisplay || (item.contentType === "NEW_QUIZ" ? "New Quiz" : item.contentType),
+    published: item.published ?? null,
+    publication: item.publication || null,
+    unlockAt: item.unlockAt || null,
+    lockAt: item.lockAt || null
   };
 }
 

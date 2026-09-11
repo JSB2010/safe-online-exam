@@ -1,4 +1,4 @@
-import { ContentItem, ContentType, Quiz } from "./canvas.js";
+import { CanvasPublicationEvidence, ContentItem, ContentType, Quiz } from "./canvas.js";
 import { CourseSebDefaults, normalizeCourseSebDefaults } from "./course.js";
 import {
   ExternalToolConfig,
@@ -30,6 +30,7 @@ export interface AssessmentCanvasState {
   quizEngine?: string | null;
   quizTypeDisplay?: string | null;
   published?: boolean | null;
+  publication?: CanvasPublicationEvidence | null;
   unlockAt?: string | null;
   lockAt?: string | null;
   /**
@@ -263,8 +264,23 @@ export function quizToContentItem(quiz: Quiz): ContentItem {
     quizEngine: quiz.quizEngine || "classic",
     quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz",
     published: quiz.published ?? null,
+    publication: quiz.publication || null,
     unlockAt: quiz.unlockAt || null,
     lockAt: quiz.lockAt || null
+  };
+}
+
+function legacyPublicationEvidence(
+  published: boolean | null | undefined,
+  checkedAt: string | undefined,
+  source: "quizPublished" | "assignmentPublished"
+): CanvasPublicationEvidence | null {
+  if (typeof published !== "boolean" || !checkedAt) return null;
+  return {
+    status: published ? "published" : "unpublished",
+    confidence: source === "quizPublished" ? "complete" : "single_source",
+    checkedAt,
+    [source]: published
   };
 }
 
@@ -274,6 +290,7 @@ export function quizToAssessmentRecord(
   syncedAt?: string
 ): AssessmentRecord {
   const canvasId = quiz.canvasQuizId || quiz.id;
+  const publication = quiz.publication || legacyPublicationEvidence(quiz.published, syncedAt, "quizPublished");
   return {
     ...existing,
     id: classicQuizContentId(canvasId),
@@ -290,6 +307,7 @@ export function quizToAssessmentRecord(
       quizEngine: quiz.quizEngine || "classic",
       quizTypeDisplay: quiz.quizTypeDisplay || "Classic Quiz",
       published: quiz.published ?? null,
+      publication,
       unlockAt: quiz.unlockAt || null,
       lockAt: quiz.lockAt || null
     },
@@ -310,6 +328,13 @@ export function contentItemToAssessmentRecord(
 ): AssessmentRecord {
   const parsedNewQuiz = parseNewQuizContentId(item.id);
   const quizId = item.contentType === "CLASSIC_QUIZ" ? extractClassicQuizId(item.id) || item.canvasId : null;
+  const publication =
+    item.publication ||
+    legacyPublicationEvidence(
+      item.published,
+      syncedAt,
+      item.contentType === "NEW_QUIZ" ? "assignmentPublished" : "quizPublished"
+    );
   return {
     ...existing,
     id: item.id,
@@ -331,6 +356,7 @@ export function contentItemToAssessmentRecord(
       quizEngine: item.quizEngine,
       quizTypeDisplay: item.quizTypeDisplay,
       published: item.published ?? null,
+      publication,
       unlockAt: item.unlockAt || null,
       lockAt: item.lockAt || null,
       metadata: null
@@ -361,6 +387,7 @@ export function assessmentToQuiz(record: AssessmentRecord): Quiz | null {
     quizTypeDisplay: record.canvas.quizTypeDisplay || "Classic Quiz",
     contentType: "CLASSIC_QUIZ",
     published: record.canvas.published ?? null,
+    publication: record.canvas.publication || null,
     unlockAt: record.canvas.unlockAt || null,
     lockAt: record.canvas.lockAt || null,
     createdAt: record.createdAt,
@@ -388,6 +415,7 @@ export function assessmentToContentItem(record: AssessmentRecord): ContentItem {
       record.canvas.quizTypeDisplay ||
       (record.contentType === "CLASSIC_QUIZ" ? "Classic Quiz" : record.contentType === "NEW_QUIZ" ? "New Quiz" : null),
     published: record.canvas.published ?? null,
+    publication: record.canvas.publication || null,
     unlockAt: record.canvas.unlockAt || null,
     lockAt: record.canvas.lockAt || null
   };

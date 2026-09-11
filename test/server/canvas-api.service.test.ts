@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppConfig } from "../../src/server/config/app-config.js";
 import { createInMemoryRepositories, RepositoryProvider } from "../../src/server/data/repositories.js";
 import { UpstreamRequestTimeoutError } from "../../src/server/http/upstream-deadline.js";
 import {
   CANVAS_API_RESPONSE_MAX_BYTES,
   CANVAS_OAUTH_RESPONSE_MAX_BYTES,
-  CanvasApiService
+  CanvasApiService,
+  classicQuizPublicationEvidence,
+  newQuizPublicationEvidence
 } from "../../src/server/services/canvas-api.service.js";
 import { CANVAS_OAUTH_SCOPE_VERSION, CANVAS_REQUIRED_OAUTH_SCOPES } from "../../src/shared/models.js";
 
@@ -29,6 +31,8 @@ describe("CanvasApiService", () => {
     await service.storeAccessToken("user-1", "token-1");
     vi.restoreAllMocks();
   });
+
+  afterEach(() => vi.useRealTimers());
 
   it("fetches classic quizzes from Canvas", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -276,7 +280,8 @@ describe("CanvasApiService", () => {
             name: "Assignment-backed New Quiz",
             html_url: "https://canvas.example.com/courses/course-7/assignments/99",
             external_tool_tag_attributes: { url: "https://canvas.example.com/courses/course-7/external_tools/99" },
-            is_quiz_assignment: true
+            is_quiz_assignment: true,
+            published: true
           },
           {
             id: 100,
@@ -292,6 +297,7 @@ describe("CanvasApiService", () => {
           canvas_launch_url: "https://canvas.example.com/courses/course-7/assignments/99/take",
           resource_link_uuid: "resource-uuid",
           lookup_uuid: "lookup-uuid",
+          published: true,
           quiz_settings: {
             require_student_access_code: true,
             student_access_code: "CANVAS-ACCESS-SECRET"
@@ -330,6 +336,174 @@ describe("CanvasApiService", () => {
     );
   });
 
+  it("preserves agreement, disagreement, missing, and malformed New Quiz publication evidence", () => {
+    const checkedAt = "2026-09-10T20:10:58.887Z";
+    expect(newQuizPublicationEvidence(true, true, checkedAt)).toMatchObject({
+      status: "published",
+      confidence: "complete",
+      assignmentPublished: true,
+      newQuizPublished: true
+    });
+    expect(newQuizPublicationEvidence(false, false, checkedAt)).toMatchObject({
+      status: "unpublished",
+      confidence: "complete"
+    });
+    expect(newQuizPublicationEvidence(false, true, checkedAt)).toMatchObject({
+      status: "conflict",
+      confidence: "complete"
+    });
+    expect(newQuizPublicationEvidence(undefined, true, checkedAt)).toMatchObject({
+      status: "published",
+      confidence: "single_source"
+    });
+    expect(newQuizPublicationEvidence("false", null, checkedAt)).toMatchObject({
+      status: "unknown",
+      confidence: "unavailable"
+    });
+  });
+
+  it("never coerces missing or malformed Classic Quiz publication values to false", () => {
+    const checkedAt = "2026-09-10T20:10:58.887Z";
+    expect(classicQuizPublicationEvidence(true, checkedAt)).toMatchObject({
+      status: "published",
+      quizPublished: true
+    });
+    expect(classicQuizPublicationEvidence(false, checkedAt)).toMatchObject({
+      status: "unpublished",
+      quizPublished: false
+    });
+    for (const value of [undefined, null, "false", 0, {}, []]) {
+      expect(classicQuizPublicationEvidence(value, checkedAt)).toMatchObject({
+        status: "unknown",
+        confidence: "unavailable",
+        quizPublished: null
+      });
+    }
+  });
+
+  it("retries incomplete New Quiz evidence and keeps the successful reconciliation", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse([{ id: 99, name: "Retried New Quiz", is_quiz_assignment: true, published: true }])
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: 99, title: "Retried New Quiz" }))
+      .mockResolvedValueOnce(jsonResponse({ id: 99, title: "Retried New Quiz", published: true }));
+
+    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+      expect.objectContaining({
+        published: true,
+        publication: expect.objectContaining({ status: "published", confidence: "complete" })
+      })
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("persists a New Quiz conflict after the bounded retry instead of guessing", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse([{ id: 99, name: "Conflict New Quiz", is_quiz_assignment: true, published: true }])
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: 99, title: "Conflict New Quiz", published: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: 99, title: "Conflict New Quiz", published: false }));
+
+    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+      expect.objectContaining({
+        published: null,
+        publication: expect.objectContaining({ status: "conflict", confidence: "complete" })
+      })
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses learner-scoped Canvas visibility without persisting it", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse([
+        {
+          id: 99,
+          name: "Visible New Quiz",
+          is_quiz_assignment: true,
+          published: true,
+          unlock_at: "2026-01-01T00:00:00Z",
+          lock_at: "2026-12-31T00:00:00Z"
+        }
+      ])
+    );
+
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "newquiz:course-7:99", "user-1")
+    ).resolves.toMatchObject({ available: true, reason: "available" });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://canvas.example.com/api/v1/courses/course-7/assignments?per_page=100&new_quizzes=true",
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer token-1" }) })
+    );
+  });
+
+  it("accepts an exact learner-visible New Quiz assignment even when Canvas omits optional type markers", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse([
+        {
+          id: 99,
+          name: "Visible New Quiz",
+          published: true
+        }
+      ])
+    );
+
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "newquiz:course-7:99", "user-1")
+    ).resolves.toMatchObject({ available: true, reason: "available" });
+  });
+
+  it("does not retry a usable single-source New Quiz publication result", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse([{ id: 99, name: "Visible New Quiz", is_quiz_assignment: true }]))
+      .mockResolvedValueOnce(jsonResponse({ id: 99, title: "Visible New Quiz", published: true }));
+
+    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+      expect.objectContaining({
+        published: true,
+        publication: expect.objectContaining({ status: "published", confidence: "single_source" })
+      })
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [undefined, null, null, true, "available"],
+    [false, null, null, false, "unpublished"],
+    ["false", null, null, false, "invalid_availability"],
+    [null, null, null, false, "invalid_availability"],
+    [true, "2026-09-10T20:15:00.001Z", null, false, "not_yet_open"],
+    [true, "2026-09-10T20:15:00.000Z", null, true, "available"],
+    [true, null, "2026-09-10T20:15:00.000Z", false, "closed"],
+    [true, "malformed", null, false, "invalid_availability"],
+    [true, null, "malformed", false, "invalid_availability"]
+  ] as const)(
+    "handles learner publication=%s unlock=%s lock=%s as %s",
+    async (published, unlockAt, lockAt, available, reason) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-10T20:15:00.000Z"));
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        jsonResponse([
+          {
+            id: 42,
+            title: "Classic Quiz",
+            ...(published === undefined ? {} : { published }),
+            unlock_at: unlockAt,
+            lock_at: lockAt
+          }
+        ])
+      );
+
+      await expect(
+        service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+      ).resolves.toMatchObject({ available, reason });
+    }
+  );
+
   it("keeps New Quiz assignment fallbacks when detail hydration fails", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -338,10 +512,12 @@ describe("CanvasApiService", () => {
             id: 99,
             name: "Fallback New Quiz",
             html_url: "https://canvas.example.com/courses/course-7/assignments/99",
-            external_tool_tag_attributes: { url: "https://canvas.example.com/new_quizzes/99" }
+            external_tool_tag_attributes: { url: "https://canvas.example.com/new_quizzes/99" },
+            published: true
           }
         ])
       )
+      .mockResolvedValueOnce(textResponse("detail unavailable", 500))
       .mockResolvedValueOnce(textResponse("detail unavailable", 500));
 
     await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
@@ -349,7 +525,9 @@ describe("CanvasApiService", () => {
         id: "newquiz:course-7:99",
         title: "Fallback New Quiz",
         htmlUrl: "https://canvas.example.com/courses/course-7/assignments/99",
-        canvasLaunchUrl: "https://canvas.example.com/new_quizzes/99"
+        canvasLaunchUrl: "https://canvas.example.com/new_quizzes/99",
+        published: true,
+        publication: expect.objectContaining({ status: "published", confidence: "single_source" })
       })
     ]);
   });

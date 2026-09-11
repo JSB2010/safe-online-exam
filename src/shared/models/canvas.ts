@@ -1,5 +1,17 @@
 export type ContentType = "CLASSIC_QUIZ" | "NEW_QUIZ" | "ASSIGNMENT" | "DISCUSSION" | "EXTERNAL_TOOL" | "PAGE";
 
+export type CanvasPublicationStatus = "published" | "unpublished" | "conflict" | "unknown";
+export type CanvasPublicationConfidence = "complete" | "single_source" | "unavailable";
+
+export interface CanvasPublicationEvidence {
+  status: CanvasPublicationStatus;
+  confidence: CanvasPublicationConfidence;
+  checkedAt: string;
+  quizPublished?: boolean | null;
+  assignmentPublished?: boolean | null;
+  newQuizPublished?: boolean | null;
+}
+
 /**
  * Every OAuth connection receives this complete capability set so a Canvas
  * user can later launch the tool in either a learner or instructor context.
@@ -43,6 +55,7 @@ export interface Quiz {
   quizTypeDisplay?: string | null;
   contentType?: ContentType | null;
   published?: boolean | null;
+  publication?: CanvasPublicationEvidence | null;
   unlockAt?: string | null;
   lockAt?: string | null;
 }
@@ -64,6 +77,7 @@ export interface ContentItem {
   quizEngine?: string | null;
   quizTypeDisplay?: string | null;
   published?: boolean | null;
+  publication?: CanvasPublicationEvidence | null;
   unlockAt?: string | null;
   lockAt?: string | null;
 }

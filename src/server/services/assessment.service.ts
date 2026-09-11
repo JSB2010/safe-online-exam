@@ -48,6 +48,7 @@ import {
 } from "./assessment-errors.js";
 import {
   type AccessCodeSetting,
+  type AssessmentReadiness,
   type OperationLease,
   assertPriorAccessCodeIsRecoverable,
   canvasGrantArgs,
@@ -60,6 +61,7 @@ import {
   hasSameAccessCodeState,
   hasSameCanvasAccessState,
   isCanvasAssessmentCurrentlyAvailable,
+  evaluateAssessmentReadiness,
   isDefinitiveCanvasRejection,
   isFreshCanvasVerification,
   mapInBatches
@@ -67,7 +69,12 @@ import {
 import { hasSameSebConfigFingerprint, invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 import { assertDistinctSebPasswords, assertNewSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
-import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtectedSetting } from "./seb-quit-password.js";
+import {
+  effectiveSebQuitPassword,
+  hasEffectiveSebQuitPassword,
+  requireSebQuitPassword,
+  type SebQuitProtectedSetting
+} from "./seb-quit-password.js";
 import { resetCourseForAdmin, type CourseResetResult } from "./assessment-course-reset.js";
 
 export interface CourseAssessmentContent {
@@ -251,6 +258,17 @@ export class AssessmentService {
 
   async getAssessmentRecord(id: string): Promise<AssessmentRecord | null> {
     return this.repositories.value.assessments.get(canonicalAssessmentId(id));
+  }
+
+  async getAssessmentReadiness(courseId: string, contentId: string): Promise<AssessmentReadiness | null> {
+    const record = await this.getAssessmentRecord(contentId);
+    if (!record || record.courseId !== courseId) return null;
+    return evaluateAssessmentReadiness(record, {
+      hasEffectiveQuitPassword: hasEffectiveSebQuitPassword(
+        record.seb.quitPassword,
+        this.config.value.seb.defaultQuitPassword
+      )
+    });
   }
 
   async isAssessmentAvailableForLearner(courseId: string, contentId: string): Promise<boolean> {

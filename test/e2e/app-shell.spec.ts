@@ -1332,7 +1332,7 @@ test("keeps SEB config and proof endpoints defensive without seeded assessment d
   expect(requirement.status()).toBe(200);
   expect(requirement.headers()["cache-control"]).toBe("private, no-store, max-age=0");
   expect(requirement.headers()["access-control-allow-origin"]).toBe("https://canvas.example.test");
-  await expect(requirement.json()).resolves.toEqual({ success: true, sebRequired: false });
+  await expect(requirement.json()).resolves.toEqual({ success: true, sebRequired: false, globallyReady: false });
 
   const config = await request.get("/seb/config/course-1/classicquiz_23455.seb");
   expect(config.status()).toBe(403);

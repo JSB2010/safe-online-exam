@@ -114,18 +114,33 @@ Do not exchange their client IDs or secrets.
 
 ## Assessment Synchronization Problems
 
-| Symptom                                     | Check                                                                                                                         |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| A quiz is missing                           | Refresh the course; confirm it is a Classic Quiz or New Quiz and the OAuth user can access it.                                |
-| A student cannot launch a listed assessment | Confirm the latest discovery is verified, the item is published, and the global Canvas unlock/lock window is open.            |
-| Enable/disable reports a Canvas error       | Inspect the Canvas permission/upstream response. Refresh before retrying; do not manually create divergent access-code state. |
-| Old `.seb` file stopped working             | A protected setting or certificate changed. Download a fresh configuration from a new launch.                                 |
-| Tool copy fails for one target              | Confirm the source tool is instructor-owned and the same OAuth user is currently a teacher in the target course.              |
-| School preset shows a failed rollout        | Fix the target course authorization/problem, then use the dashboard’s reconcile/retry action.                                 |
+| Symptom                               | Check                                                                                                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A quiz is missing                     | Refresh the course; confirm it is a Classic Quiz or New Quiz and the OAuth user can access it.                                                                                 |
+| `ASSESSMENT_NOT_AVAILABLE`            | Canvas did not expose the exact assessment to this learner, or it is explicitly unpublished, future, or closed. Check publication, dates, and differentiated assignment rules. |
+| `CANVAS_AVAILABILITY_UNVERIFIED`      | Canvas timed out, rate-limited the check, returned malformed/oversized data, or failed upstream. Wait briefly and retry; do not treat it as unpublished.                       |
+| `CANVAS_LAUNCH_ADMISSION_EXPIRED`     | More than five minutes elapsed in the admitted chain. Return to Canvas and launch the assessment again.                                                                        |
+| Configured assessment is not ready    | Run the instructor refresh preflight and use its exact publication, conflict, date, freshness, or settings reason plus **Open in Canvas**.                                     |
+| Enable/disable reports a Canvas error | Inspect the Canvas permission/upstream response. Refresh before retrying; do not manually create divergent access-code state.                                                  |
+| Old `.seb` file stopped working       | A protected setting or certificate changed. Download a fresh configuration from a new launch.                                                                                  |
+| Tool copy fails for one target        | Confirm the source tool is instructor-owned and the same OAuth user is currently a teacher in the target course.                                                               |
+| School preset shows a failed rollout  | Fix the target course authorization/problem, then use the dashboard’s reconcile/retry action.                                                                                  |
 
-The service deliberately fails closed when cached Canvas discovery is missing
-or stale. Restoring availability should come from a successful Canvas refresh,
-not by editing database documents.
+Course-wide readiness deliberately fails closed when discovery or publication
+evidence is missing, conflicting, unknown, or stale. Student correctness does
+not depend on that cache: each pure-student configuration grant verifies the
+student's current read-only Canvas visibility. Do not repair either condition
+by editing database documents or distributing the Canvas access code.
+
+### Containment for deployments before 1.1
+
+Before admitting a class on 1.0.x, verify both the Assignment wrapper and New
+Quiz publication state and the complete availability window, open the
+instructor tool after publication, run **Refresh**, and confirm the stored
+publication timestamp is current. Then launch through detector, LTI, SEB,
+Config Key proof, and access-code release with a synthetic student. If the
+stored status remains false or ambiguous, postpone the protected launch. Do
+not publish through SOE or distribute the access code as a workaround.
 
 ## Detector And Canvas Theme Problems
 

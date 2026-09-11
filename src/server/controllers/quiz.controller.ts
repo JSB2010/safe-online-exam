@@ -42,6 +42,7 @@ import {
   requestedQuizOnlyTools,
   secretUpdate
 } from "./quiz-controller-helpers.js";
+import { contentView, quizView } from "./lti-controller-helpers.js";
 
 @Controller("/api/quizzes")
 export class QuizController {
@@ -58,12 +59,38 @@ export class QuizController {
     const principal = this.authorization.requireInstructorForCourse(request, courseId, true);
     const userId = principal.canvasUserId;
     try {
-      const { classicQuizzes: quizzes } = await this.assessments.refreshCourseContent(courseId, userId);
+      const refreshed = await this.assessments.refreshCourseContent(courseId, userId);
+      const quizzes = refreshed.classicQuizzes || [];
+      const contentItems = (refreshed.contentItems || []).filter((item) => item.contentType === "NEW_QUIZ");
+      const assessmentViews = [
+        ...quizzes.map((quiz) => ({ id: quiz.id, view: quizView(quiz) })),
+        ...contentItems.map((item) => ({ id: item.id, view: contentView(item) }))
+      ];
+      const readiness = (
+        await Promise.all(
+          assessmentViews.map(async ({ id }) => {
+            const result = await this.assessments.getAssessmentReadiness(courseId, id);
+            return result ? { id, ...result } : null;
+          })
+        )
+      ).filter((value) => value !== null);
+      const readinessById = new Map(readiness.map((value) => [value.id, value]));
+      const recordsById = new Map((refreshed.assessments || []).map((record) => [record.id, record]));
+      const isRequired = (value: (typeof readiness)[number]) =>
+        recordsById.get(value.id)?.seb.required === true || (!recordsById.has(value.id) && value.configured === true);
       return {
         success: true,
         message: "Quiz data refreshed successfully",
         quizCount: quizzes.length,
-        quizzes: quizzes.map((quiz) => ({ id: quiz.id, title: quiz.title, canvasQuizId: quiz.canvasQuizId }))
+        quizzes: quizzes.map((quiz) => ({ id: quiz.id, title: quiz.title, canvasQuizId: quiz.canvasQuizId })),
+        assessmentCount: assessmentViews.length,
+        readyCount: readiness.filter((value) => isRequired(value) && value.status === "ready").length,
+        blockedCount: readiness.filter((value) => isRequired(value) && value.status !== "ready").length,
+        readiness,
+        assessments: assessmentViews.map(({ id, view }) => ({
+          ...view,
+          readiness: readinessById.get(id) || null
+        }))
       };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
@@ -489,16 +516,24 @@ export class QuizController {
           parsed.assignmentId,
           userId
         );
+        const readiness = await this.assessments.getAssessmentReadiness(courseId, quizId);
         return {
           success: true,
-          message: "Safe Online Exam enabled.",
+          message: readiness?.globallyReady
+            ? "Safe Online Exam enabled and ready."
+            : "Safe Online Exam configured. Publish and check availability in Canvas before students begin.",
+          readiness,
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
         };
       }
       const setting = await this.assessments.enableSebWithAccessCode(courseId, quizId, userId);
+      const readiness = await this.assessments.getAssessmentReadiness(courseId, quizId);
       return {
         success: true,
-        message: "Safe Online Exam enabled.",
+        message: readiness?.globallyReady
+          ? "Safe Online Exam enabled and ready."
+          : "Safe Online Exam configured. Publish and check availability in Canvas before students begin.",
+        readiness,
         setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
       };
     } catch (error) {

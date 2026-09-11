@@ -13,6 +13,25 @@ export interface QuizView {
   contentType?: string | null;
   quizTypeDisplay?: string | null;
   updatedAt?: string | null;
+  published?: boolean | null;
+  publication?: {
+    status?: "published" | "unpublished" | "conflict" | "unknown";
+    confidence?: "complete" | "single_source" | "unavailable";
+    checkedAt?: string;
+  } | null;
+  unlockAt?: string | null;
+  lockAt?: string | null;
+  readiness?: {
+    status?: string;
+    configured?: boolean;
+    globallyReady?: boolean;
+    studentLaunchAuthorized?: boolean | null;
+    publicationStatus?: "published" | "unpublished" | "conflict" | "unknown";
+    publicationConfidence?: "complete" | "single_source" | "unavailable";
+    verifiedAt?: string | null;
+    unlockAt?: string | null;
+    lockAt?: string | null;
+  } | null;
 }
 
 export interface StudentQuizView extends QuizView {
@@ -71,7 +90,12 @@ export type AdminAssessmentView = {
   id: string;
   title: string;
   contentType: string;
-  published: boolean;
+  published: boolean | null;
+  publicationStatus?: string;
+  publicationConfidence?: string;
+  readinessStatus?: string;
+  configured?: boolean;
+  globallyReady?: boolean;
   sebRequired: boolean;
   enabled: boolean;
   hasAccessCode: boolean;

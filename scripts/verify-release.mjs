@@ -51,13 +51,14 @@ function parseArguments(argv) {
   return options;
 }
 
-function extractChangelogSection(changelog, version) {
+function extractChangelogSection(changelog, version, requireDated) {
   const lines = changelog.split(/\r?\n/u);
-  const headingPattern = new RegExp(`^## \\[${escapeRegExp(version)}\\] - \\d{4}-\\d{2}-\\d{2}$`, "u");
+  const suffix = requireDated ? "\\d{4}-\\d{2}-\\d{2}" : "(?:Unreleased|\\d{4}-\\d{2}-\\d{2})";
+  const headingPattern = new RegExp(`^## \\[${escapeRegExp(version)}\\] - ${suffix}$`, "u");
   const start = lines.findIndex((line) => headingPattern.test(line));
 
   if (start === -1) {
-    fail(`CHANGELOG.md is missing a dated [${version}] section`);
+    fail(`CHANGELOG.md is missing a ${requireDated ? "dated" : "dated or Unreleased"} [${version}] section`);
   }
 
   let end = lines.length;
@@ -85,9 +86,15 @@ const packageLock = readJson("package-lock.json");
 const version = packageJson.version;
 const expectedTag = `v${version}`;
 const releaseTag = options.tag ?? expectedTag;
+const changelog = readText("CHANGELOG.md");
+const latestStableVersion = changelog.match(/^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - \d{4}-\d{2}-\d{2}$/mu)?.[1];
+const installVersion = options.tag ? version : latestStableVersion;
 
 if (!VERSION_PATTERN.test(version)) {
   fail(`package.json version is not supported SemVer: ${version}`);
+}
+if (!installVersion || !VERSION_PATTERN.test(installVersion)) {
+  fail("CHANGELOG.md does not identify a dated stable version for installation examples");
 }
 if (releaseTag !== expectedTag) {
   fail(`tag ${releaseTag} does not match package version ${expectedTag}`);
@@ -116,14 +123,14 @@ if (
 
 const readme = readText("README.md");
 const readmeVersion = readme.match(/^export VERSION=(.+)$/mu)?.[1];
-if (readmeVersion !== version) {
-  fail(`README.md quick-start version must be ${version}, found ${readmeVersion ?? "none"}`);
+if (readmeVersion !== installVersion) {
+  fail(`README.md quick-start version must be ${installVersion}, found ${readmeVersion ?? "none"}`);
 }
 
 const composeEnvironment = readText(".env.compose.example");
 const composeVersion = composeEnvironment.match(/^APP_IMAGE=ghcr\.io\/jsb2010\/safe-online-exam:([^\s]+)$/mu)?.[1];
-if (composeVersion !== version) {
-  fail(`.env.compose.example image version must be ${version}, found ${composeVersion ?? "none"}`);
+if (composeVersion !== installVersion) {
+  fail(`.env.compose.example image version must be ${installVersion}, found ${composeVersion ?? "none"}`);
 }
 
 const composeSecretsEnvironment = readText(".env.compose.secrets.example");
@@ -133,8 +140,8 @@ if (!/^COMPOSE_PROJECT_NAME=$/mu.test(composeSecretsEnvironment)) {
 
 const cloudRunEnvironment = readText("deploy/cloudrun.env.example");
 const cloudRunVersion = cloudRunEnvironment.match(/^APP_VERSION=(.+)$/mu)?.[1];
-if (cloudRunVersion !== version) {
-  fail(`deploy/cloudrun.env.example APP_VERSION must be ${version}, found ${cloudRunVersion ?? "none"}`);
+if (cloudRunVersion !== installVersion) {
+  fail(`deploy/cloudrun.env.example APP_VERSION must be ${installVersion}, found ${cloudRunVersion ?? "none"}`);
 }
 if (!/^APP_IMAGE=ghcr\.io\/jsb2010\/safe-online-exam@sha256:REPLACE_WITH_RELEASE_DIGEST$/mu.test(cloudRunEnvironment)) {
   fail("deploy/cloudrun.env.example must use the release-digest placeholder");
@@ -221,9 +228,10 @@ if (!jamfDaemon.includes("org.safeonlineexam.seb-identity-installer")) {
   fail("deploy/jamf must include the SEB identity installer LaunchDaemon manifest");
 }
 
-const changelog = readText("CHANGELOG.md");
-const changelogSection = extractChangelogSection(changelog, version);
-const changelogLink = `[${version}]: https://github.com/JSB2010/safe-online-exam/releases/tag/${expectedTag}`;
+const changelogSection = extractChangelogSection(changelog, version, !!options.tag);
+const changelogLink = options.tag
+  ? `[${version}]: https://github.com/JSB2010/safe-online-exam/releases/tag/${expectedTag}`
+  : `[${version}]: https://github.com/JSB2010/safe-online-exam/compare/v${latestStableVersion}...HEAD`;
 if (!changelog.includes(changelogLink)) {
   fail(`CHANGELOG.md is missing the canonical ${version} release link`);
 }

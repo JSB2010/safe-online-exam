@@ -6,6 +6,8 @@ import {
   YOUTUBE_VIDEO_TOOL_PRESET
 } from "../../shared/models.js";
 import { apiError } from "../http/api-error.js";
+import { evaluateAssessmentReadiness } from "../services/assessment-helpers.js";
+import { hasEffectiveSebQuitPassword } from "../services/seb-quit-password.js";
 
 export const ADMIN_PAGE_SIZE = 25;
 export const ADMIN_BULK_LIMIT = 50;
@@ -23,7 +25,10 @@ export function groupAssessments(assessments: AssessmentRecord[]): Map<string, A
   return grouped;
 }
 
-export function assessmentCounts(assessments: AssessmentRecord[]): {
+export function assessmentCounts(
+  assessments: AssessmentRecord[],
+  defaultQuitPassword?: string | null
+): {
   assessmentCount: number;
   enabledAssessmentCount: number;
   issueCount: number;
@@ -31,10 +36,16 @@ export function assessmentCounts(assessments: AssessmentRecord[]): {
   return {
     assessmentCount: assessments.length,
     enabledAssessmentCount: assessments.filter((assessment) => assessment.seb.required === true).length,
-    issueCount: assessments.filter(
-      (assessment) =>
-        assessment.canvasVerification?.status === "missing" || assessment.canvasVerification?.status === "stale"
-    ).length
+    issueCount: assessments.filter((assessment) => {
+      const readiness = evaluateAssessmentReadiness(assessment, {
+        hasEffectiveQuitPassword: hasEffectiveSebQuitPassword(assessment.seb.quitPassword, defaultQuitPassword)
+      });
+      return (
+        assessment.canvasVerification?.status === "missing" ||
+        assessment.canvasVerification?.status === "stale" ||
+        (assessment.seb.required === true && readiness.status !== "ready")
+      );
+    }).length
   };
 }
 
@@ -197,14 +208,22 @@ export function normalizedBulkAssignmentInput(body: unknown): {
   return { assigned: input.assigned, all: input.all, courseIds };
 }
 
-export function adminAssessmentView(assessment: AssessmentRecord) {
+export function adminAssessmentView(assessment: AssessmentRecord, defaultQuitPassword?: string | null) {
+  const readiness = evaluateAssessmentReadiness(assessment, {
+    hasEffectiveQuitPassword: hasEffectiveSebQuitPassword(assessment.seb.quitPassword, defaultQuitPassword)
+  });
   return {
     id: assessment.id,
     courseId: assessment.courseId,
     contentType: assessment.contentType,
     title: assessment.canvas.title || "Untitled assessment",
     htmlUrl: assessment.canvas.htmlUrl || null,
-    published: assessment.canvas.published === true,
+    published: assessment.canvas.published ?? null,
+    publicationStatus: assessment.canvas.publication?.status || "unknown",
+    publicationConfidence: assessment.canvas.publication?.confidence || "unavailable",
+    readinessStatus: readiness.status,
+    configured: readiness.configured,
+    globallyReady: readiness.globallyReady,
     sebRequired: assessment.seb.required === true,
     enabled: assessment.seb.enabled === true,
     hasAccessCode: !!assessment.seb.accessCode,

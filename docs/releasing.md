@@ -26,6 +26,14 @@ not change them as part of an application version bump.
 
 ## Prepare The Release On Main
 
+Between releases, `package.json` may identify the intended next version and
+the matching changelog section may end in `- Unreleased`. Stable installation
+examples continue to reference the newest published tag. `npm run
+release:check` validates that development state. The later release-preparation
+commit must replace `Unreleased` with the release date and synchronize the
+installation examples; tag-mode validation rejects a tag until both steps are
+complete.
+
 Start from a clean branch based on current `main`. Update `package.json` and
 the root package-lock versions without letting npm create a premature commit
 or tag:
