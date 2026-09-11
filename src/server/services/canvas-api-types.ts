@@ -30,6 +30,7 @@ export interface CanvasAssignmentResponse {
 }
 
 export interface CanvasNewQuizResponse {
+  published?: boolean;
   title?: string;
   instructions?: string | null;
   description?: string | null;

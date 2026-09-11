@@ -494,7 +494,16 @@ export class LtiController {
     try {
       const { classicQuizzes, contentItems: content } = await this.assessments.refreshCourseContent(courseId, userId);
       const newQuizzes = content.filter((item) => item.contentType === "NEW_QUIZ");
-      const quizzes = [...classicQuizzes.map(quizView), ...newQuizzes.map(contentView)];
+      const quizzes = await Promise.all([
+        ...classicQuizzes.map(async (quiz) => ({
+          ...quizView(quiz),
+          readiness: await this.assessments.getAssessmentReadiness(courseId, quiz.id)
+        })),
+        ...newQuizzes.map(async (item) => ({
+          ...contentView(item),
+          readiness: await this.assessments.getAssessmentReadiness(courseId, item.id)
+        }))
+      ]);
       const quizSebSettings: Record<string, unknown> = {};
       for (const quiz of classicQuizzes) {
         const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
@@ -683,9 +692,6 @@ export class LtiController {
       if (quiz.courseId !== courseId) {
         continue;
       }
-      if (!(await this.assessments.isAssessmentAvailableForLearner(courseId, quiz.id))) {
-        continue;
-      }
       const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
       if (setting?.courseId === courseId && setting.sebRequired && setting.enabled && setting.accessCode) {
         rows.push(
@@ -705,9 +711,6 @@ export class LtiController {
     for (const item of contentItems.filter((entry) => entry.contentType === "NEW_QUIZ")) {
       const parsed = parseNewQuizContentId(item.id);
       if (item.courseId !== courseId || parsed?.courseId !== courseId || parsed.assignmentId !== item.assignmentId) {
-        continue;
-      }
-      if (!(await this.assessments.isAssessmentAvailableForLearner(courseId, item.id))) {
         continue;
       }
       const setting = await this.assessments.getContentSebSetting(item.id);
@@ -752,9 +755,6 @@ export class LtiController {
   > {
     const canonicalContentId = canonicalSebConfigContentId(contentId);
     if (!canonicalContentId) {
-      return null;
-    }
-    if (!(await this.assessments.isAssessmentAvailableForLearner(courseId, canonicalContentId))) {
       return null;
     }
     const parsedNewQuiz = parseNewQuizContentId(canonicalContentId);

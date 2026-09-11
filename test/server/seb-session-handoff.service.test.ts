@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebSessionHandoffService } from "../../src/server/services/seb-session-handoff.service.js";
+import type { SebLaunchAdmission } from "../../src/server/services/seb-config-grant.service.js";
 
 describe("SebSessionHandoffService", () => {
   it("accepts a registered Config Key only for its course, content, settings, and Canvas quiz URL", async () => {
@@ -126,5 +127,35 @@ describe("SebSessionHandoffService", () => {
         otherAssignmentUrl
       )
     ).resolves.toBeNull();
+  });
+
+  it("preserves whether learner admission was required after that admission expires", async () => {
+    const repositories = createInMemoryRepositories();
+    const configKey = new SebConfigKeyService();
+    const service = new SebSessionHandoffService({ value: repositories } as RepositoryProvider, configKey);
+    const configKeyValue = "7".repeat(64);
+    const returnTo = "https://canvas.example.edu/courses/1/quizzes/2/take";
+    const admission: SebLaunchAdmission = {
+      attemptId: "attempt-1",
+      digest: "digest-1",
+      method: "learner_canvas",
+      checkedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() - 1_000).toISOString()
+    };
+
+    await service.registerConfig("course-1", "classicquiz_2", "settings-1", configKeyValue, returnTo, admission);
+
+    const context = await service.resolveConfigProofContext(
+      "course-1",
+      "classicquiz_2",
+      "settings-1",
+      configKey.hashForUrl(returnTo, configKeyValue),
+      returnTo
+    );
+    expect(context).toMatchObject({
+      configKey: configKeyValue,
+      launchAdmission: null,
+      launchAdmissionRequired: true
+    });
   });
 });

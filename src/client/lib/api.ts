@@ -110,6 +110,10 @@ function safeErrorMessage(
       return "Your Canvas connection has expired. Reconnect Canvas, then try again.";
     case "CANVAS_SESSION_READINESS_FAILED":
       return "Canvas could not confirm this connection right now. Check your connection and try again in a moment.";
+    case "ASSESSMENT_NOT_AVAILABLE":
+      return "Canvas is not making this assessment available to your account. Return to Canvas or ask your instructor to check publication and availability dates.";
+    case "CANVAS_AVAILABILITY_UNVERIFIED":
+      return "Canvas availability could not be verified right now. Wait a moment, return to Canvas, and try again.";
     case "INVALID_SEB_CONFIG_PROOF":
     case "SEB_CONFIGURATION_UNAVAILABLE":
       return "This Safe Online Exam configuration is no longer current. Return to Canvas and reopen the quiz from the course tool.";
@@ -245,6 +249,15 @@ export function onboardingRecovery(value: unknown, audience: "instructor" | "stu
     return {
       message: "Canvas could not verify the connection right now. Try again, or return to Canvas and reconnect later."
     };
+  }
+  if (code === "ASSESSMENT_NOT_AVAILABLE") {
+    return {
+      message:
+        "Canvas is not making this assessment available to your account. Return to Canvas or ask your instructor to check publication and availability dates."
+    };
+  }
+  if (code === "CANVAS_AVAILABILITY_UNVERIFIED") {
+    return { message: "Canvas availability could not be verified. Wait a moment, return to Canvas, and try again." };
   }
   if (code === "INVALID_SEB_CONFIG_PROOF" || code === "SEB_CONFIGURATION_UNAVAILABLE") {
     return {

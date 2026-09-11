@@ -287,7 +287,13 @@ export function AdminCoursesSection({
                         <strong>{assessment.title}</strong>
                         <small>
                           {assessment.contentType === "NEW_QUIZ" ? "New Quiz" : "Classic Quiz"} ·{" "}
-                          {assessment.published ? "Published" : "Unpublished"}
+                          {assessment.publicationStatus === "conflict"
+                            ? "Canvas status conflict"
+                            : assessment.published === true
+                              ? "Published"
+                              : assessment.published === false
+                                ? "Unpublished"
+                                : "Publication unknown"}
                         </small>
                       </div>
                     </div>

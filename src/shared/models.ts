@@ -1,5 +1,8 @@
 export {
   type ContentType,
+  type CanvasPublicationStatus,
+  type CanvasPublicationConfidence,
+  type CanvasPublicationEvidence,
   CANVAS_REQUIRED_OAUTH_SCOPES,
   CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES,
   CANVAS_OAUTH_SCOPE_VERSION,

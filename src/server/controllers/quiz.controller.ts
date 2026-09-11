@@ -58,12 +58,25 @@ export class QuizController {
     const principal = this.authorization.requireInstructorForCourse(request, courseId, true);
     const userId = principal.canvasUserId;
     try {
-      const { classicQuizzes: quizzes } = await this.assessments.refreshCourseContent(courseId, userId);
+      const refreshed = await this.assessments.refreshCourseContent(courseId, userId);
+      const quizzes = refreshed.classicQuizzes || [];
+      const contentItems = refreshed.contentItems || [];
+      const assessments = [...quizzes.map((quiz) => quiz.id), ...contentItems.map((item) => item.id)];
+      const readiness = (
+        await Promise.all(
+          assessments.map(async (id) => {
+            const result = await this.assessments.getAssessmentReadiness(courseId, id);
+            return result ? { id, ...result } : null;
+          })
+        )
+      ).filter((value) => value !== null);
       return {
         success: true,
-        message: "Quiz data refreshed successfully",
-        quizCount: quizzes.length,
-        quizzes: quizzes.map((quiz) => ({ id: quiz.id, title: quiz.title, canvasQuizId: quiz.canvasQuizId }))
+        message: "Canvas readiness check completed",
+        assessmentCount: assessments.length,
+        readyCount: readiness.filter((value) => value.globallyReady && value.configured).length,
+        blockedCount: readiness.filter((value) => value.configured && !value.globallyReady).length,
+        readiness
       };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {
@@ -489,16 +502,24 @@ export class QuizController {
           parsed.assignmentId,
           userId
         );
+        const readiness = await this.assessments.getAssessmentReadiness(courseId, quizId);
         return {
           success: true,
-          message: "Safe Online Exam enabled.",
+          message: readiness?.globallyReady
+            ? "Safe Online Exam enabled and ready."
+            : "Safe Online Exam configured. Publish and check availability in Canvas before students begin.",
+          readiness,
           setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
         };
       }
       const setting = await this.assessments.enableSebWithAccessCode(courseId, quizId, userId);
+      const readiness = await this.assessments.getAssessmentReadiness(courseId, quizId);
       return {
         success: true,
-        message: "Safe Online Exam enabled.",
+        message: readiness?.globallyReady
+          ? "Safe Online Exam enabled and ready."
+          : "Safe Online Exam configured. Publish and check availability in Canvas before students begin.",
+        readiness,
         setting: toSebSettingView(setting, this.config.value.seb.defaultQuitPassword)
       };
     } catch (error) {

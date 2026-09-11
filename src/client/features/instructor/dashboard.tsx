@@ -30,7 +30,7 @@ const SettingsDialog = lazy(async () => ({
 }));
 
 export function TeacherDashboard({ data }: { data: Record<string, any> }) {
-  const [items] = useState<QuizView[]>(data.quizzes || []);
+  const [items, setItems] = useState<QuizView[]>(data.quizzes || []);
   const [settings, setSettings] = useState<Record<string, any>>(data.quizSebSettings || {});
   const [courseDefaults, setCourseDefaults] = useState<CourseSebDefaults>(() =>
     normalizeCourseDefaults(data.courseDefaults, data.courseId)
@@ -50,9 +50,13 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
     return items.filter((item) => `${item.title} ${item.quizTypeDisplay || ""}`.toLowerCase().includes(normalized));
   }, [items, query]);
 
-  const activeCount = useMemo(
+  const configuredCount = useMemo(
     () => Object.values(settings).filter((setting: any) => setting?.sebRequired).length,
     [settings]
+  );
+  const readyCount = useMemo(
+    () => items.filter((item) => settings[item.id]?.sebRequired && item.readiness?.globallyReady).length,
+    [items, settings]
   );
   const needsExitPassword = useMemo(
     () =>
@@ -107,7 +111,17 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
           ...current,
           [item.id]: body.setting || { ...current[item.id], sebRequired: !enabled }
         }));
-        pushToast("success", enabled ? "Safe Online Exam disabled." : "Safe Online Exam enabled.");
+        pushToast(
+          "success",
+          enabled
+            ? "Safe Online Exam disabled."
+            : apiMessage(
+                body,
+                item.published === true
+                  ? "Safe Online Exam enabled."
+                  : "Safe Online Exam configured. Publish and check readiness in Canvas before students begin."
+              )
+        );
       }
     } catch (error) {
       handleRecovery(error);
@@ -126,7 +140,38 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
       });
       if (redirectForAuth(body)) return;
       if (body.success) {
-        window.location.assign("/lti/launch");
+        const readinessById = new Map<string, QuizView["readiness"]>(
+          (Array.isArray(body.readiness) ? body.readiness : []).map((value: any) => [String(value.id), value])
+        );
+        setItems((current) =>
+          current.map((item) => {
+            const readiness = readinessById.get(item.id);
+            return readiness
+              ? {
+                  ...item,
+                  readiness,
+                  published:
+                    readiness.publicationStatus === "published"
+                      ? true
+                      : readiness.publicationStatus === "unpublished"
+                        ? false
+                        : null,
+                  publication: {
+                    ...item.publication,
+                    status: readiness.publicationStatus,
+                    confidence: readiness.publicationConfidence,
+                    checkedAt: readiness.verifiedAt || undefined
+                  },
+                  unlockAt: readiness.unlockAt,
+                  lockAt: readiness.lockAt
+                }
+              : item;
+          })
+        );
+        pushToast(
+          body.blockedCount > 0 ? "error" : "success",
+          `${body.readyCount || 0} ready; ${body.blockedCount || 0} configured but blocked.`
+        );
       } else {
         handleRecovery(body);
         pushToast("error", apiMessage(body, "Could not refresh Canvas content."));
@@ -182,8 +227,12 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
             <strong>{items.length}</strong>
           </div>
           <div className="stat-pill active">
-            <span>Active</span>
-            <strong>{activeCount}</strong>
+            <span>Ready</span>
+            <strong>{readyCount}</strong>
+          </div>
+          <div className="stat-pill">
+            <span>Configured</span>
+            <strong>{configuredCount}</strong>
           </div>
           <button
             className="icon-button"
@@ -209,7 +258,7 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
             courseName={data.courseName || `Course ${data.courseId}`}
             defaults={courseDefaults}
             securityReady={courseSecurityReady}
-            enabledAssessmentCount={onboarding.enabledAssessmentCount || activeCount}
+            enabledAssessmentCount={onboarding.enabledAssessmentCount || configuredCount}
             required={onboarding.courseSetupComplete !== true && courseDefaults.setupCompleted !== true}
             onClose={() => setShowSetupWizard(false)}
             onComplete={completeSetupWizard}
@@ -240,6 +289,7 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
             const setting = settings[item.id] || {};
             const enabled = !!setting.sebRequired;
             const canEnable = enabled || canEnableSebAssessment(setting, courseDefaults);
+            const ready = enabled && item.readiness?.globallyReady === true;
             return (
               <article className="content-row teacher-row" key={item.id}>
                 <div className="content-main">
@@ -250,11 +300,33 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
                     <h3>{item.title}</h3>
                     <p>
                       {item.quizTypeDisplay || item.contentType || "Canvas content"}
-                      <span className={clsx("assessment-status", enabled && "enabled")}>
-                        {enabled ? <ShieldCheck size={13} /> : <Shield size={13} />}
-                        {enabled ? "Requires Safe Exam Browser" : "Browser not required"}
+                      <span className={clsx("assessment-status", ready && "enabled")}>
+                        {ready ? <ShieldCheck size={13} /> : <Shield size={13} />}
+                        {enabled ? readinessMessage(item.readiness?.status) : "Browser not required"}
                       </span>
+                      {enabled && (
+                        <span className="assessment-status">
+                          Canvas:{" "}
+                          {publicationLabel(
+                            item.readiness?.publicationStatus || item.publication?.status,
+                            item.published
+                          )}
+                        </span>
+                      )}
                     </p>
+                    {enabled && (
+                      <p className="muted">
+                        Evidence:{" "}
+                        {publicationConfidenceLabel(
+                          item.readiness?.publicationConfidence || item.publication?.confidence
+                        )}
+                        {item.readiness?.verifiedAt || item.publication?.checkedAt
+                          ? ` · checked ${formatCanvasTime(item.readiness?.verifiedAt || item.publication?.checkedAt)}`
+                          : " · not yet verified"}
+                        {item.unlockAt ? ` · opens ${formatCanvasTime(item.unlockAt)}` : ""}
+                        {item.lockAt ? ` · closes ${formatCanvasTime(item.lockAt)}` : ""}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="row-actions">
@@ -342,6 +414,51 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
       <ToastRegion toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((t) => t.id !== id))} />
     </main>
   );
+}
+
+function publicationLabel(status?: string, published?: boolean | null): string {
+  if (status === "published") return "Published";
+  if (status === "unpublished") return "Unpublished";
+  if (status === "conflict") return "Conflicting status";
+  if (published === true) return "Published";
+  if (published === false) return "Unpublished";
+  return "Unknown";
+}
+
+function publicationConfidenceLabel(confidence?: string): string {
+  if (confidence === "complete") return "complete";
+  if (confidence === "single_source") return "one Canvas source";
+  return "unavailable";
+}
+
+function formatCanvasTime(value?: string | null): string {
+  if (!value) return "unknown";
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : "invalid date";
+}
+
+function readinessMessage(status?: string): string {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "configured_unpublished":
+      return "Configured — publish in Canvas";
+    case "not_yet_open":
+      return "Configured — not open yet";
+    case "closed":
+      return "Configured — closed";
+    case "publication_conflict":
+      return "Configured — Canvas status conflicts";
+    case "publication_unknown":
+    case "canvas_stale":
+      return "Configured — refresh required";
+    case "canvas_missing":
+      return "Configured — missing in Canvas";
+    case "settings_incomplete":
+      return "Configured — settings incomplete";
+    default:
+      return "Configured — not ready";
+  }
 }
 
 function InstructorDialogLoadingFallback() {

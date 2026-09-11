@@ -143,16 +143,19 @@ resource a student needs.
 
 ### Refresh Assessments
 
-Select the refresh action when Canvas quizzes have been created, renamed,
-published, unpublished, or changed outside Safe Online Exam. The service
+Select the refresh action as a readiness preflight when Canvas quizzes have
+been created, renamed, published, unpublished, or changed outside Safe Online Exam. The service
 discovers:
 
 - Classic Quizzes through the Canvas REST API; and
 - New Quizzes through the assignment and New Quiz APIs.
 
-For student launch, cached assessment metadata must be currently verified,
-published, and within Canvas’s global unlock and lock window. Failed or stale
-discovery fails closed rather than trusting old availability data.
+The result counts **Configured** and **Ready** separately and identifies
+unpublished, future, closed, conflicting, unknown, stale, missing, and
+incomplete assessments. Each row shows Canvas publication evidence, its
+quality, availability dates, last verification time, and an **Open in Canvas**
+link. A student launch does not depend on this preflight: SOE performs a
+read-only visibility check using that student's Canvas connection at launch.
 
 ### Configure Course Policy
 
@@ -228,7 +231,11 @@ Enabling requires an effective exit password. The service:
 1. generates a new access code;
 2. updates the appropriate Canvas Classic Quiz or New Quiz;
 3. persists the SEB policy only after Canvas accepts the change; and
-4. exposes the assessment to the student launch list.
+4. reports whether the assessment is configured and globally ready.
+
+An assessment may be configured before it is published. In that case the
+operation succeeds with a **Configured — not ready** warning; SOE never
+publishes the assessment or changes Canvas availability dates automatically.
 
 Routine instructor responses do not return the access code. Use the explicit,
 short-lived password reveal only for authorized recovery.
@@ -280,8 +287,10 @@ setup-completion record.
    then retry with a fresh launch.
 5. Complete the assessment in SEB.
 
-The launch uses a one-time, short-lived configuration grant. Reusing an old
-download URL or old configuration after settings changed will fail.
+The launch verifies that Canvas exposes the exact assessment to the current
+student, then uses a one-time configuration grant and five-minute launch
+admission. Reusing an old download URL, waiting beyond the admission window,
+or changing SOE settings requires a fresh launch from Canvas.
 
 Once Canvas loads inside SEB, the detector asks the SEB JavaScript API for the
 current Config Key and submits proof to the service. Only valid current proof

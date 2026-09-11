@@ -24,9 +24,40 @@ describe("SebConfigGrantService", () => {
       courseId: "course-1",
       contentId: "classicquiz_101",
       settingsFingerprint: fingerprint,
-      requiresSessionHandoff: true
+      requiresSessionHandoff: true,
+      launchAdmissionRequired: false,
+      launchAttemptId: null
     });
     await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toBeNull();
+  });
+
+  it("carries a current learner admission and rejects it after expiry", async () => {
+    const service = grantService();
+    const fingerprint = sebConfigSettingsFingerprint("course-1", "101", classicSetting(), FINGERPRINT_SECRET);
+    const admission = {
+      attemptId: "8f838d14-1c11-47ea-8f17-a20b3984a379",
+      digest: "a".repeat(43),
+      method: "learner_canvas" as const,
+      checkedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    };
+    const token = await service.mintGrant(requestDouble(), principal(), "course-1", "101", fingerprint, admission);
+    await expect(service.consumeGrant(token, "course-1", "classicquiz_101")).resolves.toMatchObject({
+      launchAdmission: admission,
+      launchAdmissionRequired: true,
+      launchAttemptId: admission.attemptId
+    });
+
+    const expired = await service.mintGrant(requestDouble(), principal(), "course-1", "101", fingerprint, {
+      ...admission,
+      expiresAt: new Date(Date.now() - 1_000).toISOString()
+    });
+    await expect(service.consumeGrant(expired, "course-1", "classicquiz_101")).resolves.toMatchObject({
+      requiresSessionHandoff: true,
+      launchAdmission: null,
+      launchAdmissionRequired: true,
+      launchAttemptId: admission.attemptId
+    });
   });
 
   it("atomically burns a grant presented for a different course or content target", async () => {

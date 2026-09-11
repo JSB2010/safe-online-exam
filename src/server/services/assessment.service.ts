@@ -48,6 +48,7 @@ import {
 } from "./assessment-errors.js";
 import {
   type AccessCodeSetting,
+  type AssessmentReadiness,
   type OperationLease,
   assertPriorAccessCodeIsRecoverable,
   canvasGrantArgs,
@@ -60,6 +61,7 @@ import {
   hasSameAccessCodeState,
   hasSameCanvasAccessState,
   isCanvasAssessmentCurrentlyAvailable,
+  evaluateAssessmentReadiness,
   isDefinitiveCanvasRejection,
   isFreshCanvasVerification,
   mapInBatches
@@ -251,6 +253,14 @@ export class AssessmentService {
 
   async getAssessmentRecord(id: string): Promise<AssessmentRecord | null> {
     return this.repositories.value.assessments.get(canonicalAssessmentId(id));
+  }
+
+  async getAssessmentReadiness(courseId: string, contentId: string): Promise<AssessmentReadiness | null> {
+    const record = await this.getAssessmentRecord(contentId);
+    if (!record || record.courseId !== courseId) return null;
+    return evaluateAssessmentReadiness(record, {
+      hasEffectiveQuitPassword: !!(record.seb.quitPassword?.trim() || this.config.value.seb.defaultQuitPassword?.trim())
+    });
   }
 
   async isAssessmentAvailableForLearner(courseId: string, contentId: string): Promise<boolean> {

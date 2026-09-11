@@ -1,4 +1,4 @@
-import { createHash, scryptSync } from "node:crypto";
+import { createHash, randomUUID, scryptSync } from "node:crypto";
 import type { Response } from "express";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
 import {
@@ -19,13 +19,17 @@ import {
 } from "../services/seb-config-grant.service.js";
 import { SebConfigKeyService } from "../services/seb-config-key.service.js";
 import { SebConfigurationService } from "../services/seb-configuration.service.js";
-import { CanvasApiService } from "../services/canvas-api.service.js";
+import { CanvasApiRequestError, CanvasApiService } from "../services/canvas-api.service.js";
+import type { LearnerAssessmentAvailability } from "../services/canvas-api.service.js";
 import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
+import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
+import type { SebLaunchAdmission } from "../services/seb-config-grant.service.js";
 import {
   allowedDomains,
   canonicalCanvasAssignmentUrl,
   canvasAssignmentUrl,
   isConfiguredCanvasUrl,
+  requiresStudentSessionHandoff,
   resolveClassicCanvasUrl
 } from "./seb-controller-helpers.js";
 
@@ -48,10 +52,31 @@ export interface SebConfigGrantTarget {
 
 const SEB_REQUIREMENT_STATUS_CACHE_TTL_MS = 5_000;
 const SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES = 5_000;
+const LEARNER_AVAILABILITY_CACHE_TTL_MS = 30_000;
+const LEARNER_AVAILABILITY_CACHE_MAX_ENTRIES = 10_000;
+const LEARNER_ADMISSION_TTL_MS = 5 * 60 * 1000;
+const LEARNER_VERIFICATION_CONCURRENCY = 16;
+const LEARNER_VERIFICATION_QUEUE_LIMIT = 256;
+
+export class AssessmentNotAvailableError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly attemptId?: string
+  ) {
+    super("Canvas is not making this assessment available to the learner");
+    this.name = "AssessmentNotAvailableError";
+  }
+}
 
 export class SebContentCoordinator {
   private readonly configDownloadCache = new Map<string, { expiresAt: number; value: Promise<Buffer> }>();
   private readonly requirementStatusCache = new Map<string, { expiresAt: number; value: Promise<boolean> }>();
+  private readonly learnerAvailabilityCache = new Map<
+    string,
+    { expiresAt: number; value: Promise<LearnerAssessmentAvailability> }
+  >();
+  private learnerVerificationActive = 0;
+  private readonly learnerVerificationWaiters: Array<() => void> = [];
   private managedQuitPolicyDigestValue?: string;
 
   constructor(
@@ -112,7 +137,8 @@ export class SebContentCoordinator {
     contentId: string,
     target: { setting: QuizSebSetting | ContentSebSetting; settingsFingerprint: string },
     canvasUserId: string,
-    requiresSessionHandoff: boolean
+    requiresSessionHandoff: boolean,
+    launchAdmission?: SebLaunchAdmission | null
   ): Promise<{ buffer: Buffer; handoffDocumentIds: string[] }> {
     if (!requiresSessionHandoff) {
       return { buffer: await this.generateConfig(courseId, contentId), handoffDocumentIds: [] };
@@ -124,13 +150,22 @@ export class SebContentCoordinator {
     const sessionUrl = await this.canvasApi.getSessionToken(canvasUserId, returnTo);
     const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, sessionUrl);
     const dynamicConfigKey = this.configKey.computeConfigKey(plain);
-    const handoffDocumentIds = await this.sessionHandoff.registerConfig(
-      courseId,
-      contentId,
-      target.settingsFingerprint,
-      dynamicConfigKey,
-      returnTo
-    );
+    const handoffDocumentIds = launchAdmission
+      ? await this.sessionHandoff.registerConfig(
+          courseId,
+          contentId,
+          target.settingsFingerprint,
+          dynamicConfigKey,
+          returnTo,
+          launchAdmission
+        )
+      : await this.sessionHandoff.registerConfig(
+          courseId,
+          contentId,
+          target.settingsFingerprint,
+          dynamicConfigKey,
+          returnTo
+        );
     try {
       return {
         buffer: this.sebConfig.prepareSebConfigurationDownload(plain, {
@@ -155,16 +190,90 @@ export class SebContentCoordinator {
     return target;
   }
 
+  async resolveCurrentConfiguredTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
+    if (await this.assessments.isCourseResetInProgress(courseId)) {
+      throw new CourseResetInProgressError();
+    }
+    const target = await this.resolveConfiguredTarget(courseId, contentId);
+    if (await this.assessments.isCourseResetInProgress(courseId)) {
+      throw new CourseResetInProgressError();
+    }
+    return target;
+  }
+
+  async authorizeLaunch(
+    principal: VerifiedLtiPrincipal,
+    target: SebConfigGrantTarget
+  ): Promise<SebLaunchAdmission | null> {
+    if (requiresStudentSessionHandoff(principal)) {
+      if (!this.canvasApi) {
+        throw new Error("Canvas learner availability service is unavailable");
+      }
+      const attemptId = randomUUID();
+      const startedAt = Date.now();
+      let availability: LearnerAssessmentAvailability;
+      try {
+        availability = await this.cachedLearnerAvailability(
+          principal.canvasUserId,
+          principal.courseId,
+          target.canonicalContentId
+        );
+      } catch (error) {
+        if (error && typeof error === "object" && Object.isExtensible(error)) {
+          (error as { launchAttemptId?: string }).launchAttemptId = attemptId;
+        }
+        console.warn(
+          JSON.stringify({
+            event: "learner_canvas_availability",
+            attemptId,
+            result: "unverified",
+            durationMs: Date.now() - startedAt,
+            status: error instanceof CanvasApiRequestError ? error.status : 502
+          })
+        );
+        throw error;
+      }
+      console.info(
+        JSON.stringify({
+          event: "learner_canvas_availability",
+          attemptId,
+          result: availability.reason,
+          durationMs: Date.now() - startedAt
+        })
+      );
+      if (!availability.available) {
+        throw new AssessmentNotAvailableError(availability.reason, attemptId);
+      }
+      const admissionSecret = randomUUID();
+      return {
+        attemptId,
+        digest: createHash("sha256").update(`seb-launch-admission:${admissionSecret}`, "utf8").digest("base64url"),
+        method: "learner_canvas",
+        checkedAt: availability.checkedAt,
+        expiresAt: new Date(Date.now() + LEARNER_ADMISSION_TTL_MS).toISOString()
+      };
+    }
+    if (!(await this.assessments.isAssessmentAvailableForLearner(principal.courseId, target.canonicalContentId))) {
+      throw new AssessmentNotAvailableError("global_canvas_state");
+    }
+    return null;
+  }
+
   async finalizeCourseScopedGrant(
     courseId: string,
     target: SebConfigGrantTarget,
-    revoke: () => Promise<void>
+    revoke: () => Promise<void>,
+    requireCanvasAvailability = true
   ): Promise<SebConfigGrantTarget | null> {
     let resetInProgress: boolean;
     let current: SebConfigGrantTarget | null;
     try {
       resetInProgress = await this.assessments.isCourseResetInProgress(courseId);
-      current = resetInProgress ? null : await this.resolveConfigGrantTarget(courseId, target.canonicalContentId);
+      current = resetInProgress
+        ? null
+        : requireCanvasAvailability
+          ? await this.resolveConfigGrantTarget(courseId, target.canonicalContentId)
+          : await this.resolveConfiguredTarget(courseId, target.canonicalContentId);
       resetInProgress = resetInProgress || (await this.assessments.isCourseResetInProgress(courseId));
     } catch (error) {
       await revoke();
@@ -185,6 +294,11 @@ export class SebContentCoordinator {
   }
 
   async resolveConfigGrantTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
+    const target = await this.resolveConfiguredTarget(courseId, contentId);
+    return target && (await this.matchesAssessmentObject(courseId, target.canonicalContentId)) ? target : null;
+  }
+
+  async resolveConfiguredTarget(courseId: string, contentId: string): Promise<SebConfigGrantTarget | null> {
     const canonicalContentId = canonicalSebConfigContentId(contentId);
     if (!canonicalContentId) {
       return null;
@@ -201,7 +315,7 @@ export class SebContentCoordinator {
       setting.courseId !== courseId ||
       !this.effectiveQuitPassword(setting) ||
       (setting.startPassword && !setting.configKeySalt) ||
-      !(await this.matchesAssessmentObject(courseId, canonicalContentId))
+      !(await this.matchesConfiguredAssessmentObject(courseId, canonicalContentId))
     ) {
       return null;
     }
@@ -220,6 +334,55 @@ export class SebContentCoordinator {
         )
         .digest("base64url")
     };
+  }
+
+  private async cachedLearnerAvailability(
+    userId: string,
+    courseId: string,
+    contentId: string
+  ): Promise<LearnerAssessmentAvailability> {
+    const key = createHash("sha256").update(`${userId}\0${courseId}\0${contentId}`, "utf8").digest("base64url");
+    const now = Date.now();
+    const cached = this.learnerAvailabilityCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
+    }
+    for (const [candidate, value] of this.learnerAvailabilityCache) {
+      if (value.expiresAt <= now) this.learnerAvailabilityCache.delete(candidate);
+    }
+    while (this.learnerAvailabilityCache.size >= LEARNER_AVAILABILITY_CACHE_MAX_ENTRIES) {
+      const oldest = this.learnerAvailabilityCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.learnerAvailabilityCache.delete(oldest);
+    }
+    const value = this.withLearnerVerificationSlot(() =>
+      this.canvasApi!.getLearnerAssessmentAvailability(courseId, contentId, userId)
+    );
+    this.learnerAvailabilityCache.set(key, { expiresAt: now + LEARNER_AVAILABILITY_CACHE_TTL_MS, value });
+    try {
+      return await value;
+    } catch (error) {
+      this.learnerAvailabilityCache.delete(key);
+      throw error;
+    }
+  }
+
+  private async withLearnerVerificationSlot<T>(action: () => Promise<T>): Promise<T> {
+    if (this.learnerVerificationActive < LEARNER_VERIFICATION_CONCURRENCY) {
+      this.learnerVerificationActive += 1;
+    } else {
+      if (this.learnerVerificationWaiters.length >= LEARNER_VERIFICATION_QUEUE_LIMIT) {
+        throw new CanvasApiRequestError("Canvas learner availability verification is saturated.", "", "", 429);
+      }
+      await new Promise<void>((resolve) => this.learnerVerificationWaiters.push(resolve));
+    }
+    try {
+      return await action();
+    } finally {
+      const next = this.learnerVerificationWaiters.shift();
+      if (next) next();
+      else this.learnerVerificationActive -= 1;
+    }
   }
 
   async isSebRequirementConfigured(courseId: string, contentId: string): Promise<boolean> {
@@ -632,6 +795,26 @@ export class SebContentCoordinator {
     if (!quizId) {
       return false;
     }
+    const quiz = await this.assessments.getQuiz(quizId);
+    return quiz?.id === quizId && quiz.courseId === courseId;
+  }
+
+  async matchesConfiguredAssessmentObject(courseId: string, contentId: string): Promise<boolean> {
+    const canonicalContentId = canonicalSebConfigContentId(contentId);
+    if (!canonicalContentId) return false;
+    const parsed = parseNewQuizContentId(canonicalContentId);
+    if (parsed) {
+      if (parsed.courseId !== courseId) return false;
+      const content = await this.assessments.getContentItem(canonicalContentId);
+      return (
+        content?.id === canonicalContentId &&
+        content.courseId === courseId &&
+        content.contentType === "NEW_QUIZ" &&
+        content.assignmentId === parsed.assignmentId
+      );
+    }
+    const quizId = extractClassicQuizId(canonicalContentId);
+    if (!quizId) return false;
     const quiz = await this.assessments.getQuiz(quizId);
     return quiz?.id === quizId && quiz.courseId === courseId;
   }

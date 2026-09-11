@@ -646,7 +646,16 @@ describe("AssessmentService", () => {
       const saveVerification = async (checkedAt: string, lastVerifiedAt = checkedAt): Promise<void> => {
         await repositories.assessments.save("classicquiz_42", {
           ...base,
-          canvas: { ...base.canvas, published: true },
+          canvas: {
+            ...base.canvas,
+            published: true,
+            publication: {
+              status: "published",
+              confidence: "complete",
+              checkedAt,
+              quizPublished: true
+            }
+          },
           canvasVerification: { status: "verified", checkedAt, lastVerifiedAt }
         });
       };
@@ -1928,12 +1937,31 @@ describe("AssessmentService", () => {
     });
     await repositories.assessments.save("classicquiz_501", {
       ...classicRecord,
-      canvas: { ...classicRecord.canvas, published: true },
+      canvas: {
+        ...classicRecord.canvas,
+        published: true,
+        publication: {
+          status: "published",
+          confidence: "complete",
+          checkedAt,
+          quizPublished: true
+        }
+      },
       canvasVerification: { status: "verified", checkedAt, lastVerifiedAt: checkedAt }
     });
     await repositories.assessments.save("newquiz:101:601", {
       ...newQuizRecord,
-      canvas: { ...newQuizRecord.canvas, published: true },
+      canvas: {
+        ...newQuizRecord.canvas,
+        published: true,
+        publication: {
+          status: "published",
+          confidence: "complete",
+          checkedAt,
+          assignmentPublished: true,
+          newQuizPublished: true
+        }
+      },
       canvasVerification: { status: "verified", checkedAt, lastVerifiedAt: checkedAt }
     });
     const resetCourseState = vi.fn();

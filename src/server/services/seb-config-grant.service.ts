@@ -36,6 +36,34 @@ export interface ConsumedSebConfigGrant {
   contentId: string;
   settingsFingerprint: string;
   requiresSessionHandoff: boolean;
+  launchAdmission: SebLaunchAdmission | null;
+  launchAdmissionRequired: boolean;
+  launchAttemptId: string | null;
+}
+
+export interface SebLaunchAdmission {
+  attemptId: string;
+  digest: string;
+  method: "learner_canvas";
+  checkedAt: string;
+  expiresAt: string;
+}
+
+export function isCurrentLaunchAdmission(value: unknown): value is SebLaunchAdmission {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const admission = value as Record<string, unknown>;
+  const expiresAt = typeof admission.expiresAt === "string" ? Date.parse(admission.expiresAt) : Number.NaN;
+  return (
+    typeof admission.attemptId === "string" &&
+    /^[0-9a-f-]{36}$/iu.test(admission.attemptId) &&
+    typeof admission.digest === "string" &&
+    /^[A-Za-z0-9_-]{43}$/u.test(admission.digest) &&
+    admission.method === "learner_canvas" &&
+    typeof admission.checkedAt === "string" &&
+    Number.isFinite(Date.parse(admission.checkedAt)) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > Date.now()
+  );
 }
 
 export class SebConfigGrantRateLimitError extends Error {
@@ -57,7 +85,8 @@ export class SebConfigGrantService {
     principal: VerifiedLtiPrincipal,
     courseId: string,
     contentId: string,
-    settingsFingerprint: string
+    settingsFingerprint: string,
+    launchAdmission?: SebLaunchAdmission | null
   ): Promise<string> {
     const canonicalContentId = canonicalSebConfigContentId(contentId);
     if (
@@ -93,6 +122,8 @@ export class SebConfigGrantService {
         courseId,
         contentId: canonicalContentId,
         settingsFingerprint,
+        launchAdmissionRequired: !!launchAdmission,
+        ...(launchAdmission ? { launchAdmission } : {}),
         requiresSessionHandoff: isVerifiedStudent(principal) && !isVerifiedInstructor(principal),
         expiresAt: new Date(Date.now() + GRANT_TTL_SECONDS * 1000)
       });
@@ -177,7 +208,15 @@ export class SebConfigGrantService {
       courseId: record.courseId,
       contentId: record.contentId,
       settingsFingerprint: record.settingsFingerprint,
-      requiresSessionHandoff: record.requiresSessionHandoff
+      requiresSessionHandoff: record.requiresSessionHandoff,
+      launchAdmission: isCurrentLaunchAdmission(record.launchAdmission) ? record.launchAdmission : null,
+      launchAdmissionRequired: record.launchAdmissionRequired === true,
+      launchAttemptId:
+        record.launchAdmission &&
+        typeof record.launchAdmission === "object" &&
+        typeof (record.launchAdmission as Record<string, unknown>).attemptId === "string"
+          ? ((record.launchAdmission as Record<string, unknown>).attemptId as string)
+          : null
     };
   }
 

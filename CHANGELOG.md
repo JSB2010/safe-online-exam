@@ -5,11 +5,18 @@ release.
 
 ## [Unreleased]
 
-## [1.0.8] - 2026-09-08
+## [1.1.0] - Unreleased
 
-Safe Online Exam 1.0.8 is a backward-compatible maintenance and reliability
+Safe Online Exam 1.1.0 is a backward-compatible reliability and workflow
 release. It adds no database migration, OAuth scope, LTI registration URL, or
 public compatibility endpoint.
+
+### Canvas assessment availability
+
+- Preserve independent Assignment, Classic Quiz, and New Quiz publication evidence instead of collapsing missing or contradictory Canvas values to unpublished.
+- Distinguish configured assessments from globally ready assessments and surface precise publication, date-window, stale, missing, and settings blockers to instructors and administrators.
+- Verify protected assessment visibility with each learner's existing read-only Canvas authorization and carry the short-lived admission through configuration download and access-code proof.
+- Replace expected generic launch 404 responses with actionable unavailable, authorization, rate-limit, and retryable Canvas-verification errors plus correlated structured events.
 
 ### Reliability and security
 
@@ -422,8 +429,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.8...HEAD
-[1.0.8]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.8
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.7...HEAD
+[1.1.0]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.7...HEAD
 [1.0.7]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.7
 [1.0.6]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.6
 [1.0.5]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.5

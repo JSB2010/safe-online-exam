@@ -6,6 +6,7 @@ import {
   YOUTUBE_VIDEO_TOOL_PRESET
 } from "../../shared/models.js";
 import { apiError } from "../http/api-error.js";
+import { evaluateAssessmentReadiness } from "../services/assessment-helpers.js";
 
 export const ADMIN_PAGE_SIZE = 25;
 export const ADMIN_BULK_LIMIT = 50;
@@ -33,7 +34,10 @@ export function assessmentCounts(assessments: AssessmentRecord[]): {
     enabledAssessmentCount: assessments.filter((assessment) => assessment.seb.required === true).length,
     issueCount: assessments.filter(
       (assessment) =>
-        assessment.canvasVerification?.status === "missing" || assessment.canvasVerification?.status === "stale"
+        assessment.canvasVerification?.status === "missing" ||
+        assessment.canvasVerification?.status === "stale" ||
+        (assessment.seb.required === true &&
+          !evaluateAssessmentReadiness(assessment, { hasEffectiveQuitPassword: true }).globallyReady)
     ).length
   };
 }
@@ -198,13 +202,18 @@ export function normalizedBulkAssignmentInput(body: unknown): {
 }
 
 export function adminAssessmentView(assessment: AssessmentRecord) {
+  const readiness = evaluateAssessmentReadiness(assessment, { hasEffectiveQuitPassword: true });
   return {
     id: assessment.id,
     courseId: assessment.courseId,
     contentType: assessment.contentType,
     title: assessment.canvas.title || "Untitled assessment",
     htmlUrl: assessment.canvas.htmlUrl || null,
-    published: assessment.canvas.published === true,
+    published: assessment.canvas.published ?? null,
+    publicationStatus: assessment.canvas.publication?.status || "unknown",
+    publicationConfidence: assessment.canvas.publication?.confidence || "unavailable",
+    readinessStatus: readiness.status,
+    globallyReady: readiness.globallyReady,
     sebRequired: assessment.seb.required === true,
     enabled: assessment.seb.enabled === true,
     hasAccessCode: !!assessment.seb.accessCode,

@@ -42,6 +42,17 @@ describe("QuizController", () => {
       saveContentSebSetting: vi.fn(),
       getQuiz: vi.fn(),
       getAssessmentRecord: vi.fn(async (id: string) => assessmentById(id)),
+      getAssessmentReadiness: vi.fn().mockResolvedValue({
+        status: "ready",
+        configured: true,
+        globallyReady: true,
+        studentLaunchAuthorized: null,
+        publicationStatus: "published",
+        publicationConfidence: "complete",
+        verifiedAt: "2026-09-10T20:10:58.887Z",
+        unlockAt: null,
+        lockAt: null
+      }),
       validateSebConfiguration: vi.fn()
     };
     assessments.withAssessmentLock = vi.fn(async (_contentId, action) => action({ assertActive: vi.fn() }));
@@ -234,9 +245,24 @@ describe("QuizController", () => {
 
     await expect(controller.refresh(mutationRequest(), COURSE_ID)).resolves.toEqual({
       success: true,
-      message: "Quiz data refreshed successfully",
-      quizCount: 1,
-      quizzes: [{ id: "quiz-1", title: "Quiz 1", canvasQuizId: "quiz-1" }]
+      message: "Canvas readiness check completed",
+      assessmentCount: 1,
+      readyCount: 1,
+      blockedCount: 0,
+      readiness: [
+        {
+          id: "quiz-1",
+          status: "ready",
+          configured: true,
+          globallyReady: true,
+          studentLaunchAuthorized: null,
+          publicationStatus: "published",
+          publicationConfidence: "complete",
+          verifiedAt: "2026-09-10T20:10:58.887Z",
+          unlockAt: null,
+          lockAt: null
+        }
+      ]
     });
     expect(assessments.refreshCourseContent).toHaveBeenCalledWith(COURSE_ID, USER_ID);
   });
@@ -425,7 +451,7 @@ describe("QuizController", () => {
 
     expect(result).toMatchObject({
       success: true,
-      message: "Safe Online Exam enabled.",
+      message: "Safe Online Exam enabled and ready.",
       setting: {
         contentId: "newquiz:course-1:assignment-99",
         hasAccessCode: true,

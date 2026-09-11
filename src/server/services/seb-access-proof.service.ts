@@ -15,7 +15,8 @@ export class SebAccessProofService {
     courseId: string,
     contentId: string,
     generationDigest: string,
-    settingsFingerprint: string
+    settingsFingerprint: string,
+    attemptId?: string | null
   ): Promise<string> {
     const token = randomBytes(32).toString("base64url");
     await this.repositories.value.transientStates.save(proofDocumentId(token), {
@@ -27,6 +28,7 @@ export class SebAccessProofService {
       contentId,
       generationDigest,
       settingsFingerprint,
+      ...(attemptId ? { attemptId } : {}),
       expiresAt: new Date(Date.now() + this.ttlSeconds * 1000)
     });
     return token;
@@ -44,6 +46,15 @@ export class SebAccessProofService {
     contentId: string,
     settingsFingerprint: string
   ): Promise<string | null> {
+    return (await this.consumeProofContext(token, courseId, contentId, settingsFingerprint))?.generationDigest || null;
+  }
+
+  async consumeProofContext(
+    token: string | undefined | null,
+    courseId: string,
+    contentId: string,
+    settingsFingerprint: string
+  ): Promise<{ generationDigest: string; attemptId: string | null } | null> {
     if (!token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
       return null;
     }
@@ -62,7 +73,10 @@ export class SebAccessProofService {
       safeEqual(record.courseId, courseId) &&
       safeEqual(record.contentId, contentId) &&
       safeEqual(record.settingsFingerprint, settingsFingerprint)
-      ? record.generationDigest
+      ? {
+          generationDigest: record.generationDigest,
+          attemptId: typeof record.attemptId === "string" ? record.attemptId : null
+        }
       : null;
   }
 
