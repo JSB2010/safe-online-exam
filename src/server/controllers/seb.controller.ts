@@ -65,7 +65,8 @@ import {
   AssessmentNotAvailableError,
   SebContentCoordinator,
   type SebConfigGrantTarget,
-  type SebLaunchContentView
+  type SebLaunchContentView,
+  type SebRequirementStatus
 } from "./seb-content-coordinator.js";
 
 @Controller()
@@ -225,11 +226,19 @@ export class SebController {
         return apiError(429, "Too many configuration requests", { error_code: "RATE_LIMITED" });
       }
       if (error instanceof AssessmentNotAvailableError) {
-        logConfigGrantDenial(error.attemptId, error.reason, 409);
-        return apiError(409, "Canvas is not making this assessment available to your account.", {
-          error_code: "ASSESSMENT_NOT_AVAILABLE",
-          reason: error.reason
-        });
+        const invalidCanvasResponse = error.reason === "invalid_availability";
+        const status = invalidCanvasResponse ? 503 : 409;
+        logConfigGrantDenial(error.attemptId, error.reason, status);
+        return apiError(
+          status,
+          invalidCanvasResponse
+            ? "Canvas availability could not be verified right now."
+            : "Canvas is not making this assessment available to your account.",
+          {
+            error_code: invalidCanvasResponse ? "CANVAS_AVAILABILITY_UNVERIFIED" : "ASSESSMENT_NOT_AVAILABLE",
+            reason: error.reason
+          }
+        );
       }
       if (error instanceof CanvasApiAuthorizationError || error instanceof CanvasApiPermissionError) {
         logConfigGrantDenial(launchAttemptIdFromError(error), "canvas_authorization", 403);
@@ -699,27 +708,22 @@ export class SebController {
     }
     const cached = this.cachedSebRequirementStatus(courseId, canonicalContentId);
     if (cached) {
-      const sebRequired = await cached;
-      return {
-        success: true,
-        sebRequired,
-        globallyReady: await this.globalReadinessDiagnostic(sebRequired, courseId, canonicalContentId)
-      };
+      return { success: true, ...(await cached) };
     }
-    const sebRequired = await this.cacheSebRequirementStatus(courseId, canonicalContentId, async () => {
+    const status = await this.cacheSebRequirementStatus(courseId, canonicalContentId, async () => {
       if (
         !consumePublicBudget(request, "seb-requirement", 12_000) ||
         !(await this.distributedAdmission.consumeRequestIp(request, "seb-requirement-ip", 24_000))
       ) {
         return apiError(429, "Too many Safe Online Exam requirement checks", { error_code: "RATE_LIMITED" });
       }
-      return this.isSebRequirementConfigured(courseId, canonicalContentId);
+      const sebRequired = await this.isSebRequirementConfigured(courseId, canonicalContentId);
+      return {
+        sebRequired,
+        globallyReady: await this.globalReadinessDiagnostic(sebRequired, courseId, canonicalContentId)
+      };
     });
-    return {
-      success: true,
-      sebRequired,
-      globallyReady: await this.globalReadinessDiagnostic(sebRequired, courseId, canonicalContentId)
-    };
+    return { success: true, ...status };
   }
 
   @Post("/api/seb/access-proof/:courseId/:quizId")
@@ -1365,7 +1369,7 @@ export class SebController {
       normalizedContentId,
       proofGenerationDigest(courseId, normalizedContentId, configKey, setting.accessCode),
       target.settingsFingerprint,
-      learnerAdmission?.attemptId
+      learnerAdmission
     );
     if (
       !(await this.finalizeCourseScopedGrant(
@@ -1388,7 +1392,7 @@ export class SebController {
     return {
       success: true,
       proofToken,
-      expiresInSeconds: this.proofService.getTokenTtlSeconds()
+      expiresInSeconds: this.proofService.getTokenTtlSeconds(learnerAdmission)
     };
   }
 
@@ -1431,7 +1435,7 @@ export class SebController {
         courseId,
         target,
         () => this.proofService.revokeExitGrant(exitGrant),
-        false
+        !proof.launchAdmission
       ))
     ) {
       return apiError(409, "Safe Online Exam settings changed before the access code could be released.", {
@@ -1489,15 +1493,15 @@ export class SebController {
     }
   }
 
-  private cachedSebRequirementStatus(courseId: string, contentId: string): Promise<boolean> | null {
+  private cachedSebRequirementStatus(courseId: string, contentId: string): Promise<SebRequirementStatus> | null {
     return this.contentCoordinator.cachedSebRequirementStatus(courseId, contentId);
   }
 
   private cacheSebRequirementStatus(
     courseId: string,
     contentId: string,
-    load: () => Promise<boolean>
-  ): Promise<boolean> {
+    load: () => Promise<SebRequirementStatus>
+  ): Promise<SebRequirementStatus> {
     return this.contentCoordinator.cacheSebRequirementStatus(courseId, contentId, load);
   }
 

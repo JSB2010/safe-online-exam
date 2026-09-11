@@ -50,6 +50,11 @@ export interface SebConfigGrantTarget {
   settingsFingerprint: string;
 }
 
+export interface SebRequirementStatus {
+  sebRequired: boolean;
+  globallyReady: boolean;
+}
+
 const SEB_REQUIREMENT_STATUS_CACHE_TTL_MS = 5_000;
 const SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES = 5_000;
 const LEARNER_AVAILABILITY_CACHE_TTL_MS = 30_000;
@@ -70,7 +75,10 @@ export class AssessmentNotAvailableError extends Error {
 
 export class SebContentCoordinator {
   private readonly configDownloadCache = new Map<string, { expiresAt: number; value: Promise<Buffer> }>();
-  private readonly requirementStatusCache = new Map<string, { expiresAt: number; value: Promise<boolean> }>();
+  private readonly requirementStatusCache = new Map<
+    string,
+    { expiresAt: number; value: Promise<SebRequirementStatus> }
+  >();
   private readonly learnerAvailabilityCache = new Map<
     string,
     { expiresAt: number; value: Promise<LearnerAssessmentAvailability> }
@@ -414,7 +422,7 @@ export class SebContentCoordinator {
     return !!classicId && "quizId" in setting && setting.quizId === classicId;
   }
 
-  cachedSebRequirementStatus(courseId: string, contentId: string): Promise<boolean> | null {
+  cachedSebRequirementStatus(courseId: string, contentId: string): Promise<SebRequirementStatus> | null {
     const key = `${courseId}:${contentId}`;
     const cached = this.requirementStatusCache.get(key);
     if (!cached || cached.expiresAt <= Date.now()) {
@@ -424,7 +432,11 @@ export class SebContentCoordinator {
     return cached.value;
   }
 
-  cacheSebRequirementStatus(courseId: string, contentId: string, load: () => Promise<boolean>): Promise<boolean> {
+  cacheSebRequirementStatus(
+    courseId: string,
+    contentId: string,
+    load: () => Promise<SebRequirementStatus>
+  ): Promise<SebRequirementStatus> {
     const key = `${courseId}:${contentId}`;
     const now = Date.now();
     for (const [cachedKey, cached] of this.requirementStatusCache) {

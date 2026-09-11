@@ -18,6 +18,46 @@ import clsx from "clsx";
 import { SecretPanel } from "./secret-panel.js";
 import type { AdminCourseView, AdminOverview, AdminToolPresetView, RevealedSecrets } from "../../types.js";
 
+function adminReadinessLabel(status?: string): string {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "configured_unpublished":
+      return "Configured — unpublished";
+    case "not_yet_open":
+      return "Configured — opens later";
+    case "closed":
+      return "Configured — closed";
+    case "publication_conflict":
+      return "Configured — Canvas conflict";
+    case "publication_unknown":
+      return "Configured — publication unknown";
+    case "canvas_stale":
+      return "Configured — Canvas check stale";
+    case "canvas_missing":
+      return "Configured — missing in Canvas";
+    case "settings_incomplete":
+      return "Configured — settings incomplete";
+    default:
+      return "Configured — not ready";
+  }
+}
+
+function adminPublicationConfidenceLabel(confidence?: string): string {
+  switch (confidence) {
+    case "complete":
+      return "complete";
+    case "single_source":
+      return "single-source";
+    case "conflicting":
+      return "conflicting";
+    case "unavailable":
+      return "unavailable";
+    default:
+      return "unknown";
+  }
+}
+
 interface AdminCoursesSectionProps {
   overview: AdminOverview | null;
   loading: boolean;
@@ -267,7 +307,7 @@ export function AdminCoursesSection({
                 <h3>Assessments</h3>
               </div>
               <span>
-                {selectedCourse.enabledAssessmentCount} active · {selectedCourse.assessmentCount} total
+                {selectedCourse.enabledAssessmentCount} configured · {selectedCourse.assessmentCount} total
               </span>
             </div>
             <div className="admin-assessment-list">
@@ -289,11 +329,17 @@ export function AdminCoursesSection({
                           {assessment.contentType === "NEW_QUIZ" ? "New Quiz" : "Classic Quiz"} ·{" "}
                           {assessment.publicationStatus === "conflict"
                             ? "Canvas status conflict"
-                            : assessment.published === true
-                              ? "Published"
-                              : assessment.published === false
-                                ? "Unpublished"
-                                : "Publication unknown"}
+                            : assessment.publicationStatus === "unknown"
+                              ? "Publication unknown"
+                              : assessment.published === true
+                                ? "Published"
+                                : assessment.published === false
+                                  ? "Unpublished"
+                                  : "Publication unknown"}
+                          {assessment.sebRequired ? ` · ${adminReadinessLabel(assessment.readinessStatus)}` : ""}
+                          {assessment.sebRequired
+                            ? ` · Evidence ${adminPublicationConfidenceLabel(assessment.publicationConfidence)}`
+                            : ""}
                         </small>
                       </div>
                     </div>

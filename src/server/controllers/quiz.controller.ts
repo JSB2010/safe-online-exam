@@ -42,6 +42,7 @@ import {
   requestedQuizOnlyTools,
   secretUpdate
 } from "./quiz-controller-helpers.js";
+import { contentView, quizView } from "./lti-controller-helpers.js";
 
 @Controller("/api/quizzes")
 export class QuizController {
@@ -60,23 +61,36 @@ export class QuizController {
     try {
       const refreshed = await this.assessments.refreshCourseContent(courseId, userId);
       const quizzes = refreshed.classicQuizzes || [];
-      const contentItems = refreshed.contentItems || [];
-      const assessments = [...quizzes.map((quiz) => quiz.id), ...contentItems.map((item) => item.id)];
+      const contentItems = (refreshed.contentItems || []).filter((item) => item.contentType === "NEW_QUIZ");
+      const assessmentViews = [
+        ...quizzes.map((quiz) => ({ id: quiz.id, view: quizView(quiz) })),
+        ...contentItems.map((item) => ({ id: item.id, view: contentView(item) }))
+      ];
       const readiness = (
         await Promise.all(
-          assessments.map(async (id) => {
+          assessmentViews.map(async ({ id }) => {
             const result = await this.assessments.getAssessmentReadiness(courseId, id);
             return result ? { id, ...result } : null;
           })
         )
       ).filter((value) => value !== null);
+      const readinessById = new Map(readiness.map((value) => [value.id, value]));
+      const recordsById = new Map((refreshed.assessments || []).map((record) => [record.id, record]));
+      const isRequired = (value: (typeof readiness)[number]) =>
+        recordsById.get(value.id)?.seb.required === true || (!recordsById.has(value.id) && value.configured === true);
       return {
         success: true,
-        message: "Canvas readiness check completed",
-        assessmentCount: assessments.length,
-        readyCount: readiness.filter((value) => value.globallyReady && value.configured).length,
-        blockedCount: readiness.filter((value) => value.configured && !value.globallyReady).length,
-        readiness
+        message: "Quiz data refreshed successfully",
+        quizCount: quizzes.length,
+        quizzes: quizzes.map((quiz) => ({ id: quiz.id, title: quiz.title, canvasQuizId: quiz.canvasQuizId })),
+        assessmentCount: assessmentViews.length,
+        readyCount: readiness.filter((value) => isRequired(value) && value.status === "ready").length,
+        blockedCount: readiness.filter((value) => isRequired(value) && value.status !== "ready").length,
+        readiness,
+        assessments: assessmentViews.map(({ id, view }) => ({
+          ...view,
+          readiness: readinessById.get(id) || null
+        }))
       };
     } catch (error) {
       if (isCanvasApiAuthorizationError(error)) {

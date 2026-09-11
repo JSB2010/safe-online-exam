@@ -94,6 +94,7 @@ export type AdminAssessmentView = {
   publicationStatus?: string;
   publicationConfidence?: string;
   readinessStatus?: string;
+  configured?: boolean;
   globallyReady?: boolean;
   sebRequired: boolean;
   enabled: boolean;

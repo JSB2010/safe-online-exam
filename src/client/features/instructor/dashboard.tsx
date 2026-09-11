@@ -55,7 +55,7 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
     [settings]
   );
   const readyCount = useMemo(
-    () => items.filter((item) => settings[item.id]?.sebRequired && item.readiness?.globallyReady).length,
+    () => items.filter((item) => settings[item.id]?.sebRequired && item.readiness?.status === "ready").length,
     [items, settings]
   );
   const needsExitPassword = useMemo(
@@ -111,6 +111,13 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
           ...current,
           [item.id]: body.setting || { ...current[item.id], sebRequired: !enabled }
         }));
+        if (body.readiness) {
+          setItems((current) =>
+            current.map((candidate) =>
+              candidate.id === item.id ? applyReadiness(candidate, body.readiness as QuizView["readiness"]) : candidate
+            )
+          );
+        }
         pushToast(
           "success",
           enabled
@@ -144,33 +151,23 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
           (Array.isArray(body.readiness) ? body.readiness : []).map((value: any) => [String(value.id), value])
         );
         setItems((current) =>
-          current.map((item) => {
-            const readiness = readinessById.get(item.id);
-            return readiness
-              ? {
-                  ...item,
-                  readiness,
-                  published:
-                    readiness.publicationStatus === "published"
-                      ? true
-                      : readiness.publicationStatus === "unpublished"
-                        ? false
-                        : null,
-                  publication: {
-                    ...item.publication,
-                    status: readiness.publicationStatus,
-                    confidence: readiness.publicationConfidence,
-                    checkedAt: readiness.verifiedAt || undefined
-                  },
-                  unlockAt: readiness.unlockAt,
-                  lockAt: readiness.lockAt
-                }
-              : item;
-          })
+          Array.isArray(body.assessments)
+            ? (body.assessments as QuizView[])
+            : current.map((item) => {
+                const readiness = readinessById.get(item.id);
+                return readiness ? applyReadiness(item, readiness) : item;
+              })
         );
+        const blockedReadiness = (Array.isArray(body.readiness) ? body.readiness : []).filter(
+          (value: any) => settings[String(value.id)]?.sebRequired && value.status !== "ready"
+        );
+        const onlyScheduled =
+          blockedReadiness.length > 0 && blockedReadiness.every((value: any) => value.status === "not_yet_open");
         pushToast(
-          body.blockedCount > 0 ? "error" : "success",
-          `${body.readyCount || 0} ready; ${body.blockedCount || 0} configured but blocked.`
+          body.blockedCount > 0 && !onlyScheduled ? "error" : "success",
+          onlyScheduled
+            ? `${body.readyCount || 0} ready; ${body.blockedCount || 0} configured and waiting for its Canvas opening time.`
+            : `${body.readyCount || 0} ready; ${body.blockedCount || 0} configured but not ready.`
         );
       } else {
         handleRecovery(body);
@@ -420,9 +417,28 @@ function publicationLabel(status?: string, published?: boolean | null): string {
   if (status === "published") return "Published";
   if (status === "unpublished") return "Unpublished";
   if (status === "conflict") return "Conflicting status";
+  if (status === "unknown") return "Unknown";
   if (published === true) return "Published";
   if (published === false) return "Unpublished";
   return "Unknown";
+}
+
+function applyReadiness(item: QuizView, readiness: QuizView["readiness"]): QuizView {
+  if (!readiness) return item;
+  return {
+    ...item,
+    readiness,
+    published:
+      readiness.publicationStatus === "published" ? true : readiness.publicationStatus === "unpublished" ? false : null,
+    publication: {
+      ...item.publication,
+      status: readiness.publicationStatus,
+      confidence: readiness.publicationConfidence,
+      checkedAt: readiness.verifiedAt || undefined
+    },
+    unlockAt: readiness.unlockAt,
+    lockAt: readiness.lockAt
+  };
 }
 
 function publicationConfidenceLabel(confidence?: string): string {

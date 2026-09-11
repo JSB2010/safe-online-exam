@@ -15,6 +15,7 @@ import {
   CourseResetOperationLockLostError
 } from "../../src/server/services/assessment.service.js";
 import { CanvasApiRequestError } from "../../src/server/services/canvas-api.service.js";
+import { adminAssessmentView, assessmentCounts } from "../../src/server/controllers/admin-controller-helpers.js";
 
 const administratorRole = "http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator";
 
@@ -47,6 +48,43 @@ describe("AdminAuthorizationService", () => {
     await expect(service.requireAdminForCourse(adminRequest(), "101")).rejects.toThrow(
       "Administrator access is not valid for this course"
     );
+  });
+});
+
+describe("admin assessment readiness views", () => {
+  it("counts configured assessments with incomplete effective settings as issues", () => {
+    const checkedAt = new Date().toISOString();
+    const assessment = {
+      ...assessmentRecord(),
+      canvas: {
+        ...assessmentRecord().canvas,
+        publication: {
+          status: "published",
+          confidence: "complete",
+          quizPublished: true,
+          assignmentPublished: null,
+          newQuizPublished: null,
+          checkedAt,
+          complete: true
+        }
+      },
+      canvasVerification: { status: "verified", checkedAt, lastVerifiedAt: checkedAt },
+      seb: { ...assessmentRecord().seb, quitPassword: null, startPassword: null }
+    } as any;
+
+    expect(adminAssessmentView(assessment, null)).toMatchObject({
+      configured: false,
+      readinessStatus: "settings_incomplete",
+      globallyReady: true
+    });
+    expect(assessmentCounts([assessment], null)).toMatchObject({
+      enabledAssessmentCount: 1,
+      issueCount: 1
+    });
+    expect(adminAssessmentView(assessment, "managed-default-password")).toMatchObject({
+      configured: true,
+      readinessStatus: "ready"
+    });
   });
 });
 

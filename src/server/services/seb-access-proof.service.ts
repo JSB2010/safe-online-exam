@@ -3,6 +3,13 @@ import { constantTimeStringEqual as safeEqual } from "../security/constant-time.
 import { Injectable } from "@nestjs/common";
 import { isExpired } from "../data/document-values.js";
 import { RepositoryProvider } from "../data/repositories.js";
+import { isCurrentLaunchAdmission, type SebLaunchAdmission } from "./seb-config-grant.service.js";
+
+export interface ConsumedSebAccessProof {
+  generationDigest: string;
+  attemptId: string | null;
+  launchAdmission: SebLaunchAdmission | null;
+}
 
 @Injectable()
 export class SebAccessProofService {
@@ -16,9 +23,16 @@ export class SebAccessProofService {
     contentId: string,
     generationDigest: string,
     settingsFingerprint: string,
-    attemptId?: string | null
+    launchAdmission?: SebLaunchAdmission | null
   ): Promise<string> {
+    if (launchAdmission && !isCurrentLaunchAdmission(launchAdmission)) {
+      throw new Error("Canvas learner availability admission has expired");
+    }
     const token = randomBytes(32).toString("base64url");
+    const proofExpiresAt = Date.now() + this.ttlSeconds * 1000;
+    const expiresAt = launchAdmission
+      ? Math.min(proofExpiresAt, Date.parse(launchAdmission.expiresAt))
+      : proofExpiresAt;
     await this.repositories.value.transientStates.save(proofDocumentId(token), {
       kind: "seb-proof-v2",
       version: 2,
@@ -28,8 +42,9 @@ export class SebAccessProofService {
       contentId,
       generationDigest,
       settingsFingerprint,
-      ...(attemptId ? { attemptId } : {}),
-      expiresAt: new Date(Date.now() + this.ttlSeconds * 1000)
+      launchAdmissionRequired: !!launchAdmission,
+      ...(launchAdmission ? { launchAdmission } : {}),
+      expiresAt: new Date(expiresAt)
     });
     return token;
   }
@@ -54,7 +69,7 @@ export class SebAccessProofService {
     courseId: string,
     contentId: string,
     settingsFingerprint: string
-  ): Promise<{ generationDigest: string; attemptId: string | null } | null> {
+  ): Promise<ConsumedSebAccessProof | null> {
     if (!token || !/^[A-Za-z0-9_-]{43}$/u.test(token)) {
       return null;
     }
@@ -62,7 +77,9 @@ export class SebAccessProofService {
     if (!record) {
       return null;
     }
-    return record.kind === "seb-proof-v2" &&
+    const launchAdmission = isCurrentLaunchAdmission(record.launchAdmission) ? record.launchAdmission : null;
+    const valid =
+      record.kind === "seb-proof-v2" &&
       record.version === 2 &&
       record.audience === "seb-access-code" &&
       record.action === "release" &&
@@ -72,16 +89,23 @@ export class SebAccessProofService {
       !!record.settingsFingerprint &&
       safeEqual(record.courseId, courseId) &&
       safeEqual(record.contentId, contentId) &&
-      safeEqual(record.settingsFingerprint, settingsFingerprint)
+      safeEqual(record.settingsFingerprint, settingsFingerprint) &&
+      (record.launchAdmissionRequired !== true || launchAdmission !== null);
+    return valid
       ? {
           generationDigest: record.generationDigest,
-          attemptId: typeof record.attemptId === "string" ? record.attemptId : null
+          attemptId: launchAdmission?.attemptId || (typeof record.attemptId === "string" ? record.attemptId : null),
+          launchAdmission
         }
       : null;
   }
 
-  getTokenTtlSeconds(): number {
-    return this.ttlSeconds;
+  getTokenTtlSeconds(launchAdmission?: SebLaunchAdmission | null): number {
+    if (!launchAdmission) return this.ttlSeconds;
+    return Math.max(
+      0,
+      Math.min(this.ttlSeconds, Math.ceil((Date.parse(launchAdmission.expiresAt) - Date.now()) / 1000))
+    );
   }
 
   async mintExitGrant(courseId: string, contentId: string, generationDigest: string): Promise<string> {

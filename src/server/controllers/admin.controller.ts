@@ -168,7 +168,9 @@ export class AdminController {
         adminToolPresetIds: assignments
           .filter((assignment) => assignment.desiredAssigned)
           .map((assignment) => assignment.presetId),
-        assessments: assessments.map(adminAssessmentView)
+        assessments: assessments.map((assessment) =>
+          adminAssessmentView(assessment, this.config.value.seb.defaultQuitPassword)
+        )
       }
     };
   }
@@ -478,7 +480,9 @@ export class AdminController {
     return {
       success: true,
       assessmentCount: result.assessments.length,
-      assessments: result.assessments.map(adminAssessmentView)
+      assessments: result.assessments.map((assessment) =>
+        adminAssessmentView(assessment, this.config.value.seb.defaultQuitPassword)
+      )
     };
   }
 
@@ -987,7 +991,7 @@ export class AdminController {
       termId: course.termId,
       termName: course.termName,
       teacherNames: course.teacherNames,
-      ...assessmentCounts(assessments),
+      ...assessmentCounts(assessments, this.config.value.seb.defaultQuitPassword),
       connectedByUserId: previous?.connectedByUserId || principal.canvasUserId,
       lastCanvasCheckedAt: now,
       lastRefreshedAt: now,
@@ -1004,7 +1008,13 @@ export class AdminController {
     const id = `${principal.rootAccountId}:${courseId}`;
     operationLease?.assertActive();
     await this.repositories.value.adminCourseConnections.update(id, (current) =>
-      current ? { ...current, ...assessmentCounts(assessments), lastRefreshedAt: new Date().toISOString() } : null
+      current
+        ? {
+            ...current,
+            ...assessmentCounts(assessments, this.config.value.seb.defaultQuitPassword),
+            lastRefreshedAt: new Date().toISOString()
+          }
+        : null
     );
   }
 

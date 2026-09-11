@@ -440,9 +440,42 @@ describe("CanvasApiService", () => {
     );
   });
 
+  it("accepts an exact learner-visible New Quiz assignment even when Canvas omits optional type markers", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse([
+        {
+          id: 99,
+          name: "Visible New Quiz",
+          published: true
+        }
+      ])
+    );
+
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "newquiz:course-7:99", "user-1")
+    ).resolves.toMatchObject({ available: true, reason: "available" });
+  });
+
+  it("does not retry a usable single-source New Quiz publication result", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse([{ id: 99, name: "Visible New Quiz", is_quiz_assignment: true }]))
+      .mockResolvedValueOnce(jsonResponse({ id: 99, title: "Visible New Quiz", published: true }));
+
+    await expect(service.getNewQuizAssignments("course-7", "user-1")).resolves.toEqual([
+      expect.objectContaining({
+        published: true,
+        publication: expect.objectContaining({ status: "published", confidence: "single_source" })
+      })
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     [undefined, null, null, true, "available"],
     [false, null, null, false, "unpublished"],
+    ["false", null, null, false, "invalid_availability"],
+    [null, null, null, false, "invalid_availability"],
     [true, "2026-09-10T20:15:00.001Z", null, false, "not_yet_open"],
     [true, "2026-09-10T20:15:00.000Z", null, true, "available"],
     [true, null, "2026-09-10T20:15:00.000Z", false, "closed"],

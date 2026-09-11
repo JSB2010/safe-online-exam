@@ -243,9 +243,11 @@ describe("QuizController", () => {
       classicQuizzes: [{ id: "quiz-1", title: "Quiz 1", canvasQuizId: "quiz-1" }]
     });
 
-    await expect(controller.refresh(mutationRequest(), COURSE_ID)).resolves.toEqual({
+    await expect(controller.refresh(mutationRequest(), COURSE_ID)).resolves.toMatchObject({
       success: true,
-      message: "Canvas readiness check completed",
+      message: "Quiz data refreshed successfully",
+      quizCount: 1,
+      quizzes: [{ id: "quiz-1", title: "Quiz 1", canvasQuizId: "quiz-1" }],
       assessmentCount: 1,
       readyCount: 1,
       blockedCount: 0,
@@ -262,9 +264,45 @@ describe("QuizController", () => {
           unlockAt: null,
           lockAt: null
         }
-      ]
+      ],
+      assessments: [expect.objectContaining({ id: "quiz-1", title: "Quiz 1", contentType: "CLASSIC_QUIZ" })]
     });
     expect(assessments.refreshCourseContent).toHaveBeenCalledWith(COURSE_ID, USER_ID);
+  });
+
+  it("does not duplicate Classic Quizzes projected into the content-item collection", async () => {
+    const classicQuiz = {
+      id: "classicquiz_1",
+      courseId: COURSE_ID,
+      title: "Classic",
+      canvasQuizId: "1",
+      published: true
+    };
+    assessments.refreshCourseContent.mockResolvedValue({
+      classicQuizzes: [classicQuiz],
+      contentItems: [
+        { ...classicQuiz, contentType: "CLASSIC_QUIZ", canvasId: "1" },
+        {
+          id: `newquiz:${COURSE_ID}:2`,
+          courseId: COURSE_ID,
+          title: "New",
+          contentType: "NEW_QUIZ",
+          canvasId: "2",
+          assignmentId: "2",
+          published: true
+        }
+      ]
+    });
+
+    await expect(controller.refresh(mutationRequest(), COURSE_ID)).resolves.toMatchObject({
+      quizCount: 1,
+      assessmentCount: 2,
+      assessments: [
+        expect.objectContaining({ id: "classicquiz_1", contentType: "CLASSIC_QUIZ" }),
+        expect.objectContaining({ id: `newquiz:${COURSE_ID}:2`, contentType: "NEW_QUIZ" })
+      ]
+    });
+    expect(assessments.getAssessmentReadiness).toHaveBeenCalledTimes(2);
   });
 
   it("returns secret-free course defaults only to the course instructor", async () => {

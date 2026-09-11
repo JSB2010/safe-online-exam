@@ -69,7 +69,12 @@ import {
 import { hasSameSebConfigFingerprint, invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 import { assertDistinctSebPasswords, assertNewSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
-import { effectiveSebQuitPassword, requireSebQuitPassword, type SebQuitProtectedSetting } from "./seb-quit-password.js";
+import {
+  effectiveSebQuitPassword,
+  hasEffectiveSebQuitPassword,
+  requireSebQuitPassword,
+  type SebQuitProtectedSetting
+} from "./seb-quit-password.js";
 import { resetCourseForAdmin, type CourseResetResult } from "./assessment-course-reset.js";
 
 export interface CourseAssessmentContent {
@@ -259,7 +264,10 @@ export class AssessmentService {
     const record = await this.getAssessmentRecord(contentId);
     if (!record || record.courseId !== courseId) return null;
     return evaluateAssessmentReadiness(record, {
-      hasEffectiveQuitPassword: !!(record.seb.quitPassword?.trim() || this.config.value.seb.defaultQuitPassword?.trim())
+      hasEffectiveQuitPassword: hasEffectiveSebQuitPassword(
+        record.seb.quitPassword,
+        this.config.value.seb.defaultQuitPassword
+      )
     });
   }
 

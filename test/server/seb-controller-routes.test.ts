@@ -164,6 +164,7 @@ describe("SebController route contracts", () => {
     expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
     expect(assessments.getSebSettingForQuiz).toHaveBeenCalledTimes(1);
     expect(assessments.getSebSettingForQuiz).toHaveBeenCalledWith("classicquiz_23455");
+    expect(assessments.isAssessmentAvailableForLearner).toHaveBeenCalledTimes(1);
     expect(assessments.getContentSebSetting).not.toHaveBeenCalled();
     expect(distributedAdmission.consumeRequestIp).toHaveBeenCalledTimes(1);
     expect(distributedAdmission.consumeRequestIp).toHaveBeenCalledWith(expect.anything(), "seb-requirement-ip", 24_000);
@@ -342,7 +343,7 @@ describe("SebController route contracts", () => {
 
   it("gates access-code retrieval with one-time proof tokens", async () => {
     const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
-    const { controller } = controllerWith({
+    const { controller, assessments } = controllerWith({
       proofService,
       assessments: {
         getSebSettingForQuiz: vi.fn().mockResolvedValue({
@@ -398,6 +399,7 @@ describe("SebController route contracts", () => {
     );
     expect(secretResponse.setHeader).toHaveBeenCalledWith("cache-control", "private, no-store, max-age=0");
     expect(secretResponse.vary).toHaveBeenCalledWith("Origin, X-SEB-Proof-Token");
+    expect(assessments.isAssessmentAvailableForLearner).toHaveBeenCalledTimes(3);
     await expect(controller.accessCode("course-1", "23455", proofToken, requestDouble())).rejects.toMatchObject({
       status: 403
     });
@@ -436,6 +438,53 @@ describe("SebController route contracts", () => {
     );
     expect(completeResponse.setHeader).toHaveBeenCalledWith("x-seb-quit", "true");
     expect(completeResponse.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-quit"'));
+  });
+
+  it("rechecks global Canvas readiness before releasing a non-admitted access code", async () => {
+    const proofService = new SebAccessProofService({ value: createInMemoryRepositories() } as RepositoryProvider);
+    const availability = vi.fn().mockResolvedValue(true);
+    const { controller } = controllerWith({
+      proofService,
+      assessments: {
+        isAssessmentAvailableForLearner: availability,
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS-CODE",
+          ssoDomains: [],
+          educationalToolDomains: [],
+          urlRules: [],
+          externalTools: []
+        }),
+        getQuiz: vi.fn().mockResolvedValue({
+          id: "23455",
+          courseId: "course-1",
+          htmlUrl: "https://canvas.example.edu/courses/course-1/quizzes/23455"
+        })
+      }
+    });
+    const quizUrl = "https://canvas.example.edu/courses/course-1/quizzes/23455/take";
+    const configKeyService = new SebConfigKeyService();
+    const currentConfigKey = configKeyService.computeConfigKey(
+      new SebConfigurationService(configDouble() as any).generateSebConfiguration({
+        courseId: "course-1",
+        contentId: "classicquiz_23455",
+        startUrl: quizUrl,
+        accessCode: "ACCESS-CODE",
+        allowedDomains: []
+      })
+    );
+    const proof = await controller.createAccessProof(requestDouble(), "course-1", "23455", {
+      configKeyHash: configKeyService.hashForUrl(quizUrl, currentConfigKey),
+      url: quizUrl
+    });
+
+    availability.mockResolvedValue(false);
+    await expect(
+      controller.accessCode("course-1", "23455", proof.proofToken as string, requestDouble())
+    ).rejects.toMatchObject({ status: 409 });
   });
 
   it("does not mint a proof from a stale setting after the Canvas assessment object is gone", async () => {

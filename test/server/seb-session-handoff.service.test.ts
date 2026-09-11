@@ -136,8 +136,8 @@ describe("SebSessionHandoffService", () => {
     const configKeyValue = "7".repeat(64);
     const returnTo = "https://canvas.example.edu/courses/1/quizzes/2/take";
     const admission: SebLaunchAdmission = {
-      attemptId: "attempt-1",
-      digest: "digest-1",
+      attemptId: "8f838d14-1c11-47ea-8f17-a20b3984a379",
+      digest: "a".repeat(43),
       method: "learner_canvas",
       checkedAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() - 1_000).toISOString()

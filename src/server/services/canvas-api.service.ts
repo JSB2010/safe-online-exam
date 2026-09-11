@@ -268,9 +268,7 @@ export class CanvasApiService {
         url,
         "student_session"
       );
-      const assignment = assignments.find(
-        (candidate) => String(candidate.id) === parsed.assignmentId && isNewQuizAssignment(candidate)
-      );
+      const assignment = assignments.find((candidate) => String(candidate.id) === parsed.assignmentId);
       return learnerAvailabilityFromCanvasObject(assignment, checkedAt);
     }
     const quizId = extractClassicQuizId(contentId);
@@ -1003,7 +1001,8 @@ export class CanvasApiService {
           publication
         };
         lastHydrated = hydrated;
-        if (publication.confidence === "complete" && publication.status !== "conflict") {
+        const detailPublished = canvasPublicationBoolean(detail.published);
+        if (detailPublished !== null && publication.status !== "conflict") {
           return hydrated;
         }
         if (attempt === 2) {
@@ -1045,7 +1044,12 @@ function learnerAvailabilityFromCanvasObject(
   if (!value) {
     return { available: false, reason: "not_found", checkedAt };
   }
-  if (canvasPublicationBoolean(value.published) === false) {
+  const hasPublished = Object.hasOwn(value, "published");
+  const published = canvasPublicationBoolean(value.published);
+  if (hasPublished && published === null) {
+    return { available: false, reason: "invalid_availability", checkedAt };
+  }
+  if (published === false) {
     return { available: false, reason: "unpublished", checkedAt };
   }
   const now = Date.now();

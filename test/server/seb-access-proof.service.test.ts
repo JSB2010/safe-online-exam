@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createInMemoryRepositories, type RepositoryProvider } from "../../src/server/data/repositories.js";
 import {
   exitGrantDocumentId,
   proofDocumentId,
   SebAccessProofService
 } from "../../src/server/services/seb-access-proof.service.js";
+import type { SebLaunchAdmission } from "../../src/server/services/seb-config-grant.service.js";
 
 describe("SebAccessProofService", () => {
   it("mints single-use tokens bound to course, content, and config generation across service instances", async () => {
@@ -35,6 +36,32 @@ describe("SebAccessProofService", () => {
     });
 
     await expect(service.consumeProof(token, "course-1", "quiz-1", "settings-1")).resolves.toBeNull();
+  });
+
+  it("never lets a learner proof outlive its Canvas launch admission", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-10T20:15:00.000Z"));
+      const repositories = createInMemoryRepositories();
+      const service = new SebAccessProofService({ value: repositories } as RepositoryProvider);
+      const admission: SebLaunchAdmission = {
+        attemptId: "12345678-1234-4234-8234-123456789abc",
+        digest: "a".repeat(43),
+        method: "learner_canvas",
+        checkedAt: "2026-09-10T20:15:00.000Z",
+        expiresAt: "2026-09-10T20:15:05.000Z"
+      };
+
+      const token = await service.mintProof("course-1", "quiz-1", "generation-1", "settings-1", admission);
+      const stored = await repositories.transientStates.get(proofDocumentId(token));
+
+      expect(stored?.expiresAt).toEqual(new Date(admission.expiresAt));
+      expect(service.getTokenTtlSeconds(admission)).toBe(5);
+      vi.advanceTimersByTime(5_001);
+      await expect(service.consumeProofContext(token, "course-1", "quiz-1", "settings-1")).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects missing proof tokens", async () => {

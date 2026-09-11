@@ -87,7 +87,7 @@ const version = packageJson.version;
 const expectedTag = `v${version}`;
 const releaseTag = options.tag ?? expectedTag;
 const changelog = readText("CHANGELOG.md");
-const latestStableVersion = changelog.match(/^## \[([^\]]+)\] - \d{4}-\d{2}-\d{2}$/mu)?.[1];
+const latestStableVersion = changelog.match(/^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - \d{4}-\d{2}-\d{2}$/mu)?.[1];
 const installVersion = options.tag ? version : latestStableVersion;
 
 if (!VERSION_PATTERN.test(version)) {
