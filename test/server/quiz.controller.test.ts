@@ -305,6 +305,44 @@ describe("QuizController", () => {
     expect(assessments.getAssessmentReadiness).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds readiness reads while preserving refreshed assessment order", async () => {
+    const quizzes = Array.from({ length: 20 }, (_, index) => ({
+      id: `classicquiz_${index + 1}`,
+      courseId: COURSE_ID,
+      title: `Quiz ${index + 1}`,
+      canvasQuizId: String(index + 1),
+      published: true
+    }));
+    assessments.refreshCourseContent.mockResolvedValue({ classicQuizzes: quizzes });
+    let active = 0;
+    let maximumActive = 0;
+    assessments.getAssessmentReadiness.mockImplementation(async () => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      return {
+        status: "ready",
+        configured: true,
+        globallyReady: true,
+        studentLaunchAuthorized: null,
+        publicationStatus: "published",
+        publicationConfidence: "complete",
+        verifiedAt: "2026-09-10T20:10:58.887Z",
+        unlockAt: null,
+        lockAt: null
+      };
+    });
+
+    const result = await controller.refresh(mutationRequest(), COURSE_ID);
+
+    expect(maximumActive).toBeLessThanOrEqual(8);
+    expect(maximumActive).toBeGreaterThan(1);
+    expect((result.assessments as Array<{ id: string }>).map((assessment) => assessment.id)).toEqual(
+      quizzes.map((quiz) => quiz.id)
+    );
+  });
+
   it("returns secret-free course defaults only to the course instructor", async () => {
     courseSettings.getDefaults.mockResolvedValue({
       ...defaultCourseSebDefaults(COURSE_ID),

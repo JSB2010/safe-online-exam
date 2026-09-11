@@ -44,6 +44,8 @@ import {
 } from "./quiz-controller-helpers.js";
 import { contentView, quizView } from "./lti-controller-helpers.js";
 
+const ASSESSMENT_READINESS_CONCURRENCY = 8;
+
 @Controller("/api/quizzes")
 export class QuizController {
   constructor(
@@ -67,12 +69,10 @@ export class QuizController {
         ...contentItems.map((item) => ({ id: item.id, view: contentView(item) }))
       ];
       const readiness = (
-        await Promise.all(
-          assessmentViews.map(async ({ id }) => {
-            const result = await this.assessments.getAssessmentReadiness(courseId, id);
-            return result ? { id, ...result } : null;
-          })
-        )
+        await mapWithConcurrency(assessmentViews, ASSESSMENT_READINESS_CONCURRENCY, async ({ id }) => {
+          const result = await this.assessments.getAssessmentReadiness(courseId, id);
+          return result ? { id, ...result } : null;
+        })
       ).filter((value) => value !== null);
       const readinessById = new Map(readiness.map((value) => [value.id, value]));
       const recordsById = new Map((refreshed.assessments || []).map((record) => [record.id, record]));
