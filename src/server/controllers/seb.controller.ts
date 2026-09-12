@@ -233,7 +233,7 @@ export class SebController {
           status,
           invalidCanvasResponse
             ? "Canvas availability could not be verified right now."
-            : "Canvas is not making this assessment available to your account.",
+            : "Canvas is not currently making this assessment available to your account. If it was just published, refresh Canvas and try again in a few seconds.",
           {
             error_code: invalidCanvasResponse ? "CANVAS_AVAILABILITY_UNVERIFIED" : "ASSESSMENT_NOT_AVAILABLE",
             reason: error.reason
@@ -1161,7 +1161,7 @@ export class SebController {
             .send(
               renderFallbackHtml(
                 "Assessment Not Available",
-                "<h1>Canvas is not making this assessment available to your account.</h1><p>Return to Canvas or ask your instructor to check publication and availability dates.</p>"
+                "<h1>Canvas is not currently making this assessment available to your account.</h1><p>If it was just published, refresh Canvas and try again in a few seconds. Otherwise, ask your instructor to check publication, availability dates, and differentiated assignments.</p>"
               )
             );
           return;

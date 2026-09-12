@@ -111,7 +111,7 @@ function safeErrorMessage(
     case "CANVAS_SESSION_READINESS_FAILED":
       return "Canvas could not confirm this connection right now. Check your connection and try again in a moment.";
     case "ASSESSMENT_NOT_AVAILABLE":
-      return "Canvas is not making this assessment available to your account. Return to Canvas or ask your instructor to check publication and availability dates.";
+      return "Canvas is not currently making this assessment available to your account. If it was just published, refresh Canvas and try again in a few seconds. Otherwise, ask your instructor to check publication, availability dates, and differentiated assignments.";
     case "CANVAS_AVAILABILITY_UNVERIFIED":
       return "Canvas availability could not be verified right now. Wait a moment, return to Canvas, and try again.";
     case "INVALID_SEB_CONFIG_PROOF":
@@ -253,7 +253,7 @@ export function onboardingRecovery(value: unknown, audience: "instructor" | "stu
   if (code === "ASSESSMENT_NOT_AVAILABLE") {
     return {
       message:
-        "Canvas is not making this assessment available to your account. Return to Canvas or ask your instructor to check publication and availability dates."
+        "Canvas is not currently making this assessment available to your account. If it was just published, refresh Canvas and try again in a few seconds. Otherwise, ask your instructor to check publication, availability dates, and differentiated assignments."
     };
   }
   if (code === "CANVAS_AVAILABILITY_UNVERIFIED") {

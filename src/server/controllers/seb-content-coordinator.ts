@@ -58,6 +58,7 @@ export interface SebRequirementStatus {
 const SEB_REQUIREMENT_STATUS_CACHE_TTL_MS = 5_000;
 const SEB_REQUIREMENT_STATUS_CACHE_MAX_ENTRIES = 5_000;
 const LEARNER_AVAILABILITY_CACHE_TTL_MS = 30_000;
+const LEARNER_UNAVAILABLE_CACHE_TTL_MS = 2_000;
 const LEARNER_AVAILABILITY_CACHE_MAX_ENTRIES = 10_000;
 const LEARNER_ADMISSION_TTL_MS = 5 * 60 * 1000;
 const LEARNER_VERIFICATION_CONCURRENCY = 16;
@@ -368,9 +369,22 @@ export class SebContentCoordinator {
     );
     this.learnerAvailabilityCache.set(key, { expiresAt: now + LEARNER_AVAILABILITY_CACHE_TTL_MS, value });
     try {
-      return await value;
+      const result = await value;
+      if (!result.available) {
+        // A teacher may publish or change differentiated availability while
+        // students are waiting. Keep coalescing the current request, but do
+        // not let a prior denial mask that Canvas change for 30 seconds.
+        const current = this.learnerAvailabilityCache.get(key);
+        if (current?.value === value) {
+          current.expiresAt = Date.now() + LEARNER_UNAVAILABLE_CACHE_TTL_MS;
+        }
+      }
+      return result;
     } catch (error) {
-      this.learnerAvailabilityCache.delete(key);
+      const current = this.learnerAvailabilityCache.get(key);
+      if (current?.value === value) {
+        this.learnerAvailabilityCache.delete(key);
+      }
       throw error;
     }
   }

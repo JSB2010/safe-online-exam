@@ -236,6 +236,10 @@ Enabling requires an effective exit password. The service:
 An assessment may be configured before it is published. In that case the
 operation succeeds with a **Configured — not ready** warning; SOE never
 publishes the assessment or changes Canvas availability dates automatically.
+The instructor does not need to reopen or refresh SOE after publishing. A
+student launch checks current Canvas visibility with that student's connection.
+If a student tried before publication, have them refresh Canvas and retry after
+a few seconds so Canvas can expose the newly available assessment.
 
 Routine instructor responses do not return the access code. Use the explicit,
 short-lived password reveal only for authorized recovery.
