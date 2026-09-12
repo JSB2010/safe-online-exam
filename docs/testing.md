@@ -284,6 +284,7 @@ Run this sequence after a deployment that affects authentication, Canvas interac
 6. After the handoff opens SEB, quit SEB and select **Return to course** in the ordinary browser. Confirm it opens the Canvas course rather than the SEB-required page. Reload or reuse a consumed handoff and confirm its ended state also returns to the course without a browser-back loop.
 7. Confirm the detector’s launch UI is available on the Canvas assessment route and approved tools are not exposed before a valid SEB proof.
 8. Configure a separate Classic Quiz and New Quiz with ordinary Canvas access codes but do not enable them in Safe Online Exam. Confirm both retain their normal Canvas access-code flow and never show the SEB-required prompt.
+9. Configure one Classic Quiz and one New Quiz for SOE while both are unpublished. Without reopening or refreshing the instructor LTI, publish each assessment and immediately launch as the student. Confirm the detector opens SOE, learner-scoped Canvas verification succeeds, and configuration download, Config Key proof, access-code release, submission, and exit complete. Also attempt once before publication and confirm a retry after a few seconds succeeds without waiting for the 30-second successful-visibility cache.
 
 ### Student In SEB
 

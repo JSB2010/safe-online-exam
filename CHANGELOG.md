@@ -16,6 +16,7 @@ public compatibility endpoint.
 - Preserve independent Assignment, Classic Quiz, and New Quiz publication evidence instead of collapsing missing or contradictory Canvas values to unpublished.
 - Distinguish configured assessments from globally ready assessments and surface precise publication, date-window, stale, missing, and settings blockers to instructors and administrators.
 - Verify protected assessment visibility with each learner's existing read-only Canvas authorization and carry the short-lived admission through configuration download and access-code proof.
+- Recheck learner denials after two seconds while retaining the 30-second successful-visibility cache, so a just-published assessment becomes launchable without reopening the instructor LTI.
 - Replace expected generic launch 404 responses with actionable unavailable, authorization, rate-limit, and retryable Canvas-verification errors plus correlated structured events.
 
 ### Reliability and security
