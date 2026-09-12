@@ -1020,12 +1020,11 @@ describe("SebController route contracts", () => {
   });
 
   it("returns a retryable Canvas verification error without logging learner identity", async () => {
+    const getLearnerAssessmentAvailability = vi
+      .fn()
+      .mockRejectedValue(new CanvasApiRequestError("Canvas timed out", "student-1", "https://canvas.invalid", 504));
     const { controller } = controllerWith({
-      canvasApi: {
-        getLearnerAssessmentAvailability: vi
-          .fn()
-          .mockRejectedValue(new CanvasApiRequestError("Canvas timed out", "student-1", "https://canvas.invalid", 504))
-      },
+      canvasApi: { getLearnerAssessmentAvailability },
       assessments: {
         getSebSettingForQuiz: vi.fn().mockResolvedValue({
           quizId: "23455",
@@ -1056,12 +1055,67 @@ describe("SebController route contracts", () => {
       status: 503,
       response: expect.objectContaining({ error_code: "CANVAS_AVAILABILITY_UNVERIFIED" })
     });
+    await expect(
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      )
+    ).rejects.toMatchObject({
+      status: 503,
+      response: expect.objectContaining({ error_code: "CANVAS_AVAILABILITY_UNVERIFIED" })
+    });
+    expect(getLearnerAssessmentAvailability).toHaveBeenCalledTimes(2);
     const serializedLogs = JSON.stringify(warn.mock.calls);
     expect(serializedLogs).toContain("seb_config_grant_denied");
     expect(serializedLogs).not.toContain("student-1");
     expect(serializedLogs).not.toContain("opaque-student-1");
     expect(serializedLogs).not.toContain("canvas.invalid");
     warn.mockRestore();
+  });
+
+  it("does not cache malformed Canvas availability evidence", async () => {
+    const getLearnerAssessmentAvailability = vi.fn().mockResolvedValue({
+      available: false,
+      reason: "invalid_availability",
+      checkedAt: "2026-09-12T18:00:00.000Z"
+    });
+    const { controller } = controllerWith({
+      canvasApi: { getLearnerAssessmentAvailability },
+      assessments: {
+        getSebSettingForQuiz: vi.fn().mockResolvedValue({
+          quizId: "23455",
+          courseId: "course-1",
+          sebRequired: true,
+          enabled: true,
+          accessCode: "ACCESS",
+          urlRules: [],
+          externalTools: []
+        }),
+        getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" })
+      }
+    });
+    const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+      subject: "opaque-student-1",
+      deploymentId: "deployment-1",
+      sessionId: "session-1"
+    });
+    const issueGrant = () =>
+      controller.issueConfigGrant(
+        requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+        "course-1",
+        "classicquiz_23455"
+      );
+
+    await expect(issueGrant()).rejects.toMatchObject({
+      status: 503,
+      response: expect.objectContaining({
+        error_code: "CANVAS_AVAILABILITY_UNVERIFIED",
+        reason: "invalid_availability"
+      })
+    });
+    await expect(issueGrant()).rejects.toMatchObject({ status: 503 });
+    expect(getLearnerAssessmentAvailability).toHaveBeenCalledTimes(2);
   });
 
   it("never reuses one learner's Canvas visibility result for another learner", async () => {

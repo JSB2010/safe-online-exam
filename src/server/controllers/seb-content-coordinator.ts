@@ -371,12 +371,19 @@ export class SebContentCoordinator {
     try {
       const result = await value;
       if (!result.available) {
-        // A teacher may publish or change differentiated availability while
-        // students are waiting. Keep coalescing the current request, but do
-        // not let a prior denial mask that Canvas change for 30 seconds.
         const current = this.learnerAvailabilityCache.get(key);
         if (current?.value === value) {
-          current.expiresAt = Date.now() + LEARNER_UNAVAILABLE_CACHE_TTL_MS;
+          if (result.reason === "invalid_availability") {
+            // Malformed Canvas publication or date evidence is an upstream
+            // verification failure, not a learner denial. Allow the next
+            // attempt to obtain a fresh response immediately.
+            this.learnerAvailabilityCache.delete(key);
+          } else {
+            // A teacher may publish or change differentiated availability
+            // while students are waiting. Keep coalescing the current
+            // request, but do not mask that Canvas change for 30 seconds.
+            current.expiresAt = Date.now() + LEARNER_UNAVAILABLE_CACHE_TTL_MS;
+          }
         }
       }
       return result;
