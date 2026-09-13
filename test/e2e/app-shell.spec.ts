@@ -1012,6 +1012,8 @@ test("renders the responsive root-account administrator workspace and controlled
   const coursesTab = page.getByRole("tab", { name: /Courses/u });
   await expect(coursesTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Biology" })).toBeVisible();
+  await expect(page.getByText("BIO-101 · Active")).toBeVisible();
+  await expect(page.getByText(/Evidence/u)).toHaveCount(0);
   await expect(page.getByLabel("Operational term")).toHaveValue("22");
   expect(summaryRequests).toBe(1);
   expect(courseListRequests).toBe(1);
@@ -1098,6 +1100,99 @@ test("renders the responsive root-account administrator workspace and controlled
     token: "test-admin-token",
     body: { confirmation: "101" }
   });
+  expect(browserErrors).toEqual([]);
+});
+
+test("keeps instructor readiness wording clear and hides internal Canvas evidence details", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/instructor-readiness-copy-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "teacher",
+          data: {
+            courseId: "course-1",
+            courseName: "Biology",
+            userId: "user-1",
+            authToken: "test-token",
+            showSetupWizard: false,
+            quizzes: [
+              {
+                id: "classicquiz_501",
+                title: "Published assessment",
+                quizTypeDisplay: "Classic Quiz",
+                published: true,
+                unlockAt: "2026-09-12T18:00:00.000Z",
+                lockAt: "2026-09-12T20:00:00.000Z",
+                publication: {
+                  status: "published",
+                  confidence: "complete",
+                  checkedAt: "2026-09-12T17:57:36.000Z"
+                },
+                readiness: {
+                  status: "ready",
+                  publicationStatus: "published",
+                  publicationConfidence: "complete",
+                  verifiedAt: "2026-09-12T17:57:36.000Z"
+                }
+              },
+              {
+                id: "classicquiz_502",
+                title: "Assessment needing review",
+                quizTypeDisplay: "Classic Quiz",
+                published: null,
+                publication: {
+                  status: "conflict",
+                  confidence: "single_source",
+                  checkedAt: "2026-09-12T17:57:36.000Z"
+                },
+                readiness: {
+                  status: "publication_conflict",
+                  publicationStatus: "conflict",
+                  publicationConfidence: "single_source",
+                  verifiedAt: "2026-09-12T17:57:36.000Z"
+                }
+              }
+            ],
+            quizSebSettings: {
+              classicquiz_501: { courseId: "course-1", quizId: "501", sebRequired: true, enabled: true },
+              classicquiz_502: { courseId: "course-1", quizId: "502", sebRequired: true, enabled: true }
+            },
+            courseDefaults: {
+              courseId: "course-1",
+              setupCompleted: true,
+              urlRules: [],
+              externalTools: [],
+              hasQuitPassword: true,
+              hasEffectiveQuitPassword: true,
+              hasStartPassword: false
+            },
+            onboarding: {
+              courseSecurityReady: true,
+              courseSetupComplete: true,
+              enabledAssessmentCount: 2
+            }
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/instructor-readiness-copy-preview");
+
+  const published = page.locator("article.teacher-row").filter({ hasText: "Published assessment" });
+  await expect(published.getByText("Canvas: Published")).toBeVisible();
+  await expect(published.getByText(/Opens /u)).toBeVisible();
+  await expect(published.getByText(/Closes /u)).toBeVisible();
+  const needsReview = page.locator("article.teacher-row").filter({ hasText: "Assessment needing review" });
+  await expect(needsReview.getByText("Canvas: Needs review")).toBeVisible();
+  await expect(needsReview.getByText("Configured — review Canvas status")).toBeVisible();
+  await expect(page.getByText(/Evidence:|one Canvas source|not yet verified|invalid date/u)).toHaveCount(0);
   expect(browserErrors).toEqual([]);
 });
 

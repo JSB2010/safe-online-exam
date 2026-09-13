@@ -287,6 +287,7 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
             const enabled = !!setting.sebRequired;
             const canEnable = enabled || canEnableSebAssessment(setting, courseDefaults);
             const ready = enabled && item.readiness?.status === "ready";
+            const availabilityWindow = enabled ? availabilityWindowLabel(item.unlockAt, item.lockAt) : null;
             return (
               <article className="content-row teacher-row" key={item.id}>
                 <div className="content-main">
@@ -311,19 +312,7 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
                         </span>
                       )}
                     </p>
-                    {enabled && (
-                      <p className="muted">
-                        Evidence:{" "}
-                        {publicationConfidenceLabel(
-                          item.readiness?.publicationConfidence || item.publication?.confidence
-                        )}
-                        {item.readiness?.verifiedAt || item.publication?.checkedAt
-                          ? ` · checked ${formatCanvasTime(item.readiness?.verifiedAt || item.publication?.checkedAt)}`
-                          : " · not yet verified"}
-                        {item.unlockAt ? ` · opens ${formatCanvasTime(item.unlockAt)}` : ""}
-                        {item.lockAt ? ` · closes ${formatCanvasTime(item.lockAt)}` : ""}
-                      </p>
-                    )}
+                    {availabilityWindow && <p className="muted">{availabilityWindow}</p>}
                   </div>
                 </div>
                 <div className="row-actions">
@@ -416,11 +405,11 @@ export function TeacherDashboard({ data }: { data: Record<string, any> }) {
 function publicationLabel(status?: string, published?: boolean | null): string {
   if (status === "published") return "Published";
   if (status === "unpublished") return "Unpublished";
-  if (status === "conflict") return "Conflicting status";
-  if (status === "unknown") return "Unknown";
+  if (status === "conflict") return "Needs review";
+  if (status === "unknown") return "Needs refresh";
   if (published === true) return "Published";
   if (published === false) return "Unpublished";
-  return "Unknown";
+  return "Needs refresh";
 }
 
 function applyReadiness(item: QuizView, readiness: QuizView["readiness"]): QuizView {
@@ -441,16 +430,19 @@ function applyReadiness(item: QuizView, readiness: QuizView["readiness"]): QuizV
   };
 }
 
-function publicationConfidenceLabel(confidence?: string): string {
-  if (confidence === "complete") return "complete";
-  if (confidence === "single_source") return "one Canvas source";
-  return "unavailable";
+function formatCanvasTime(value?: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : null;
 }
 
-function formatCanvasTime(value?: string | null): string {
-  if (!value) return "unknown";
-  const parsed = new Date(value);
-  return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : "invalid date";
+function availabilityWindowLabel(unlockAt?: string | null, lockAt?: string | null): string | null {
+  const opens = formatCanvasTime(unlockAt);
+  const closes = formatCanvasTime(lockAt);
+  const parts = [opens ? `Opens ${opens}` : null, closes ? `Closes ${closes}` : null].filter(
+    (value): value is string => !!value
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function readinessMessage(status?: string): string {
@@ -464,14 +456,14 @@ function readinessMessage(status?: string): string {
     case "closed":
       return "Configured — closed";
     case "publication_conflict":
-      return "Configured — Canvas status conflicts";
+      return "Configured — review Canvas status";
     case "publication_unknown":
     case "canvas_stale":
-      return "Configured — refresh required";
+      return "Configured — refresh needed";
     case "canvas_missing":
-      return "Configured — missing in Canvas";
+      return "Configured — not found in Canvas";
     case "settings_incomplete":
-      return "Configured — settings incomplete";
+      return "Configured — finish setup";
     default:
       return "Configured — not ready";
   }

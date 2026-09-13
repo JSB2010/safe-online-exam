@@ -29,32 +29,16 @@ function adminReadinessLabel(status?: string): string {
     case "closed":
       return "Configured — closed";
     case "publication_conflict":
-      return "Configured — Canvas conflict";
+      return "Configured — review Canvas status";
     case "publication_unknown":
-      return "Configured — publication unknown";
     case "canvas_stale":
-      return "Configured — Canvas check stale";
+      return "Configured — refresh needed";
     case "canvas_missing":
-      return "Configured — missing in Canvas";
+      return "Configured — not found in Canvas";
     case "settings_incomplete":
-      return "Configured — settings incomplete";
+      return "Configured — finish setup";
     default:
       return "Configured — not ready";
-  }
-}
-
-function adminPublicationConfidenceLabel(confidence?: string): string {
-  switch (confidence) {
-    case "complete":
-      return "complete";
-    case "single_source":
-      return "single-source";
-    case "conflicting":
-      return "conflicting";
-    case "unavailable":
-      return "unavailable";
-    default:
-      return "unknown";
   }
 }
 
@@ -203,7 +187,8 @@ export function AdminCoursesSection({
                 <span className="section-kicker">Course {selectedCourse.id}</span>
                 <h2>{selectedCourse.name}</h2>
                 <p>
-                  {selectedCourse.courseCode || "No course code"} · {selectedCourse.workflowState || "unknown state"}
+                  {selectedCourse.courseCode || "No course code"} ·{" "}
+                  {adminCourseStateLabel(selectedCourse.workflowState)}
                 </p>
               </div>
               <div className="admin-detail-actions">
@@ -328,18 +313,15 @@ export function AdminCoursesSection({
                         <small>
                           {assessment.contentType === "NEW_QUIZ" ? "New Quiz" : "Classic Quiz"} ·{" "}
                           {assessment.publicationStatus === "conflict"
-                            ? "Canvas status conflict"
+                            ? "Canvas status needs review"
                             : assessment.publicationStatus === "unknown"
-                              ? "Publication unknown"
+                              ? "Canvas status unavailable"
                               : assessment.published === true
                                 ? "Published"
                                 : assessment.published === false
                                   ? "Unpublished"
-                                  : "Publication unknown"}
+                                  : "Canvas status unavailable"}
                           {assessment.sebRequired ? ` · ${adminReadinessLabel(assessment.readinessStatus)}` : ""}
-                          {assessment.sebRequired
-                            ? ` · Evidence ${adminPublicationConfidenceLabel(assessment.publicationConfidence)}`
-                            : ""}
                         </small>
                       </div>
                     </div>
@@ -580,4 +562,20 @@ export function AdminInstitutionSection({
       </div>
     </section>
   );
+}
+
+function adminCourseStateLabel(state?: string | null): string {
+  switch (state) {
+    case "available":
+      return "Active";
+    case "completed":
+      return "Completed";
+    case "created":
+    case "unpublished":
+      return "Unpublished";
+    case "deleted":
+      return "Deleted";
+    default:
+      return "Canvas status unavailable";
+  }
 }
