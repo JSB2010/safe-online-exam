@@ -1,4 +1,4 @@
-import { ShieldCheck, X } from "lucide-react";
+import { AlertCircle, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import { errorMessage, persistStudentReadinessPromptDismissal } from "../../lib/api.js";
 import { BrandMark } from "../../components/brand-mark.js";
@@ -90,6 +90,12 @@ export function StudentDashboard({ data }: { data: Record<string, any> }) {
             <p>Open each quiz in Safe Exam Browser.</p>
           </div>
         </div>
+        {data.availabilityIncomplete === true && quizzes.length > 0 && (
+          <div className="notice error" role="alert">
+            <AlertCircle size={17} />
+            <span>Some quizzes could not be checked. Reopen Safe Online Exam in a moment.</span>
+          </div>
+        )}
         <div className="content-list">
           {quizzes.map((quiz) => (
             <article className="content-row student-row" key={quiz.id}>
@@ -112,8 +118,12 @@ export function StudentDashboard({ data }: { data: Record<string, any> }) {
           ))}
           {quizzes.length === 0 && (
             <EmptyState
-              title="No Safe Online Exam quizzes are active"
-              message="Your instructor has not enabled Safe Online Exam for a quiz in this course."
+              title={data.availabilityIncomplete === true ? "Quizzes could not be checked" : "No quizzes available"}
+              message={
+                data.availabilityIncomplete === true
+                  ? "Reopen Safe Online Exam in a moment."
+                  : "There are no Safe Online Exam quizzes available to you in this course right now."
+              }
             />
           )}
         </div>

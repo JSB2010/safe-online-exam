@@ -58,6 +58,17 @@ import {
 } from "./lti-controller-helpers.js";
 import { ASSESSMENT_READINESS_CONCURRENCY, mapWithConcurrency } from "./quiz-controller-helpers.js";
 
+interface StudentAssessmentCandidate {
+  canonicalContentId: string;
+  contentType: "CLASSIC_QUIZ" | "NEW_QUIZ";
+  view: Record<string, unknown>;
+}
+
+interface StudentCandidateVisibility {
+  candidates: StudentAssessmentCandidate[];
+  verified: boolean;
+}
+
 @Controller()
 export class LtiController {
   private readonly logger = new Logger(LtiController.name);
@@ -641,6 +652,9 @@ export class LtiController {
         }
       });
     }
+    const studentQuizzes = courseId
+      ? await this.enabledStudentQuizzes(courseId, request, principal)
+      : { quizzes: [], availabilityIncomplete: false };
     return renderAppShell({
       title: "Safe Online Exam",
       view: "student",
@@ -658,7 +672,8 @@ export class LtiController {
           connection: "connected",
           readinessRecommended: !readinessPromptDismissed
         },
-        quizzes: courseId ? await this.enabledStudentQuizzes(courseId, request, principal) : []
+        quizzes: studentQuizzes.quizzes,
+        availabilityIncomplete: studentQuizzes.availabilityIncomplete
       }
     });
   }
@@ -685,30 +700,35 @@ export class LtiController {
     courseId: string,
     request: Request,
     principal: VerifiedLtiPrincipal
-  ): Promise<Array<Record<string, unknown>>> {
+  ): Promise<{ quizzes: Array<Record<string, unknown>>; availabilityIncomplete: boolean }> {
     const [classicQuizzes, contentItems] = await Promise.all([
       this.assessments.getQuizzesForCourse(courseId),
       this.assessments.getCachedContentForCourse(courseId)
     ]);
-    const rows: Array<Record<string, unknown>> = [];
+    const candidates: StudentAssessmentCandidate[] = [];
     for (const quiz of classicQuizzes) {
       if (quiz.courseId !== courseId) {
         continue;
       }
       const setting = await this.assessments.getSebSettingForQuiz(quiz.id);
       if (setting?.courseId === courseId && setting.sebRequired && setting.enabled && setting.accessCode) {
-        rows.push(
-          await this.studentQuizView(
-            request,
-            principal,
-            courseId,
-            quiz.id,
-            quiz.title,
-            "Classic Quiz",
-            quiz.htmlUrl,
-            setting
-          )
-        );
+        const canonicalContentId = canonicalSebConfigContentId(quiz.id);
+        if (canonicalContentId) {
+          candidates.push({
+            canonicalContentId,
+            contentType: "CLASSIC_QUIZ",
+            view: await this.studentQuizView(
+              request,
+              principal,
+              courseId,
+              quiz.id,
+              quiz.title,
+              "Classic Quiz",
+              quiz.htmlUrl,
+              setting
+            )
+          });
+        }
       }
     }
     for (const item of contentItems.filter((entry) => entry.contentType === "NEW_QUIZ")) {
@@ -724,8 +744,10 @@ export class LtiController {
         setting.enabled &&
         setting.accessCode
       ) {
-        rows.push(
-          await this.studentQuizView(
+        candidates.push({
+          canonicalContentId: item.id,
+          contentType: "NEW_QUIZ",
+          view: await this.studentQuizView(
             request,
             principal,
             courseId,
@@ -735,10 +757,81 @@ export class LtiController {
             item.htmlUrl,
             setting
           )
-        );
+        });
       }
     }
-    return rows.sort((left, right) => String(left.title).localeCompare(String(right.title)));
+    const visibility = await Promise.all([
+      this.learnerVisibleStudentCandidates(
+        courseId,
+        principal.canvasUserId,
+        "CLASSIC_QUIZ",
+        candidates.filter((candidate) => candidate.contentType === "CLASSIC_QUIZ")
+      ),
+      this.learnerVisibleStudentCandidates(
+        courseId,
+        principal.canvasUserId,
+        "NEW_QUIZ",
+        candidates.filter((candidate) => candidate.contentType === "NEW_QUIZ")
+      )
+    ]);
+    return {
+      quizzes: visibility
+        .flatMap(({ candidates: visibleCandidates }) => visibleCandidates)
+        .map(({ view }) => view)
+        .sort((left, right) => String(left.title).localeCompare(String(right.title))),
+      availabilityIncomplete: visibility.some(({ verified }) => !verified)
+    };
+  }
+
+  private async learnerVisibleStudentCandidates(
+    courseId: string,
+    canvasUserId: string,
+    contentType: StudentAssessmentCandidate["contentType"],
+    candidates: StudentAssessmentCandidate[]
+  ): Promise<StudentCandidateVisibility> {
+    if (candidates.length === 0) {
+      return { candidates: [], verified: true };
+    }
+    const startedAt = Date.now();
+    try {
+      const availability = await this.canvasApi.getLearnerAssessmentAvailabilities(
+        courseId,
+        candidates.map((candidate) => candidate.canonicalContentId),
+        canvasUserId
+      );
+      const visible = candidates.filter((candidate) => availability[candidate.canonicalContentId]?.available === true);
+      const verified = candidates.every((candidate) => {
+        const result = availability[candidate.canonicalContentId];
+        return !!result && result.reason !== "invalid_availability";
+      });
+      this.logger.log(
+        JSON.stringify({
+          event: "student_lti_assessment_visibility",
+          source: "learner_canvas",
+          contentType,
+          candidateCount: candidates.length,
+          visibleCount: visible.length,
+          hiddenCount: candidates.length - visible.length,
+          result: verified ? "verified" : "incomplete",
+          durationMs: Date.now() - startedAt
+        })
+      );
+      return { candidates: visible, verified };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "student_lti_assessment_visibility",
+          source: "learner_canvas",
+          contentType,
+          candidateCount: candidates.length,
+          visibleCount: 0,
+          result: "unverified",
+          durationMs: Date.now() - startedAt,
+          canvasStatus: isCanvasApiRequestError(error) ? error.status : 502
+        })
+      );
+      return { candidates: [], verified: false };
+    }
   }
 
   private async resolveStudentContent(

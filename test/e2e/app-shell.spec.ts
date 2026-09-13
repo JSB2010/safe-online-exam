@@ -339,6 +339,78 @@ test("keeps the student dashboard setup reminder optional and user initiated", a
   await expect(page.getByRole("dialog", { name: "Safe Exam Browser setup check" })).toBeVisible();
 });
 
+test("explains when the student dashboard cannot confirm available quizzes", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/student-availability-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "student",
+          data: {
+            courseId: "course-1",
+            courseName: "Example Course",
+            configGrantToken: "preview-token",
+            onboarding: { connection: "connected", readinessRecommended: false },
+            availabilityIncomplete: true,
+            quizzes: []
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/student-availability-preview");
+
+  await expect(page.getByText("Quizzes could not be checked", { exact: true })).toBeVisible();
+  await expect(page.getByText("Reopen Safe Online Exam in a moment.")).toBeVisible();
+  await expect(page.getByText("No quizzes available")).toHaveCount(0);
+  expect(browserErrors).toEqual([]);
+});
+
+test("warns when only part of the student quiz list could be checked", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route("**/student-partial-availability-preview", async (route) => {
+    await route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script id="seb-bootstrap" type="application/json">${JSON.stringify(
+        {
+          view: "student",
+          data: {
+            courseId: "course-1",
+            courseName: "Example Course",
+            configGrantToken: "preview-token",
+            onboarding: { connection: "connected", readinessRecommended: false },
+            availabilityIncomplete: true,
+            quizzes: [
+              {
+                id: "101",
+                title: "Visible Quiz",
+                quizTypeDisplay: "Classic Quiz",
+                configGrantUrl: "/api/seb/config-grant/course-1/classicquiz_101"
+              }
+            ]
+          }
+        }
+      )}</script><script type="module" src="/assets/index.js"></script><link rel="stylesheet" href="/assets/index.css"></head><body><div id="root"></div></body></html>`
+    });
+  });
+
+  await page.goto("/student-partial-availability-preview");
+
+  await expect(page.getByText("Visible Quiz", { exact: true })).toBeVisible();
+  await expect(page.getByText("Some quizzes could not be checked. Reopen Safe Online Exam in a moment.")).toBeVisible();
+  expect(browserErrors).toEqual([]);
+});
+
 test("opens the setup-check handoff even when saving the optional reminder preference fails", async ({ page }) => {
   await page.route("**/student-readiness-failure-preview", async (route) => {
     await route.fulfill({
