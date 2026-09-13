@@ -175,7 +175,7 @@ export class RepositoryProvider implements OnModuleInit {
       return;
     }
     await this.database.checkConnection();
-    await assertSchemaReady(this.database);
+    await assertSchemaReady(this.database, this.config.value.database.schemaCompatibilityProfile);
   }
 }
 

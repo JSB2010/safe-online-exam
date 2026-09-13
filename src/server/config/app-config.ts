@@ -5,6 +5,12 @@ import {
   type OAuthTokenEncryptionSettings
 } from "../security/oauth-token-encryption.js";
 import { sebPasswordPolicyViolation } from "../services/seb-password-policy.js";
+import {
+  GOOGLE_DOCS_STAGE2_V7_SCHEMA_COMPATIBILITY_PROFILE,
+  isDatabaseSchemaCompatibilityProfile,
+  normalizeDatabaseSchemaCompatibilityProfile,
+  STRICT_DATABASE_SCHEMA_COMPATIBILITY_PROFILE
+} from "../data/schema-compatibility.js";
 import { resolveSecretValue } from "./secret-value.js";
 
 export type AppProfile = "dev" | "prod" | "test";
@@ -49,6 +55,7 @@ export interface AppConfigSnapshot {
     poolMax: number;
     connectionTimeoutMs: number;
     statementTimeoutMs: number;
+    schemaCompatibilityProfile: string;
   };
   lti: {
     issuer: string;
@@ -181,7 +188,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
       sslMode: parseDatabaseSslMode(env.DATABASE_SSL_MODE),
       poolMax: parseInteger(env.DATABASE_POOL_MAX, 5),
       connectionTimeoutMs: parseInteger(env.DATABASE_CONNECTION_TIMEOUT_MS, 10_000),
-      statementTimeoutMs: parseInteger(env.DATABASE_STATEMENT_TIMEOUT_MS, 30_000)
+      statementTimeoutMs: parseInteger(env.DATABASE_STATEMENT_TIMEOUT_MS, 30_000),
+      schemaCompatibilityProfile: normalizeDatabaseSchemaCompatibilityProfile(env.DATABASE_SCHEMA_COMPATIBILITY_PROFILE)
     },
     lti: {
       issuer: firstPresent(env.LTI_ISSUER, "https://canvas.instructure.com")!,
@@ -256,6 +264,19 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): AppConfigSnapshot {
 export function validateRuntimeConfig(snapshot: AppConfigSnapshot, env: NodeJS.ProcessEnv): string[] {
   const cloudRunRuntime = isCloudRunRuntime(env);
   const errors: string[] = [];
+  const schemaCompatibilityProfile = snapshot.database.schemaCompatibilityProfile;
+  if (!isDatabaseSchemaCompatibilityProfile(schemaCompatibilityProfile)) {
+    errors.push(
+      `DATABASE_SCHEMA_COMPATIBILITY_PROFILE must be ${STRICT_DATABASE_SCHEMA_COMPATIBILITY_PROFILE} or ${GOOGLE_DOCS_STAGE2_V7_SCHEMA_COMPATIBILITY_PROFILE}`
+    );
+  } else if (
+    schemaCompatibilityProfile === GOOGLE_DOCS_STAGE2_V7_SCHEMA_COMPATIBILITY_PROFILE &&
+    snapshot.profile !== "dev"
+  ) {
+    errors.push(
+      `DATABASE_SCHEMA_COMPATIBILITY_PROFILE=${schemaCompatibilityProfile} may only be used when APP_ENV is dev`
+    );
+  }
   if (!requiresHardenedRuntimeValidation(snapshot, env)) {
     return errors;
   }

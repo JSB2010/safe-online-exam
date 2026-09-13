@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly PROJECT_ID="seb-for-canvas"
-readonly REGION="us-central1"
-readonly SERVICE="school-canvas-seb"
+readonly CONTRACT_PATH="/workspace/deploy/testbed/school-canvas-seb.contract.sh"
+[[ -f "$CONTRACT_PATH" ]] || {
+  echo "Testbed deployment failed: deployment contract is missing" >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$CONTRACT_PATH"
+
+readonly PROJECT_ID="$TESTBED_PROJECT_ID"
+readonly REGION="$TESTBED_REGION"
+readonly SERVICE="$TESTBED_SERVICE"
 readonly MIGRATION_JOB="school-canvas-seb-migrate"
 readonly CLEANUP_JOB="school-canvas-seb-cleanup"
 readonly INSTANCE="school-canvas-seb"
 readonly DATABASE_NAME="canvas_seb"
 readonly DATABASE_USER="canvas_seb"
 readonly SERVICE_ACCOUNT="seb-canvas@seb-for-canvas.iam.gserviceaccount.com"
-readonly PUBLIC_TOOL_URL="https://seb.jacobbarkin.com"
+readonly PUBLIC_TOOL_URL="$TESTBED_TOOL_URL"
 readonly IMAGE_REPOSITORY="us-central1-docker.pkg.dev/seb-for-canvas/canvas-seb-repo/school-canvas-seb"
 readonly DIGEST_FILE="/workspace/school-canvas-testbed.digest"
 readonly CLOUDSDK_PYTHON="/usr/lib/google-cloud-sdk/platform/bundledpythonunix/bin/python3.14"
@@ -51,10 +59,10 @@ readonly CANDIDATE_TAG="testbed-$SOURCE_SHORT_SHA"
 IFS= read -r IMAGE_DIGEST < "$DIGEST_FILE"
 [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "image digest artifact is invalid"
 
-readonly BASE_ENV="NODE_ENV=production,APP_ENV=dev,LTI_ISSUER=https://canvas.instructure.com,LTI_KEY_SET_URL=https://canvas-test.apps.jacobbarkin.com/api/lti/security/jwks,LTI_AUTH_URL=https://canvas-test.apps.jacobbarkin.com/api/lti/authorize_redirect,LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS=$LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS,OAUTH_TOKEN_ENCRYPTION_MODE=enforce,OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary,SEB_CONFIG_ENCRYPTION_ENABLED=true,DATABASE_HOST=/cloudsql/$PROJECT_ID:$REGION:$INSTANCE,DATABASE_PORT=5432,DATABASE_NAME=$DATABASE_NAME,DATABASE_USER=$DATABASE_USER,DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=2"
+readonly BASE_ENV="NODE_ENV=production,APP_ENV=dev,LTI_ISSUER=https://canvas.instructure.com,LTI_KEY_SET_URL=$TESTBED_CANVAS_DOMAIN/api/lti/security/jwks,LTI_AUTH_URL=$TESTBED_LTI_AUTH_URL,LTI_DEPLOYMENT_ID_CHECKING_ENABLED=true,LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS=$LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS,OAUTH_TOKEN_ENCRYPTION_MODE=enforce,OAUTH_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=primary,SEB_CONFIG_ENCRYPTION_ENABLED=true,DATABASE_HOST=/cloudsql/$PROJECT_ID:$REGION:$INSTANCE,DATABASE_PORT=5432,DATABASE_NAME=$DATABASE_NAME,DATABASE_USER=$DATABASE_USER,DATABASE_SSL_MODE=disable,DATABASE_POOL_MAX=2,DATABASE_SCHEMA_COMPATIBILITY_PROFILE=$TESTBED_SCHEMA_COMPATIBILITY_PROFILE"
 readonly JOB_ENV="$BASE_ENV,DEV_TESTBED_ENABLED=false,APP_DEBUG_ENABLED=false,APP_DETECTOR_DIAGNOSTICS_ENABLED=false"
 readonly SERVICE_ENV="$BASE_ENV,DEV_TESTBED_ENABLED=true,APP_DEBUG_ENABLED=true,APP_DETECTOR_DIAGNOSTICS_ENABLED=true,SOURCE_COMMIT_SHA=$SOURCE_COMMIT_SHA,SOURCE_REF=$SOURCE_REF,SOURCE_WORKTREE_STATE=$SOURCE_WORKTREE_STATE,SOURCE_DIFF_SHA=$SOURCE_DIFF_SHA,CLOUD_BUILD_ID=$CLOUD_BUILD_ID,APP_IMAGE_DIGEST=$IMAGE_DIGEST,APP_ASSET_VERSION=$SOURCE_SHORT_SHA"
-readonly SECRETS="CANVAS_DOMAIN=school_canvas_seb_canvas_domain:6,LTI_CLIENT_ID=school_canvas_seb_lti_client_id:6,LTI_DEPLOYMENT_ID=school_canvas_seb_lti_deployment_id:6,TOOL_URL=school_canvas_seb_tool_url:6,LTI_PRIVATE_KEY=school_canvas_seb_lti_private_key:6,SESSION_SECRET=school_canvas_seb_session_secret:6,STATE_ENCRYPTION_KEY=school_canvas_seb_state_encryption_key:6,OAUTH_TOKEN_ENCRYPTION_KEYRING=school_canvas_seb_oauth_token_encryption_keyring:1,CANVAS_API_CLIENT_ID=school_canvas_seb_api_client_id:6,CANVAS_API_CLIENT_SECRET=school_canvas_seb_api_client_secret:6,SEB_CONFIG_ENCRYPTION_CERT_PEM=school_canvas_seb_seb_config_encryption_cert_pem:6,DATABASE_PASSWORD=school_canvas_seb_database_password:1"
+readonly SECRETS="$TESTBED_SECRET_BINDINGS"
 
 traffic_rows="$(gcloud run services describe "$SERVICE" --project="$PROJECT_ID" --region="$REGION" \
   --flatten='status.traffic[]' --format='value(status.traffic.revisionName,status.traffic.percent)')"
@@ -99,7 +107,9 @@ service_url="$(gcloud run services describe "$SERVICE" --project="$PROJECT_ID" -
 candidate_url="https://$CANDIDATE_TAG---${service_url#https://}"
 
 verify_url() {
-  "$CLOUDSDK_PYTHON" /workspace/scripts/probe-school-testbed.py "${1%/}" "$SOURCE_COMMIT_SHA" "$IMAGE_DIGEST"
+  "$CLOUDSDK_PYTHON" /workspace/scripts/probe-school-testbed.py \
+    "${1%/}" "$SOURCE_COMMIT_SHA" "$IMAGE_DIGEST" "$TESTBED_TOOL_URL" \
+    "$TESTBED_LTI_AUTH_URL" "$TESTBED_LTI_CLIENT_ID" "$TESTBED_LTI_DEPLOYMENT_ID"
 }
 
 verify_url "$candidate_url" || fail "candidate smoke checks failed; traffic remains on $previous_revision"
@@ -120,6 +130,7 @@ gcloud run services update-traffic "$SERVICE" --project="$PROJECT_ID" --region="
   --to-revisions="$candidate_revision=100" --quiet
 verify_url "$PUBLIC_TOOL_URL"
 gcloud run services update-traffic "$SERVICE" --project="$PROJECT_ID" --region="$REGION" --clear-tags --quiet
+/workspace/scripts/verify-school-testbed-runtime.sh "$PROJECT_ID" "$IMAGE_DIGEST"
 cutover_started=false
 trap - ERR
 

@@ -29,6 +29,7 @@ describe("school Canvas commit testbed deployment", () => {
 
   it("uses dev-only diagnostics and a no-traffic candidate before explicit cutover", () => {
     const deploy = source("scripts/deploy-school-testbed-runtime.sh");
+    const contract = source("deploy/testbed/school-canvas-seb.contract.sh");
 
     expect(deploy).toContain("APP_ENV=dev");
     expect(deploy).toContain("DEV_TESTBED_ENABLED=true");
@@ -40,10 +41,38 @@ describe("school Canvas commit testbed deployment", () => {
       deploy.indexOf("gcloud run services update-traffic")
     );
     expect(deploy).toContain("rollback_on_error");
-    expect(deploy).toContain("https://seb.jacobbarkin.com");
+    expect(contract).toContain('TESTBED_TOOL_URL="https://seb.jacobbarkin.com"');
     expect(deploy).toContain("/workspace/scripts/probe-school-testbed.py");
+    expect(deploy).toContain("/workspace/scripts/verify-school-testbed-runtime.sh");
+    expect(deploy).toContain("DATABASE_SCHEMA_COMPATIBILITY_PROFILE=$TESTBED_SCHEMA_COMPATIBILITY_PROFILE");
     expect(deploy).toContain("/usr/lib/google-cloud-sdk/platform/bundledpythonunix/bin/python3.14");
     expect(deploy).not.toContain("curl ");
+    expect(contract).toContain('TESTBED_SCHEMA_COMPATIBILITY_PROFILE="google-docs-stage2-v7"');
+    expect(contract).toContain('TESTBED_LTI_CLIENT_ID_SECRET_VERSION="6"');
+    expect(contract).toContain('TESTBED_CANVAS_API_CLIENT_ID_SECRET_VERSION="7"');
+    expect(contract).toContain('TESTBED_LTI_CLIENT_ID="10000000000002"');
+    expect(contract).toContain('TESTBED_LTI_DEPLOYMENT_ID="1:276ac1e5d77509bef8b8ad3c104fc824f7fb6de9"');
+  });
+
+  it("verifies the migrated schema and the live testbed runtime contract", () => {
+    const migrate = source("src/server/data/migrate.ts");
+    const runtimeVerification = source("scripts/verify-school-testbed-runtime.sh");
+    const metadataReader = source("scripts/read-cloud-run-metadata.py");
+    const probe = source("scripts/probe-school-testbed.py");
+
+    expect(migrate).toContain("assertSchemaReady(database, config.value.database.schemaCompatibilityProfile)");
+    expect(runtimeVerification).toContain("service schema compatibility profile drifted");
+    expect(runtimeVerification).toContain("service LTI client secret version drifted");
+    expect(runtimeVerification).toContain("service Canvas API client secret version drifted");
+    expect(runtimeVerification).toContain("$TESTBED_SERVICE-migrate");
+    expect(runtimeVerification).toContain("$TESTBED_SERVICE-cleanup");
+    expect(runtimeVerification).toContain("read-cloud-run-metadata.py");
+    expect(runtimeVerification).not.toContain("--filter=");
+    expect(metadataReader).toContain('mode == "traffic-100"');
+    expect(metadataReader).toContain('mode in ("env-value", "secret-version")');
+    expect(probe).toContain("verify_lti_login()");
+    expect(probe).toContain('"client_id": lti_client_id');
+    expect(probe).toContain('"lti_deployment_id": lti_deployment_id');
   });
 
   it("keeps every testbed operator script executable", () => {
@@ -51,6 +80,8 @@ describe("school Canvas commit testbed deployment", () => {
       "scripts/validate-school-testbed-target.sh",
       "scripts/create-school-testbed-backup.sh",
       "scripts/deploy-school-testbed-runtime.sh",
+      "scripts/read-cloud-run-metadata.py",
+      "scripts/verify-school-testbed-runtime.sh",
       "scripts/deploy-gcloud-school-testbed.sh",
       "scripts/rollback-gcloud-school-testbed.sh",
       "scripts/reset-gcloud-school-testbed-database.sh"

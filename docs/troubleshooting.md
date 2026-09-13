@@ -74,15 +74,16 @@ easier.
 
 ## LTI Launch Problems
 
-| Visible result                            | Meaning and safe recovery                                                                                                                                |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sso.canvaslms.com refused to connect`    | A self-hosted Canvas is using the cloud authorization default. Configure its actual `LTI_AUTH_URL` and `LTI_KEY_SET_URL`, deploy, and relaunch.          |
-| `Canvas Signing-Key Error`                | Canvas published an RSA signing key below the service’s 2048-bit minimum. Rotate Canvas platform LTI keys, restart/reload Canvas, and relaunch.          |
-| `LTI Deployment Configuration Required`   | The signed deployment ID is not in `LTI_DEPLOYMENT_ID`. Confirm the installed app and append the exact intended ID before deploying.                     |
-| `Canvas Configuration Error`              | Required signed user/account/course substitutions are absent. Refresh the LTI registration from `${TOOL_URL}/lti/config`, reinstall if needed, relaunch. |
-| `Invalid LTI Launch`                      | Signature, issuer, audience, nonce, browser binding, state, target URI, or token timing failed. Compare Canvas registration with the deployed config.    |
-| Tool says the role is not authorized      | The signed launch role does not permit that view. Test from the intended course or root-account placement with a separate correctly assigned account.    |
-| Launch returns to `/login` outside Canvas | No valid LTI session exists. Reopen the tool from Canvas instead of bookmarking an internal route.                                                       |
+| Visible result                            | Meaning and safe recovery                                                                                                                                               |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sso.canvaslms.com refused to connect`    | A self-hosted Canvas is using the cloud authorization default. Configure its actual `LTI_AUTH_URL` and `LTI_KEY_SET_URL`, deploy, and relaunch.                         |
+| `Canvas Signing-Key Error`                | Canvas published an RSA signing key below the service’s 2048-bit minimum. Rotate Canvas platform LTI keys, restart/reload Canvas, and relaunch.                         |
+| `LTI Deployment Configuration Required`   | The signed deployment ID is not in `LTI_DEPLOYMENT_ID`. Confirm the installed app and append the exact intended ID before deploying.                                    |
+| `Invalid LTI platform or target`          | Canvas's posted issuer, global LTI client ID, or target URI does not exactly match runtime configuration. The locked testbed probe checks these before traffic cutover. |
+| `Canvas Configuration Error`              | Required signed user/account/course substitutions are absent. Refresh the LTI registration from `${TOOL_URL}/lti/config`, reinstall if needed, relaunch.                |
+| `Invalid LTI Launch`                      | Signature, issuer, audience, nonce, browser binding, state, target URI, or token timing failed. Compare Canvas registration with the deployed config.                   |
+| Tool says the role is not authorized      | The signed launch role does not permit that view. Test from the intended course or root-account placement with a separate correctly assigned account.                   |
+| Launch returns to `/login` outside Canvas | No valid LTI session exists. Reopen the tool from Canvas instead of bookmarking an internal route.                                                                      |
 
 For repeated launch failures, compare:
 
@@ -95,6 +96,12 @@ For repeated launch failures, compare:
 Do not disable deployment-ID checking as a quick fix. That setting is only for
 a reviewed self-service installation model where anyone allowed to install the
 configured client ID is intentionally trusted.
+
+The locked testbed may deliberately accept its already-applied additive Google
+Docs migration through `DATABASE_SCHEMA_COMPATIBILITY_PROFILE=google-docs-stage2-v7`.
+The exception verifies the migration ledger name and checksum. Do not enable it
+in another environment, and do not use it to accept an unknown or later schema;
+production rejects the profile and retains exact schema-version enforcement.
 
 ## Canvas OAuth Problems
 

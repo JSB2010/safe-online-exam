@@ -253,6 +253,15 @@ This mode cannot validate Canvas OAuth, PostgreSQL, certificate decryption, or S
 
 Run this sequence after a deployment that affects authentication, Canvas interaction, settings, configuration generation, the detector, certificate material, or exit behavior. Use separate administrator, instructor, and student accounts.
 
+For the locked `school-canvas-seb` testbed, the automated candidate probe first
+submits a non-authorizing OIDC login envelope using the checked-in global LTI
+client ID and deployment ID and requires Canvas's configured authorization
+redirect. After cutover, runtime verification also checks that the service and
+both jobs use the same immutable image, schema compatibility profile, and
+client-ID secret versions. These checks catch configuration drift but cannot
+grant Canvas OAuth access or prove that a Developer Key remains enabled; the
+administrator and instructor browser checks below remain required.
+
 ### Administrator
 
 1. Confirm `/health`, `/lti/config`, JWKS, and detector endpoints on the deployed URL.

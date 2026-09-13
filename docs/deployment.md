@@ -382,9 +382,22 @@ The workflow refuses a second concurrent tagged testbed build, runs the full
 Docker and real-PostgreSQL gates, pushes an immutable digest, optionally takes
 the backup, applies migrations, updates cleanup, and deploys a tagged
 no-traffic revision. It verifies health, readiness, JWKS, LTI metadata, the
-detector, and build provenance at the candidate URL before traffic changes.
-It then repeats those checks at the custom origin. A failed post-cutover check
-automatically restores the prior revision; forward database migrations remain.
+detector, build provenance, and a synthetic OIDC login using the locked Canvas
+client and deployment IDs at the candidate URL before traffic changes. It then
+repeats those checks at the custom origin and verifies that the service,
+migration job, and cleanup job share the expected image, compatibility profile,
+and secret-version bindings. A failed post-cutover check automatically restores
+the prior revision; forward database migrations remain.
+
+The public, non-secret testbed contract is
+`deploy/testbed/school-canvas-seb.contract.sh`. It independently pins the LTI
+and Canvas API client-ID secret versions so rotating or testing one identity
+cannot silently replace the other. The locked database already contains the
+additive `google_docs_stage2` migration from an earlier experiment. Testbed
+runtime processes therefore use
+`DATABASE_SCHEMA_COMPATIBILITY_PROFILE=google-docs-stage2-v7`, which accepts
+only migration version 7 with its recorded name and SHA-256 checksum. Production
+continues to use strict schema matching and rejects this compatibility profile.
 
 The root status page and `GET /api/testbed/status` show the commit, worktree
 state or diff fingerprint, Cloud Build ID, image digest, Cloud Run revision,

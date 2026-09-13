@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   const database = new PostgresDatabase(config);
   try {
     await database.checkConnection();
-    await assertSchemaReady(database);
+    await assertSchemaReady(database, config.value.database.schemaCompatibilityProfile);
     const store = new PostgresOAuthTokenStore(database, config.value.security.oauthTokenEncryption);
     const result = await store.rewriteLegacyAndRotatedTokens();
     process.stdout.write(

@@ -19,8 +19,25 @@ describe("AppConfig", () => {
       name: "canvas_seb",
       user: "canvas_seb",
       sslMode: "disable",
-      poolMax: 5
+      poolMax: 5,
+      schemaCompatibilityProfile: "strict"
     });
+  });
+
+  it("allows the known schema-v7 compatibility profile only in development", () => {
+    const devEnv = { APP_ENV: "dev", DATABASE_SCHEMA_COMPATIBILITY_PROFILE: "google-docs-stage2-v7" };
+    expect(loadConfigFromEnv(devEnv).database.schemaCompatibilityProfile).toBe("google-docs-stage2-v7");
+    expect(validateRuntimeConfig(loadConfigFromEnv(devEnv), devEnv)).toEqual([]);
+
+    const prodEnv = productionRuntimeEnv({ DATABASE_SCHEMA_COMPATIBILITY_PROFILE: "google-docs-stage2-v7" });
+    expect(validateRuntimeConfig(loadConfigFromEnv(prodEnv), prodEnv)).toContain(
+      "DATABASE_SCHEMA_COMPATIBILITY_PROFILE=google-docs-stage2-v7 may only be used when APP_ENV is dev"
+    );
+
+    const invalidEnv = { APP_ENV: "dev", DATABASE_SCHEMA_COMPATIBILITY_PROFILE: "accept-anything" };
+    expect(validateRuntimeConfig(loadConfigFromEnv(invalidEnv), invalidEnv)).toContain(
+      "DATABASE_SCHEMA_COMPATIBILITY_PROFILE must be strict or google-docs-stage2-v7"
+    );
   });
 
   it("uses a school-neutral local Canvas placeholder outside Cloud Run", () => {
@@ -347,6 +364,7 @@ describe("AppConfig", () => {
       user: "canvas_runtime",
       password: "database-secret",
       sslMode: "require",
+      schemaCompatibilityProfile: "strict",
       poolMax: 7,
       connectionTimeoutMs: 12000,
       statementTimeoutMs: 45000

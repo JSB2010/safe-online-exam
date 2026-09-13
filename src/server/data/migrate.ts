@@ -1,11 +1,14 @@
 import { AppConfig } from "../config/app-config.js";
 import { runMigrations } from "./migrations.js";
 import { PostgresDatabase } from "./postgres-client.js";
+import { assertSchemaReady } from "./schema.js";
 
 async function main(): Promise<void> {
-  const database = new PostgresDatabase(new AppConfig());
+  const config = new AppConfig();
+  const database = new PostgresDatabase(config);
   try {
     await runMigrations(database);
+    await assertSchemaReady(database, config.value.database.schemaCompatibilityProfile);
   } finally {
     await database.close();
   }

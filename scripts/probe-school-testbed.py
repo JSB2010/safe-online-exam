@@ -15,14 +15,26 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-if len(sys.argv) != 4:
-    fail("usage: probe-school-testbed.py BASE_URL SOURCE_COMMIT_SHA IMAGE_DIGEST")
+if len(sys.argv) != 8:
+    fail(
+        "usage: probe-school-testbed.py BASE_URL SOURCE_COMMIT_SHA IMAGE_DIGEST "
+        "TOOL_URL LTI_AUTH_URL LTI_CLIENT_ID LTI_DEPLOYMENT_ID"
+    )
 
-base_url, source_commit_sha, image_digest = sys.argv[1:]
+(
+    base_url,
+    source_commit_sha,
+    image_digest,
+    tool_url,
+    lti_auth_url,
+    lti_client_id,
+    lti_deployment_id,
+) = sys.argv[1:]
 ca_candidates = (
     os.environ.get("SSL_CERT_FILE"),
     "/etc/ssl/certs/ca-certificates.crt",
     "/usr/lib/google-cloud-sdk/lib/third_party/certifi/cacert.pem",
+    ssl.get_default_verify_paths().cafile,
 )
 ca_bundle = next((path for path in ca_candidates if path and os.path.isfile(path)), None)
 if ca_bundle is None:
@@ -35,6 +47,14 @@ if not re.fullmatch(r"[0-9a-f]{40}", source_commit_sha):
     fail("source commit SHA is invalid")
 if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest):
     fail("image digest is invalid")
+for label, value in (("tool URL", tool_url), ("LTI authorization URL", lti_auth_url)):
+    parsed_value = urllib.parse.urlsplit(value)
+    if parsed_value.scheme != "https" or not parsed_value.hostname or parsed_value.username or parsed_value.password:
+        fail(f"{label} must be a credential-free HTTPS URL")
+if not lti_client_id or len(lti_client_id) > 512:
+    fail("LTI client ID is invalid")
+if not lti_deployment_id or len(lti_deployment_id) > 512:
+    fail("LTI deployment ID is invalid")
 
 
 def fetch(path: str) -> tuple[bytes, str]:
@@ -48,6 +68,51 @@ def fetch(path: str) -> tuple[bytes, str]:
         return response.read(1_000_000), response.headers.get_content_type()
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def verify_lti_login() -> None:
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/lti/login",
+        data=urllib.parse.urlencode(
+            {
+                "iss": "https://canvas.instructure.com",
+                "login_hint": "testbed-deployment-probe",
+                "target_link_uri": f"{tool_url.rstrip('/')}/lti/launch",
+                "client_id": lti_client_id,
+                "lti_deployment_id": lti_deployment_id,
+            }
+        ).encode("utf-8"),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "safe-online-exam-testbed-probe/1",
+        },
+        method="POST",
+    )
+    opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPSHandler(context=tls_context))
+    try:
+        opener.open(request, timeout=20)
+        raise RuntimeError("LTI login did not redirect")
+    except urllib.error.HTTPError as response:
+        if response.code not in (302, 303):
+            raise RuntimeError(f"LTI login returned HTTP {response.code}") from response
+        location = response.headers.get("Location", "")
+
+    redirect = urllib.parse.urlsplit(location)
+    expected = urllib.parse.urlsplit(lti_auth_url)
+    if (redirect.scheme, redirect.netloc, redirect.path) != (expected.scheme, expected.netloc, expected.path):
+        raise RuntimeError("LTI login redirected to an unexpected authorization endpoint")
+    query = urllib.parse.parse_qs(redirect.query)
+    if query.get("client_id") != [lti_client_id]:
+        raise RuntimeError("LTI login redirect used the wrong client ID")
+    if query.get("redirect_uri") != [f"{tool_url.rstrip('/')}/lti/launch"]:
+        raise RuntimeError("LTI login redirect used the wrong launch URI")
+    if query.get("lti_deployment_id") != [lti_deployment_id]:
+        raise RuntimeError("LTI login redirect used the wrong deployment ID")
+
+
 last_error = "no response"
 for attempt in range(1, 25):
     try:
@@ -57,6 +122,7 @@ for attempt in range(1, 25):
         lti_config = json.loads(fetch("/lti/config")[0])
         detector = fetch("/js/canvas-seb-detector.js")[0].decode("utf-8")
         status = json.loads(fetch("/api/testbed/status")[0])
+        verify_lti_login()
         if health.get("status") != "UP" or ready.get("status") != "UP":
             raise RuntimeError("health or readiness is not UP")
         if not isinstance(jwks.get("keys"), list) or not jwks["keys"]:
