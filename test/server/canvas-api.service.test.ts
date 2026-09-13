@@ -440,6 +440,53 @@ describe("CanvasApiService", () => {
     );
   });
 
+  it("resolves a student dashboard assessment group with one Canvas collection request", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse([
+        { id: 41, title: "Visible Quiz", published: true },
+        { id: 42, title: "Unpublished Quiz", published: false }
+      ])
+    );
+
+    await expect(
+      service.getLearnerAssessmentAvailabilities(
+        "course-7",
+        ["classicquiz_41", "classicquiz_42", "classicquiz_43"],
+        "user-1"
+      )
+    ).resolves.toMatchObject({
+      classicquiz_41: { available: true, reason: "available" },
+      classicquiz_42: { available: false, reason: "unpublished" },
+      classicquiz_43: { available: false, reason: "not_found" }
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer token-1" }) })
+    );
+  });
+
+  it("bounds concurrent learner visibility collection reads", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return jsonResponse([{ id: 41, title: "Visible Quiz", published: true }]);
+    });
+
+    await Promise.all(
+      Array.from({ length: 40 }, () =>
+        service.getLearnerAssessmentAvailabilities("course-7", ["classicquiz_41"], "user-1")
+      )
+    );
+
+    expect(maximumActive).toBeLessThanOrEqual(16);
+    expect(maximumActive).toBeGreaterThan(1);
+  });
+
   it("accepts an exact learner-visible New Quiz assignment even when Canvas omits optional type markers", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse([

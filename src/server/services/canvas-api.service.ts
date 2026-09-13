@@ -55,6 +55,8 @@ import {
 
 const CANVAS_DISCOVERY_PAGE_SIZE = 100;
 const CANVAS_DISCOVERY_MAX_PAGES = 100;
+const CANVAS_LEARNER_READ_CONCURRENCY = 16;
+const CANVAS_LEARNER_READ_QUEUE_LIMIT = 256;
 export const CANVAS_API_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 export const CANVAS_OAUTH_RESPONSE_MAX_BYTES = 64 * 1024;
 export const CANVAS_API_USER_AGENT = "SafeOnlineExam/1.0";
@@ -130,6 +132,8 @@ export type {
 @Injectable()
 export class CanvasApiService {
   private readonly logger = new Logger(CanvasApiService.name);
+  private learnerReadActive = 0;
+  private readonly learnerReadWaiters: Array<() => void> = [];
 
   constructor(
     private readonly config: AppConfig,
@@ -255,32 +259,85 @@ export class CanvasApiService {
     userId: string
   ): Promise<LearnerAssessmentAvailability> {
     const checkedAt = new Date().toISOString();
-    const parsed = parseNewQuizContentId(contentId);
-    if (parsed) {
-      if (parsed.courseId !== courseId) {
-        return { available: false, reason: "not_found", checkedAt };
-      }
+    const availability = await this.getLearnerAssessmentAvailabilities(courseId, [contentId], userId, checkedAt);
+    return availability[contentId] || { available: false, reason: "not_found", checkedAt };
+  }
+
+  /**
+   * Resolves several assessment IDs from one learner-scoped Canvas collection
+   * request. Callers should group Classic and New Quiz IDs separately so a
+   * temporary failure in one Canvas API does not obscure the other type.
+   */
+  async getLearnerAssessmentAvailabilities(
+    courseId: string,
+    contentIds: readonly string[],
+    userId: string,
+    checkedAt = new Date().toISOString()
+  ): Promise<Record<string, LearnerAssessmentAvailability>> {
+    const uniqueContentIds = [...new Set(contentIds)];
+    const parsedIds = uniqueContentIds.map((contentId) => ({
+      contentId,
+      newQuiz: parseNewQuizContentId(contentId),
+      classicQuizId: extractClassicQuizId(contentId)
+    }));
+    const hasNewQuizzes = parsedIds.some(({ newQuiz }) => newQuiz?.courseId === courseId);
+    const hasClassicQuizzes = parsedIds.some(({ newQuiz, classicQuizId }) => !newQuiz && !!classicQuizId);
+    if (hasNewQuizzes && hasClassicQuizzes) {
+      throw new CanvasApiRequestError(
+        "Learner assessment availability requests must contain only one Canvas assessment type.",
+        userId,
+        "",
+        400
+      );
+    }
+
+    let values: Array<CanvasAssignmentResponse | CanvasQuizResponse> = [];
+    if (hasNewQuizzes) {
       const url =
         `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/assignments` +
         `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}&new_quizzes=true`;
-      const assignments = await this.requestCompleteCanvasCollection<CanvasAssignmentResponse>(
-        userId,
-        url,
-        "student_session"
+      values = await this.withLearnerReadSlot(() =>
+        this.requestCompleteCanvasCollection<CanvasAssignmentResponse>(userId, url, "student_session")
       );
-      const assignment = assignments.find((candidate) => String(candidate.id) === parsed.assignmentId);
-      return learnerAvailabilityFromCanvasObject(assignment, checkedAt);
+    } else if (hasClassicQuizzes) {
+      const url =
+        `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes` +
+        `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}`;
+      values = await this.withLearnerReadSlot(() =>
+        this.requestCompleteCanvasCollection<CanvasQuizResponse>(userId, url, "student_session")
+      );
     }
-    const quizId = extractClassicQuizId(contentId);
-    if (!quizId) {
-      return { available: false, reason: "not_found", checkedAt };
+
+    const valuesById = new Map(values.map((value) => [String(value.id), value]));
+    return Object.fromEntries(
+      parsedIds.map(({ contentId, newQuiz, classicQuizId }) => {
+        const canvasId = newQuiz?.courseId === courseId ? newQuiz.assignmentId : !newQuiz ? classicQuizId : null;
+        return [
+          contentId,
+          canvasId
+            ? learnerAvailabilityFromCanvasObject(valuesById.get(canvasId), checkedAt)
+            : { available: false, reason: "not_found", checkedAt }
+        ];
+      })
+    );
+  }
+
+  private async withLearnerReadSlot<T>(action: () => Promise<T>): Promise<T> {
+    if (this.learnerReadActive < CANVAS_LEARNER_READ_CONCURRENCY) {
+      this.learnerReadActive += 1;
+    } else {
+      if (this.learnerReadWaiters.length >= CANVAS_LEARNER_READ_QUEUE_LIMIT) {
+        throw new CanvasApiRequestError("Canvas learner visibility verification is saturated.", "", "", 429);
+      }
+      await new Promise<void>((resolve) => this.learnerReadWaiters.push(resolve));
     }
-    const url =
-      `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes` +
-      `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}`;
-    const quizzes = await this.requestCompleteCanvasCollection<CanvasQuizResponse>(userId, url, "student_session");
-    const quiz = quizzes.find((candidate) => String(candidate.id) === quizId);
-    return learnerAvailabilityFromCanvasObject(quiz, checkedAt);
+    try {
+      return await action();
+    } finally {
+      const next = this.learnerReadWaiters.shift();
+      if (next) next();
+      else this.learnerReadActive -= 1;
+    }
   }
 
   async getQuizAccessCode(
