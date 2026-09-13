@@ -20,6 +20,7 @@ describe("LtiController role routing", () => {
   let canvasApi: {
     hasAccessToken: ReturnType<typeof vi.fn>;
     hasSessionTokenAccess: ReturnType<typeof vi.fn>;
+    getLearnerAssessmentAvailabilities: ReturnType<typeof vi.fn>;
     hasDismissedStudentReadinessPrompt: ReturnType<typeof vi.fn>;
     updateStoredIdentity: ReturnType<typeof vi.fn>;
   };
@@ -49,6 +50,16 @@ describe("LtiController role routing", () => {
     canvasApi = {
       hasAccessToken: vi.fn().mockResolvedValue(true),
       hasSessionTokenAccess: vi.fn().mockResolvedValue(true),
+      getLearnerAssessmentAvailabilities: vi
+        .fn()
+        .mockImplementation(async (_courseId: string, contentIds: string[]) =>
+          Object.fromEntries(
+            contentIds.map((contentId) => [
+              contentId,
+              { available: true, reason: "available", checkedAt: "2026-09-12T18:00:00.000Z" }
+            ])
+          )
+        ),
       hasDismissedStudentReadinessPrompt: vi.fn().mockResolvedValue(false),
       updateStoredIdentity: vi.fn().mockResolvedValue(undefined)
     };
@@ -1057,10 +1068,33 @@ describe("LtiController role routing", () => {
     expect(html).not.toContain("Cross-course New Quiz");
     expect(html.indexOf("Alpha Classic")).toBeLessThan(html.indexOf("Gamma New Quiz"));
     expect(html).not.toContain("?grant=");
+    expect(canvasApi.getLearnerAssessmentAvailabilities).toHaveBeenCalledTimes(2);
+    expect(canvasApi.getLearnerAssessmentAvailabilities).toHaveBeenCalledWith(
+      "course-1",
+      ["classicquiz_101"],
+      "student-1"
+    );
+    expect(canvasApi.getLearnerAssessmentAvailabilities).toHaveBeenCalledWith(
+      "course-1",
+      ["newquiz:course-1:99"],
+      "student-1"
+    );
   });
 
-  it("keeps configured assessments discoverable until learner-scoped launch authorization", async () => {
-    assessments.getQuizzesForCourse.mockResolvedValue([{ id: "101", courseId: "course-1", title: "Stale Classic" }]);
+  it("uses current learner Canvas visibility instead of stale stored publication on the student dashboard", async () => {
+    assessments.getQuizzesForCourse.mockResolvedValue([
+      {
+        id: "101",
+        courseId: "course-1",
+        title: "Stale Classic",
+        published: false,
+        publication: {
+          status: "unpublished",
+          confidence: "complete",
+          checkedAt: "2026-09-12T17:00:00.000Z"
+        }
+      }
+    ]);
     assessments.getSebSettingForQuiz.mockResolvedValue({
       quizId: "101",
       courseId: "course-1",
@@ -1068,7 +1102,6 @@ describe("LtiController role routing", () => {
       enabled: true,
       accessCode: "STALE-ACCESS"
     });
-    assessments.isAssessmentAvailableForLearner.mockResolvedValue(false);
     const response = responseDouble();
 
     await controller.launchGet(
@@ -1084,7 +1117,166 @@ describe("LtiController role routing", () => {
     expect(html).toContain('"view":"student"');
     expect(html).toContain("Stale Classic");
     expect(assessments.getSebSettingForQuiz).toHaveBeenCalledWith("101");
-    expect(assessments.isAssessmentAvailableForLearner).not.toHaveBeenCalled();
+    expect(canvasApi.getLearnerAssessmentAvailabilities).toHaveBeenCalledWith(
+      "course-1",
+      ["classicquiz_101"],
+      "student-1"
+    );
+    expect(assessments.getAssessmentReadiness).not.toHaveBeenCalled();
+  });
+
+  it("hides an enabled assessment that current learner-scoped Canvas access does not expose", async () => {
+    assessments.getQuizzesForCourse.mockResolvedValue([
+      { id: "101", courseId: "course-1", title: "Published in stored state", published: true }
+    ]);
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "101",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS"
+    });
+    canvasApi.getLearnerAssessmentAvailabilities.mockResolvedValue({
+      classicquiz_101: { available: false, reason: "not_found", checkedAt: "2026-09-12T18:00:00.000Z" }
+    });
+    const response = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      response
+    );
+
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).toContain('"view":"student"');
+    expect(html).not.toContain("Published in stored state");
+    expect(html).toContain('"quizzes":[]');
+  });
+
+  it("fails closed without exposing stored quiz titles when learner Canvas visibility is unavailable", async () => {
+    assessments.getQuizzesForCourse.mockResolvedValue([
+      { id: "101", courseId: "course-1", title: "Stored Ready" },
+      { id: "102", courseId: "course-1", title: "Stored Unpublished" }
+    ]);
+    assessments.getSebSettingForQuiz.mockImplementation(async (quizId: string) => ({
+      quizId,
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS"
+    }));
+    canvasApi.getLearnerAssessmentAvailabilities.mockRejectedValue(new Error("temporary Canvas failure"));
+    const response = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      response
+    );
+
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).not.toContain("Stored Ready");
+    expect(html).not.toContain("Stored Unpublished");
+    expect(html).toContain('"availabilityIncomplete":true');
+    expect(assessments.getAssessmentReadiness).not.toHaveBeenCalled();
+  });
+
+  it("shows retry guidance when Canvas returns malformed learner availability evidence", async () => {
+    assessments.getQuizzesForCourse.mockResolvedValue([
+      { id: "101", courseId: "course-1", title: "Malformed Availability" }
+    ]);
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "101",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS"
+    });
+    canvasApi.getLearnerAssessmentAvailabilities.mockResolvedValue({
+      classicquiz_101: {
+        available: false,
+        reason: "invalid_availability",
+        checkedAt: "2026-09-12T18:00:00.000Z"
+      }
+    });
+    const response = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      response
+    );
+
+    const html = response.send.mock.calls[0][0] as string;
+    expect(html).not.toContain("Malformed Availability");
+    expect(html).toContain('"availabilityIncomplete":true');
+  });
+
+  it("never shares student dashboard visibility between learners", async () => {
+    assessments.getQuizzesForCourse.mockResolvedValue([{ id: "101", courseId: "course-1", title: "Differentiated" }]);
+    assessments.getSebSettingForQuiz.mockResolvedValue({
+      quizId: "101",
+      courseId: "course-1",
+      sebRequired: true,
+      enabled: true,
+      accessCode: "ACCESS"
+    });
+    canvasApi.getLearnerAssessmentAvailabilities.mockImplementation(
+      async (_courseId: string, contentIds: string[], userId: string) =>
+        Object.fromEntries(
+          contentIds.map((contentId) => [
+            contentId,
+            {
+              available: userId === "student-1",
+              reason: userId === "student-1" ? "available" : "not_found",
+              checkedAt: "2026-09-12T18:00:00.000Z"
+            }
+          ])
+        )
+    );
+    const firstResponse = responseDouble();
+    const secondResponse = responseDouble();
+
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-1",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      firstResponse
+    );
+    await controller.launchGet(
+      requestDouble({
+        userId: "student-2",
+        courseId: "course-1",
+        roles: ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"]
+      }),
+      secondResponse
+    );
+
+    expect(firstResponse.send.mock.calls[0][0]).toContain("Differentiated");
+    expect(secondResponse.send.mock.calls[0][0]).not.toContain("Differentiated");
+    expect(canvasApi.getLearnerAssessmentAvailabilities).toHaveBeenNthCalledWith(
+      1,
+      "course-1",
+      ["classicquiz_101"],
+      "student-1"
+    );
+    expect(canvasApi.getLearnerAssessmentAvailabilities).toHaveBeenNthCalledWith(
+      2,
+      "course-1",
+      ["classicquiz_101"],
+      "student-2"
+    );
   });
 
   it("renders the SEB-required screen for targeted student launches outside SEB", async () => {
