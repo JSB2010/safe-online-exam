@@ -18,6 +18,13 @@ a user needs Canvas API access, the application displays **Connect Canvas**.
 The authorization belongs to that Canvas user and can be refreshed with
 **Reconnect Canvas** if scopes, credentials, or Canvas permissions change.
 
+The student course-navigation dashboard lists only protected assessments that
+Canvas currently makes available to that student. Unpublished, locked, future,
+and differentiated assessments that the student cannot access stay hidden.
+Instructors can still configure an unpublished assessment in advance, and it
+appears to students after Canvas makes it available without requiring an
+instructor to reopen Safe Online Exam.
+
 ## Canvas Administrators
 
 The root-account dashboard is not a public `/admin` page. It is available only
