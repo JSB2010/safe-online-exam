@@ -818,4 +818,3 @@
             state.urlCompletionObserver = null;
         }
     }
-

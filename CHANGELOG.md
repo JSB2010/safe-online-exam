@@ -5,7 +5,7 @@ release.
 
 ## [Unreleased]
 
-## [1.1.0] - Unreleased
+## [1.1.0] - 2026-09-12
 
 Safe Online Exam 1.1.0 is a backward-compatible reliability and workflow
 release. It adds no database migration, OAuth scope, LTI registration URL, or
@@ -23,6 +23,18 @@ public compatibility endpoint.
 
 ### Reliability and security
 
+- Encrypt stored Canvas OAuth access and refresh tokens with AES-256-GCM,
+  support explicit active-key rotation, and provide staged `compat` and
+  `enforce` upgrade modes plus maintenance commands for rewriting legacy or
+  rotated records without adding a database migration.
+- Prevent Cloud Run upgrades from silently recreating or replacing an
+  established OAuth encryption keyring, and require an existing installation
+  to complete the rollback-compatible `compat` deployment before enforcing
+  encrypted-only records.
+- Load the Canvas detector only after a bounded, secret-free requirement check
+  confirms that the current assessment is managed by Safe Online Exam, and
+  reduce browser-console diagnostics to structural signals that cannot expose
+  Canvas URLs, element metadata, user agents, or upstream error text.
 - Keep certificate-encrypted SEB configuration generation compatible with
   Node 24.20's native RSA key encoder while preserving the required PKCS#1
   public-key bytes and SHA-1 configuration-key hash.
@@ -35,6 +47,29 @@ public compatibility endpoint.
   committed integrity and checksum pins.
 - Split production and development security-update groups so a transitive test
   tool update cannot be coupled to a runtime vulnerability remediation.
+- Install dependencies with lifecycle scripts disabled, permit only the
+  reviewed `esbuild` rebuild, verify registry integrity and publication age,
+  and supplement Dependabot with a read-only weekly supply-chain monitor.
+
+### Release and deployment operations
+
+- Build production Cloud Run revisions only from a published immutable release
+  digest, verify the GitHub attestation against the exact tag and source commit,
+  and support KMS-backed Binary Authorization before migration, cleanup, or
+  service rollout.
+- Scan the exact staged multi-architecture image for fixable high or critical
+  vulnerabilities before Compose smoke testing, attestation, final GHCR tag
+  promotion, and immutable GitHub Release publication.
+- Preserve a Compose installation's stable project identity, database volume,
+  secrets, backups, and relative paths when a new release bundle performs an
+  upgrade from a different directory.
+- Add a source-based, target-locked school testbed workflow with immutable
+  provenance, pre-traffic migration and readiness checks, bounded diagnostics,
+  explicit rollback, and schema-compatibility guards that remain unavailable
+  to production.
+- Modularize the client, server, PostgreSQL stores, shared models, styles, and
+  Canvas detector source while preserving public routes and built asset
+  compatibility paths.
 
 ### Configurable student navigation
 
@@ -432,8 +467,8 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.7...HEAD
-[1.1.0]: https://github.com/JSB2010/safe-online-exam/compare/v1.0.7...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.1.0
 [1.0.7]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.7
 [1.0.6]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.6
 [1.0.5]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.5

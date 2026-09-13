@@ -645,4 +645,3 @@
         state.newQuizBeginClickKey = null;
         disconnectNewQuizBeginObserver();
     }
-

@@ -666,4 +666,3 @@
             // Storage can be disabled in hardened browser contexts.
         }
     }
-

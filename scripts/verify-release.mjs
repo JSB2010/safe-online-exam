@@ -229,11 +229,16 @@ if (!jamfDaemon.includes("org.safeonlineexam.seb-identity-installer")) {
 }
 
 const changelogSection = extractChangelogSection(changelog, version, !!options.tag);
-const changelogLink = options.tag
-  ? `[${version}]: https://github.com/JSB2010/safe-online-exam/releases/tag/${expectedTag}`
-  : `[${version}]: https://github.com/JSB2010/safe-online-exam/compare/v${latestStableVersion}...HEAD`;
+const changelogLink =
+  options.tag || latestStableVersion === version
+    ? `[${version}]: https://github.com/JSB2010/safe-online-exam/releases/tag/${expectedTag}`
+    : `[${version}]: https://github.com/JSB2010/safe-online-exam/compare/v${latestStableVersion}...HEAD`;
 if (!changelog.includes(changelogLink)) {
   fail(`CHANGELOG.md is missing the canonical ${version} release link`);
+}
+const unreleasedLink = `[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v${latestStableVersion}...HEAD`;
+if (!changelog.includes(unreleasedLink)) {
+  fail(`CHANGELOG.md is missing the canonical Unreleased link from v${latestStableVersion}`);
 }
 
 if (options.notesOutput) {
