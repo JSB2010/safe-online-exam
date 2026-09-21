@@ -67,8 +67,8 @@
     "lucide-react": "1.46.0",
     "pg": "8.23.0",
     "plist": "5.0.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "reflect-metadata": "0.2.2"
   },
   "overrides": {
@@ -86,8 +86,8 @@
     "@types/node": "24.13.4",
     "@types/pg": "8.23.1",
     "@types/plist": "3.0.5",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.7",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
     "esbuild": "0.28.2",
