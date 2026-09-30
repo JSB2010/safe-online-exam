@@ -1,10 +1,3 @@
-/**
- * Safe Online Exam browser detection and redirection script
- *
- * Injected by a Canvas theme loader. Keep this file dependency-free because it
- * runs inside Canvas and Safe Exam Browser.
- */
-(function () {
     'use strict';
 
     const SEB_DOWNLOAD_BASE_URL = "__SEB_BASE_URL__";
