@@ -7,19 +7,19 @@ substitutions:
   _LTI_COURSE_NAVIGATION_VISIBLE_TO_STUDENTS: "false"
 
 steps:
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:c458b41dcd5fa7fa66934a7ffe872b8a06e7134f51b01c007ed025858bc75b9c"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:73a97b855d386c74bee3facd59ccc261006c55a9812b7913fa6b93816010a1bc"
     entrypoint: "/workspace/scripts/validate-school-testbed-target.sh"
     args: ["$PROJECT_ID"]
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:c458b41dcd5fa7fa66934a7ffe872b8a06e7134f51b01c007ed025858bc75b9c"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:73a97b855d386c74bee3facd59ccc261006c55a9812b7913fa6b93816010a1bc"
     entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"
     args: ["$PROJECT_ID", "school-canvas-seb", "us-central1", "enforce"]
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:3d00b6c1a9b862621c30fc74d4f2abfc62bcbdee631ed3febd31e7edbdf6252c"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f"
     args: ["pull", "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"]
     allowFailure: true
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:3d00b6c1a9b862621c30fc74d4f2abfc62bcbdee631ed3febd31e7edbdf6252c"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f"
     env: ["DOCKER_BUILDKIT=1"]
     args:
       - "build"
@@ -39,23 +39,23 @@ steps:
       - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"
       - "."
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:3d00b6c1a9b862621c30fc74d4f2abfc62bcbdee631ed3febd31e7edbdf6252c"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f"
     entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:3d00b6c1a9b862621c30fc74d4f2abfc62bcbdee631ed3febd31e7edbdf6252c"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f"
     entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
     args:
       - "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:$BUILD_ID"
       - "/workspace/school-canvas-testbed.digest"
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:3d00b6c1a9b862621c30fc74d4f2abfc62bcbdee631ed3febd31e7edbdf6252c"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:bbb3d633c5c2813b2ce5245852979e1d637768f4acfc504d8ece288f91e9b60f"
     args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/canvas-seb-repo/school-canvas-seb:cache"]
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:c458b41dcd5fa7fa66934a7ffe872b8a06e7134f51b01c007ed025858bc75b9c"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:73a97b855d386c74bee3facd59ccc261006c55a9812b7913fa6b93816010a1bc"
     entrypoint: "/workspace/scripts/create-school-testbed-backup.sh"
     args: ["$PROJECT_ID", "${_CREATE_BACKUP}"]
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:c458b41dcd5fa7fa66934a7ffe872b8a06e7134f51b01c007ed025858bc75b9c"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:73a97b855d386c74bee3facd59ccc261006c55a9812b7913fa6b93816010a1bc"
     entrypoint: "/workspace/scripts/deploy-school-testbed-runtime.sh"
     args:
       - "$PROJECT_ID"

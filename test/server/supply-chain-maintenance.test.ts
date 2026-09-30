@@ -37,10 +37,10 @@ function supplyChainFixture(
   );
   writeFileSync(
     join(directory, "package.json"),
-    '{"packageManager":"npm@11.19.1+sha512.cedb312b1b7f92421a02cfb68b4194e88f8346651dacd6acc5364a25ef5309d4a32b19616a1ff8aff865e7280c0fa5c0835a99f5cd93368991e2a80ec9da75d2"}\n'
+    '{"packageManager":"npm@11.20.0+sha512.745dc40c5c1b60df8de51522a7e6580ded0d79444ae4182a28e72f4f588db546214cc4e5d05c16841b97ad2ecab57c9dbaac93312e5a6906ab7a09c70c0c4d83"}\n'
   );
   writeFileSync(join(directory, ".github", "workflows", "publish-release-image.yml"), "with:\n  version: v0.73.0\n");
-  writeFileSync(join(directory, "scripts", "verify-github-release-attestation.sh"), 'GH_CLI_VERSION="2.100.0"\n');
+  writeFileSync(join(directory, "scripts", "verify-github-release-attestation.sh"), 'GH_CLI_VERSION="2.102.0"\n');
   writeFileSync(
     join(directory, "fixtures.json"),
     JSON.stringify({
@@ -49,7 +49,7 @@ function supplyChainFixture(
         "node:24-bookworm-slim": imageDigest,
         "gcr.io/cloud-builders/docker:latest": imageDigest
       },
-      tools: { npm: "11.19.1", trivy: "v0.73.0", githubCli: "v2.100.0" },
+      tools: { npm: "11.20.0", trivy: "v0.73.0", githubCli: "v2.102.0" },
       npmEligible,
       outdated
     })
@@ -200,13 +200,13 @@ while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-C" ]]; then destination="$2"; break; fi
   shift
 done
-mkdir -p "$destination/gh_2.100.0_linux_amd64/bin"
+mkdir -p "$destination/gh_2.102.0_linux_amd64/bin"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\\n" "$*" >>"$GH_TEST_LOG"' \
   'if [[ "\${1:-}" == "api" ]]; then printf "%b\\n" "$GH_TEST_RELEASE_STATE"; fi' \
-  >"$destination/gh_2.100.0_linux_amd64/bin/gh"
-chmod +x "$destination/gh_2.100.0_linux_amd64/bin/gh"
+  >"$destination/gh_2.102.0_linux_amd64/bin/gh"
+chmod +x "$destination/gh_2.102.0_linux_amd64/bin/gh"
 `
     );
 
