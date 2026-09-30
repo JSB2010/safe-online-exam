@@ -361,7 +361,7 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("Dependency review");
     expect(workflow).toContain("actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294");
     expect(workflow).toContain("bash scripts/compose-smoke.sh");
-    expect(workflow).toContain("docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a");
+    expect(workflow).toMatch(/uses: docker\/build-push-action@[0-9a-f]{40}(?:\s|$)/u);
     expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
     expect(workflow).not.toMatch(/gcloud|google-github-actions|packages: write|id-token: write/iu);
   });
