@@ -2,7 +2,7 @@
 
 The Canvas detector is authored as ordered source fragments because every part
 shares the private scope of one browser IIFE. `manifest.json` is the canonical
-assembly order. `src/server/services/detector-source.ts` joins the fragments
+assembly order. `src/server/services/detector-source.ts` owns the IIFE wrapper and joins the fragments
 without separators so the result preserves the established browser behavior
 byte-for-byte; the build then writes both readable and minified public assets.
 
@@ -16,6 +16,8 @@ The fragment boundaries follow runtime responsibilities:
 - `submission.js`: submission detection, exit handoff, and recovery behavior
 - `runtime.js`: mutation observers, navigation hooks, and startup
 
-Fragments are intentionally not standalone programs: `core.js` opens the IIFE
-and `runtime.js` closes it. Edit them in manifest order, then run the detector
-and static-controller tests, `npm run build`, and `npm run test:e2e`.
+Every fragment must parse independently so static security analysis can inspect
+all detector code. The assembler supplies the shared IIFE wrapper; fragments
+share its private scope at runtime and must not be executed independently. Edit
+them in manifest order, then run the detector and static-controller tests,
+`npm run build`, and `npm run test:e2e`.
