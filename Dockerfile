@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS base
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS base
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY package.json ./
 ENV PATH="/opt/corepack-shims:${PATH}"
 RUN mkdir -p /opt/corepack-shims \
     && corepack enable npm --install-directory /opt/corepack-shims \
-    && npm --version | grep -Fx "11.19.1"
+    && npm --version | grep -Fx "11.20.0"
 
 FROM base AS deps
 
@@ -27,7 +27,7 @@ FROM deps AS postgres-tests
 COPY . .
 CMD ["npm", "run", "test:postgres"]
 
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS production-deps
+FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS production-deps
 
 WORKDIR /app
 
@@ -35,7 +35,7 @@ COPY package*.json .npmrc ./
 ENV PATH="/opt/corepack-shims:${PATH}"
 RUN mkdir -p /opt/corepack-shims \
     && corepack enable npm --install-directory /opt/corepack-shims \
-    && npm --version | grep -Fx "11.19.1"
+    && npm --version | grep -Fx "11.20.0"
 RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev --ignore-scripts
 
 FROM deps AS verify
@@ -54,7 +54,7 @@ RUN --network=none npm run format:check
 RUN --network=none npm run test:coverage
 RUN --network=none npm run build
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:774b7d020b24214835769e24c3544835526cd0288f0b094eae48e8b2c2429a79 AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d AS runtime
 
 STOPSIGNAL SIGTERM
 
