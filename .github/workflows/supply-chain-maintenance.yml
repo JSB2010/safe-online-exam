@@ -116,14 +116,18 @@ jobs:
     name: Published image vulnerability monitor
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      findings-result: ${{ steps.findings.outcome }}
     steps:
       - name: Report every high or critical finding
+        id: findings
+        continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.75.0
           image-ref: ghcr.io/jsb2010/safe-online-exam:latest
           format: table
-          exit-code: "0"
+          exit-code: "1"
           ignore-unfixed: false
           vuln-type: os,library
           severity: HIGH,CRITICAL
@@ -141,8 +145,8 @@ jobs:
 
   maintenance-issue:
     name: Maintain the supply-chain drift issue
-    needs: audit
-    if: always() && needs.audit.outputs.status != ''
+    needs: [audit, image-scan]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -150,6 +154,7 @@ jobs:
       issues: write
     steps:
       - name: Download the read-only monitor report
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: supply-chain-maintenance
@@ -158,9 +163,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MONITOR_STATUS: ${{ needs.audit.outputs.status }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
+          IMAGE_SCAN_RESULT: ${{ needs.image-scan.result }}
+          IMAGE_SCAN_FINDINGS_RESULT: ${{ needs.image-scan.outputs.findings-result }}
         shell: bash
         run: |
           set -euo pipefail
+          report_available=true
+          if [[ ! -s supply-chain-report.md ]]; then
+            report_available=false
+            printf '# Weekly supply-chain maintenance\n\nThe dependency monitor report is unavailable. Check the workflow run before closing this issue.\n' \
+              >supply-chain-report.md
+          fi
+          {
+            echo
+            echo "## Workflow results"
+            echo
+            printf -- '- Dependency audit job: `%s`\n' "${AUDIT_RESULT:-unknown}"
+            printf -- '- Published image scan job: `%s`\n' "${IMAGE_SCAN_RESULT:-unknown}"
+            printf -- '- All HIGH/CRITICAL findings check: `%s`\n' "${IMAGE_SCAN_FINDINGS_RESULT:-unknown}"
+            printf '\n[Workflow run](%s/%s/actions/runs/%s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf '\nOnly close after both monitors complete successfully and the published image has no HIGH/CRITICAL findings. Source updates do not replace the published image.\n'
+          } >>supply-chain-report.md
+
           title="Weekly supply-chain maintenance"
           issue_number="$(
             gh issue list --repo "$GITHUB_REPOSITORY" --state open \
@@ -168,10 +193,14 @@ jobs:
               --jq 'map(select(.title == "Weekly supply-chain maintenance"))[0].number // empty'
           )"
 
-          if [[ "$MONITOR_STATUS" == "clean" ]]; then
+          if [[ "${MONITOR_STATUS:-}" == "clean" \
+            && "${AUDIT_RESULT:-}" == "success" \
+            && "${IMAGE_SCAN_RESULT:-}" == "success" \
+            && "${IMAGE_SCAN_FINDINGS_RESULT:-}" == "success" \
+            && "$report_available" == "true" ]]; then
             if [[ -n "$issue_number" ]]; then
               gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" \
-                --body "The current weekly run found no actionable drift. Closing this maintenance issue."
+                --body "Both monitors completed successfully with no actionable drift or HIGH/CRITICAL published-image findings. Closing this maintenance issue."
               gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --reason completed
             fi
             exit 0

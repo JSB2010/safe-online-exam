@@ -57,6 +57,67 @@ function supplyChainFixture(
   return directory;
 }
 
+interface MaintenanceIssueCall {
+  args: string[];
+  body: string;
+}
+
+function maintainSupplyChainIssue(
+  monitorStatus: string,
+  auditResult: string,
+  imageScanResult: string,
+  findingsResult: string,
+  options: { reportAvailable?: boolean; issueNumber?: string } = {}
+) {
+  const directory = temporaryDirectory("safe-online-exam-maintenance-issue-");
+  const fakeBin = join(directory, "bin");
+  const log = join(directory, "gh.log");
+  mkdirSync(fakeBin);
+  if (options.reportAvailable !== false) {
+    writeFileSync(join(directory, "supply-chain-report.md"), "# Weekly supply-chain maintenance\n\nPin report.\n");
+  }
+  writeExecutable(
+    join(fakeBin, "gh"),
+    `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] !== "issue" || !["list", "edit", "create", "comment", "close"].includes(args[1])) process.exit(99);
+const bodyIndex = args.indexOf("--body-file");
+const body = bodyIndex < 0 ? "" : readFileSync(args[bodyIndex + 1], "utf8");
+appendFileSync(process.env.GH_TEST_LOG, JSON.stringify({ args, body }) + "\\n");
+if (args[1] === "list") process.stdout.write(process.env.GH_TEST_ISSUE_NUMBER + "\\n");
+`
+  );
+  const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
+  const issueJob = workflow.slice(workflow.indexOf("  maintenance-issue:"));
+  const runBlock = issueJob.match(/ {8}run: \|\n([\s\S]+)$/u)?.[1];
+  if (!runBlock) throw new Error("Maintenance issue command is missing.");
+  const script = runBlock.replace(/^ {10}/gmu, "");
+  const result = spawnSync("bash", ["-c", script], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      GH_TOKEN: "test-only-token",
+      GH_TEST_LOG: log,
+      GH_TEST_ISSUE_NUMBER: options.issueNumber ?? "123",
+      MONITOR_STATUS: monitorStatus,
+      AUDIT_RESULT: auditResult,
+      IMAGE_SCAN_RESULT: imageScanResult,
+      IMAGE_SCAN_FINDINGS_RESULT: findingsResult,
+      GITHUB_SERVER_URL: "https://github.com",
+      GITHUB_REPOSITORY: "JSB2010/safe-online-exam",
+      GITHUB_RUN_ID: "42"
+    }
+  });
+  const calls = readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as MaintenanceIssueCall);
+  return { result, calls };
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -488,5 +549,82 @@ exit 99
     expect(result.stderr).toContain("rerun with --apply");
     expect(policy).toContain("evaluationMode: REQUIRE_ATTESTATION");
     expect(policy).toContain("enforcementMode: ENFORCED_BLOCK_AND_AUDIT_LOG");
+  });
+});
+
+describe("supply-chain maintenance issue lifecycle", () => {
+  it("closes an existing issue only after clean pins and a complete clean image scan", () => {
+    const { result, calls } = maintainSupplyChainIssue("clean", "success", "success", "success");
+
+    expect(result.status).toBe(0);
+    expect(calls.filter((call) => call.args[1] === "close")).toHaveLength(1);
+    expect(calls.find((call) => call.args[1] === "close")?.args).toContain("123");
+    expect(calls.some((call) => call.args[1] === "edit" || call.args[1] === "create")).toBe(false);
+  });
+
+  it.each([
+    ["clean", "success", "failure", "failure"],
+    ["clean", "success", "success", "failure"],
+    ["clean", "success", "cancelled", ""],
+    ["clean", "success", "skipped", ""],
+    ["clean", "success", "success", ""],
+    ["clean", "success", "success", "skipped"],
+    ["clean", "failure", "success", "success"],
+    ["", "failure", "success", "success"],
+    ["clean", "cancelled", "success", "success"],
+    ["clean", "skipped", "success", "success"],
+    ["drift", "success", "success", "success"],
+    ["error", "failure", "success", "success"]
+  ])("keeps the issue open for audit %s/%s and image %s/%s", (monitor, audit, image, findings) => {
+    const { result, calls } = maintainSupplyChainIssue(monitor, audit, image, findings);
+
+    expect(result.status).toBe(0);
+    expect(calls.some((call) => call.args[1] === "close")).toBe(false);
+    const update = calls.find((call) => call.args[1] === "edit");
+    expect(update?.args).toContain("123");
+    expect(update?.body).toContain("Pin report.");
+    expect(update?.body).toContain("## Workflow results");
+    expect(update?.body).toContain("https://github.com/JSB2010/safe-online-exam/actions/runs/42");
+    expect(update?.body).toContain("Source updates do not replace the published image.");
+  });
+
+  it("keeps an issue open when the report cannot be downloaded despite successful jobs", () => {
+    const { result, calls } = maintainSupplyChainIssue("clean", "success", "success", "success", {
+      reportAvailable: false
+    });
+
+    expect(result.status).toBe(0);
+    expect(calls.some((call) => call.args[1] === "close")).toBe(false);
+    expect(calls.find((call) => call.args[1] === "edit")?.body).toContain("dependency monitor report is unavailable");
+  });
+
+  it("creates an issue for image findings even when there is no pin drift or existing issue", () => {
+    const { result, calls } = maintainSupplyChainIssue("clean", "success", "success", "failure", { issueNumber: "" });
+
+    expect(result.status).toBe(0);
+    expect(calls.some((call) => call.args[1] === "close")).toBe(false);
+    expect(calls.find((call) => call.args[1] === "create")?.body).toContain(
+      "All HIGH/CRITICAL findings check: `failure`"
+    );
+  });
+
+  it("waits for both jobs and uses the scan's original outcome while retaining the fixable-finding gate", () => {
+    const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
+    const issueJob = workflow.slice(workflow.indexOf("  maintenance-issue:"));
+    const imageJob = workflow.slice(workflow.indexOf("  image-scan:"), workflow.indexOf("  maintenance-issue:"));
+    const fixableGate = imageJob.slice(imageJob.indexOf("      - name: Reject fixable high or critical findings"));
+
+    expect(issueJob).toContain("needs: [audit, image-scan]");
+    expect(issueJob).toContain("if: always()");
+    expect(issueJob).not.toContain("if: always() && needs.audit.outputs.status != ''");
+    expect(issueJob).toContain("IMAGE_SCAN_RESULT: ${{ needs.image-scan.result }}");
+    expect(issueJob).toContain("IMAGE_SCAN_FINDINGS_RESULT: ${{ needs.image-scan.outputs.findings-result }}");
+    expect(imageJob).toContain("findings-result: ${{ steps.findings.outcome }}");
+    expect(imageJob).not.toContain("steps.findings.conclusion");
+    expect(imageJob).toContain("id: findings\n        continue-on-error: true");
+    expect(imageJob).toContain("ignore-unfixed: false");
+    expect(fixableGate).toContain('exit-code: "1"');
+    expect(fixableGate).toContain("ignore-unfixed: true");
+    expect(fixableGate).not.toContain("continue-on-error");
   });
 });
