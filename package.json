@@ -55,9 +55,9 @@
     "verify:e2e": "npm run verify && npm run test:e2e"
   },
   "dependencies": {
-    "@nestjs/common": "12.1.0",
-    "@nestjs/core": "12.1.0",
-    "@nestjs/platform-express": "12.1.0",
+    "@nestjs/common": "12.1.2",
+    "@nestjs/core": "12.1.2",
+    "@nestjs/platform-express": "12.1.2",
     "clsx": "2.1.1",
     "compression": "1.8.2",
     "cookie-parser": "1.4.7",
