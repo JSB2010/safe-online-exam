@@ -83,7 +83,12 @@ frontend, and every digest-pinned image hidden in Docker, Compose, and Cloud
 Build configuration. It opens or refreshes one maintenance issue; it never
 changes source, a lockfile, an image pin, or a release. It also scans the
 published `latest` image both for all high/critical findings and for fixable
-findings that should fail the workflow. See GitHub's
+findings that should fail the workflow. The issue closes only after both monitors
+complete successfully, the full high/critical scan is clean, and its dependency
+report is available. Unfixed findings and failed, cancelled, skipped, or missing
+results keep the issue open. Its report includes both monitor outcomes and the
+workflow-run link; passing source checks does not replace the published image.
+See GitHub's
 [supported ecosystems](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories).
 
 Dependabot opens independently reviewable weekly update PRs for npm packages
