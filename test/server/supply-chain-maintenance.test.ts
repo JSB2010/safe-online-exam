@@ -90,7 +90,7 @@ if (args[1] === "list") process.stdout.write(process.env.GH_TEST_ISSUE_NUMBER + 
   );
   const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
   const issueJob = workflow.slice(workflow.indexOf("  maintenance-issue:"));
-  const runBlock = issueJob.match(/        run: \|\n([\s\S]+)$/u)?.[1];
+  const runBlock = issueJob.match(/ {8}run: \|\n([\s\S]+)$/u)?.[1];
   if (!runBlock) throw new Error("Maintenance issue command is missing.");
   const script = runBlock.replace(/^ {10}/gmu, "");
   const result = spawnSync("bash", ["-c", script], {
