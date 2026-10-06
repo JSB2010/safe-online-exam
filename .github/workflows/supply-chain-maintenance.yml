@@ -46,13 +46,6 @@ jobs:
         shell: bash
         run: |
           set +e
-          node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md >pin-monitor.log 2>&1
-          pin_status=$?
-          if [[ ! -f supply-chain-report.md ]]; then
-            printf '# Weekly supply-chain maintenance\n\nThe immutable-pin monitor failed before it could render its report.\n' \
-              >supply-chain-report.md
-          fi
-
           npm run verify:dependency-policy >dependency-policy.log 2>&1
           policy_status=$?
           if [[ "$policy_status" -eq 0 ]]; then
@@ -65,6 +58,16 @@ jobs:
           signature_status=$?
           npm audit --omit=dev --audit-level=high >advisories.log 2>&1
           advisory_status=$?
+
+          # npm outdated omits missing development packages; materialize the
+          # script-disabled tree and verify it before checking direct pin drift.
+          node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md >pin-monitor.log 2>&1
+          pin_status=$?
+          if [[ ! -f supply-chain-report.md ]]; then
+            printf '# Weekly supply-chain maintenance\n\nThe immutable-pin monitor failed before it could render its report.\n' \
+              >supply-chain-report.md
+          fi
+
           set -e
 
           monitor_result=clean
