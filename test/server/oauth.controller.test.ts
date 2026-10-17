@@ -18,6 +18,7 @@ describe("canvasScopes", () => {
     expect(canvasScopes()).toEqual([
       "url:GET|/api/v1/courses",
       "url:GET|/api/v1/courses/:course_id/quizzes",
+      "url:GET|/api/v1/courses/:course_id/quizzes/:id",
       "url:GET|/api/v1/courses/:course_id/assignments",
       "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
       "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
@@ -37,7 +38,6 @@ describe("canvasScopes", () => {
       "url:GET|/api/v1/accounts/:account_id/courses",
       "url:GET|/api/v1/accounts/:account_id/terms",
       "url:GET|/api/v1/courses/:id",
-      "url:GET|/api/v1/courses/:course_id/quizzes/:id",
       ...canvasScopes()
     ]);
   });

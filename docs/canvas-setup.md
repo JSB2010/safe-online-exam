@@ -108,6 +108,7 @@ If the Canvas instance supports enforced scopes, allow this complete application
 ```text
 url:GET|/api/v1/courses
 url:GET|/api/v1/courses/:course_id/quizzes
+url:GET|/api/v1/courses/:course_id/quizzes/:id
 url:GET|/api/v1/courses/:course_id/assignments
 url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id
 url:PUT|/api/v1/courses/:course_id/quizzes/:id
@@ -125,7 +126,6 @@ url:GET|/api/v1/accounts/:account_id/permissions
 url:GET|/api/v1/accounts/:account_id/courses
 url:GET|/api/v1/accounts/:account_id/terms
 url:GET|/api/v1/courses/:id
-url:GET|/api/v1/courses/:course_id/quizzes/:id
 ```
 
 The administrator authorization requests the complete application scope set—including `url:GET|/api/v1/login/session_token`—plus these administrator scopes. Course and term collection access powers the paginated active-course picker; it does not import or preload the root account's complete historical catalog. Individual course access supports connection, refresh, recovery, and assessment changes. Individual Classic Quiz access lets the administrator reset flow snapshot every current access code before it changes anything. PostgreSQL stores one OAuth grant per Canvas user. Administrator consent upgrades that grant in place, and later instructor or student reauthorization preserves the complete administrator scope profile. A multi-role administrator therefore authorizes once and uses the same refreshable grant in every Canvas context.
@@ -138,6 +138,16 @@ redirect URI or scope set, affected users must reauthorize. Grants issued
 before OAuth scope contract version 3 may not include
 `url:GET|/api/v1/courses`; those instructors must select **Reconnect Canvas**
 before using course-to-course exam-tool copy.
+
+OAuth scope contract version 4 adds
+`url:GET|/api/v1/courses/:course_id/quizzes/:id` to every connection. Student
+Classic Quiz availability uses this individual-quiz API because Canvas can
+disable the quiz collection API when the course's **Quizzes** navigation item
+is hidden. Before deploying this change, allow the exact read scope on the
+Developer Key. Existing users must reconnect once to obtain the version 4
+grant; refreshing an older token does not add scopes. Administrator grants
+retain the same total endpoint capabilities, but must also reconnect to update
+the shared scope contract. Course navigation can remain hidden.
 
 ## 2. Create the LTI 1.3 Developer Key
 

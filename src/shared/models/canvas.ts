@@ -19,6 +19,7 @@ export interface CanvasPublicationEvidence {
 export const CANVAS_REQUIRED_OAUTH_SCOPES = [
   "url:GET|/api/v1/courses",
   "url:GET|/api/v1/courses/:course_id/quizzes",
+  "url:GET|/api/v1/courses/:course_id/quizzes/:id",
   "url:GET|/api/v1/courses/:course_id/assignments",
   "url:GET|/api/quiz/v1/courses/:course_id/quizzes/:assignment_id",
   "url:PUT|/api/v1/courses/:course_id/quizzes/:id",
@@ -32,15 +33,14 @@ export const CANVAS_ADMIN_REQUIRED_OAUTH_SCOPES = [
   "url:GET|/api/v1/accounts/:account_id/permissions",
   "url:GET|/api/v1/accounts/:account_id/courses",
   "url:GET|/api/v1/accounts/:account_id/terms",
-  "url:GET|/api/v1/courses/:id",
-  "url:GET|/api/v1/courses/:course_id/quizzes/:id"
+  "url:GET|/api/v1/courses/:id"
 ] as const;
 
 /**
  * Version of the role-independent OAuth scope contract. Changes to this
  * common scope set require a fresh Canvas authorization for every user.
  */
-export const CANVAS_OAUTH_SCOPE_VERSION = 3;
+export const CANVAS_OAUTH_SCOPE_VERSION = 4;
 
 export interface Quiz {
   id: string;
