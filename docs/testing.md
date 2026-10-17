@@ -79,8 +79,9 @@ and successful learner-scoped individual-quiz reads. They cover dashboard
 availability, configuration grants, direct LTI launch handoffs, practice
 quizzes/surveys, exact response identity, publication/date denials, authorization
 and upstream errors, learner/course/quiz cache isolation, short denial caching,
-and bounded concurrency. OAuth tests require the individual Classic Quiz read
-scope in the common version 4 contract and reject older grants for reconnect.
+differentiated-assignment denials with independent course-access checks, and
+bounded concurrency for lists exceeding the shared queue capacity. OAuth tests
+require the individual Classic Quiz read scope in the common version 4 contract and reject older grants for reconnect.
 New Quiz regression coverage retains the student assignment-collection path
 when course navigation is hidden.
 

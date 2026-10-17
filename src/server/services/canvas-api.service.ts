@@ -133,6 +133,8 @@ export type {
   CanvasInstructorCourse
 } from "./canvas-api-types.js";
 
+class CanvasLearnerQuizUnavailableError extends CanvasApiPermissionError {}
+
 @Injectable()
 export class CanvasApiService {
   private readonly logger = new Logger(CanvasApiService.name);
@@ -301,31 +303,64 @@ export class CanvasApiService {
     }
 
     if (hasClassicQuizzes) {
-      const entries = await Promise.all(
-        parsedIds.map(async ({ contentId, classicQuizId }) => {
-          if (!classicQuizId) {
-            return [contentId, { available: false, reason: "not_found", checkedAt }] as const;
+      // A differentiated-assignment denial must not hide other quizzes or clear
+      // a valid token. Confirm course access before treating it as quiz absence.
+      let courseAccess: Promise<void> | undefined;
+      const confirmCourseAccess = (): Promise<void> =>
+        (courseAccess ??= (async () => {
+          const url = `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/assignments?per_page=1`;
+          const assignments = await this.request<unknown>(userId, url, {}, "student_session");
+          if (!Array.isArray(assignments)) {
+            throw new CanvasApiRequestError("Canvas API returned an invalid collection response.", userId, url, 502);
           }
-          const url = this.classicQuizUrl(courseId, classicQuizId);
-          const read = this.cachedLearnerCollectionRead(userId, courseId, `CLASSIC_QUIZ:${classicQuizId}`, async () => {
-            let quiz: CanvasQuizResponse;
-            try {
-              quiz = await this.request<CanvasQuizResponse>(userId, url, {}, "student_session");
-            } catch (error) {
-              if (error instanceof CanvasApiRequestError && error.status === 404) return [];
-              throw error;
-            }
-            if (!isJsonObject(quiz) || String(quiz.id) !== classicQuizId) {
-              throw new CanvasApiRequestError("Canvas returned an invalid learner quiz response.", userId, url, 502);
-            }
-            return [quiz];
-          });
-          const values = await read.value;
-          const availability = learnerAvailabilityFromCanvasObject(values[0], checkedAt);
-          this.updateLearnerCollectionReadExpiry(read, [availability]);
-          return [contentId, availability] as const;
-        })
-      );
+        })());
+      const entries: Array<readonly [string, LearnerAssessmentAvailability]> = [];
+      // Bound scheduling as well as HTTP concurrency so one large course cannot
+      // fill the shared learner-read queue with its own quiz list.
+      for (let offset = 0; offset < parsedIds.length; offset += CANVAS_LEARNER_READ_CONCURRENCY) {
+        const batch = await Promise.all(
+          parsedIds
+            .slice(offset, offset + CANVAS_LEARNER_READ_CONCURRENCY)
+            .map(async ({ contentId, classicQuizId }) => {
+              if (!classicQuizId) {
+                return [contentId, { available: false, reason: "not_found", checkedAt }] as const;
+              }
+              const url = this.classicQuizUrl(courseId, classicQuizId);
+              const read = this.cachedLearnerCollectionRead(
+                userId,
+                courseId,
+                `CLASSIC_QUIZ:${classicQuizId}`,
+                async () => {
+                  let quiz: CanvasQuizResponse;
+                  try {
+                    quiz = await this.performRequest<CanvasQuizResponse>(userId, url, {}, "student_session", true);
+                  } catch (error) {
+                    if (error instanceof CanvasLearnerQuizUnavailableError) {
+                      await confirmCourseAccess();
+                      return [];
+                    }
+                    if (error instanceof CanvasApiRequestError && error.status === 404) return [];
+                    throw error;
+                  }
+                  if (!isJsonObject(quiz) || String(quiz.id) !== classicQuizId) {
+                    throw new CanvasApiRequestError(
+                      "Canvas returned an invalid learner quiz response.",
+                      userId,
+                      url,
+                      502
+                    );
+                  }
+                  return [quiz];
+                }
+              );
+              const values = await read.value;
+              const availability = learnerAvailabilityFromCanvasObject(values[0], checkedAt);
+              this.updateLearnerCollectionReadExpiry(read, [availability]);
+              return [contentId, availability] as const;
+            })
+        );
+        entries.push(...batch);
+      }
       return Object.fromEntries(entries);
     }
 
@@ -836,9 +871,19 @@ export class CanvasApiService {
     init: RequestInit = {},
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<T> {
+    return this.performRequest<T>(userId, url, init, grantType);
+  }
+
+  private async performRequest<T>(
+    userId: string,
+    url: string,
+    init: RequestInit,
+    grantType: CanvasOAuthGrantType,
+    learnerQuizRead = false
+  ): Promise<T> {
     try {
       return await withUpstreamDeadline((signal) =>
-        this.requestWithinDeadline<T>(userId, url, init, grantType, signal)
+        this.requestWithinDeadline<T>(userId, url, init, grantType, signal, learnerQuizRead)
       );
     } catch (error) {
       if (isUpstreamRequestTimeout(error)) {
@@ -890,13 +935,15 @@ export class CanvasApiService {
     url: string,
     init: RequestInit,
     grantType: CanvasOAuthGrantType,
-    signal: AbortSignal
+    signal: AbortSignal,
+    learnerQuizRead: boolean
   ): Promise<T> {
     const accessToken = await this.getAccessToken(userId, grantType, signal);
     if (!accessToken) {
       throw new CanvasApiAuthorizationError("Canvas API authorization is required.", userId);
     }
     let response = await this.fetchWithAccessToken(url, init, accessToken, signal);
+    if (learnerQuizRead) await this.checkLearnerQuizDenial(response, userId, url);
     if (response.status === 401 && isSafeReadMethod(init.method)) {
       await discardResponseBody(response);
       const refreshed = await this.refreshStoredToken(
@@ -907,6 +954,7 @@ export class CanvasApiService {
       );
       if (refreshed?.accessToken) {
         response = await this.fetchWithAccessToken(url, init, refreshed.accessToken, signal);
+        if (learnerQuizRead) await this.checkLearnerQuizDenial(response, userId, url);
       }
     }
     if (response.status === 401) {
@@ -944,6 +992,28 @@ export class CanvasApiService {
       return JSON.parse(text) as T;
     } catch {
       throw new CanvasApiRequestError("Canvas API returned an invalid JSON response.", userId, url, 502);
+    }
+  }
+
+  private async checkLearnerQuizDenial(response: Response, userId: string, url: string): Promise<void> {
+    if (![401, 403].includes(response.status) || response.headers.has("www-authenticate")) return;
+    // Canvas marks authenticated resource denials with this status. Invalid
+    // tokens and insufficient scopes use other responses and retain normal
+    // refresh/reconnect handling. Never retain or log the error body.
+    const text = await readBoundedUtf8Response(response, CANVAS_OAUTH_RESPONSE_MAX_BYTES);
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (isJsonObject(body) && body.status === "unauthorized") {
+      throw new CanvasLearnerQuizUnavailableError(
+        "Canvas denied learner quiz visibility.",
+        userId,
+        url,
+        response.status
+      );
     }
   }
 

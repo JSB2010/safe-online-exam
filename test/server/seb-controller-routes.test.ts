@@ -870,6 +870,57 @@ describe("SebController route contracts", () => {
     }
   );
 
+  it("does not mint a config grant for a differentiated-assignment denial with valid course access", async () => {
+    const repositories = createInMemoryRepositories();
+    const canvas = new CanvasApiService(
+      { getCanvasApiBaseUrl: () => "https://canvas.example.edu/api/v1" } as any,
+      { value: repositories } as RepositoryProvider
+    );
+    await canvas.storeAccessToken("student-1", "student-token");
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input) =>
+        new Response(JSON.stringify(String(input).includes("/assignments?") ? [] : { status: "unauthorized" }), {
+          status: String(input).includes("/assignments?") ? 200 : 403,
+          headers: { "content-type": "application/json" }
+        })
+    );
+    try {
+      const { controller, configGrants } = controllerWith({
+        canvasApi: { getLearnerAssessmentAvailability: canvas.getLearnerAssessmentAvailability.bind(canvas) },
+        assessments: {
+          getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" }),
+          getSebSettingForQuiz: vi.fn().mockResolvedValue({
+            quizId: "23455",
+            courseId: "course-1",
+            sebRequired: true,
+            enabled: true,
+            accessCode: "ACCESS",
+            urlRules: [],
+            externalTools: []
+          })
+        }
+      });
+      const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+        subject: "opaque-student-1",
+        deploymentId: "deployment-1",
+        sessionId: "session-1"
+      });
+      await expect(
+        controller.issueConfigGrant(
+          requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+          "course-1",
+          "classicquiz_23455"
+        )
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ error_code: "ASSESSMENT_NOT_AVAILABLE", reason: "not_found" })
+      });
+      expect(configGrants.mintGrant).not.toHaveBeenCalled();
+      await expect(canvas.getAccessToken("student-1", "student_session")).resolves.toBe("student-token");
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it.each(["classic", "new"] as const)(
     "rechecks a just-published %s quiz after the short learner-denial cache",
     async (assessmentType) => {

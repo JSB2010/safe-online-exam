@@ -467,6 +467,112 @@ describe("CanvasApiService", () => {
     expect(fetch.mock.calls.every(([url]) => /\/quizzes\/\d+$/.test(String(url)))).toBe(true);
   });
 
+  it.each([401, 403])(
+    "isolates authenticated quiz %s denials without invalidating the learner connection",
+    async (status) => {
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/quizzes/41")) return jsonResponse({ id: 41, published: true });
+        if (url.endsWith("/assignments?per_page=1")) return jsonResponse([]);
+        return jsonResponse({ status: "unauthorized", errors: [{ message: "PRIVATE_DIFFERENTIATED_DENIAL" }] }, status);
+      });
+      const clearToken = vi.spyOn(service, "clearAccessToken");
+      await expect(
+        service.getLearnerAssessmentAvailabilities(
+          "course-7",
+          ["classicquiz_41", "classicquiz_42", "classicquiz_43"],
+          "user-1"
+        )
+      ).resolves.toMatchObject({
+        classicquiz_41: { available: true },
+        classicquiz_42: { available: false, reason: "not_found" },
+        classicquiz_43: { available: false, reason: "not_found" }
+      });
+      expect(fetch).toHaveBeenCalledTimes(4);
+      expect(fetch).toHaveBeenCalledWith(
+        "https://canvas.example.com/api/v1/courses/course-7/assignments?per_page=1",
+        expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer token-1" }) })
+      );
+      expect(clearToken).not.toHaveBeenCalled();
+      await expect(service.getAccessToken("user-1", "student_session")).resolves.toBe("token-1");
+    }
+  );
+
+  it.each([
+    { status: 401, body: { status: "unauthorized" }, challenge: true },
+    { status: 401, body: { errors: [{ message: "Invalid access token." }] }, challenge: false },
+    { status: 403, body: { errors: [{ message: "Insufficient scopes on access token." }] }, challenge: false }
+  ])("retains real authorization handling for learner quiz response %j", async ({ status, body, challenge }) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const response = jsonResponse(body, status);
+      if (challenge) response.headers.set("www-authenticate", 'Bearer realm="canvas-lms"');
+      return response;
+    });
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+    ).rejects.toMatchObject({ status });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await expect(service.getAccessToken("user-1", "student_session")).resolves.toBe(status === 401 ? null : "token-1");
+  });
+
+  it.each([
+    { status: 401, body: { errors: [{ message: "Invalid access token." }] }, expected: 401 },
+    { status: 403, body: { status: "unauthorized" }, expected: 403 },
+    { status: 500, body: {}, expected: 500 },
+    { status: 200, body: {}, expected: 502 }
+  ])("rejects a quiz denial when course access cannot be confirmed: %j", async ({ status, body, expected }) => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "unauthorized" }, 403))
+      .mockResolvedValueOnce(jsonResponse(body, status));
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+    ).rejects.toMatchObject({ status: expected });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks a differentiated quiz denial after two seconds", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ status: "unauthorized" }, 403))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ id: 42, published: true }));
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+    ).resolves.toMatchObject({ available: false });
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+    ).resolves.toMatchObject({ available: false });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(2_001);
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+    ).resolves.toMatchObject({ available: true });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("processes a large Classic Quiz dashboard without saturating its own verification queue", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return jsonResponse({ id: new URL(String(input)).pathname.split("/").at(-1), published: true });
+    });
+    const contentIds = Array.from({ length: 300 }, (_, index) => `classicquiz_${index + 1}`);
+    const result = await service.getLearnerAssessmentAvailabilities("course-7", contentIds, "user-1");
+    expect(Object.keys(result)).toHaveLength(300);
+    expect(Object.values(result).every(({ available }) => available)).toBe(true);
+    expect(maximumActive).toBeLessThanOrEqual(16);
+    expect(maximumActive).toBeGreaterThan(1);
+    expect(fetch).toHaveBeenCalledTimes(300);
+    await service.getLearnerAssessmentAvailabilities("course-7", contentIds, "user-1");
+    expect(fetch).toHaveBeenCalledTimes(300);
+  });
+
   it("coalesces dashboard and launch reads for the same learner and Classic Quiz", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       await new Promise((resolve) => setTimeout(resolve, 5));
