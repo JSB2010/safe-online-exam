@@ -272,9 +272,10 @@ export class CanvasApiService {
   }
 
   /**
-   * Resolves several assessment IDs from one learner-scoped Canvas collection
-   * request. Callers should group Classic and New Quiz IDs separately so a
-   * temporary failure in one Canvas API does not obscure the other type.
+   * Uses learner-scoped single-quiz reads for Classic Quizzes because Canvas
+   * disables the collection API when Quizzes navigation is hidden. New Quizzes
+   * use the learner's assignment collection. Neither read depends on course
+   * navigation visibility. Callers group assessment types to isolate failures.
    */
   async getLearnerAssessmentAvailabilities(
     courseId: string,
@@ -299,6 +300,35 @@ export class CanvasApiService {
       );
     }
 
+    if (hasClassicQuizzes) {
+      const entries = await Promise.all(
+        parsedIds.map(async ({ contentId, classicQuizId }) => {
+          if (!classicQuizId) {
+            return [contentId, { available: false, reason: "not_found", checkedAt }] as const;
+          }
+          const url = this.classicQuizUrl(courseId, classicQuizId);
+          const read = this.cachedLearnerCollectionRead(userId, courseId, `CLASSIC_QUIZ:${classicQuizId}`, async () => {
+            let quiz: CanvasQuizResponse;
+            try {
+              quiz = await this.request<CanvasQuizResponse>(userId, url, {}, "student_session");
+            } catch (error) {
+              if (error instanceof CanvasApiRequestError && error.status === 404) return [];
+              throw error;
+            }
+            if (!isJsonObject(quiz) || String(quiz.id) !== classicQuizId) {
+              throw new CanvasApiRequestError("Canvas returned an invalid learner quiz response.", userId, url, 502);
+            }
+            return [quiz];
+          });
+          const values = await read.value;
+          const availability = learnerAvailabilityFromCanvasObject(values[0], checkedAt);
+          this.updateLearnerCollectionReadExpiry(read, [availability]);
+          return [contentId, availability] as const;
+        })
+      );
+      return Object.fromEntries(entries);
+    }
+
     let read:
       | {
           key: string;
@@ -311,13 +341,6 @@ export class CanvasApiService {
         `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}&new_quizzes=true`;
       read = this.cachedLearnerCollectionRead(userId, courseId, "NEW_QUIZ", () =>
         this.requestCompleteCanvasCollection<CanvasAssignmentResponse>(userId, url, "student_session")
-      );
-    } else if (hasClassicQuizzes) {
-      const url =
-        `${this.getCanvasApiBaseUrl()}/courses/${encodeURIComponent(courseId)}/quizzes` +
-        `?per_page=${CANVAS_DISCOVERY_PAGE_SIZE}`;
-      read = this.cachedLearnerCollectionRead(userId, courseId, "CLASSIC_QUIZ", () =>
-        this.requestCompleteCanvasCollection<CanvasQuizResponse>(userId, url, "student_session")
       );
     }
 
@@ -341,7 +364,7 @@ export class CanvasApiService {
   private cachedLearnerCollectionRead(
     userId: string,
     courseId: string,
-    contentType: "CLASSIC_QUIZ" | "NEW_QUIZ",
+    contentType: `CLASSIC_QUIZ:${string}` | "NEW_QUIZ",
     action: () => Promise<Array<CanvasAssignmentResponse | CanvasQuizResponse>>
   ): { key: string; value: Promise<Array<CanvasAssignmentResponse | CanvasQuizResponse>> } {
     const key = createHash("sha256").update(`${userId}\0${courseId}\0${contentType}`, "utf8").digest("base64url");

@@ -139,6 +139,17 @@ not depend on that cache: each pure-student configuration grant verifies the
 student's current read-only Canvas visibility. Do not repair either condition
 by editing database documents or distributing the Canvas access code.
 
+If Classic Quiz launch reports that Canvas availability cannot be verified
+while the student's Quizzes collection returns 404 with “That page has been
+disabled for this course,” check whether **Quizzes** is hidden in course
+navigation. That response does not prove the assessment was deleted. The
+individual-quiz learner check supports hidden navigation; its OAuth scope
+contract version 4 requires the exact `url:GET|/api/v1/courses/:course_id/quizzes/:id`
+scope on the Developer Key and one reconnect for existing users. On an older
+deployment, enabling Quizzes navigation is a temporary workaround to validate
+with a synthetic student before the next protected assessment. Do not disable
+SEB protection or substitute instructor visibility for a learner check.
+
 ### Containment for deployments before 1.1
 
 Before admitting a class on 1.0.x, verify both the Assignment wrapper and New

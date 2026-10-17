@@ -10,7 +10,7 @@ import {
 import { SebAccessProofService } from "../../src/server/services/seb-access-proof.service.js";
 import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { SebConfigurationService } from "../../src/server/services/seb-configuration.service.js";
-import { CanvasApiRequestError } from "../../src/server/services/canvas-api.service.js";
+import { CanvasApiRequestError, CanvasApiService } from "../../src/server/services/canvas-api.service.js";
 
 const BROWSER_TRANSACTION = createLtiOidcBrowserTransaction();
 
@@ -791,6 +791,84 @@ describe("SebController route contracts", () => {
       expect.objectContaining({ method: "learner_canvas", expiresAt: expect.any(String) })
     );
   });
+
+  it.each(["config-grant", "direct-launch"])(
+    "allows the student %s flow with hidden Canvas Quizzes navigation",
+    async (flow) => {
+      const repositories = createInMemoryRepositories();
+      const canvas = new CanvasApiService(
+        { getCanvasApiBaseUrl: () => "https://canvas.example.edu/api/v1" } as any,
+        { value: repositories } as RepositoryProvider
+      );
+      await canvas.storeAccessToken("student-1", "student-token");
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(
+        async (input) =>
+          new Response(
+            JSON.stringify(
+              String(input).endsWith("/quizzes/23455")
+                ? { id: 23455, published: true }
+                : { message: "That page has been disabled for this course" }
+            ),
+            {
+              status: String(input).endsWith("/quizzes/23455") ? 200 : 404,
+              headers: { "content-type": "application/json" }
+            }
+          )
+      );
+      try {
+        const { controller, configGrants } = controllerWith({
+          canvasApi: { getLearnerAssessmentAvailability: canvas.getLearnerAssessmentAvailability.bind(canvas) },
+          assessments: {
+            getQuiz: vi.fn().mockResolvedValue({ id: "23455", courseId: "course-1", title: "Midterm" }),
+            getSebSettingForQuiz: vi.fn().mockResolvedValue({
+              quizId: "23455",
+              courseId: "course-1",
+              sebRequired: true,
+              enabled: true,
+              accessCode: "ACCESS",
+              urlRules: [],
+              externalTools: []
+            })
+          }
+        });
+        if (flow === "config-grant") {
+          const token = createSebConfigGrantActionToken(configDouble() as any, "student-1", "course-1", {
+            subject: "opaque-student-1",
+            deploymentId: "deployment-1",
+            sessionId: "session-1"
+          });
+          await expect(
+            controller.issueConfigGrant(
+              requestDouble("/api/seb/config-grant/course-1/classicquiz_23455", token),
+              "course-1",
+              "classicquiz_23455"
+            )
+          ).resolves.toMatchObject({ success: true });
+        } else {
+          const request = requestDouble("/seb/launch/classicquiz_23455");
+          request.session.pendingSebLaunch = {
+            courseId: "course-1",
+            contentId: "classicquiz_23455",
+            subject: "opaque-student-1",
+            deploymentId: "deployment-1",
+            issuedAt: Date.now()
+          };
+          request.session.save = vi.fn((callback: (error?: Error) => void) => callback());
+          const response = responseDouble();
+          await controller.launchGet(request, response, "classicquiz_23455");
+          expect(response.send).toHaveBeenCalledWith(expect.stringContaining('"view":"seb-launching"'));
+          expect(response.status).not.toHaveBeenCalledWith(503);
+        }
+        expect(configGrants.mintGrant).toHaveBeenCalledOnce();
+        expect(fetch).toHaveBeenCalledExactlyOnceWith(
+          "https://canvas.example.edu/api/v1/courses/course-1/quizzes/23455",
+          expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer student-token" }) })
+        );
+      } finally {
+        fetch.mockRestore();
+      }
+    }
+  );
 
   it.each(["classic", "new"] as const)(
     "rechecks a just-published %s quiz after the short learner-denial cache",

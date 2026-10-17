@@ -72,7 +72,28 @@ npm run test:e2e
 
 `npm run verify` first checks release metadata consistency, then runs type checking, linting, Prettier verification, Vitest coverage tests, and the production build. `npm run verify:postgres` starts PostgreSQL 17, applies migrations in isolated schemas, and runs repository atomicity/concurrency tests. The deploy pipeline runs both layers before promotion.
 
+### Hidden Canvas navigation regression
+
+The Canvas API and SEB controller suites simulate a disabled Quizzes collection
+and successful learner-scoped individual-quiz reads. They cover dashboard
+availability, configuration grants, direct LTI launch handoffs, practice
+quizzes/surveys, exact response identity, publication/date denials, authorization
+and upstream errors, learner/course/quiz cache isolation, short denial caching,
+and bounded concurrency. OAuth tests require the individual Classic Quiz read
+scope in the common version 4 contract and reject older grants for reconnect.
+New Quiz regression coverage retains the student assignment-collection path
+when course navigation is hidden.
+
+Before release, use an isolated Canvas test course and synthetic student to
+check Quizzes navigation both visible and hidden. Include graded and practice
+Classic Quizzes, a New Quiz, unavailable/unassigned assessments, and invalid or
+revoked OAuth access. With scope contract version 4 authorized, verify the
+student list, direct launch, configuration download, Config Key proof, and
+access-code release. Repeat New Quiz checks with Assignments navigation hidden.
+Local tests mock Canvas and cannot replace this hosted Canvas/native SEB check.
+
 GitHub Actions runs those two layers plus the Compose smoke test for every pull request and push to `main`. Pull requests also run GitHub's dependency review and reject newly introduced vulnerabilities of moderate severity or higher. A separate required dependency-integrity job authenticates npm 11.21.0 through Corepack against the committed SHA-512 archive hash, validates the strict repository npm configuration and lockfile, and audits the production graph before install, installs with lifecycle scripts disabled, verifies registry signatures/provenance against that materialized tree, and only then exercises the sole approved rebuild. Application, PostgreSQL, and Compose jobs cannot start until that integrity job succeeds. CI uses the pinned Ubuntu 24.04 runner and Node 24—the same supported major runtime as the production container—with npm and BuildKit caching. The Compose job builds once through Buildx and passes that image into the smoke script rather than rebuilding it. This CI workflow has no cloud credentials and does not publish images or deploy services. The repository ruleset requires signed commits, its application, PostgreSQL, Compose, dependency-review, dependency-integrity, and aggregate CodeQL checks before merge. The aggregate check remains available when CodeQL legitimately skips individual language matrices for lockfile-only changes.
+
 
 Dependabot's documented npm support includes this repository's npm 11 toolchain,
 but its PRs remain inputs to review rather than merge decisions. The repository

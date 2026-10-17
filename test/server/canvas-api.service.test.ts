@@ -440,13 +440,13 @@ describe("CanvasApiService", () => {
     );
   });
 
-  it("resolves a student dashboard assessment group with one Canvas collection request", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse([
-        { id: 41, title: "Visible Quiz", published: true },
-        { id: 42, title: "Unpublished Quiz", published: false }
-      ])
-    );
+  it("resolves Classic dashboard assessments even when Canvas disables the Quizzes collection", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/quizzes/41")) return jsonResponse({ id: 41, title: "Visible Quiz", published: true });
+      if (path.endsWith("/quizzes/42")) return jsonResponse({ id: 42, title: "Unpublished Quiz", published: false });
+      return jsonResponse({ message: "That page has been disabled for this course" }, 404);
+    });
 
     await expect(
       service.getLearnerAssessmentAvailabilities(
@@ -459,17 +459,20 @@ describe("CanvasApiService", () => {
       classicquiz_42: { available: false, reason: "unpublished" },
       classicquiz_43: { available: false, reason: "not_found" }
     });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect(fetch).toHaveBeenCalledWith(
-      "https://canvas.example.com/api/v1/courses/course-7/quizzes?per_page=100",
+      "https://canvas.example.com/api/v1/courses/course-7/quizzes/41",
       expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer token-1" }) })
     );
+    expect(fetch.mock.calls.every(([url]) => /\/quizzes\/\d+$/.test(String(url)))).toBe(true);
   });
 
-  it("coalesces dashboard and launch visibility reads for the same learner and assessment type", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+  it("coalesces dashboard and launch reads for the same learner and Classic Quiz", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       await new Promise((resolve) => setTimeout(resolve, 5));
-      return jsonResponse([{ id: 41, title: "Visible Quiz", published: true }]);
+      return String(input).endsWith("/41")
+        ? jsonResponse({ id: 41, title: "Visible Quiz", published: true })
+        : jsonResponse({ message: "not found" }, 404);
     });
 
     const [dashboard, launch] = await Promise.all([
@@ -482,13 +485,114 @@ describe("CanvasApiService", () => {
       classicquiz_42: { available: false, reason: "not_found" }
     });
     expect(launch).toMatchObject({ available: true, reason: "available" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["assignment", "practice_quiz", "survey", "graded_survey"])(
+    "verifies a learner's %s without the hidden Quizzes navigation collection",
+    async (quizType) => {
+      await service.storeAccessToken("learner-2", "learner-token");
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).endsWith("/quizzes/42")) {
+          return jsonResponse({ id: 42, quiz_type: quizType, published: true });
+        }
+        return jsonResponse({ message: "That page has been disabled for this course" }, 404);
+      });
+      const save = vi.spyOn(repositories.assessments, "save");
+
+      await expect(
+        service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "learner-2")
+      ).resolves.toMatchObject({ available: true, reason: "available" });
+
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(
+        "https://canvas.example.com/api/v1/courses/course-7/quizzes/42",
+        expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer learner-token" }) })
+      );
+      expect(save).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps New Quiz visibility working when Quizzes and Assignments navigation are hidden", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) =>
+        String(input).includes("/assignments?")
+          ? jsonResponse([{ id: 99, published: true }])
+          : jsonResponse({ message: "That page has been disabled for this course" }, 404)
+      );
+
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "newquiz:course-7:99", "user-1")
+    ).resolves.toMatchObject({ available: true });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, [], {}, { id: 99, published: true }])(
+    "rejects malformed or mismatched Classic Quiz evidence %j without caching it",
+    async (invalid) => {
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(jsonResponse(invalid))
+        .mockResolvedValueOnce(jsonResponse({ id: 42, published: true }));
+
+      await expect(
+        service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+      ).rejects.toMatchObject({ status: 502 });
+      await expect(
+        service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+      ).resolves.toMatchObject({ available: true });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([403, 429, 500, 504])(
+    "does not turn a Classic Quiz %s into permission to launch or cached absence",
+    async (status) => {
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(jsonResponse({}, status))
+        .mockResolvedValueOnce(jsonResponse({ id: 42, published: true }));
+
+      await expect(
+        service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+      ).rejects.toMatchObject({ status });
+      await expect(
+        service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1")
+      ).resolves.toMatchObject({ available: true });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("isolates Classic Quiz caches by learner, course, and quiz and retains successful reads for 30 seconds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-16T17:00:00Z"));
+    await service.storeAccessToken("learner-2", "other-token");
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) =>
+        new Headers(init?.headers).get("authorization") === "Bearer other-token"
+          ? jsonResponse({}, 404)
+          : jsonResponse({ id: new URL(String(input)).pathname.split("/").at(-1), published: true })
+      );
+
+    await service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1");
+    await service.getLearnerAssessmentAvailability("course-7", "classicquiz_43", "user-1");
+    await service.getLearnerAssessmentAvailability("course-8", "classicquiz_42", "user-1");
+    await expect(
+      service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "learner-2")
+    ).resolves.toMatchObject({ available: false, reason: "not_found" });
+    vi.advanceTimersByTime(29_999);
+    await service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1");
+    expect(fetch).toHaveBeenCalledTimes(4);
+    vi.advanceTimersByTime(2);
+    await service.getLearnerAssessmentAvailability("course-7", "classicquiz_42", "user-1");
+    expect(fetch).toHaveBeenCalledTimes(5);
   });
 
   it("refreshes a learner collection two seconds after an unavailable result", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-12T18:00:00.000Z"));
-    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse([]));
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({}, 404));
 
     await service.getLearnerAssessmentAvailability("course-7", "classicquiz_41", "user-1");
     await service.getLearnerAssessmentAvailability("course-7", "classicquiz_41", "user-1");
@@ -507,7 +611,7 @@ describe("CanvasApiService", () => {
       maximumActive = Math.max(maximumActive, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
       active -= 1;
-      return jsonResponse([{ id: 41, title: "Visible Quiz", published: true }]);
+      return jsonResponse({ id: 41, title: "Visible Quiz", published: true });
     });
 
     await Promise.all(
@@ -567,15 +671,13 @@ describe("CanvasApiService", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-09-10T20:15:00.000Z"));
       vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        jsonResponse([
-          {
-            id: 42,
-            title: "Classic Quiz",
-            ...(published === undefined ? {} : { published }),
-            unlock_at: unlockAt,
-            lock_at: lockAt
-          }
-        ])
+        jsonResponse({
+          id: 42,
+          title: "Classic Quiz",
+          ...(published === undefined ? {} : { published }),
+          unlock_at: unlockAt,
+          lock_at: lockAt
+        })
       );
 
       await expect(
@@ -768,6 +870,18 @@ describe("CanvasApiService", () => {
     });
     await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(true);
     await expect(service.hasAccessToken("scoped-user")).resolves.toBe(true);
+  });
+
+  it("requires reconnect for a version-3 grant missing the individual Classic Quiz read scope", async () => {
+    await service.storeAccessToken("scoped-user", "old-token", {
+      requestedScopes: CANVAS_REQUIRED_OAUTH_SCOPES.filter(
+        (scope) => scope !== "url:GET|/api/v1/courses/:course_id/quizzes/:id"
+      ),
+      oauthScopeVersion: 3
+    });
+
+    await expect(service.hasSessionTokenAccess("scoped-user")).resolves.toBe(false);
+    await expect(service.hasAccessToken("scoped-user")).resolves.toBe(false);
   });
 
   it("persists a student setup-check dismissal without treating it as device trust", async () => {
@@ -1029,9 +1143,9 @@ describe("CanvasApiService", () => {
   });
 });
 
-function jsonResponse(value: unknown): Response {
+function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
-    status: 200,
+    status,
     headers: { "content-type": "application/json" }
   });
 }
