@@ -256,7 +256,7 @@ recover a consumed grant. A quiz timer can continue independently of the
 visible page; the instructor should inspect Canvas attempt timestamps before
 changing time limits or granting another attempt.
 
-Use SEB 3.7.1 or later on macOS 26.6+, preferably the tested 3.7.1.1 maintenance
+Use SEB 3.7.1 or later on macOS 26.6+, preferably the 3.7.1.1 maintenance
 release. The configuration specifies the Mac 3.7.1 minimum for clients that
 support version requirements. Older clients can ignore that setting, so device
 management and a real setup check remain necessary. Validate required
