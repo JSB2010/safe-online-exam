@@ -1,4 +1,4 @@
-import { createHash, randomUUID, scryptSync } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync } from "node:crypto";
 import type { Response } from "express";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
 import {
@@ -21,7 +21,7 @@ import { SebConfigKeyService } from "../services/seb-config-key.service.js";
 import { SebConfigurationService } from "../services/seb-configuration.service.js";
 import { CanvasApiRequestError, CanvasApiService } from "../services/canvas-api.service.js";
 import type { LearnerAssessmentAvailability } from "../services/canvas-api.service.js";
-import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
+import { SebSessionHandoffService, sebCanvasSessionPath } from "../services/seb-session-handoff.service.js";
 import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js";
 import type { SebLaunchAdmission } from "../services/seb-config-grant.service.js";
 import {
@@ -156,25 +156,24 @@ export class SebContentCoordinator {
       throw new Error("Canvas session handoff services are unavailable");
     }
     const returnTo = await this.resolveCanvasStartUrl(courseId, contentId);
-    const sessionUrl = await this.canvasApi.getSessionToken(canvasUserId, returnTo);
-    const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, sessionUrl);
+    const token = randomBytes(32).toString("base64url");
+    const startUrl = new URL(
+      sebCanvasSessionPath(courseId, contentId, token),
+      this.config.getApplicationBaseUrl() || this.config.toolUrl
+    ).toString();
+    const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, startUrl);
     const dynamicConfigKey = this.configKey.computeConfigKey(plain);
-    const handoffDocumentIds = launchAdmission
-      ? await this.sessionHandoff.registerConfig(
-          courseId,
-          contentId,
-          target.settingsFingerprint,
-          dynamicConfigKey,
-          returnTo,
-          launchAdmission
-        )
-      : await this.sessionHandoff.registerConfig(
-          courseId,
-          contentId,
-          target.settingsFingerprint,
-          dynamicConfigKey,
-          returnTo
-        );
+    const handoffDocumentIds = [
+      await this.sessionHandoff.registerSessionStart(token, {
+        canvasUserId,
+        courseId,
+        contentId,
+        settingsFingerprint: target.settingsFingerprint,
+        configKey: dynamicConfigKey,
+        returnTo,
+        ...(launchAdmission ? { attemptId: launchAdmission.attemptId } : {})
+      })
+    ];
     try {
       return {
         buffer: this.sebConfig.prepareSebConfigurationDownload(plain, {
@@ -215,57 +214,61 @@ export class SebContentCoordinator {
     target: SebConfigGrantTarget
   ): Promise<SebLaunchAdmission | null> {
     if (requiresStudentSessionHandoff(principal)) {
-      if (!this.canvasApi) {
-        throw new Error("Canvas learner availability service is unavailable");
-      }
-      const attemptId = randomUUID();
-      const startedAt = Date.now();
-      let availability: LearnerAssessmentAvailability;
-      try {
-        availability = await this.cachedLearnerAvailability(
-          principal.canvasUserId,
-          principal.courseId,
-          target.canonicalContentId
-        );
-      } catch (error) {
-        if (error && typeof error === "object" && Object.isExtensible(error)) {
-          (error as { launchAttemptId?: string }).launchAttemptId = attemptId;
-        }
-        console.warn(
-          JSON.stringify({
-            event: "learner_canvas_availability",
-            attemptId,
-            result: "unverified",
-            durationMs: Date.now() - startedAt,
-            status: error instanceof CanvasApiRequestError ? error.status : 502
-          })
-        );
-        throw error;
-      }
-      console.info(
-        JSON.stringify({
-          event: "learner_canvas_availability",
-          attemptId,
-          result: availability.reason,
-          durationMs: Date.now() - startedAt
-        })
-      );
-      if (!availability.available) {
-        throw new AssessmentNotAvailableError(availability.reason, attemptId);
-      }
-      const admissionSecret = randomUUID();
-      return {
-        attemptId,
-        digest: createHash("sha256").update(`seb-launch-admission:${admissionSecret}`, "utf8").digest("base64url"),
-        method: "learner_canvas",
-        checkedAt: availability.checkedAt,
-        expiresAt: new Date(Date.now() + LEARNER_ADMISSION_TTL_MS).toISOString()
-      };
+      return this.authorizeLearnerLaunch(principal.canvasUserId, principal.courseId, target);
     }
     if (!(await this.assessments.isAssessmentAvailableForLearner(principal.courseId, target.canonicalContentId))) {
       throw new AssessmentNotAvailableError("global_canvas_state");
     }
     return null;
+  }
+
+  async authorizeLearnerLaunch(
+    canvasUserId: string,
+    courseId: string,
+    target: SebConfigGrantTarget,
+    attemptId: string = randomUUID()
+  ): Promise<SebLaunchAdmission> {
+    if (!this.canvasApi) {
+      throw new Error("Canvas learner availability service is unavailable");
+    }
+    const startedAt = Date.now();
+    let availability: LearnerAssessmentAvailability;
+    try {
+      availability = await this.cachedLearnerAvailability(canvasUserId, courseId, target.canonicalContentId);
+    } catch (error) {
+      if (error && typeof error === "object" && Object.isExtensible(error)) {
+        (error as { launchAttemptId?: string }).launchAttemptId = attemptId;
+      }
+      console.warn(
+        JSON.stringify({
+          event: "learner_canvas_availability",
+          attemptId,
+          result: "unverified",
+          durationMs: Date.now() - startedAt,
+          status: error instanceof CanvasApiRequestError ? error.status : 502
+        })
+      );
+      throw error;
+    }
+    console.info(
+      JSON.stringify({
+        event: "learner_canvas_availability",
+        attemptId,
+        result: availability.reason,
+        durationMs: Date.now() - startedAt
+      })
+    );
+    if (!availability.available) {
+      throw new AssessmentNotAvailableError(availability.reason, attemptId);
+    }
+    const admissionSecret = randomUUID();
+    return {
+      attemptId,
+      digest: createHash("sha256").update(`seb-launch-admission:${admissionSecret}`, "utf8").digest("base64url"),
+      method: "learner_canvas",
+      checkedAt: availability.checkedAt,
+      expiresAt: new Date(Date.now() + LEARNER_ADMISSION_TTL_MS).toISOString()
+    };
   }
 
   async finalizeCourseScopedGrant(

@@ -137,11 +137,11 @@ When an instructor enables SEB, `AssessmentService` creates an access code, muta
 
 Student downloads do not use a reusable `.seb` link. A verified LTI principal requests a configuration grant, and the server first verifies the exact assessment through that learner's Canvas identity. A success mints a non-identifying launch-admission digest with a five-minute lifetime, then a one-time 120-second capability bound to the principal, course, content ID, current settings fingerprint, and admission. `GET /seb/config/:courseId/:contentId.seb` consumes that capability.
 
-For a student download, the service obtains a fresh Canvas session URL and builds the SEB start URL around it. The configuration contains the canonical Canvas assessment entry route, SEB URL policy, Config Key behavior, and an HMAC-bound quit URL. It is then encrypted to the configured public certificate. The service holds only public encryption material.
+For a student download, the service builds an assessment-bound deferred login page as the SEB start URL. After the native start-password and application prompts, that page proves its Config Key and requests a fresh Canvas session URL. The configuration contains the SEB URL policy, Config Key behavior, and an HMAC-bound quit URL. It is encrypted to the configured public certificate. The service holds only public encryption material.
 
 ### Config Key proof and access-code release
 
-On the Canvas assessment page, the detector gets the SEB Config Key hash and current browser URL through the SEB JavaScript API. It requests a proof from `POST /api/seb/access-proof/:courseId/:quizId`; the server verifies the assessment, current settings fingerprint, URL family, Config Key hash, and unexpired launch admission before returning a one-time proof token. The admission follows the configuration grant, download, dynamic handoff, Config Key proof, and access-code release without consulting contradictory course-wide publication state again. Settings changes, disable, or course reset still invalidate every boundary; admission expiry requires a fresh Canvas launch.
+On the Canvas assessment page, the detector gets the SEB Config Key hash and current browser URL through the SEB JavaScript API. It requests a proof from `POST /api/seb/access-proof/:courseId/:quizId`; the server verifies the assessment, current settings fingerprint, URL family, Config Key hash, and unexpired launch admission before returning a one-time proof token. The initial admission follows the configuration grant and download. At deferred login, learner availability is checked again and a fresh five-minute admission follows Config Key proof and access-code release without consulting contradictory course-wide publication state again. Settings changes, disable, or course reset still invalidate every boundary; admission expiry requires a fresh Canvas launch.
 
 `POST /api/seb/access-code/:courseId/:quizId` consumes that proof token. It returns the access code, approved tools, and an exit grant with sensitive response headers. A proof is valid for two minutes and can be consumed once. The detector then fills only an unambiguous Canvas access-code prompt. It does not treat DOM content as authorization.
 
@@ -317,3 +317,23 @@ SEB-required page.
 | `POST /api/debug/canvas-detector-trace` | Accepts sanitized detector diagnostics only when debug/diagnostic mode is enabled.                    |
 
 The route handlers are the source of truth for parameters and response schemas. Treat unlisted query parameters or output fields as implementation details.
+
+### Deferred Canvas browser login
+
+Student configurations start at `GET /seb/session/:courseId/:contentId/:token`,
+a server-owned page with a 15-minute, assessment-bound, single-use capability.
+No Canvas session token is created during configuration download: Canvas's
+login URLs expire within seconds, and SEB may still be waiting for the start
+password or native application dialogs. The start page reads the native SEB
+Config Key hash and posts it to the same path with a same-origin request.
+The server validates the proof before consuming the capability, rechecks live
+learner availability and current settings, registers the Canvas proof context,
+and creates a fresh Canvas login URL immediately before navigation. Replays,
+changed settings, resets, expired capabilities, and invalid proofs fail closed.
+No login-provider allowlist exception is needed. Existing downloaded
+configurations retain their previous behavior; obtain a fresh configuration
+after updating the service.
+
+`GET /seb/relaunch/:courseId/:contentId` requires the original verified Canvas
+session and renders a new launch action. Recovery never reuses a consumed
+configuration grant. The LTI browser transaction cookie remains mandatory.

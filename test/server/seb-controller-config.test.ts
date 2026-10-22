@@ -48,7 +48,7 @@ describe("SEB config downloads", () => {
     expect(response.type).toHaveBeenCalledWith("application/octet-stream");
   });
 
-  it("uses a fresh Canvas session URL only while creating a connected student's SEB config", async () => {
+  it("defers Canvas login until SEB has opened the configuration", async () => {
     await withConfig(async () => {
       const sebConfig = new SebConfigurationService(new AppConfig());
       const prepareDownload = vi
@@ -60,7 +60,7 @@ describe("SEB config downloads", () => {
       };
       const handoffDocumentIds = ["a".repeat(64)];
       const sessionHandoff = {
-        registerConfig: vi.fn().mockResolvedValue(handoffDocumentIds),
+        registerSessionStart: vi.fn().mockResolvedValue(handoffDocumentIds[0]),
         revokeConfigs: vi.fn().mockResolvedValue(undefined)
       };
       const controller = new SebController(
@@ -119,15 +119,21 @@ describe("SEB config downloads", () => {
       );
       const parsed = plist.parse(generated.buffer.toString("utf8")) as Record<string, unknown>;
 
-      expect(canvasApi.getSessionToken).toHaveBeenCalledWith("7288", `${CANVAS_URL}/courses/11825/quizzes/23455/take`);
-      expect(parsed.startURL).toBe("https://canvas.example.edu/login/session_token?opaque=secret");
+      expect(canvasApi.getSessionToken).not.toHaveBeenCalled();
+      expect(parsed.startURL).toMatch(
+        /^https:\/\/tool\.example\.edu\/seb\/session\/11825\/classicquiz_23455\/[A-Za-z0-9_-]{43}$/u
+      );
       expect(JSON.stringify(parsed.URLFilterRules)).not.toContain("accounts.google.com");
-      expect(sessionHandoff.registerConfig).toHaveBeenCalledWith(
-        "11825",
-        "classicquiz_23455",
-        "settings-fingerprint",
-        expect.stringMatching(/^[a-f0-9]{64}$/u),
-        `${CANVAS_URL}/courses/11825/quizzes/23455/take`
+      expect(sessionHandoff.registerSessionStart).toHaveBeenCalledWith(
+        expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+        expect.objectContaining({
+          canvasUserId: "7288",
+          courseId: "11825",
+          contentId: "classicquiz_23455",
+          settingsFingerprint: "settings-fingerprint",
+          configKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          returnTo: `${CANVAS_URL}/courses/11825/quizzes/23455/take`
+        })
       );
       expect(generated.handoffDocumentIds).toEqual(handoffDocumentIds);
       expect(sessionHandoff.revokeConfigs).not.toHaveBeenCalled();

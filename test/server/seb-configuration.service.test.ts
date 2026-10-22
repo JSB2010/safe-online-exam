@@ -230,7 +230,7 @@ describe("SebConfigurationService", () => {
       ignoreExitKeys: true,
       removeBrowserProfile: true,
       restartExamPasswordProtected: true,
-      sebAllowedVersions: ["win.3.6.min"],
+      sebAllowedVersions: ["win.3.6.min", "mac.3.7.1.min"],
       sebServiceIgnore: false,
       sebServicePolicy: 2,
       aacDnsPrePinning: true,

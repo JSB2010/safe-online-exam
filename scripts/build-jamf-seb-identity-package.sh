@@ -92,6 +92,7 @@ printf '%s\n' \
   'target_volume="${3:-/}"' \
   'daemon_path="$target_volume/Library/LaunchDaemons/org.safeonlineexam.seb-identity-installer.plist"' \
   '/bin/launchctl bootout system "$daemon_path" >/dev/null 2>&1 || true' \
+  '/bin/rm -f "$target_volume/Library/Application Support/SafeOnlineExam/SEBIdentity/completed"' \
   '/bin/launchctl bootstrap system "$daemon_path"' \
   '/bin/launchctl kickstart -k system/org.safeonlineexam.seb-identity-installer' \
   > "$scripts_root/postinstall"

@@ -11,6 +11,7 @@ import { requireSebConfigGrantRequestIntegrity } from "../http/request-integrity
 import { renderAppShell, renderFallbackHtml } from "../http/app-shell.js";
 import {
   setPrivateNoStoreResponseHeaders,
+  setSecretResponseHeaders,
   setSebDownloadResponseHeaders,
   setSensitiveSebResponseHeaders
 } from "../http/response-headers.js";
@@ -42,7 +43,7 @@ import {
   CanvasApiRequestError,
   CanvasApiService
 } from "../services/canvas-api.service.js";
-import { SebSessionHandoffService } from "../services/seb-session-handoff.service.js";
+import { SebSessionHandoffService, sebCanvasSessionPath } from "../services/seb-session-handoff.service.js";
 import {
   browserLaunchHandoffPath,
   configGrantEndpoint,
@@ -310,6 +311,118 @@ export class SebController {
     // readiness result and never grants durable device trust.
     await this.canvasApi.dismissStudentReadinessPrompt(principal.canvasUserId);
     return { success: true };
+  }
+
+  @Get("/seb/session/:courseId/:contentId/:token")
+  async canvasSessionPage(
+    @Res() response: Response,
+    @Param("courseId") courseId: string,
+    @Param("contentId") contentId: string,
+    @Param("token") token: string
+  ): Promise<void> {
+    setSecretResponseHeaders(response);
+    const record = await this.sessionHandoff?.getSessionStart(token, courseId, contentId);
+    response.status(record ? 200 : 410).send(
+      renderAppShell({
+        title: record ? "Opening your quiz" : "Reopen this quiz from Canvas",
+        view: "seb-session-start",
+        initialData: {
+          startPath: record ? sebCanvasSessionPath(courseId, contentId, token) : undefined,
+          canvasOrigin: new URL(this.config.getCanvasDomain()).origin,
+          error: record ? undefined : "This launch link has expired or already been used."
+        }
+      })
+    );
+  }
+
+  @Post("/seb/session/:courseId/:contentId/:token")
+  async startCanvasSession(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Param("courseId") courseId: string,
+    @Param("contentId") contentId: string,
+    @Param("token") token: string,
+    @Body() body: { configKeyHash?: string } = {}
+  ): Promise<void> {
+    setSecretResponseHeaders(response);
+    const fail = (status: number, message: string) => response.status(status).json({ success: false, message });
+    const base = this.config.getApplicationBaseUrl() || this.config.toolUrl;
+    if (
+      !base ||
+      request.header("origin") !== new URL(base).origin ||
+      !body ||
+      typeof body.configKeyHash !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(body.configKeyHash)
+    ) {
+      fail(403, "Open this quiz in Safe Exam Browser using a fresh launch from Canvas.");
+      return;
+    }
+    if (
+      !consumePublicBudget(request, "seb-session-start", 1_200) ||
+      !(await this.distributedAdmission.consumeRequestIp(request, "seb-session-start-ip", 2_400))
+    ) {
+      fail(429, "Too many launch requests. Wait a moment, then reopen the quiz from Canvas.");
+      return;
+    }
+    const record = await this.sessionHandoff?.consumeSessionStart(
+      token,
+      courseId,
+      contentId,
+      body.configKeyHash,
+      new URL(sebCanvasSessionPath(courseId, contentId, token), base).toString()
+    );
+    if (!record || !this.sessionHandoff || !this.canvasApi) {
+      fail(403, "This launch could not be verified or has already been used.");
+      return;
+    }
+    let proofIds: string[] = [];
+    try {
+      const target = await this.resolveCurrentConfiguredTarget(courseId, contentId);
+      if (!target || !sameSebConfigSettingsFingerprint(record.settingsFingerprint, target.settingsFingerprint)) {
+        fail(409, "The quiz settings changed.");
+        return;
+      }
+      const admission = await this.contentCoordinator.authorizeLearnerLaunch(
+        record.canvasUserId,
+        courseId,
+        target,
+        record.attemptId
+      );
+      proofIds = await this.sessionHandoff.registerConfig(
+        courseId,
+        contentId,
+        target.settingsFingerprint,
+        record.configKey,
+        record.returnTo,
+        admission
+      );
+      if (
+        !(await this.finalizeCourseScopedGrant(
+          courseId,
+          target,
+          () => this.sessionHandoff!.revokeConfigs(proofIds),
+          false
+        ))
+      ) {
+        fail(409, "The quiz settings changed.");
+        return;
+      }
+      // Canvas accepts this URL for only seconds. Mint it after native SEB
+      // password/application prompts, immediately before browser navigation.
+      const sessionUrl = await this.canvasApi.getSessionToken(record.canvasUserId, record.returnTo);
+      response.json({ success: true, sessionUrl });
+      console.info(JSON.stringify({ event: "seb_canvas_session_started", attemptId: admission.attemptId }));
+    } catch (error) {
+      await this.sessionHandoff.revokeConfigs(proofIds);
+      const denied =
+        error instanceof AssessmentNotAvailableError ||
+        error instanceof CanvasApiAuthorizationError ||
+        error instanceof CanvasApiPermissionError;
+      fail(
+        denied ? 403 : 503,
+        denied ? "Canvas is no longer making this quiz available to your account." : "Canvas could not open this quiz."
+      );
+    }
   }
 
   @Get("/seb/config/:courseId/:contentId.seb")
@@ -622,6 +735,30 @@ export class SebController {
     @Query("connected") _connected?: string
   ): Promise<void> {
     await this.handleSebLaunch(request, response, contentId);
+  }
+
+  @Get("/seb/relaunch/:courseId/:contentId")
+  async relaunch(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Param("courseId") courseId: string,
+    @Param("contentId") contentId: string
+  ): Promise<void> {
+    setPrivateNoStoreResponseHeaders(response);
+    const principal = verifiedLtiPrincipal(request);
+    const canonical = canonicalSebConfigContentId(contentId);
+    if (!principal || principal.courseId !== courseId || !canonical) {
+      response
+        .status(403)
+        .send(
+          renderFallbackHtml(
+            "Canvas Launch Required",
+            "<h1>Reopen this quiz from Canvas</h1><p>Return to your Canvas course and select the quiz to start a new launch.</p>"
+          )
+        );
+      return;
+    }
+    await this.renderConfigGrantPage(request, response, principal, courseId, canonical);
   }
 
   @Get("/seb/launch/:contentId/login")

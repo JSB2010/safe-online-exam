@@ -16,7 +16,7 @@ export function describeLtiLaunchFailure(error: unknown): { logMessage: string; 
     return {
       logMessage: "browser transaction cookie was absent or did not match",
       title: "Canvas Launch Cookie Blocked",
-      html: "<h1>Canvas Launch Cookie Blocked</h1><p>The browser did not return the short-lived security cookie created when Canvas opened this tool.</p><p>Allow third-party cookies for Canvas and this tool, then reopen it from Canvas. If the browser offers an option to open the tool in a new window, that also avoids third-party cookie blocking.</p>"
+      html: "<h1>Canvas Launch Cookie Blocked</h1><p>The browser did not return the short-lived security cookie created when Canvas opened this tool.</p><p>Close other launch or authorization windows, return to your Canvas course, and open the tool again in the same browser. If it still fails, open Canvas in a full browser window and allow cookies for Canvas and this tool.</p>"
     };
   }
   if (/Validated root-account launch is missing signed numeric account identifiers/i.test(message)) {

@@ -93,7 +93,7 @@ certificate_fingerprint() {
 
 identity_exists() {
   run_as_console_user /usr/bin/security find-identity "$LOGIN_KEYCHAIN" 2>/dev/null |
-    /usr/bin/grep -F -- "$CERTIFICATE_COMMON_NAME" >/dev/null
+    /usr/bin/awk -v fingerprint="$EXPECTED_IDENTITY_SHA1" '$2 == fingerprint { found = 1 } END { exit !found }'
 }
 
 while (( $# > 0 )); do
@@ -153,6 +153,9 @@ ACTUAL_CERT_SHA256="$(certificate_fingerprint < "$CERTIFICATE_PATH")"
 /usr/bin/openssl pkey -in "$IDENTITY_PATH" -pubout -out "$KEY_PUBLIC_PATH" >/dev/null 2>&1 || fail "The staged identity does not contain a usable private key"
 /usr/bin/openssl x509 -in "$CERTIFICATE_PATH" -pubkey -noout > "$CERTIFICATE_PUBLIC_PATH" || fail "Could not read the staged certificate public key"
 /usr/bin/cmp -s "$KEY_PUBLIC_PATH" "$CERTIFICATE_PUBLIC_PATH" || fail "The staged private key does not match the staged certificate"
+
+EXPECTED_IDENTITY_SHA1="$(/usr/bin/openssl x509 -in "$CERTIFICATE_PATH" -noout -fingerprint -sha1 | /usr/bin/sed 's/^.*=//' | /usr/bin/tr -d ':' | /usr/bin/tr '[:lower:]' '[:upper:]')"
+[[ "$EXPECTED_IDENTITY_SHA1" =~ ^[A-F0-9]{40}$ ]] || fail "Could not determine the expected identity fingerprint"
 
 CERTIFICATE_COMMON_NAME="$(/usr/bin/openssl x509 -in "$CERTIFICATE_PATH" -noout -subject -nameopt RFC2253 | /usr/bin/sed -n 's/^subject=.*CN=\([^,]*\).*$/\1/p')"
 [[ -n "$CERTIFICATE_COMMON_NAME" ]] || fail "Could not determine the staged certificate common name"

@@ -170,7 +170,7 @@ export const ASSESSMENT_LOCKDOWN_SETTINGS: Readonly<Record<string, unknown>> = {
   ignoreExitKeys: true,
   removeBrowserProfile: true,
   restartExamPasswordProtected: true,
-  sebAllowedVersions: ["win.3.6.min"],
+  sebAllowedVersions: ["win.3.6.min", "mac.3.7.1.min"],
   sebServiceIgnore: false,
   sebServicePolicy: 2
 };

@@ -31,6 +31,9 @@ const OAuthErrorPage = lazy(async () => ({
 const SebDownloadPage = lazy(async () => ({
   default: (await import("./features/seb/launch.js")).SebDownloadPage
 }));
+const SebSessionStartPage = lazy(async () => ({
+  default: (await import("./features/seb/session-start.js")).SebSessionStartPage
+}));
 const SebLaunchingPage = lazy(async () => ({
   default: (await import("./features/seb/launch.js")).SebLaunchingPage
 }));
@@ -75,6 +78,8 @@ function renderView() {
       return <SebDownloadPage data={bootstrap.data} />;
     case "seb-launching":
       return <SebLaunchingPage data={bootstrap.data} />;
+    case "seb-session-start":
+      return <SebSessionStartPage data={bootstrap.data} />;
     case "seb-launching-handoff":
       return <SebLaunchingHandoffPage data={bootstrap.data} />;
     case "seb-exit":

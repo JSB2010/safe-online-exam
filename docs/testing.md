@@ -347,3 +347,14 @@ Before merge or release, ensure all applicable items are true:
 ## Test Data And Safety
 
 Use isolated Canvas courses and non-sensitive test accounts. Do not paste actual access codes, OAuth tokens, session URLs, private keys, `.p12` files, or password values into test fixtures, snapshots, shell history, or issue reports. Clear temporary client configuration files and test assessment data according to the environment’s retention policy.
+
+### Delayed SEB launch regression checks
+
+Server tests cover a ten-minute wait before native startup, Config Key proof
+bound to the handoff URL, one successful consume under concurrent starts,
+capability expiry, changed settings, live learner denial, and cleanup after
+Canvas failure. The PostgreSQL gate additionally verifies the handoff's atomic
+consume across database clients. Browser tests cover successful navigation and
+actionable recovery at desktop and mobile widths, including console errors.
+Native acceptance must still cover password waiting, application-close dialogs,
+certificate access, accessibility tools, and a complete Canvas submission.

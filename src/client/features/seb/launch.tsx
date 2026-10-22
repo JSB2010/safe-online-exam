@@ -233,6 +233,7 @@ export function SebLaunchingPage({ data }: { data: Record<string, any> }) {
   const sebLaunchUrl = typeof data.sebLaunchUrl === "string" ? data.sebLaunchUrl : "";
   const returnUrl = typeof data.browserReturnUrl === "string" ? data.browserReturnUrl : "";
   const presentation = sebLaunchPresentation(data.launchPurpose);
+  const retryUrl = freshSebLaunchPath(sebLaunchUrl);
   const { showRecovery, startLaunchRecovery } = useSebLaunchRecovery();
 
   useEffect(() => {
@@ -251,8 +252,12 @@ export function SebLaunchingPage({ data }: { data: Record<string, any> }) {
           <div className="seb-launch-action-buttons">
             {returnUrl && <ReturnToCourseButton returnUrl={returnUrl} primary />}
             {sebLaunchUrl && (
-              <a className="button secondary" href={sebLaunchUrl} onClick={startLaunchRecovery}>
-                <ExternalLink size={16} /> Try opening again
+              <a
+                className="button secondary"
+                href={retryUrl || sebLaunchUrl}
+                onClick={retryUrl ? undefined : startLaunchRecovery}
+              >
+                <ExternalLink size={16} /> {retryUrl ? "Start a new launch" : "Try opening again"}
               </a>
             )}
           </div>
@@ -265,6 +270,16 @@ export function SebLaunchingPage({ data }: { data: Record<string, any> }) {
       }
     />
   );
+}
+
+function freshSebLaunchPath(launchUrl: string): string | null {
+  try {
+    const url = new URL(launchUrl);
+    const match = url.pathname.match(/^\/seb\/config\/([^/]+)\/([^/]+)\.seb$/u);
+    return match && url.searchParams.has("grant") ? `/seb/relaunch/${match[1]}/${match[2]}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function isSebLaunchHandoffPurpose(value: unknown): value is SebLaunchHandoffPurpose {

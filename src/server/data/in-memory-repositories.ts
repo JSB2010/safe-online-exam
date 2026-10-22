@@ -193,16 +193,19 @@ export class InMemoryTransientStateStore
   }
 
   async consume(id: string): Promise<TransientStateRecord | null> {
-    const existing = await this.get(id);
+    // Match PostgreSQL's atomic UPDATE ... WHERE consumed_at IS NULL.
+    // Yielding between reading and marking permits concurrent local replays.
+    const existing = this.documents.get(id);
     if (!existing || existing.consumedAt || isExpired(existing.expiresAt)) {
       if (existing && isExpired(existing.expiresAt)) {
-        await this.delete(id);
+        this.documents.delete(id);
       }
       return null;
     }
     const consumedAt = new Date().toISOString();
-    await this.save(id, { ...existing, consumedAt });
-    return { ...existing, consumedAt };
+    const consumed = prepareDocument(id, { ...existing, consumedAt }, consumedAt);
+    this.documents.set(id, structuredClone(consumed));
+    return structuredClone(consumed);
   }
 }
 

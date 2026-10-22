@@ -7,6 +7,21 @@ import { SebConfigKeyService } from "./seb-config-key.service.js";
 import { isCurrentLaunchAdmission, type SebLaunchAdmission } from "./seb-config-grant.service.js";
 
 const HANDOFF_CONFIG_TTL_SECONDS = 12 * 60 * 60;
+const SESSION_START_TTL_MS = 15 * 60 * 1000;
+
+export interface SebCanvasSessionStart {
+  canvasUserId: string;
+  courseId: string;
+  contentId: string;
+  settingsFingerprint: string;
+  configKey: string;
+  returnTo: string;
+  attemptId?: string;
+}
+
+export function sebCanvasSessionPath(courseId: string, contentId: string, token: string): string {
+  return `/seb/session/${encodeURIComponent(courseId)}/${encodeURIComponent(contentId)}/${token}`;
+}
 
 export interface SebConfigProofContext {
   configKey: string;
@@ -20,6 +35,46 @@ export class SebSessionHandoffService {
     private readonly repositories: RepositoryProvider,
     private readonly configKey: SebConfigKeyService
   ) {}
+
+  async registerSessionStart(token: string, input: SebCanvasSessionStart): Promise<string> {
+    const id = sessionStartDocumentId(token);
+    if (!id || !/^[a-f0-9]{64}$/u.test(input.configKey) || !canonicalProofUrl(input.returnTo)) {
+      throw new Error("Invalid Canvas session handoff");
+    }
+    if (
+      !(await this.repositories.value.transientStates.claim(id, {
+        ...input,
+        kind: "seb-canvas-session-start",
+        version: 1,
+        audience: "seb-canvas-session",
+        action: "start",
+        expiresAt: new Date(Date.now() + SESSION_START_TTL_MS)
+      }))
+    )
+      throw new Error("Unable to register Canvas session handoff");
+    return id;
+  }
+
+  async getSessionStart(token: string, courseId: string, contentId: string): Promise<SebCanvasSessionStart | null> {
+    const id = sessionStartDocumentId(token);
+    if (!id) return null;
+    const record = await this.repositories.value.transientStates.get(id);
+    return validSessionStart(record, courseId, contentId) ? record : null;
+  }
+
+  async consumeSessionStart(
+    token: string,
+    courseId: string,
+    contentId: string,
+    configKeyHash: string,
+    url: string
+  ): Promise<SebCanvasSessionStart | null> {
+    const record = await this.getSessionStart(token, courseId, contentId);
+    // Invalid proof must not burn another student's capability.
+    if (!record || !this.configKey.validateConfigKeyHashForUrl(configKeyHash, url, record.configKey)) return null;
+    const consumed = await this.repositories.value.transientStates.consume(sessionStartDocumentId(token)!);
+    return validSessionStart(consumed, courseId, contentId, true) ? consumed : null;
+  }
 
   async registerConfig(
     courseId: string,
@@ -157,6 +212,37 @@ export class SebSessionHandoffService {
     }
     return null;
   }
+}
+
+function sessionStartDocumentId(token: string): string | null {
+  return /^[A-Za-z0-9_-]{43}$/u.test(token)
+    ? createHash("sha256").update(`seb-canvas-session-start:${token}`).digest("hex")
+    : null;
+}
+
+function validSessionStart(
+  record: TransientStateRecord | null,
+  courseId: string,
+  contentId: string,
+  consumed = false
+): record is TransientStateRecord & SebCanvasSessionStart {
+  return (
+    !!record &&
+    record.kind === "seb-canvas-session-start" &&
+    record.version === 1 &&
+    record.audience === "seb-canvas-session" &&
+    record.action === "start" &&
+    !isExpired(record.expiresAt) &&
+    (consumed || !record.consumedAt) &&
+    record.courseId === courseId &&
+    record.contentId === contentId &&
+    typeof record.canvasUserId === "string" &&
+    !!record.canvasUserId &&
+    typeof record.settingsFingerprint === "string" &&
+    typeof record.returnTo === "string" &&
+    typeof record.configKey === "string" &&
+    /^[a-f0-9]{64}$/u.test(record.configKey)
+  );
 }
 
 function configProofUrls(returnTo: string): string[] {

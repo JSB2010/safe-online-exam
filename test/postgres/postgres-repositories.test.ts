@@ -4,6 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/server/data/migrations.js";
 import { createPostgresRepositories, PostgresOAuthTokenStore } from "../../src/server/data/postgres-repositories.js";
 import { RepositoryProvider } from "../../src/server/data/repositories.js";
+import {
+  SebSessionHandoffService,
+  sebCanvasSessionPath
+} from "../../src/server/services/seb-session-handoff.service.js";
+import { SebConfigKeyService } from "../../src/server/services/seb-config-key.service.js";
 import { assessmentWithQuizSebSetting, type CourseRecord, type OAuthToken } from "../../src/shared/models.js";
 import { createPostgresTestDatabase, type PostgresTestDatabase } from "./helpers.js";
 
@@ -235,6 +240,28 @@ describe("PostgreSQL document repositories", () => {
 });
 
 describe("PostgreSQL atomic runtime repositories", () => {
+  it("consumes a deferred Canvas login only once across concurrent service clients", async () => {
+    const provider = { value: createPostgresRepositories(testDatabase.database) } as RepositoryProvider;
+    const keys = new SebConfigKeyService();
+    const clients = Array.from({ length: 12 }, () => new SebSessionHandoffService(provider, keys));
+    const token = "L".repeat(43),
+      configKey = "a".repeat(64),
+      content = "newquiz:1:2";
+    const url = "https://tool.example.edu" + sebCanvasSessionPath("1", content, token);
+    await clients[0].registerSessionStart(token, {
+      canvasUserId: "student-1",
+      courseId: "1",
+      contentId: content,
+      settingsFingerprint: "settings",
+      configKey,
+      returnTo: "https://canvas.example.edu/courses/1/assignments/2"
+    });
+    const results = await Promise.all(
+      clients.map((client) => client.consumeSessionStart(token, "1", content, keys.hashForUrl(url, configKey), url))
+    );
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
   it("allows exactly one live claim and exactly one consume across concurrent clients", async () => {
     const store = createPostgresRepositories(testDatabase.database).transientStates;
     const claim = {

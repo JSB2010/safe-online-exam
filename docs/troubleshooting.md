@@ -245,3 +245,31 @@ Before opening a non-sensitive issue, confirm:
 Use [GitHub private vulnerability reporting](https://github.com/JSB2010/safe-online-exam/security/advisories/new)
 for any suspected security issue. Do not test against school or production
 systems without authorization.
+
+### A quiz stays blank after entering the start password
+
+Update the service and obtain a fresh configuration so Canvas login happens
+after SEB finishes its native prompts. A pre-update configuration may contain
+a Canvas login URL that expired while waiting. Quit SEB and use **Start a new
+launch** from the browser; repeatedly reopening the old download link cannot
+recover a consumed grant. A quiz timer can continue independently of the
+visible page; the instructor should inspect Canvas attempt timestamps before
+changing time limits or granting another attempt.
+
+Use SEB 3.7.1 or later on macOS 26.6+, preferably the tested 3.7.1.1 maintenance
+release. The configuration specifies the Mac 3.7.1 minimum for clients that
+support version requirements. Older clients can ignore that setting, so device
+management and a real setup check remain necessary. Validate required
+accessibility tools before changing a school's approved client version.
+
+### Identity certificate missing or inaccessible
+
+The student needs the matching certificate **and private key** in their own
+keychain, with access granted to the approved SEB application. A public
+certificate alone is insufficient. If the log finds the private key but cannot
+decrypt, investigate keychain access and application restrictions on that Mac.
+Installers compare the exact certificate identity fingerprint; a matching
+certificate name is insufficient. Redeploy the signed identity package for a
+rotation or another user. New package installs clear the prior completion
+marker before checking the staged replacement. Never distribute private
+identities or passphrases to students or broaden access to all applications.

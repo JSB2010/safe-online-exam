@@ -1,5 +1,74 @@
 import { expect, test } from "@playwright/test";
 
+test("opens a deferred Canvas login after native configuration proof", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  await page.addInitScript(() => {
+    (window as any).SafeExamBrowser = {
+      security: { configKey: "a".repeat(64), updateKeys: (done: () => void) => done() }
+    };
+  });
+  await page.route("**/deferred-session-preview", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Opening your quiz</title><link rel="stylesheet" href="/assets/index.css"></head><body><script id="seb-bootstrap" type="application/json">${JSON.stringify({ view: "seb-session-start", data: { startPath: "/seb/session/1/newquiz%3A1%3A2/test", canvasOrigin: "https://canvas.example.edu" } })}</script><div id="root"></div><script type="module" src="/assets/index.js"></script></body></html>`
+    })
+  );
+  await page.route("**/seb/session/1/newquiz%3A1%3A2/test", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ configKeyHash: "a".repeat(64) });
+    await route.fulfill({
+      json: { success: true, sessionUrl: "https://canvas.example.edu/courses/1/assignments/2?session_token=fresh" }
+    });
+  });
+  await page.route("https://canvas.example.edu/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<h1>Canvas quiz ready</h1>" })
+  );
+  await page.goto("/deferred-session-preview");
+  await expect(page.getByRole("heading", { name: "Canvas quiz ready" })).toBeVisible();
+  await expect(page).toHaveURL("https://canvas.example.edu/courses/1/assignments/2?session_token=fresh");
+  expect(errors).toEqual([]);
+});
+
+test("shows expired startup recovery without a blank page or another login request", async ({ page }, info) => {
+  const errors: string[] = [];
+  let posts = 0;
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts++;
+  });
+  await page.goto("/seb/session/1/newquiz%3A1%3A2/expired");
+  await expect(page.getByRole("heading", { name: "Quiz could not open" })).toBeVisible();
+  await expect(page.getByText(/return to Canvas, and start a new launch/u)).toBeVisible();
+  expect(posts).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: `/private/tmp/canvas-seb-investigation/recovery-${info.project.name}.png` });
+  expect(errors.filter((error) => !error.includes("410"))).toEqual([]);
+});
+
+test("assessment recovery starts a new launch instead of reopening a consumed configuration", async ({ page }) => {
+  await page.route("**/retry-launch-preview", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/index.css"></head><body><script id="seb-bootstrap" type="application/json">${JSON.stringify({ view: "seb-launching", data: { sebLaunchUrl: "sebs://localhost:8080/seb/config/1/newquiz%3A1%3A2.seb?grant=used", launchPurpose: "assessment" } })}</script><div id="root"></div><script type="module" src="/assets/index.js"></script></body></html>`
+    })
+  );
+  await page.route("**/seb/relaunch/1/newquiz%3A1%3A2", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<h1>Fresh launch action</h1>" })
+  );
+  await page.goto("/retry-launch-preview");
+  const retry = page.getByRole("link", { name: "Start a new launch" });
+  await expect(retry).toHaveAttribute("href", "/seb/relaunch/1/newquiz%3A1%3A2");
+  await retry.click();
+  await expect(page.getByRole("heading", { name: "Fresh launch action" })).toBeVisible();
+});
+
 test("keeps an unvalidated assessment exit page nonterminal", async ({ page }) => {
   const browserErrors: string[] = [];
   page.on("console", (message) => {
@@ -243,14 +312,18 @@ for (const handoff of [
     purpose: "assessment",
     launchUrl: "sebs://tool.example.test/seb/config/course-1/classicquiz_quiz-1.seb?grant=assessment",
     message: "We’re opening your assessment in Safe Exam Browser.",
-    returnLabel: "Return to course"
+    returnLabel: "Return to course",
+    retryLabel: "Start a new launch",
+    retryUrl: "/seb/relaunch/course-1/classicquiz_quiz-1"
   },
   {
     name: "setup check",
     purpose: "setup-check",
     launchUrl: "sebs://tool.example.test/seb/check/config.seb",
     message: "We’re opening your setup check in Safe Exam Browser.",
-    returnLabel: "Return to course"
+    returnLabel: "Return to course",
+    retryLabel: "Try opening again",
+    retryUrl: "sebs://tool.example.test/seb/check/config.seb"
   }
 ]) {
   test(`opens the server-backed ${handoff.name} browser handoff without browser storage`, async ({ page }) => {
@@ -276,7 +349,7 @@ for (const handoff of [
 
     await expect(page.getByRole("heading", { name: "Opening Safe Exam Browser" })).toBeVisible();
     await expect(page.getByText(handoff.message, { exact: false })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Try opening again" })).toHaveAttribute("href", handoff.launchUrl);
+    await expect(page.getByRole("link", { name: handoff.retryLabel })).toHaveAttribute("href", handoff.retryUrl);
     await expect(page.getByRole("button", { name: handoff.returnLabel })).toBeVisible();
     await expect(page.getByRole("heading", { name: "This Safe Exam Browser launch has ended" })).toHaveCount(0);
   });
@@ -298,7 +371,7 @@ for (const handoff of [
 
     await expect(page.getByRole("heading", { name: "Opening Safe Exam Browser" })).toBeVisible();
     await expect(page.getByText(handoff.message, { exact: false })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Try opening again" })).toHaveAttribute("href", handoff.launchUrl);
+    await expect(page.getByRole("link", { name: handoff.retryLabel })).toHaveAttribute("href", handoff.retryUrl);
     await expect(page.getByRole("button", { name: handoff.returnLabel })).toBeVisible();
     await expect.poll(() => page.evaluate((key) => window.sessionStorage.getItem(key), storageKey)).toBeNull();
 

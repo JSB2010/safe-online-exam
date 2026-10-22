@@ -73,6 +73,7 @@ export interface TransientStateRecord extends Record<string, any> {
     | "seb-config-grant"
     | "seb-browser-launch-handoff"
     | "seb-session-handoff-config"
+    | "seb-canvas-session-start"
     | "admission-budget";
   payload?: Record<string, string>;
   courseId?: string | null;
