@@ -1,3 +1,5 @@
+import { diagnosticSpan } from "../diagnostics/tracing.js";
+import { diagnostics } from "../diagnostics/runtime.js";
 import { createHash } from "node:crypto";
 import { Injectable, Logger } from "@nestjs/common";
 import type {
@@ -871,7 +873,23 @@ export class CanvasApiService {
     init: RequestInit = {},
     grantType: CanvasOAuthGrantType = "instructor"
   ): Promise<T> {
-    return this.performRequest<T>(userId, url, init, grantType);
+    const startedAt = Date.now();
+    try {
+      const result = await diagnosticSpan("canvas.api", () => this.performRequest<T>(userId, url, init, grantType));
+      diagnostics.record("canvas.api", {
+        outcome: "succeeded",
+        durationMs: Date.now() - startedAt,
+        details: { operation: "canvas_request", httpMethod: init.method || "GET", grantType }
+      });
+      return result;
+    } catch (error) {
+      diagnostics.failure("canvas.api", error, {
+        reasonCode: error instanceof CanvasApiRequestError ? "CANVAS_HTTP_" + error.status : "CANVAS_REQUEST_FAILED",
+        status: error instanceof CanvasApiRequestError ? error.status : undefined,
+        durationMs: Date.now() - startedAt
+      });
+      throw error;
+    }
   }
 
   private async performRequest<T>(
@@ -1019,7 +1037,13 @@ export class CanvasApiService {
 
   private async getStoredToken(userId: string, grantType: CanvasOAuthGrantType): Promise<OAuthToken | null> {
     const tokenId = oauthTokenId(userId, grantType);
-    let token = await this.repositories.value.oauthTokens.get(tokenId);
+    let token: OAuthToken | null;
+    try {
+      token = await this.repositories.value.oauthTokens.get(tokenId);
+    } catch (error) {
+      diagnostics.failure("oauth.token_storage", error, { reasonCode: "OAUTH_TOKEN_DECRYPT_OR_READ_FAILED" });
+      throw error;
+    }
     // Compatibility for a rolling deployment before migration 004 has
     // consolidated the formerly isolated administrator record.
     if (grantType === "account_admin" && !hasCurrentRequiredScopes(token, "account_admin")) {
@@ -1081,6 +1105,11 @@ export class CanvasApiService {
           },
           body,
           signal
+        });
+        diagnostics.record("oauth.refresh", {
+          outcome: response.ok ? "succeeded" : "failed",
+          status: response.status,
+          reasonCode: response.ok ? undefined : "CANVAS_REFRESH_REJECTED"
         });
         if (!response.ok) {
           await discardResponseBody(response);
@@ -1144,6 +1173,20 @@ export class CanvasApiService {
         authorization: `Bearer ${accessToken}`,
         "user-agent": CANVAS_API_USER_AGENT
       }
+    }).then((response) => {
+      const requestCost = Number(response.headers.get("x-request-cost") ?? "NaN");
+      const quotaRemaining = Number(response.headers.get("x-rate-limit-remaining") ?? "NaN");
+      diagnostics.record("canvas.response", {
+        outcome: response.ok ? "succeeded" : "failed",
+        status: response.status,
+        reasonCode: response.ok ? undefined : "CANVAS_HTTP_" + response.status,
+        details: {
+          operation: "canvas_http",
+          ...(Number.isFinite(requestCost) ? { requestCost } : {}),
+          ...(Number.isFinite(quotaRemaining) ? { quotaRemaining } : {})
+        }
+      });
+      return response;
     });
   }
 

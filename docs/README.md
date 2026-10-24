@@ -117,3 +117,7 @@ the executable contract:
 When code changes one of these contracts, update the owning guide in the same
 pull request. Add a new guide only when the material has a distinct audience
 or lifecycle; otherwise extend the existing owner.
+
+## Production diagnostics
+
+See [production diagnostics](diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.

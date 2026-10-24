@@ -358,3 +358,7 @@ consume across database clients. Browser tests cover successful navigation and
 actionable recovery at desktop and mobile widths, including console errors.
 Native acceptance must still cover password waiting, application-close dialogs,
 certificate access, accessibility tools, and a complete Canvas submission.
+
+## Production diagnostics
+
+See [production diagnostics](diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.

@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { createHash, randomBytes } from "node:crypto";
 import { constantTimeStringEqual as safeEqual } from "../security/constant-time.js";
 import { Injectable } from "@nestjs/common";
@@ -111,6 +112,13 @@ export class SebAccessProofService {
   async mintExitGrant(courseId: string, contentId: string, generationDigest: string): Promise<string> {
     const token = randomBytes(32).toString("base64url");
     await this.repositories.value.transientStates.save(exitGrantDocumentId(token), {
+      diagnosticsContext: diagnostics.current()
+        ? {
+            flowId: diagnostics.current()!.flowId,
+            attemptId: diagnostics.current()!.attemptId,
+            subjectKey: diagnostics.current()!.subjectKey
+          }
+        : undefined,
       kind: "seb-exit-grant",
       version: 1,
       audience: "seb-exit",
@@ -164,7 +172,8 @@ export class SebAccessProofService {
     if (!record || isExpired(record.expiresAt)) {
       return null;
     }
-    return record.kind === "seb-exit-grant" &&
+    const valid =
+      record.kind === "seb-exit-grant" &&
       record.version === 1 &&
       record.audience === "seb-exit" &&
       record.action === "show-quit-link" &&
@@ -173,8 +182,11 @@ export class SebAccessProofService {
       typeof record.generationDigest === "string" &&
       safeEqual(record.courseId, courseId) &&
       safeEqual(record.contentId, contentId)
-      ? record.generationDigest
-      : null;
+        ? record.generationDigest
+        : null;
+    if (valid && record.diagnosticsContext && typeof record.diagnosticsContext === "object")
+      diagnostics.bind({ ...record.diagnosticsContext, courseId, contentId });
+    return valid;
   }
 
   getExitGrantTtlSeconds(): number {

@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { clientEntryModulePreloads } from "./static-assets.js";
 
 export interface AppShellOptions {
@@ -9,7 +10,17 @@ export interface AppShellOptions {
 export function renderAppShell(options: AppShellOptions): string {
   const payload = JSON.stringify({
     view: options.view,
-    data: options.initialData || {}
+    data: {
+      ...(options.initialData || {}),
+      ...(diagnostics.current()?.attemptId && diagnostics.active(diagnostics.current()?.courseId)
+        ? {
+            _diagnostics: {
+              token: diagnostics.browserToken(diagnostics.current()!.attemptId!),
+              endpoint: "/api/diagnostics/v1/browser-events"
+            }
+          }
+        : {})
+    }
   })
     .replace(/</gu, "\\u003c")
     .replace(/\u2028/gu, "\\u2028")

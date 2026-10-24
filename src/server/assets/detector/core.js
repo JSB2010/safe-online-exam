@@ -228,6 +228,7 @@
     }
 
     function detectorTrace(event, details = {}, type = 'info') {
+        productionDiagnosticFromTrace(event, type);
         if (!state.debugMode) {
             return;
         }

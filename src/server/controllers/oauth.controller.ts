@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { Controller, Get, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { CANVAS_OAUTH_SCOPE_VERSION } from "../../shared/models.js";
@@ -199,6 +200,7 @@ export class OAuthController {
       }
       const requestedScopes = state.oauthScopeProfile === "admin" ? adminScopes() : scopesForPurpose(state.purpose);
       const grantType = hasAdminScopeProfile(requestedScopes) ? "account_admin" : "instructor";
+      diagnostics.record("oauth.exchange", { outcome: "succeeded" });
       await this.canvasApi.storeAccessToken(tokenOwner, token.access_token, {
         ...(grantType === "account_admin" ? { grantType } : {}),
         refreshToken: token.refresh_token || null,
@@ -228,7 +230,8 @@ export class OAuthController {
           initialData: { canvasReturnUrl: canvasReturnUrl(this.config, principal) }
         })
       );
-    } catch {
+    } catch (error) {
+      diagnostics.failure("oauth.callback", error, { reasonCode: "OAUTH_CALLBACK_FAILED" });
       response.status(400).send(
         renderAppShell({
           title: "Canvas Authorization Error",

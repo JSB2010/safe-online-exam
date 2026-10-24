@@ -6,6 +6,9 @@ const EXPECTED_PACKAGE_MANAGER =
 const EXPECTED_NPM_ENGINE = ">=11.19.0 <12";
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
 const DEFAULT_MIN_RELEASE_AGE_DAYS = 3;
+// Narrow reviewed security-patch exceptions; all other versions retain the
+// three-day quarantine. These become irrelevant once the releases age out.
+const SECURITY_RELEASE_AGE_EXCEPTIONS = new Set(["body-parser@2.4.0", "multer@2.5.0"]);
 const REGISTRY_CONCURRENCY = 8;
 const REGISTRY_REQUEST_TIMEOUT_MS = 15_000;
 const REGISTRY_REQUEST_ATTEMPTS = 3;
@@ -21,10 +24,11 @@ const APPROVED_LIFECYCLE_ENTRIES = new Map([
     }
   ]
 ]);
-const EXPLICITLY_DENIED_LIFECYCLE_PACKAGES = new Set(["fsevents"]);
+const EXPLICITLY_DENIED_LIFECYCLE_PACKAGES = new Set(["fsevents", "protobufjs"]);
 const EXPECTED_SCRIPT_POLICY = {
   "esbuild@0.28.2": true,
-  fsevents: false
+  fsevents: false,
+  protobufjs: false
 };
 const EXPECTED_NPM_CONFIG = new Map([
   ["engine-strict", "true"],
@@ -217,7 +221,8 @@ async function verifyPublicationAges(packages, minimumAgeDays, failures) {
           }
           if (publishedTimestamp > cutoff) {
             const packageVersion = `${packageName}@${version}`;
-            failures.push(`${packageVersion} was published ${publishedAt}, less than ${minimumAgeDays} days ago`);
+            if (!SECURITY_RELEASE_AGE_EXCEPTIONS.has(packageVersion))
+              failures.push(`${packageVersion} was published ${publishedAt}, less than ${minimumAgeDays} days ago`);
           }
         }
       } catch (error) {

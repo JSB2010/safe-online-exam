@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { isExpired } from "../data/document-values.js";
@@ -17,6 +18,7 @@ export interface SebCanvasSessionStart {
   configKey: string;
   returnTo: string;
   attemptId?: string;
+  diagnosticsFlowId?: string;
 }
 
 export function sebCanvasSessionPath(courseId: string, contentId: string, token: string): string {
@@ -44,6 +46,7 @@ export class SebSessionHandoffService {
     if (
       !(await this.repositories.value.transientStates.claim(id, {
         ...input,
+        diagnosticsFlowId: diagnostics.current()?.flowId,
         kind: "seb-canvas-session-start",
         version: 1,
         audience: "seb-canvas-session",

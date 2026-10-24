@@ -3,6 +3,7 @@ import type { VerifiedLtiPrincipal } from "../security/verified-lti-principal.js
 
 declare module "express-session" {
   interface SessionData {
+    diagnosticsFlowId?: string;
     launchData?: LtiLaunchData;
     verifiedLtiPrincipal?: VerifiedLtiPrincipal;
     ltiLaunchData?: LtiLaunchData;

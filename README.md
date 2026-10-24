@@ -253,3 +253,7 @@ Read [commercial licensing](COMMERCIAL-LICENSE.md),
 [contributing](CONTRIBUTING.md), [third-party notices](THIRD-PARTY-NOTICES.md),
 and [trademark guidance](TRADEMARKS.md) before redistribution or commercial
 use.
+
+## Production diagnostics
+
+See [production diagnostics](docs/diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.

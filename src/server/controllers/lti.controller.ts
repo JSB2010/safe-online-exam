@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { randomUUID } from "node:crypto";
 import { Body, Controller, Get, HttpCode, Logger, Post, Query, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
@@ -143,6 +144,8 @@ export class LtiController {
     let verificationStage = "state";
     try {
       const state = this.ltiState.peekState(body.state);
+      if (state.diagnosticsFlowId) diagnostics.bind({ flowId: state.diagnosticsFlowId });
+      diagnostics.record("lti.state", { outcome: "succeeded" });
       verificationStage = "browser-binding";
       const transactionCookieName = matchingLtiOidcBrowserTransactionCookie(request, state);
       if (!transactionCookieName) {
@@ -155,6 +158,7 @@ export class LtiController {
       }
       verificationStage = "token";
       const launchData = await this.ltiService.validateToken(body.id_token, state.nonce);
+      diagnostics.record("lti.token", { outcome: "succeeded" });
       verificationStage = "login-launch-binding";
       if (
         state.issuer !== launchData.issuer ||
@@ -172,6 +176,21 @@ export class LtiController {
       const principal = createVerifiedLtiPrincipal(launchData);
       storeLaunchData(request, { ...launchData, courseId: principal.courseId });
       request.session!.verifiedLtiPrincipal = principal;
+      request.session!.diagnosticsFlowId = diagnostics.current()?.flowId;
+      diagnostics.bind({ courseId: principal.courseId, subjectKey: diagnostics.subject(principal.canvasUserId) });
+      diagnostics.identity({
+        canvasUserId: principal.canvasUserId,
+        displayName: launchData.fullName || undefined,
+        email: launchData.email || undefined,
+        roles: principal.roles,
+        courseName: launchData.courseName || undefined,
+        sectionIds: launchData.custom?.canvas_section_ids
+          ?.split(",")
+          .map((v) => v.trim())
+          .filter(Boolean),
+        sectionNames: launchData.custom?.canvas_section_names ? [launchData.custom.canvas_section_names] : undefined
+      });
+      diagnostics.record("lti.principal", { outcome: "succeeded" });
       verificationStage = "identity";
       await this.canvasApi.updateStoredIdentity?.(
         principal.canvasUserId,
@@ -251,6 +270,9 @@ export class LtiController {
           );
         return;
       }
+      diagnostics.failure("lti.verification", error, {
+        reasonCode: "LTI_" + verificationStage.replaceAll("-", "_").toUpperCase() + "_FAILED"
+      });
       const failure = describeLtiLaunchFailure(error);
       this.logger.warn(`LTI launch verification failed at ${verificationStage}: ${failure.logMessage}`);
       response.status(400).send(renderFallbackHtml(failure.title, failure.html));
@@ -329,6 +351,8 @@ export class LtiController {
       canvas_lis_membership_roles: "$com.Instructure.membership.roles",
       seb_launch_surface: "course",
       canvas_course_id: "$Canvas.course.id",
+      canvas_section_ids: "$Canvas.course.sectionIds",
+      canvas_section_names: "$com.instructure.User.sectionNames",
       canvas_membership_permissions:
         "$Canvas.membership.permissions<manage_assignments_add,manage_assignments_edit,manage_course_content_add,manage_course_content_edit,manage_course_content_delete>"
     };
@@ -457,6 +481,7 @@ export class LtiController {
     const browserTransaction = createLtiOidcBrowserTransaction();
     const statePayload: Record<string, string> = {
       nonce,
+      ...(diagnostics.current() ? { diagnosticsFlowId: diagnostics.current()!.flowId } : {}),
       targetLinkUri,
       issuer,
       [LTI_OIDC_TRANSACTION_ID_FIELD]: browserTransaction.transactionId,
@@ -466,6 +491,7 @@ export class LtiController {
       statePayload.deploymentId = params.lti_deployment_id;
     }
     const state = await this.ltiState.createState(statePayload);
+    diagnostics.record("lti.login", { outcome: "succeeded" });
     const redirectUri = `${this.config.getRequiredToolUrl()}/lti/launch`;
     const authUrl = new URL(this.config.value.lti.authUrl);
     authUrl.searchParams.set("scope", "openid");

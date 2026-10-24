@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import type {
@@ -66,7 +67,11 @@ import {
   isFreshCanvasVerification,
   mapInBatches
 } from "./assessment-helpers.js";
-import { hasSameSebConfigFingerprint, invalidateConfigKeyIfSebConfigChanged } from "./seb-setting-fingerprint.js";
+import {
+  hasSameSebConfigFingerprint,
+  invalidateConfigKeyIfSebConfigChanged,
+  sebConfigFingerprint
+} from "./seb-setting-fingerprint.js";
 import { normalizeSebStartPasswordState } from "./seb-start-password.js";
 import { assertDistinctSebPasswords, assertNewSebPassword, resolveSebPasswordUpdate } from "./seb-password-policy.js";
 import {
@@ -363,6 +368,7 @@ export class AssessmentService {
     if (!result) {
       throw new Error("Saved assessment is not a Classic Quiz");
     }
+    recordDiagnosticConfiguration(result);
     return result;
   }
 
@@ -391,7 +397,9 @@ export class AssessmentService {
     if (!saved) {
       throw new Error("Saved assessment is missing");
     }
-    return assessmentToContentSebSetting(saved);
+    const result = assessmentToContentSebSetting(saved);
+    recordDiagnosticConfiguration(result);
+    return result;
   }
 
   async getOrCreateContentSebSetting(
@@ -1125,4 +1133,19 @@ export class AssessmentService {
       };
     });
   }
+}
+
+function recordDiagnosticConfiguration(setting: QuizSebSetting | ContentSebSetting) {
+  diagnostics.record("configuration.changed", {
+    outcome: "succeeded",
+    courseId: setting.courseId || undefined,
+    contentId: "contentId" in setting ? setting.contentId : assessmentIdForClassicQuiz(setting.quizId),
+    configurationRevision: diagnostics.configurationRevision(sebConfigFingerprint(setting)),
+    details: {
+      enabled: setting.enabled === true,
+      sebRequired: setting.sebRequired === true,
+      startPasswordConfigured: !!setting.startPassword,
+      quitPasswordConfigured: !!setting.quitPassword
+    }
+  });
 }

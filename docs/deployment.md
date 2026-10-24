@@ -755,3 +755,7 @@ into the server or enable production diagnostics as a shortcut.
 
 Continue with [Canvas setup](canvas-setup.md), then complete the
 [deployment acceptance sequence](testing.md#canvas-and-seb-acceptance).
+
+## Production diagnostics
+
+See [production diagnostics](diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.

@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { AppConfig } from "../config/app-config.js";
@@ -14,20 +15,35 @@ export class LtiStateService {
 
   async createState(payload: Record<string, string>): Promise<string> {
     const expiresAt = Date.now() + this.ttlMs;
-    return encryptJson({ payload, expiresAt }, this.getKey());
+    return encryptJson(
+      {
+        payload: { ...payload, ...(diagnostics.current() ? { diagnosticsFlowId: diagnostics.current()!.flowId } : {}) },
+        expiresAt
+      },
+      this.getKey()
+    );
   }
 
   peekState(state: string | undefined | null): Record<string, string> {
     if (!state) {
       throw new Error("Missing LTI state");
     }
-    const decrypted = decryptJson(state, this.getKey()) as { payload: Record<string, string>; expiresAt: number };
+    let decrypted: { payload: Record<string, string>; expiresAt: number };
+    try {
+      decrypted = decryptJson(state, this.getKey()) as typeof decrypted;
+    } catch (error) {
+      diagnostics.failure("lti.state", error, { reasonCode: "LTI_STATE_DECRYPT_FAILED" });
+      throw error;
+    }
     if (!decrypted.expiresAt || decrypted.expiresAt < Date.now()) {
+      diagnostics.record("lti.state", { outcome: "failed", reasonCode: "LTI_STATE_EXPIRED" });
       throw new Error("Expired LTI state");
     }
     if (!decrypted.payload || typeof decrypted.payload !== "object" || Array.isArray(decrypted.payload)) {
       throw new Error("Invalid LTI state");
     }
+    if (/^[0-9a-f-]{36}$/iu.test(decrypted.payload.diagnosticsFlowId || ""))
+      diagnostics.bind({ flowId: decrypted.payload.diagnosticsFlowId });
     return decrypted.payload;
   }
 

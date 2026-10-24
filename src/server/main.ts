@@ -1,4 +1,7 @@
 import "reflect-metadata";
+import { startDiagnosticTracing } from "./diagnostics/tracing.js";
+import { DiagnosticsExceptionFilter } from "./diagnostics/exception-filter.js";
+import { configureDiagnostics, diagnosticRequest } from "./diagnostics/runtime.js";
 import { join } from "node:path";
 import cookieParser from "cookie-parser";
 import compression from "compression";
@@ -19,6 +22,15 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bodyParser: true });
   const config = app.get(AppConfig);
+  configureDiagnostics();
+  const tracing = startDiagnosticTracing();
+  app.useGlobalFilters(new DiagnosticsExceptionFilter(app.getHttpAdapter()));
+  if (tracing) {
+    for (const signal of ["SIGTERM", "SIGINT"] as const)
+      process.once(signal, () => {
+        void tracing.shutdown();
+      });
+  }
   const repositories = app.get(RepositoryProvider);
   const expressApp = app.getHttpAdapter().getInstance() as express.Express;
 
@@ -47,6 +59,8 @@ async function bootstrap(): Promise<void> {
       }
     })
   );
+
+  app.use(diagnosticRequest);
 
   // Compress only public code assets. Dynamic application and API responses
   // can contain user-specific data, while these files are identical for every

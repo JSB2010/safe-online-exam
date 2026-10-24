@@ -273,3 +273,7 @@ certificate name is insufficient. Redeploy the signed identity package for a
 rotation or another user. New package installs clear the prior completion
 marker before checking the staged replacement. Never distribute private
 identities or passphrases to students or broaden access to all applications.
+
+## Production diagnostics
+
+See [production diagnostics](diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.

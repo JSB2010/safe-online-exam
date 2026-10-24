@@ -514,6 +514,7 @@
             return false;
         }
 
+        emitProductionDiagnostic('browser.submit_requested');
         debugLog('FINAL QUIZ SUBMISSION DETECTED by ' + source + '. Marking pending redirect...', 'success');
         debugLog('Submit control details: ' + describeElement(submitButton));
         markPendingRedirect(quizInfo);

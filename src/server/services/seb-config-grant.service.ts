@@ -42,6 +42,8 @@ export interface ConsumedSebConfigGrant {
 }
 
 export interface SebLaunchAdmission {
+  diagnosticsFlowId?: string;
+  diagnosticsSubjectKey?: string;
   attemptId: string;
   digest: string;
   method: "learner_canvas";

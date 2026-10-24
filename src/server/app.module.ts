@@ -1,3 +1,4 @@
+import { DiagnosticsController } from "./diagnostics/controller.js";
 import { Module } from "@nestjs/common";
 import { AppConfig } from "./config/app-config.js";
 import { RepositoryProvider } from "./data/repositories.js";
@@ -30,6 +31,7 @@ import { DistributedAdmissionService } from "./security/distributed-admission.js
 
 @Module({
   controllers: [
+    DiagnosticsController,
     AdminController,
     DebugController,
     HomeController,

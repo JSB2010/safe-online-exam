@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { createHash } from "node:crypto";
 import type { Request } from "express";
 import type { ContentSebSetting, QuizSebSetting } from "../../shared/models.js";
@@ -166,6 +167,8 @@ export function sanitizeFileToken(value: string): string {
 export function sebConfigPath(courseId: string, contentId: string, grant: string): string {
   const params = new URLSearchParams();
   params.set("grant", grant);
+  const attemptId = diagnostics.current()?.attemptId;
+  if (attemptId && diagnostics.active(courseId)) params.set("diagnostic", attemptId);
   return `/seb/config/${encodeURIComponent(courseId)}/${encodeURIComponent(contentId)}.seb?${params.toString()}`;
 }
 

@@ -21,11 +21,10 @@ describe("release consistency script", () => {
     temporaryDirectories.push(directory);
     const notes = join(directory, "notes.md");
 
-    const output = execFileSync(
-      process.execPath,
-      ["scripts/verify-release.mjs", "--tag", `v${packageJson.version}`, "--notes-output", notes],
-      { cwd: process.cwd(), encoding: "utf8" }
-    );
+    const output = execFileSync(process.execPath, ["scripts/verify-release.mjs", "--notes-output", notes], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
 
     expect(output).toContain(`release consistency check passed for v${packageJson.version}`);
     expect(readFileSync(notes, "utf8")).toContain(`v${packageJson.version} changelog`);

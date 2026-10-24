@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { createHash, randomBytes, randomUUID, scryptSync } from "node:crypto";
 import type { Response } from "express";
 import type { ContentSebSetting, ExternalToolConfig, QuizSebSetting } from "../../shared/models.js";
@@ -161,7 +162,15 @@ export class SebContentCoordinator {
       sebCanvasSessionPath(courseId, contentId, token),
       this.config.getApplicationBaseUrl() || this.config.toolUrl
     ).toString();
+    diagnostics.record("configuration.generation", {
+      outcome: "started",
+      configurationRevision: diagnostics.configurationRevision(target.settingsFingerprint)
+    });
     const plain = await this.generatePlainConfigUncached(courseId, contentId, undefined, startUrl);
+    diagnostics.record("configuration.generation", {
+      outcome: "succeeded",
+      configurationRevision: diagnostics.configurationRevision(target.settingsFingerprint)
+    });
     const dynamicConfigKey = this.configKey.computeConfigKey(plain);
     const handoffDocumentIds = [
       await this.sessionHandoff.registerSessionStart(token, {
@@ -175,13 +184,13 @@ export class SebContentCoordinator {
       })
     ];
     try {
-      return {
-        buffer: this.sebConfig.prepareSebConfigurationDownload(plain, {
-          startPassword: target.setting.startPassword
-        }),
-        handoffDocumentIds
-      };
+      const buffer = this.sebConfig.prepareSebConfigurationDownload(plain, {
+        startPassword: target.setting.startPassword
+      });
+      diagnostics.record("configuration.encryption", { outcome: "succeeded" });
+      return { buffer, handoffDocumentIds };
     } catch (error) {
+      diagnostics.failure("configuration.encryption", error, { reasonCode: "CONFIGURATION_ENCRYPTION_FAILED" });
       await this.sessionHandoff.revokeConfigs(handoffDocumentIds);
       throw error;
     }
@@ -231,11 +240,22 @@ export class SebContentCoordinator {
     if (!this.canvasApi) {
       throw new Error("Canvas learner availability service is unavailable");
     }
+    diagnostics.bind({
+      attemptId,
+      courseId,
+      contentId: target.canonicalContentId,
+      subjectKey: diagnostics.subject(canvasUserId)
+    });
     const startedAt = Date.now();
     let availability: LearnerAssessmentAvailability;
     try {
       availability = await this.cachedLearnerAvailability(canvasUserId, courseId, target.canonicalContentId);
     } catch (error) {
+      diagnostics.failure("canvas.availability", error, {
+        attemptId,
+        reasonCode: "CANVAS_AVAILABILITY_UNVERIFIED",
+        durationMs: Date.now() - startedAt
+      });
       if (error && typeof error === "object" && Object.isExtensible(error)) {
         (error as { launchAttemptId?: string }).launchAttemptId = attemptId;
       }
@@ -258,12 +278,21 @@ export class SebContentCoordinator {
         durationMs: Date.now() - startedAt
       })
     );
+    diagnostics.record("canvas.availability", {
+      attemptId,
+      outcome: availability.available ? "succeeded" : "failed",
+      reasonCode: availability.reason.toUpperCase(),
+      durationMs: Date.now() - startedAt
+    });
     if (!availability.available) {
       throw new AssessmentNotAvailableError(availability.reason, attemptId);
     }
     const admissionSecret = randomUUID();
     return {
       attemptId,
+      ...(diagnostics.current()
+        ? { diagnosticsFlowId: diagnostics.current()!.flowId, diagnosticsSubjectKey: diagnostics.current()!.subjectKey }
+        : {}),
       digest: createHash("sha256").update(`seb-launch-admission:${admissionSecret}`, "utf8").digest("base64url"),
       method: "learner_canvas",
       checkedAt: availability.checkedAt,

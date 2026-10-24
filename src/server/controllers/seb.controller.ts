@@ -1,3 +1,4 @@
+import { diagnostics } from "../diagnostics/runtime.js";
 import { Controller, Get, Head, Post, Param, Query, Req, Res, Body, Headers } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { regenerateSession, saveSession } from "../http/session-lifecycle.js";
@@ -210,6 +211,7 @@ export class SebController {
         await this.configGrants.revokeGrant(grant);
         throw error;
       }
+      diagnostics.record("configuration.authorized", { outcome: "succeeded" });
       console.info(
         JSON.stringify({
           event: "seb_config_grant_authorized",
@@ -375,6 +377,13 @@ export class SebController {
       fail(403, "This launch could not be verified or has already been used.");
       return;
     }
+    diagnostics.bind({
+      attemptId: record.attemptId,
+      courseId,
+      contentId,
+      ...(typeof record.diagnosticsFlowId === "string" ? { flowId: record.diagnosticsFlowId } : {}),
+      subjectKey: diagnostics.subject(record.canvasUserId)
+    });
     let proofIds: string[] = [];
     try {
       const target = await this.resolveCurrentConfiguredTarget(courseId, contentId);
@@ -411,6 +420,7 @@ export class SebController {
       // password/application prompts, immediately before browser navigation.
       const sessionUrl = await this.canvasApi.getSessionToken(record.canvasUserId, record.returnTo);
       response.json({ success: true, sessionUrl });
+      diagnostics.record("canvas.session_started", { outcome: "succeeded" });
       console.info(JSON.stringify({ event: "seb_canvas_session_started", attemptId: admission.attemptId }));
     } catch (error) {
       await this.sessionHandoff.revokeConfigs(proofIds);
@@ -450,6 +460,14 @@ export class SebController {
       return;
     }
     const consumedGrant = await this.configGrants.consumeGrant(grant, courseId, canonicalContentId);
+    if (consumedGrant)
+      diagnostics.bind({
+        courseId,
+        contentId: canonicalContentId || undefined,
+        attemptId: consumedGrant.launchAttemptId || undefined,
+        flowId: consumedGrant.launchAdmission?.diagnosticsFlowId || diagnostics.current()?.flowId,
+        subjectKey: diagnostics.subject(consumedGrant.canvasUserId)
+      });
     if (!consumedGrant) {
       response.status(403).setHeader("cache-control", "no-store").send("Invalid or expired configuration grant");
       return;
@@ -511,10 +529,11 @@ export class SebController {
         .type("application/octet-stream")
         .setHeader(
           "content-disposition",
-          `attachment; filename="quiz_${sanitizeFileToken(courseId)}_${sanitizeFileToken(canonicalContentId)}.seb"`
+          `attachment; filename="quiz_${sanitizeFileToken(courseId)}_${sanitizeFileToken(canonicalContentId)}${diagnostics.active(courseId) && consumedGrant.launchAttemptId ? "_diagnostic_" + consumedGrant.launchAttemptId : ""}.seb"`
         )
         .setHeader("content-description", "Safe Online Exam Configuration")
         .send(generated.buffer);
+      diagnostics.record("configuration.response_prepared", { outcome: "succeeded" });
       console.info(
         JSON.stringify({
           event: "seb_config_downloaded",
@@ -961,6 +980,7 @@ export class SebController {
         );
       return;
     }
+    diagnostics.record("exit.page_observed", { outcome: "observed" });
     const quitUrl = absoluteUrl(
       request,
       `/seb/exit/quit/${encodeURIComponent(courseId)}/${encodeURIComponent(context.grantContentId)}/${grant}`,
@@ -1041,6 +1061,7 @@ export class SebController {
         .send(renderFallbackHtml("Exit Link Unavailable", "<h1>Exit link unavailable</h1>"));
       return;
     }
+    diagnostics.record("exit.quit_requested", { outcome: "observed" });
     response
       .setHeader("cache-control", "no-store")
       .setHeader("referrer-policy", "no-referrer")
@@ -1467,6 +1488,12 @@ export class SebController {
         : null;
     const configKey = staticValid ? expectedConfigKey : handoffContext?.configKey || null;
     if (!configKey) {
+      diagnostics.record("proof.validation", {
+        outcome: "failed",
+        reasonCode: "SEB_CONFIG_PROOF_MISMATCH",
+        courseId,
+        contentId: normalizedContentId
+      });
       console.warn(
         "SEB access proof rejected",
         JSON.stringify({
@@ -1491,6 +1518,14 @@ export class SebController {
       );
     }
     const learnerAdmission = handoffContext?.launchAdmission || null;
+    if (learnerAdmission)
+      diagnostics.bind({
+        attemptId: learnerAdmission.attemptId,
+        flowId: learnerAdmission.diagnosticsFlowId || diagnostics.current()?.flowId,
+        subjectKey: learnerAdmission.diagnosticsSubjectKey,
+        courseId,
+        contentId: normalizedContentId
+      });
     if (handoffContext?.launchAdmissionRequired && !learnerAdmission) {
       return apiError(403, "Canvas learner availability expired. Return to Canvas and reopen the assessment.", {
         error_code: "CANVAS_LAUNCH_ADMISSION_EXPIRED"
@@ -1520,6 +1555,7 @@ export class SebController {
         error_code: "SEB_CONFIGURATION_UNAVAILABLE"
       });
     }
+    diagnostics.record("proof.minted", { outcome: "succeeded" });
     console.info(
       JSON.stringify({
         event: "seb_access_proof_minted",
@@ -1529,6 +1565,7 @@ export class SebController {
     return {
       success: true,
       proofToken,
+      diagnosticsToken: learnerAdmission ? diagnostics.browserToken(learnerAdmission.attemptId) : undefined,
       expiresInSeconds: this.proofService.getTokenTtlSeconds(learnerAdmission)
     };
   }
@@ -1566,6 +1603,14 @@ export class SebController {
     if (!proof) {
       return apiError(403, "Invalid or expired Safe Online Exam access proof");
     }
+    if (proof.launchAdmission)
+      diagnostics.bind({
+        attemptId: proof.attemptId || undefined,
+        flowId: proof.launchAdmission.diagnosticsFlowId || diagnostics.current()?.flowId,
+        subjectKey: proof.launchAdmission.diagnosticsSubjectKey,
+        courseId,
+        contentId: normalizedContentId
+      });
     const exitGrant = await this.proofService.mintExitGrant(courseId, normalizedContentId, proof.generationDigest);
     if (
       !(await this.finalizeCourseScopedGrant(
@@ -1579,6 +1624,7 @@ export class SebController {
         error_code: "SEB_CONFIGURATION_UNAVAILABLE"
       });
     }
+    diagnostics.record("access_code.released", { outcome: "succeeded" });
     console.info(
       JSON.stringify({
         event: "seb_access_code_released",
@@ -1589,6 +1635,7 @@ export class SebController {
     return {
       success: true,
       accessCode: setting.accessCode,
+      diagnosticsToken: proof.attemptId ? diagnostics.browserToken(proof.attemptId) : undefined,
       exitGrant,
       exitGrantExpiresInSeconds: this.proofService.getExitGrantTtlSeconds(),
       tools: this.examToolPayloads(setting.externalTools)
@@ -1698,6 +1745,12 @@ function launchAttemptIdFromError(error: unknown): string | undefined {
 }
 
 function logConfigGrantDenial(attemptId: string | undefined, reason: string, status: number): void {
+  diagnostics.record("configuration.denied", {
+    attemptId,
+    outcome: "failed",
+    reasonCode: reason.toUpperCase(),
+    status
+  });
   console.warn(
     JSON.stringify({
       event: "seb_config_grant_denied",

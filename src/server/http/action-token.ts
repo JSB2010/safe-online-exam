@@ -218,6 +218,19 @@ function sessionBinding(config: AppConfig, sessionId: string): string {
     .digest("base64url");
 }
 
+export function diagnoseActionToken(config: AppConfig, token: string | undefined | null): string {
+  if (!token) return "TOKEN_MISSING";
+  const parts = parseSignedToken(token);
+  if (!parts) return "TOKEN_MALFORMED";
+  if (!constantTimeEquals(parts[1], sign(config, parts[0]))) return "TOKEN_SIGNATURE_INVALID";
+  try {
+    const value = JSON.parse(Buffer.from(parts[0], "base64url").toString());
+    return typeof value.exp === "number" && value.exp < Date.now() ? "TOKEN_EXPIRED" : "TOKEN_CLAIMS_INVALID";
+  } catch {
+    return "TOKEN_MALFORMED";
+  }
+}
+
 function parseSignedToken(token: string | undefined | null): [string, string] | null {
   if (!token || token.length > 4096) {
     return null;

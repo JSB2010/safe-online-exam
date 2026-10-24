@@ -190,3 +190,7 @@ updates. The command reports counts only and fails closed if any row cannot be
 decrypted.
 
 For Cloud Run, the checked-in builds deliberately use numbered Secret Manager versions and never `latest`. The exact dev, prod, and parameterized secret names and bootstrap order are documented in [Deployment](deployment.md).
+
+## Production diagnostics
+
+See [production diagnostics](diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.

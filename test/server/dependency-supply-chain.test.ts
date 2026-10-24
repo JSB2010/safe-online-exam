@@ -144,7 +144,8 @@ describe("dependency supply-chain policy", () => {
     );
     expect(canonicalPackage.allowScripts).toEqual({
       "esbuild@0.28.2": true,
-      fsevents: false
+      fsevents: false,
+      protobufjs: false
     });
   });
 });

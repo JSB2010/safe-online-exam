@@ -300,6 +300,8 @@
             }
 
             const data = await response.json();
+            if (data.diagnosticsToken) installProductionDiagnostics(data.diagnosticsToken, courseId, quizId);
+            emitProductionDiagnostic('browser.proof_completed');
             return data.success
                 ? { proofToken: data.proofToken, errorMessage: null }
                 : {
@@ -347,6 +349,7 @@
         debugLog(`Auto-fill attempt ${attempt + 1}/${maxAttempts}`);
 
         if (fillAccessCodeField(accessCode)) {
+            emitProductionDiagnostic('browser.form_found');
             debugLog('Access code auto-filled successfully', 'success');
             return;
         }
@@ -383,6 +386,8 @@
                 const data = await response.json();
                 debugLog('Response data: ' + JSON.stringify({ success: data.success, hasAccessCode: !!data.accessCode }));
                 const tools = Array.isArray(data.tools) ? data.tools.filter(isUsableExamTool) : [];
+                if (data.diagnosticsToken) installProductionDiagnostics(data.diagnosticsToken, courseId, quizId);
+                emitProductionDiagnostic('browser.code_completed');
                 persistExamSessionCapabilities(courseId, quizId, tools, data.exitGrant);
                 return data.accessCode;
             }

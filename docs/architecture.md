@@ -337,3 +337,7 @@ after updating the service.
 `GET /seb/relaunch/:courseId/:contentId` requires the original verified Canvas
 session and renders a new launch action. Recovery never reuses a consumed
 configuration grant. The LTI browser transaction cookie remains mandatory.
+
+## Production diagnostics
+
+See [production diagnostics](diagnostics.md) for independent opt-in settings, encrypted identity, evidence boundaries and the separate 1.2 deployment acceptance gate. This source preparation does not enable or deploy production diagnostics.
