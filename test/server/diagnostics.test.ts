@@ -176,3 +176,21 @@ it("retains the resolved attempt on response completion even when emitted outsid
     configureDiagnostics({});
   }
 });
+
+it("scrubs quoted credentials and multiline native secret blocks in the shared viewer contract", async () => {
+  const { DiagnosticTextRedactor } = await import("../../src/shared/diagnostics/redaction.js");
+  const redactor = new DiagnosticTextRedactor();
+  const value = [
+    '"client_secret":"synthetic-secret"',
+    "<key>accessCode</key>",
+    "<string>synthetic-code</string>",
+    "-----BEGIN PRIVATE KEY-----",
+    "synthetic-key",
+    "-----END PRIVATE KEY-----",
+    "ordinary"
+  ]
+    .map((line) => redactor.line(line))
+    .join("\n");
+  expect(value).not.toMatch(/synthetic-secret|synthetic-code|synthetic-key/);
+  expect(value).toContain("ordinary");
+});
