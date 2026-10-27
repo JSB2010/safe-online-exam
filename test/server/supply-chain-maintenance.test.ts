@@ -261,13 +261,13 @@ while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-C" ]]; then destination="$2"; break; fi
   shift
 done
-mkdir -p "$destination/gh_2.102.0_linux_amd64/bin"
+mkdir -p "$destination/gh_2.102.1_linux_amd64/bin"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\\n" "$*" >>"$GH_TEST_LOG"' \
   'if [[ "\${1:-}" == "api" ]]; then printf "%b\\n" "$GH_TEST_RELEASE_STATE"; fi' \
-  >"$destination/gh_2.102.0_linux_amd64/bin/gh"
-chmod +x "$destination/gh_2.102.0_linux_amd64/bin/gh"
+  >"$destination/gh_2.102.1_linux_amd64/bin/gh"
+chmod +x "$destination/gh_2.102.1_linux_amd64/bin/gh"
 `
     );
 
