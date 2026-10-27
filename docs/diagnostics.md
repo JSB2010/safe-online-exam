@@ -1,6 +1,6 @@
-# Production diagnostics (prepared for 1.2)
+# Production diagnostics (1.2)
 
-Diagnostics operate independently of `APP_DEBUG_ENABLED` and development detector tracing. They default off. This source preparation does not enable pilot production telemetry, migrate production data, or publish 1.2.
+Diagnostics operate independently of `APP_DEBUG_ENABLED` and development detector tracing. They default off. Publishing or upgrading the application does not automatically enable capture. Configure a bounded pilot window separately.
 
 ## Opt-in controls
 
@@ -31,7 +31,7 @@ Structured events go to the configured Cloud Logging sink, then authenticated Pu
 
 The investigation database enforces a 90-day maximum on reads and cleanup. Collector expiry can shorten native evidence retention. Cloud Logging, Pub/Sub and existing SQL backups have separate provider retention; database cleanup cannot erase existing backups. This implementation does not change the shared instance backup policy.
 
-## Later 1.2 acceptance gate
+## Live rollout acceptance
 
 After a separately authorized immutable 1.2 release and deployment, enable a short, restricted pilot window and verify actual LTI → OAuth → config → SEB → proof → code → submission observation → exit correlation, including a multi-attempt flow. Confirm native marker extraction against actual SEB logs and retain the distinction between server confirmation and client observation. Until then the dashboard must show **SOE 1.2 telemetry pending deployment**.
 
