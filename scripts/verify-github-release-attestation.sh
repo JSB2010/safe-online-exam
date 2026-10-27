@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GH_CLI_VERSION="2.102.1"
-GH_CLI_SHA256="77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b"
+GH_CLI_VERSION="2.103.3"
+GH_CLI_SHA256="4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d"
 
 if [[ $# -ne 5 ]]; then
   echo "usage: $0 IMAGE REPOSITORY SIGNER_WORKFLOW SOURCE_DIGEST RELEASE_TAG" >&2

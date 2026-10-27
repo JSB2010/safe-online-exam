@@ -27,17 +27,17 @@ substitutions:
   _DATABASE_PASSWORD_SECRET_VERSION: "1"
 
 steps:
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:1855ee6031f03bb7d4b251cfd0e5b88a18fd9a2552a742cf86d269810832c80b"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:d3f74bb21280869467e4e901c66280d4610e0bda81bab1cd7d9c112ccd1d2276"
     entrypoint: "/workspace/scripts/validate-oauth-encryption-rollout.sh"
     args: ["$PROJECT_ID", "${_SERVICE}", "${_LOCATION}", "${_OAUTH_TOKEN_ENCRYPTION_MODE}"]
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f"
     args:
       - "pull"
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
     allowFailure: true
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f"
     env:
       - "DOCKER_BUILDKIT=1"
     args:
@@ -52,21 +52,21 @@ steps:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
       - "."
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f"
     entrypoint: "/workspace/scripts/cloud-build-postgres-integration.sh"
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f"
     entrypoint: "/workspace/scripts/push-image-capture-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$BUILD_ID"
       - "/workspace/canvas-seb-dev.digest"
 
-  - name: "gcr.io/cloud-builders/docker:latest@sha256:f772ab459889c67835bd959c2b9e9351f2c0752c4f989710ecda20c229f0733e"
+  - name: "gcr.io/cloud-builders/docker:latest@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f"
     args:
       - "push"
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:${_CACHE_TAG}"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:1855ee6031f03bb7d4b251cfd0e5b88a18fd9a2552a742cf86d269810832c80b"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:d3f74bb21280869467e4e901c66280d4610e0bda81bab1cd7d9c112ccd1d2276"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
@@ -83,7 +83,7 @@ steps:
       - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:${_CANVAS_DOMAIN_SECRET_VERSION},LTI_CLIENT_ID=dev_lti_client_id:${_LTI_CLIENT_ID_SECRET_VERSION},LTI_DEPLOYMENT_ID=dev_lti_deployment_id:${_LTI_DEPLOYMENT_ID_SECRET_VERSION},TOOL_URL=dev_tool_url:${_TOOL_URL_SECRET_VERSION},LTI_PRIVATE_KEY=dev_lti_private_key:${_LTI_PRIVATE_KEY_SECRET_VERSION},SESSION_SECRET=dev_session_secret:${_SESSION_SECRET_VERSION},STATE_ENCRYPTION_KEY=dev_state_encryption_key:${_STATE_ENCRYPTION_KEY_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=dev_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=dev_api_client_id:${_CANVAS_API_CLIENT_ID_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=dev_api_client_secret:${_CANVAS_API_CLIENT_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:${_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION},DATABASE_PASSWORD=dev_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:1855ee6031f03bb7d4b251cfd0e5b88a18fd9a2552a742cf86d269810832c80b"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:d3f74bb21280869467e4e901c66280d4610e0bda81bab1cd7d9c112ccd1d2276"
     entrypoint: "gcloud"
     args:
       - "run"
@@ -93,7 +93,7 @@ steps:
       - "--region=${_LOCATION}"
       - "--wait"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:1855ee6031f03bb7d4b251cfd0e5b88a18fd9a2552a742cf86d269810832c80b"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:d3f74bb21280869467e4e901c66280d4610e0bda81bab1cd7d9c112ccd1d2276"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
@@ -110,7 +110,7 @@ steps:
       - "--set-secrets=CANVAS_DOMAIN=dev_canvas_domain:${_CANVAS_DOMAIN_SECRET_VERSION},LTI_CLIENT_ID=dev_lti_client_id:${_LTI_CLIENT_ID_SECRET_VERSION},LTI_DEPLOYMENT_ID=dev_lti_deployment_id:${_LTI_DEPLOYMENT_ID_SECRET_VERSION},TOOL_URL=dev_tool_url:${_TOOL_URL_SECRET_VERSION},LTI_PRIVATE_KEY=dev_lti_private_key:${_LTI_PRIVATE_KEY_SECRET_VERSION},SESSION_SECRET=dev_session_secret:${_SESSION_SECRET_VERSION},STATE_ENCRYPTION_KEY=dev_state_encryption_key:${_STATE_ENCRYPTION_KEY_SECRET_VERSION},OAUTH_TOKEN_ENCRYPTION_KEYRING=dev_oauth_token_encryption_keyring:${_OAUTH_TOKEN_ENCRYPTION_KEYRING_SECRET_VERSION},CANVAS_API_CLIENT_ID=dev_api_client_id:${_CANVAS_API_CLIENT_ID_SECRET_VERSION},CANVAS_API_CLIENT_SECRET=dev_api_client_secret:${_CANVAS_API_CLIENT_SECRET_VERSION},SEB_CONFIG_ENCRYPTION_CERT_PEM=dev_seb_config_encryption_cert_pem:${_SEB_CONFIG_ENCRYPTION_CERT_SECRET_VERSION},DATABASE_PASSWORD=dev_database_password:${_DATABASE_PASSWORD_SECRET_VERSION}"
       - "--service-account=seb-canvas-dev@$PROJECT_ID.iam.gserviceaccount.com"
 
-  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:1855ee6031f03bb7d4b251cfd0e5b88a18fd9a2552a742cf86d269810832c80b"
+  - name: "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable@sha256:d3f74bb21280869467e4e901c66280d4610e0bda81bab1cd7d9c112ccd1d2276"
     entrypoint: "/workspace/scripts/deploy-cloud-run-digest.sh"
     args:
       - "${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}"
