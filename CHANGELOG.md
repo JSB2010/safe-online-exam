@@ -5,7 +5,7 @@ release.
 
 ## [Unreleased]
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-10-26
 
 ### Added
 
@@ -15,13 +15,19 @@ release.
   OpenTelemetry spans, and non-secret native-log markers.
 - An authenticated read-only assessment context endpoint for the diagnostics service.
 
+### Reliability
+
+- Improve delayed Canvas launch handling and SEB identity recovery while preserving
+  existing launch URLs, one-time handoff behavior and stored authorization.
+
 ### Security and compatibility
 
 - Existing LTI, Canvas OAuth, SEB proof, just-in-time session handoff, and one-time
   token semantics remain in place. Diagnostics failure never authorizes entry.
 - Update multipart and request-body parser overrides to patched runtime versions.
-- This version is prepared in source only. Release tagging, production migrations,
-  deployment and live launch acceptance remain separate gates.
+- Refresh pinned Node.js and distroless runtime images and patched proxy handling.
+- Diagnostics remain disabled by default and use a separate, bounded opt-in
+  production capture window.
 
 ## [1.1.0] - 2026-09-12
 
@@ -485,7 +491,7 @@ Safe Online Exam 1.0.0 is the first stable public release.
   commercial licensing, contribution, trademark, and third-party notice
   documentation.
 
-[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/JSB2010/safe-online-exam/compare/v1.2.0...HEAD
 [1.1.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.1.0
 [1.0.7]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.7
 [1.0.6]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.6
@@ -495,4 +501,4 @@ Safe Online Exam 1.0.0 is the first stable public release.
 [1.0.2]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.0.0
-[1.2.0]: https://github.com/JSB2010/safe-online-exam/compare/v1.1.0...HEAD
+[1.2.0]: https://github.com/JSB2010/safe-online-exam/releases/tag/v1.2.0
