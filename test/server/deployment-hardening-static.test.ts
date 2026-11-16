@@ -95,7 +95,12 @@ describe("deployment hardening artifacts", () => {
     const integrityJob = workflow.slice(workflow.indexOf("  dependency-integrity:"), workflow.indexOf("  compose:"));
     expect(integrityJob.indexOf("npm ci --ignore-scripts")).toBeLessThan(integrityJob.indexOf("npm audit signatures"));
     expect(integrityJob.indexOf("npm audit signatures")).toBeLessThan(integrityJob.indexOf("npm run install:trusted"));
-    expect(workflow.match(/needs: dependency-integrity/gu)).toHaveLength(3);
+    for (const job of ["verify", "postgres", "compose", "runtime-arm64"]) {
+      const jobStart = workflow.indexOf(`\n  ${job}:\n`);
+      expect(jobStart, job).toBeGreaterThanOrEqual(0);
+      const jobDefinition = workflow.slice(jobStart + 1).split(/\n {2}[A-Za-z_][A-Za-z0-9_-]*:\n/u)[0];
+      expect(jobDefinition, job).toMatch(/^ {4}needs: dependency-integrity$/mu);
+    }
     expect(() => source(".github/workflows/dependabot-automerge.yml")).toThrow();
   });
 
