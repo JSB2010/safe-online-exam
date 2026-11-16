@@ -325,6 +325,7 @@ describe("deployment hardening artifacts", () => {
     expect(requiredChecks).toContain("Application verification");
     expect(requiredChecks).toContain("PostgreSQL integration");
     expect(requiredChecks).toContain("Production Compose smoke");
+    expect(requiredChecks).toContain("Arm64 runtime qualification");
     expect(requiredChecks).toContain("Dependency integrity");
     expect(requiredChecks).toContain("Analyze (javascript-typescript)");
     expect(requiredChecks).toContain("Analyze (actions)");

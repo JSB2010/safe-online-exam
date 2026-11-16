@@ -16,6 +16,7 @@ required_checks=(
   "Application verification"
   "PostgreSQL integration"
   "Production Compose smoke"
+  "Arm64 runtime qualification"
   "Dependency integrity"
   "Analyze (javascript-typescript)"
   "Analyze (actions)"
