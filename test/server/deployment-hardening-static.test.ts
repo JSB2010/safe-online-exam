@@ -405,6 +405,7 @@ describe("deployment hardening artifacts", () => {
       "Application verification",
       "PostgreSQL integration",
       "Production Compose smoke",
+      "Arm64 runtime qualification",
       "Dependency review",
       "Dependency integrity",
       "CodeQL"
