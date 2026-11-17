@@ -311,7 +311,7 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("node scripts/verify-release.mjs");
     expect(workflow).toContain("git merge-base --is-ancestor");
     expect(workflow).toContain(
-      "verify-release:\n    name: Verify release source\n    runs-on: ubuntu-24.04\n    # The required-check waiter polls for up to 30 minutes. Leave enough\n    # headroom for checkout, metadata validation, and GitHub API latency.\n    timeout-minutes: 40"
+      "verify-release:\n    name: Verify release source\n    runs-on: ubuntu-24.04\n    # The required-check waiter polls for up to 50 minutes, covering the\n    # dependency-integrity and Arm64 chain with setup and API headroom.\n    timeout-minutes: 60"
     );
     expect(workflow).toContain("publish:\n    name: Publish verified release\n    needs: verify-release");
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(
@@ -326,6 +326,7 @@ describe("deployment hardening artifacts", () => {
     expect(requiredChecks).toContain("PostgreSQL integration");
     expect(requiredChecks).toContain("Production Compose smoke");
     expect(requiredChecks).toContain("Arm64 runtime qualification");
+    expect(requiredChecks).toContain('maximum_attempts="${RELEASE_CHECK_MAX_ATTEMPTS:-200}"');
     expect(requiredChecks).toContain("Dependency integrity");
     expect(requiredChecks).toContain("Analyze (javascript-typescript)");
     expect(requiredChecks).toContain("Analyze (actions)");
