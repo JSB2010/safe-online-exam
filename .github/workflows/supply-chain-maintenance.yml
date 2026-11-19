@@ -43,6 +43,8 @@ jobs:
 
       - name: Run dependency, signature, advisory, and pin checks
         id: monitor
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set +e

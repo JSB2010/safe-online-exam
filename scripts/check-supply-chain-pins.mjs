@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { latestGithubReleaseTag } from "./github-release.mjs";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u;
@@ -98,12 +99,7 @@ async function latestNpmWithinMajor(current, fixtures) {
 
 async function latestGithubRelease(repository, fixtures, fixtureKey) {
   if (fixtures) return fixtures.tools?.[fixtureKey] || null;
-  const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
-    headers: { accept: "application/vnd.github+json", "user-agent": "safe-online-exam-supply-chain-monitor" },
-    signal: AbortSignal.timeout(EXTERNAL_CHECK_TIMEOUT_MS)
-  });
-  if (!response.ok) throw new Error(`GitHub release API returned HTTP ${response.status} for ${repository}`);
-  return (await response.json()).tag_name;
+  return latestGithubReleaseTag(repository);
 }
 
 function npmOutdated(root, fixtures) {
