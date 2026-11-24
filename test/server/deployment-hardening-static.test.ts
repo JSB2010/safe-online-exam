@@ -95,7 +95,12 @@ describe("deployment hardening artifacts", () => {
     const integrityJob = workflow.slice(workflow.indexOf("  dependency-integrity:"), workflow.indexOf("  compose:"));
     expect(integrityJob.indexOf("npm ci --ignore-scripts")).toBeLessThan(integrityJob.indexOf("npm audit signatures"));
     expect(integrityJob.indexOf("npm audit signatures")).toBeLessThan(integrityJob.indexOf("npm run install:trusted"));
-    expect(workflow.match(/needs: dependency-integrity/gu)).toHaveLength(3);
+    for (const job of ["verify", "postgres", "compose", "runtime-arm64"]) {
+      const jobStart = workflow.indexOf(`\n  ${job}:\n`);
+      expect(jobStart, job).toBeGreaterThanOrEqual(0);
+      const jobDefinition = workflow.slice(jobStart + 1).split(/\n {2}[A-Za-z_][A-Za-z0-9_-]*:\n/u)[0];
+      expect(jobDefinition, job).toMatch(/^ {4}needs: dependency-integrity$/mu);
+    }
     expect(() => source(".github/workflows/dependabot-automerge.yml")).toThrow();
   });
 
@@ -306,7 +311,7 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("node scripts/verify-release.mjs");
     expect(workflow).toContain("git merge-base --is-ancestor");
     expect(workflow).toContain(
-      "verify-release:\n    name: Verify release source\n    runs-on: ubuntu-24.04\n    # The required-check waiter polls for up to 30 minutes. Leave enough\n    # headroom for checkout, metadata validation, and GitHub API latency.\n    timeout-minutes: 40"
+      "verify-release:\n    name: Verify release source\n    runs-on: ubuntu-24.04\n    # The required-check waiter polls for up to 50 minutes, covering the\n    # dependency-integrity and Arm64 chain with setup and API headroom.\n    timeout-minutes: 60"
     );
     expect(workflow).toContain("publish:\n    name: Publish verified release\n    needs: verify-release");
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(
@@ -320,6 +325,8 @@ describe("deployment hardening artifacts", () => {
     expect(requiredChecks).toContain("Application verification");
     expect(requiredChecks).toContain("PostgreSQL integration");
     expect(requiredChecks).toContain("Production Compose smoke");
+    expect(requiredChecks).toContain("Arm64 runtime qualification");
+    expect(requiredChecks).toContain('maximum_attempts="${RELEASE_CHECK_MAX_ATTEMPTS:-200}"');
     expect(requiredChecks).toContain("Dependency integrity");
     expect(requiredChecks).toContain("Analyze (javascript-typescript)");
     expect(requiredChecks).toContain("Analyze (actions)");
@@ -359,7 +366,9 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run verify:postgres");
     expect(workflow).toContain("Dependency review");
-    expect(workflow).toContain("actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294");
+    expect(workflow).toMatch(/uses: actions\/dependency-review-action@[0-9a-f]{40}(?:\s|$)/u);
+    expect(workflow).toContain("fail-on-severity: moderate");
+    expect(workflow).toContain("fail-on-scopes: runtime, development");
     expect(workflow).toContain("bash scripts/compose-smoke.sh");
     expect(workflow).toMatch(/uses: docker\/build-push-action@[0-9a-f]{40}(?:\s|$)/u);
     expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
@@ -399,6 +408,7 @@ describe("deployment hardening artifacts", () => {
       "Application verification",
       "PostgreSQL integration",
       "Production Compose smoke",
+      "Arm64 runtime qualification",
       "Dependency review",
       "Dependency integrity",
       "CodeQL"

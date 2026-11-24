@@ -44,9 +44,12 @@ jobs:
       - name: Run dependency, signature, advisory, and pin checks
         id: monitor
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_RELEASE_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          # Do not pass this read token to install, audit, or Docker subprocesses.
+          release_token="${GITHUB_RELEASE_TOKEN:-}"
+          unset GITHUB_RELEASE_TOKEN
           set +e
           npm run verify:dependency-policy >dependency-policy.log 2>&1
           policy_status=$?
@@ -63,8 +66,9 @@ jobs:
 
           # npm outdated omits missing development packages; materialize the
           # script-disabled tree and verify it before checking direct pin drift.
-          node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md >pin-monitor.log 2>&1
+          GITHUB_RELEASE_TOKEN="$release_token" node scripts/check-supply-chain-pins.mjs --report supply-chain-report.md >pin-monitor.log 2>&1
           pin_status=$?
+          unset release_token
           if [[ ! -f supply-chain-report.md ]]; then
             printf '# Weekly supply-chain maintenance\n\nThe immutable-pin monitor failed before it could render its report.\n' \
               >supply-chain-report.md

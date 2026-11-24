@@ -134,7 +134,7 @@ describe("weekly supply-chain maintenance", () => {
           import { latestGithubReleaseTag } from "./scripts/github-release.mjs";
           let requested;
           globalThis.fetch = async (url, options) => {
-            requested = { url, authorization: options.headers.authorization };
+            requested = { url, authorization: options.headers.authorization, redirect: options.redirect, subprocessTokenPresent: Boolean(process.env.GITHUB_RELEASE_TOKEN) };
             return new Response(JSON.stringify({ tag_name: "v0.76.2", message: "private response detail" }), {
               status: ${status},
               headers: { "x-ratelimit-remaining": "12", "x-github-request-id": "request-123", "retry-after": "60" }
@@ -146,12 +146,14 @@ describe("weekly supply-chain maintenance", () => {
           console.log(JSON.stringify({ requested, result }));
           `
         ],
-        { cwd: ROOT, encoding: "utf8", env: { ...process.env, GITHUB_TOKEN: "test-only-token", GH_TOKEN: "" } }
+        { cwd: ROOT, encoding: "utf8", env: { ...process.env, GITHUB_RELEASE_TOKEN: "test-only-token", GH_TOKEN: "" } }
       );
       const { requested, result } = JSON.parse(output);
       expect(requested).toEqual({
         url: "https://api.github.com/repos/aquasecurity/trivy/releases/latest",
-        authorization: "Bearer test-only-token"
+        authorization: "Bearer test-only-token",
+        redirect: "error",
+        subprocessTokenPresent: false
       });
       if (status === 200) expect(result).toBe("v0.76.2");
       else {
@@ -164,7 +166,9 @@ describe("weekly supply-chain maintenance", () => {
       }
     }
     const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
-    expect(workflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
+    expect(workflow).toContain("GITHUB_RELEASE_TOKEN: ${{ github.token }}");
+    expect(workflow.indexOf("unset GITHUB_RELEASE_TOKEN")).toBeLessThan(workflow.indexOf("npm run verify:dependency-policy"));
+    expect(workflow).toContain('GITHUB_RELEASE_TOKEN="$release_token" node scripts/check-supply-chain-pins.mjs');
     expect(workflow).toContain("permissions:\n  contents: read");
   });
 

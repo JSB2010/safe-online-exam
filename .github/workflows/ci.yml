@@ -86,7 +86,7 @@ jobs:
       contents: read
     steps:
       - name: Reject vulnerable dependency changes
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
           fail-on-severity: moderate
           fail-on-scopes: runtime, development
@@ -163,3 +163,86 @@ jobs:
           COMPOSE_SMOKE_IMAGE: safe-online-exam:compose-smoke
           COMPOSE_SMOKE_SKIP_BUILD: "true"
         run: bash scripts/compose-smoke.sh
+
+  runtime-arm64:
+    name: Arm64 runtime qualification
+    needs: dependency-integrity
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert native arm64 runner and exact candidate pin
+        run: |
+          test "$(uname -m)" = "aarch64"
+          grep -Fqx 'FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78 AS runtime' Dockerfile
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the pinned arm64 production image locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: safe-online-exam:arm64-runtime-smoke
+
+      - name: Verify image architecture and nonroot runtime
+        run: |
+          image="safe-online-exam:arm64-runtime-smoke"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = "linux/arm64"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "65532"
+
+      - name: Start the app and verify its health and runtime uid
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_name="safe-online-exam-arm64-runtime-smoke"
+          cleanup() {
+            status=$?
+            if [[ "$status" -ne 0 ]]; then
+              docker logs "$container_name" >&2 || true
+            fi
+            docker rm --force "$container_name" >/dev/null 2>&1 || true
+            return "$status"
+          }
+          trap cleanup EXIT
+
+          docker run --detach \
+            --name "$container_name" \
+            --publish 127.0.0.1:18080:8080 \
+            --env NODE_ENV=development \
+            --env APP_ENV=dev \
+            --env HOST=0.0.0.0 \
+            --env USE_IN_MEMORY_STORE=true \
+            --env TOOL_URL=http://localhost:8080 \
+            --env LTI_CLIENT_ID=arm64-ci-smoke \
+            safe-online-exam:arm64-runtime-smoke >/dev/null
+
+          for attempt in $(seq 1 60); do
+            if response="$(curl --fail --silent --show-error --max-time 2 http://127.0.0.1:18080/health 2>/dev/null)"; then
+              printf '%s\n' "$response" | jq --exit-status '.status == "UP"'
+              break
+            fi
+            if [[ "$attempt" -eq 60 ]]; then
+              echo "Arm64 app health endpoint did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          docker top "$container_name" -eo pid,uid,gid,args | awk '
+            NR == 1 { next }
+            {
+              if ($2 != "65532" || $3 != "65532") bad = 1
+              if ($0 ~ /dist\/server\/server\/main.js/) app = 1
+            }
+            END { if (bad || !app) exit 1 }
+          '
