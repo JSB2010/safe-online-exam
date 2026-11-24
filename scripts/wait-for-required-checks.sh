@@ -10,12 +10,13 @@ fi
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
 commit_sha="$1"
-maximum_attempts="${RELEASE_CHECK_MAX_ATTEMPTS:-120}"
+maximum_attempts="${RELEASE_CHECK_MAX_ATTEMPTS:-200}"
 poll_interval_seconds="${RELEASE_CHECK_POLL_SECONDS:-15}"
 required_checks=(
   "Application verification"
   "PostgreSQL integration"
   "Production Compose smoke"
+  "Arm64 runtime qualification"
   "Dependency integrity"
   "Analyze (javascript-typescript)"
   "Analyze (actions)"
