@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const EXPECTED_PACKAGE_MANAGER =
-  "npm@11.21.2+sha512.ec73c0a64f807e53146af4ac78bd4f9ba0a762a3081e4e77c7e2a6ba1aa64c3a8f9233cc8312294cf713aac13dd4428dc3880504957d7e75e249d1a6d435eaf4";
+  "npm@11.21.3+sha512.e427fe8c4f9772d6e11ffce338ea970be8adcbb79e73f4e4938425dfcb5feb0fb586da76c183c7984e1cd51d44b370d8db6ec0735e3e48bae5609c2406271b4e";
 const EXPECTED_NPM_ENGINE = ">=11.19.0 <12";
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
 const DEFAULT_MIN_RELEASE_AGE_DAYS = 3;
