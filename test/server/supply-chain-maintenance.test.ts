@@ -167,7 +167,9 @@ describe("weekly supply-chain maintenance", () => {
     }
     const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
     expect(workflow).toContain("GITHUB_RELEASE_TOKEN: ${{ github.token }}");
-    expect(workflow.indexOf("unset GITHUB_RELEASE_TOKEN")).toBeLessThan(workflow.indexOf("npm run verify:dependency-policy"));
+    expect(workflow.indexOf("unset GITHUB_RELEASE_TOKEN")).toBeLessThan(
+      workflow.indexOf("npm run verify:dependency-policy")
+    );
     expect(workflow).toContain('GITHUB_RELEASE_TOKEN="$release_token" node scripts/check-supply-chain-pins.mjs');
     expect(workflow).toContain("permissions:\n  contents: read");
   });
