@@ -123,6 +123,57 @@ afterEach(() => {
 });
 
 describe("weekly supply-chain maintenance", () => {
+  it("authenticates release lookups and preserves evidence for rate-limit and other HTTP failures", () => {
+    for (const status of [200, 403, 429]) {
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+          import { latestGithubReleaseTag } from "./scripts/github-release.mjs";
+          let requested;
+          globalThis.fetch = async (url, options) => {
+            requested = { url, authorization: options.headers.authorization, redirect: options.redirect, subprocessTokenPresent: Boolean(process.env.GITHUB_RELEASE_TOKEN) };
+            return new Response(JSON.stringify({ tag_name: "v0.76.2", message: "private response detail" }), {
+              status: ${status},
+              headers: { "x-ratelimit-remaining": "12", "x-github-request-id": "request-123", "retry-after": "60" }
+            });
+          };
+          let result;
+          try { result = await latestGithubReleaseTag("aquasecurity/trivy"); }
+          catch (error) { result = error.message; }
+          console.log(JSON.stringify({ requested, result }));
+          `
+        ],
+        { cwd: ROOT, encoding: "utf8", env: { ...process.env, GITHUB_RELEASE_TOKEN: "test-only-token", GH_TOKEN: "" } }
+      );
+      const { requested, result } = JSON.parse(output);
+      expect(requested).toEqual({
+        url: "https://api.github.com/repos/aquasecurity/trivy/releases/latest",
+        authorization: "Bearer test-only-token",
+        redirect: "error",
+        subprocessTokenPresent: false
+      });
+      if (status === 200) expect(result).toBe("v0.76.2");
+      else {
+        expect(result).toContain(`HTTP ${status}`);
+        expect(result).toContain("x-ratelimit-remaining=12");
+        expect(result).toContain("x-github-request-id=request-123");
+        expect(result).toContain("retry-after=60");
+        expect(result).not.toContain("test-only-token");
+        expect(result).not.toContain("private response detail");
+      }
+    }
+    const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
+    expect(workflow).toContain("GITHUB_RELEASE_TOKEN: ${{ github.token }}");
+    const unsetToken = workflow.indexOf("unset GITHUB_RELEASE_TOKEN");
+    expect(unsetToken).toBeGreaterThanOrEqual(0);
+    expect(unsetToken).toBeLessThan(workflow.indexOf("npm run verify:dependency-policy"));
+    expect(workflow).toContain('GITHUB_RELEASE_TOKEN="$release_token" node scripts/check-supply-chain-pins.mjs');
+    expect(workflow).toContain("permissions:\n  contents: read");
+  });
+
   it("reports clean pins and treats major migrations as informational", () => {
     const directory = supplyChainFixture({ typescript: { current: "5.9.3", latest: "6.0.0" } });
     const report = join(directory, "report.md");
@@ -531,7 +582,10 @@ exit 99
     const monitor = readFileSync(join(ROOT, "scripts/check-supply-chain-pins.mjs"), "utf8");
     const workflow = readFileSync(join(ROOT, ".github/workflows/supply-chain-maintenance.yml"), "utf8");
 
-    expect(monitor.match(/AbortSignal\.timeout\(EXTERNAL_CHECK_TIMEOUT_MS\)/gu)).toHaveLength(3);
+    const githubRelease = readFileSync(join(ROOT, "scripts/github-release.mjs"), "utf8");
+    expect(monitor.match(/AbortSignal\.timeout\(EXTERNAL_CHECK_TIMEOUT_MS\)/gu)).toHaveLength(2);
+    expect(githubRelease).toContain("const REQUEST_TIMEOUT_MS = 30_000");
+    expect(githubRelease).toContain("signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)");
     expect(monitor.match(/timeout: EXTERNAL_CHECK_TIMEOUT_MS/gu)).toHaveLength(2);
     expect(monitor.match(/if \(result\.error\)/gu)).toHaveLength(2);
     expect(workflow).toContain('elif [[ "$pin_status" -ne 0 ]]; then');
