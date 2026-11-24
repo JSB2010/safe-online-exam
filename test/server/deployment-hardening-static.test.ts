@@ -366,7 +366,9 @@ describe("deployment hardening artifacts", () => {
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run verify:postgres");
     expect(workflow).toContain("Dependency review");
-    expect(workflow).toContain("actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294");
+    expect(workflow).toMatch(/uses: actions\/dependency-review-action@[0-9a-f]{40}(?:\s|$)/u);
+    expect(workflow).toContain("fail-on-severity: moderate");
+    expect(workflow).toContain("fail-on-scopes: runtime, development");
     expect(workflow).toContain("bash scripts/compose-smoke.sh");
     expect(workflow).toMatch(/uses: docker\/build-push-action@[0-9a-f]{40}(?:\s|$)/u);
     expect(workflow).toContain('COMPOSE_SMOKE_SKIP_BUILD: "true"');
