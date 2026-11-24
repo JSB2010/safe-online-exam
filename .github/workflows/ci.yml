@@ -180,7 +180,7 @@ jobs:
       - name: Assert native arm64 runner and exact candidate pin
         run: |
           test "$(uname -m)" = "aarch64"
-          grep -Fqx 'FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78 AS runtime' Dockerfile
+          grep -Fqx 'FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:39b0407357c9fadf1a9708d22088f02de21f0e1e8a688474eea2d8701e7d5693 AS runtime' Dockerfile
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
